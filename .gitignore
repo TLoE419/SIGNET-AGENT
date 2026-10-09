@@ -1,0 +1,36 @@
+# Downloaded official code and local scientific runtime
+/official-signet/
+/vm/
+/runs/
+/results/
+/analyses/
+
+# Keep only the two small runtime provenance/validation records
+/evidence/*
+!/evidence/input-validation.json
+!/evidence/provenance.json
+/desktop/evidence/
+
+# Dependencies, generated apps and desktop user data
+node_modules/
+/desktop/dist/
+/desktop/.runtime/
+__pycache__/
+*.pyc
+.DS_Store
+*.log
+
+# Diagram scratch files; the published architecture lives in docs/
+/.archify/
+
+# Local credentials/configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+id_ed25519*
+id_rsa*
+
+# Superseded standalone viewer
+/tools/viewer.html

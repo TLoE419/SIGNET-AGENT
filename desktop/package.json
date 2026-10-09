@@ -1,0 +1,20 @@
+{
+  "name": "signet-desktop",
+  "version": "0.2.0",
+  "description": "SIGNET Electron analysis manager (Node.js, no local Python server)",
+  "private": true,
+  "main": "main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "package:mac": "node package.mjs",
+    "test": "node --test test-core.cjs",
+    "test:scientific": "node --test test-scientific.cjs"
+  },
+  "devDependencies": {
+    "electron": "44.5.1",
+    "@electron/packager": "20.3.0"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}

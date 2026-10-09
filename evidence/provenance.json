@@ -1,0 +1,157 @@
+{
+  "retrieved_local_date": "2026-10-06",
+  "repository": "https://github.com/signet4grn/SIGNET",
+  "commit": "bed55b3e121de0edf5fd43da683dc59850ff82d3",
+  "container_requested": "library://jiang548/signet/signet:0.0.6",
+  "container_actual": {
+    "sha256": "de28f224f3da41b17ff08a03d0f04b1d5c033b2afbad18ed448b646b2feda277",
+    "bytes": 6383458834,
+    "architecture": "amd64",
+    "verified_against_official_library": true,
+    "internal_labels": {
+      "Author": "Zhongli Jiang",
+      "Version": "v0.0.4",
+      "org.label-schema.build-arch": "amd64",
+      "org.label-schema.build-date": "Tuesday_29_November_2022_1:59:27_UTC",
+      "org.label-schema.schema-version": "1.0",
+      "org.label-schema.usage": "/.singularity.d/runscript.help",
+      "org.label-schema.usage.singularity.deffile.bootstrap": "library",
+      "org.label-schema.usage.singularity.deffile.from": "library://geomeday/signet/signet:0.0.5",
+      "org.label-schema.usage.singularity.runscript.help": "/.singularity.d/runscript.help",
+      "org.label-schema.usage.singularity.version": "3.9-8-focal"
+    },
+    "library_tag": "0.0.6"
+  },
+  "actual_network_run_completed": true,
+  "configuration": {
+    "ncore_local": "4",
+    "net.gexp.data": "example/network/signet_net.gexp.data",
+    "net.geno.data": "example/network/signet_all.eQTL.data",
+    "sig.pair": "example/network/signet_all.sig.pValue_0.05",
+    "net.genename": "example/network/signet_net.genename",
+    "net.genepos": "example/network/signet_net.genepos",
+    "ncis": "3",
+    "cor": "0.3",
+    "nboots": "2",
+    "ncores": "4",
+    "queue": "local",
+    "memory": "4",
+    "walltime": "00:15:00",
+    "interactive": "F",
+    "resn": "res/resn/signet",
+    "sif": "/work/evidence/signet-0.0.6.sif",
+    "email": "F",
+    "computing": "slurm"
+  },
+  "allowed_sources": [
+    "https://github.com/signet4grn/SIGNET",
+    "https://doi.org/10.1038/s41598-023-46295-6",
+    "https://drive.google.com/file/d/1mu6OE2yIuBQcKwZv4jb3SnGVZQC72mNm/view"
+  ],
+  "local_vm": {
+    "qemu_version": "6.2.0",
+    "qemu_image_id": "sha256:f17b8da7c9d8c9e492ca5633775d3d63b85e2913ef6c74116d6745c9a6e1127f",
+    "ubuntu_image_sha256": "012d81fade7e8ff4428fc35dfeee711d66d1f47d5ea9c5c8ced96a85b959835c",
+    "vcpus": 4,
+    "guest_memory_mib": 5120,
+    "docker_memory_limit_gib": 6,
+    "ssh_target": "root@127.0.0.1:2226",
+    "work_directory": "/work/runs/macos-vm-smoke-20261006",
+    "kernel": "5.15.0-198-generic",
+    "apptainer_version": "1.3.6",
+    "slurm_package_version": "21.08.5-2ubuntu1",
+    "final_state": "stopped after normal guest power-off; disk and results retained",
+    "final_state_evidence": "evidence/final-container-states.txt"
+  },
+  "R_version": "4.1.0 (2021-05-18)",
+  "actual_run": {
+    "status": "verified_actual_run",
+    "job_ids": [
+      "1",
+      "2",
+      "3",
+      "4",
+      "5"
+    ],
+    "nboots": 2,
+    "shape": [
+      95,
+      86
+    ],
+    "counts": {
+      "0.5": 731,
+      "0.8": 327,
+      "0.9": 327,
+      "1.0": 327
+    },
+    "outputs": [
+      {
+        "file": "runs/macos-vm-smoke-20261006/res/resn/signet_Afreq",
+        "sha256": "43d345232387347f5ec7fb0c740609465e5feed000072bdd16d6665648ca4123"
+      },
+      {
+        "file": "runs/macos-vm-smoke-20261006/res/resn/signet_CoeffMat0",
+        "sha256": "0e809a72dba6acba9a677b885f17c016189cd74b9360ab7feff5358603b6f7bd"
+      },
+      {
+        "file": "runs/macos-vm-smoke-20261006/res/resn/signet_net.genepos",
+        "sha256": "8f4ffd71673f512b5451cc13f9b041e166be4b33d6278d9deead4cfe227843b8"
+      }
+    ],
+    "started_utc": "2026-10-06T19:36:55Z",
+    "ended_utc": "2026-10-06T20:10:50Z",
+    "elapsed_seconds": 2035.0,
+    "scheduler_records": [
+      {
+        "id": "1",
+        "state": "COMPLETED",
+        "exit_code": "0:0",
+        "runtime": "00:00:26",
+        "cpu": "4",
+        "resources": "cpu=4,mem=4G,node=1,billing=4"
+      },
+      {
+        "id": "2",
+        "state": "COMPLETED",
+        "exit_code": "0:0",
+        "runtime": "00:06:47",
+        "cpu": "4",
+        "resources": "cpu=4,mem=4G,node=1,billing=4"
+      },
+      {
+        "id": "3",
+        "state": "COMPLETED",
+        "exit_code": "0:0",
+        "runtime": "00:07:32",
+        "cpu": "4",
+        "resources": "cpu=4,mem=4G,node=1,billing=4"
+      },
+      {
+        "id": "4",
+        "state": "COMPLETED",
+        "exit_code": "0:0",
+        "runtime": "00:06:53",
+        "cpu": "4",
+        "resources": "cpu=4,mem=4G,node=1,billing=4"
+      },
+      {
+        "id": "5",
+        "state": "COMPLETED",
+        "exit_code": "0:0",
+        "runtime": "00:07:07",
+        "cpu": "4",
+        "resources": "cpu=4,mem=4G,node=1,billing=4"
+      }
+    ],
+    "verification_file": "runs/macos-vm-smoke-20261006/logs/verification.json",
+    "visualization": "results/actual/network.html",
+    "official_source_unchanged": true,
+    "official_inputs_hashes_unchanged": true,
+    "browser_checked": {
+      "all_genes_frequency_0.5": 731,
+      "all_genes_frequency_0.8": 327,
+      "MEGF6_frequency_1.0": 6,
+      "screenshot": "evidence/actual-preview.png"
+    }
+  }
+}
