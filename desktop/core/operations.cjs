@@ -16,7 +16,19 @@ const EXPLANATIONS=Object.freeze({
  'identity-mismatch':['Operation ownership differs','Select a record owned by this isolated runtime.'],
  'missing-checkpoint':['No verified checkpoint','Keep scientific continuation disabled.'],
  'stale-plan':['Checkpoint or selection changed','Review the new plan and confirm it again.'],
- 'not-ready':['Scientific execution is unavailable in S2','Monitoring does not submit, retry or compute PCA.'],
+ 'not-ready':['Scientific execution is unavailable','Monitoring does not submit, retry or compute PCA.'],
+ 'executor_unavailable':['Plan saved; execution unavailable','A plan is not a remote operation. A trusted current authority and accepted executor are required.'],
+ 'needs_user_auth':['Authentication is unverified','Use a separately authorized core authentication provider; never enter credentials here.'],
+ 'capability_unknown':['Current station capability is missing','Configuration alone cannot prove access, resources or transfer readiness.'],
+ 'reference_drift':['Frozen selection changed','Reload and explicitly bind the intended versions; do not resubmit the old request.'],
+ 'host_key_unverified':['Trusted host key is missing','Use a separately authorized host-key provider; never auto-accept a key.'],
+ 'root_unverified':['Remote storage is unverified','Obtain canonical root, permission and shared storage evidence.'],
+ 'capability_expired':['Station evidence expired','Obtain new trusted evidence before planning a new request.'],
+ 'resource_unsupported':['Resource capability is unverified','Configuration is not proof of account, partition or allocation limits.'],
+ 'operation_conflict':['Request identity conflicts','Keep the original operation; explicitly create a new reviewed request.'],
+ 'profile_in_use':['Connection is referenced','Preserve existing resources, bindings and operation history.'],
+ 'revision_conflict':['Configuration revision changed','Reload and explicitly save against the intended current revision.'],
+ 'permission_denied':['Authorization denied','Do not retry with a different path or unapproved source.'],
  'log-rotated':['Log snapshot changed','Read from the beginning; do not combine generations.'],
  'corrupt-record':['Persisted record is invalid','Preserve the record and inspect its original controller.'],
 });
@@ -33,7 +45,7 @@ class Operations{
  safe(file){let folder=path.dirname(file);while(folder!==this.root){if(!folder.startsWith(this.root+path.sep)||fs.lstatSync(folder).isSymbolicLink())fail('unsafe-path');folder=path.dirname(folder);}if(fs.existsSync(file)&&fs.lstatSync(file).isSymbolicLink())fail('unsafe-path');return file;}
  readJSON(file){try{return JSON.parse(bounded(this.safe(file)).bytes.toString('utf8'));}catch(e){if(e.code==='ENOENT')throw e;if(e.code==='unsafe-path')throw e;fail('corrupt-record');}}
  file(operationId){if(!OP.test(operationId))fail('invalid-operation-id');return this.safe(path.join(this.base,'operations',operationId+'.json'));}
- record(operationId){const envelope=this.readJSON(this.file(operationId)),r=envelope.record;if(envelope.schemaVersion!==2||!r||hash(r)!==envelope.sha256||r.operationId!==operationId||r.owner!==this.owner||!ANALYSIS.test(r.analysisId)||!Number.isSafeInteger(r.revision)||!/^at-[a-f0-9]{32}$/.test(r.attemptId))fail('identity-mismatch');return r;}
+ record(operationId){const envelope=this.readJSON(this.file(operationId)),r=envelope.record;if(envelope.schemaVersion!==2||!r||hash(r)!==envelope.sha256||r.operationId!==operationId||r.owner!==this.owner||!(r.kind==='s3-plan'?r.analysisId===null&&r.frozen?.adapterVersion==='SIGNET-P3-O2-adapter-v1':ANALYSIS.test(r.analysisId))||!Number.isSafeInteger(r.revision)||!/^at-[a-f0-9]{32}$/.test(r.attemptId))fail('identity-mismatch');return r;}
  write(r){F.write(this.file(r.operationId),{schemaVersion:2,record:r,sha256:hash(r)});return structuredClone(r);}
  update(r,changes){return this.write({...r,...changes,revision:r.revision+1,checkedAt:stamp()});}
  names(){const names=[],directory=fs.opendirSync(this.safe(path.join(this.base,'operations')));try{let entry;while((entry=directory.readSync())){if(names.length>=512)fail('scan-limit');names.push(entry.name);}}finally{directory.closeSync();}return names.filter(n=>/^op-[a-f0-9]{32}\.json$/.test(n)).sort();}
@@ -45,11 +57,17 @@ class Operations{
   this.write(r); // Durable intent precedes attaching a local monitor.
   this.handles.add(r.operationId);const ready=this.update(r,{status:'monitoring'});this.journal(ready,'local-monitor-attached');return this.status({operationId:r.operationId});
  }
- projection(r){const a=this.analysis(r.analysisId).state;return {stateSource:'persisted-local-record',checkedAt:r.checkedAt,revision:r.revision,localController:this.handles.has(r.operationId)?'monitoring':'detached',remoteController:'unknown',remoteJobs:'unknown',scientificCompletion:'unknown',stages:(a.stages||[]).slice(0,6).map(s=>({id:s.id,localRecordedStatus:s.status,remoteStatus:'unknown',verifiedCompletion:false})),batches:'unknown'};}
+ registerConfiguration(p){
+  object(p,['requestId','frozen','blocked']);if(typeof p.requestId!=='string'||! /^[A-Za-z0-9_-]{8,80}$/.test(p.requestId)||p.frozen?.adapterVersion!=='SIGNET-P3-O2-adapter-v1'||!['profileCheckPlan','transferPlan','submissionPlanInput'].includes(p.frozen.method)||typeof p.blocked!=='string')fail('invalid-parameters');
+  if(Buffer.byteLength(canonical(p.frozen))>65536)fail('record-limit');const payloadHash=hash(p.frozen);for(const name of this.names()){const r=this.record(name.slice(0,-5));if(r.requestId===p.requestId){if(r.kind!=='s3-plan'||r.payloadHash!==payloadHash)fail('operation_conflict');return this.status({operationId:r.operationId});}}
+  const r={schemaVersion:2,operationId:uuid('op-'),requestId:p.requestId,analysisId:null,attemptId:uuid('at-'),owner:this.owner,kind:'s3-plan',status:'blocked',revision:1,createdAt:stamp(),checkedAt:stamp(),error:{code:p.blocked},evidenceRefs:[],payloadHash,planHash:hash(p.frozen),frozen:structuredClone(p.frozen),executeEnabled:false};
+  this.write(r);return this.status({operationId:r.operationId});
+ }
+ projection(r){if(r.kind==='s3-plan')return {stateSource:'persisted-local-plan',checkedAt:r.checkedAt,revision:r.revision,localController:'plan-only',remoteController:'unknown',remoteJobs:'unknown',scientificCompletion:'unknown',executeEnabled:false};const a=this.analysis(r.analysisId).state;return {stateSource:'persisted-local-record',checkedAt:r.checkedAt,revision:r.revision,localController:this.handles.has(r.operationId)?'monitoring':'detached',remoteController:'unknown',remoteJobs:'unknown',scientificCompletion:'unknown',stages:(a.stages||[]).slice(0,6).map(s=>({id:s.id,localRecordedStatus:s.status,remoteStatus:'unknown',verifiedCompletion:false})),batches:'unknown'};}
  status(params){const p=object(params,['operationId']);let r=this.record(p.operationId);if(['registered','monitoring','cancelling'].includes(r.status)&&!this.handles.has(r.operationId))r=this.update(r,{status:'unknown',error:{code:'controller-lost'}});return {...r,projection:this.projection(r)};}
  target(params){const p=object(params,['operationId','analysisId','attemptId','owner','revision','confirmed']);const r=this.record(p.operationId);if(r.analysisId!==p.analysisId||r.attemptId!==p.attemptId||r.owner!==p.owner)fail('identity-mismatch');if(r.revision!==p.revision)fail('stale-revision');return r;}
  cancel(params){
-  let r=this.target(params);if(params.confirmed!==true)return {...r,confirmationRequired:true};
+  let r=this.target(params);if(r.kind!=='monitor')fail('not-ready');if(params.confirmed!==true)return {...r,confirmationRequired:true};
   if(r.status==='cancelled')return {...r,projection:this.projection(r)};
   r=this.update(r,{status:'cancelling'});this.journal(r,'cancel-intent');
   if(!this.handles.delete(r.operationId))return this.update(r,{status:'unknown',error:{code:'controller-lost'}});
@@ -57,7 +75,7 @@ class Operations{
   r=this.update(r,{status:'cancelled',error:null,evidenceRefs:[...r.evidenceRefs,evidence]});this.journal(r,'local-monitor-released');return {...r,projection:this.projection(r)};
  }
  scan(params){const p=object(params,['limit']);const limit=p.limit??50;if(!Number.isSafeInteger(limit)||limit<1||limit>100)fail('invalid-parameters');const names=this.names(),candidates=[],issues=[];for(const name of names.slice(0,limit)){try{candidates.push(this.status({operationId:name.slice(0,-5)}));}catch(e){issues.push({recordId:name.slice(0,-5),code:e.code||'corrupt-record'});}}return {status:issues.length?'partial':'ok',candidates,issues,truncated:names.length>limit,checkedAt:stamp(),scope:'owned-isolated-local-manifests',remote:'unknown'};}
- attach(params){let r=this.target(params);if(params.confirmed!==undefined)fail('invalid-parameters');if(this.analysis(r.analysisId).digest!==r.analysisHash)fail('stale-source');if(r.status==='cancelled')fail('not-ready');if(this.handles.has(r.operationId))return {...r,attached:true,duplicate:true};this.handles.add(r.operationId);r=this.update(r,{status:'monitoring',error:null});this.journal(r,'local-monitor-reattached');return {...r,attached:true,scientificResubmitted:false,projection:this.projection(r)};}
+ attach(params){let r=this.target(params);if(r.kind!=='monitor')fail('not-ready');if(params.confirmed!==undefined)fail('invalid-parameters');if(this.analysis(r.analysisId).digest!==r.analysisHash)fail('stale-source');if(r.status==='cancelled')fail('not-ready');if(this.handles.has(r.operationId))return {...r,attached:true,duplicate:true};this.handles.add(r.operationId);r=this.update(r,{status:'monitoring',error:null});this.journal(r,'local-monitor-reattached');return {...r,attached:true,scientificResubmitted:false,projection:this.projection(r)};}
  journal(r,event){const file=this.safe(path.join(this.base,'logs',r.operationId+'-controller.log'));if(fs.existsSync(file)&&fs.statSync(file).size>1024*1024)fail('log-limit');fs.appendFileSync(file,JSON.stringify({at:stamp(),event,operationId:r.operationId,status:r.status,revision:r.revision})+'\n',{mode:0o600});}
  logRead(params){
   const p=object(params,['operationId','logId','cursor','limit']);const record=this.record(p.operationId);if(!['controller','worker','stage','scheduler'].includes(p.logId))fail('invalid-log-id');const limit=p.limit??8192;if(!Number.isSafeInteger(limit)||limit<256||limit>8192)fail('invalid-parameters');
@@ -90,7 +108,7 @@ class Operations{
  close(params){const p=object(params,['decision','target']);if(!['review','keep-running','close-anyway','cancel-owned'].includes(p.decision))fail('invalid-parameters');if(p.decision==='review')return {confirmationRequired:true,active:this.scan({limit:100}).candidates.filter(r=>this.handles.has(r.operationId)),shouldClose:false};if(p.decision==='keep-running')return {shouldClose:false,cancelled:false};if(p.decision==='close-anyway')return {shouldClose:true,cancelled:false,independentAnalysisStopped:false};const r=this.cancel({...p.target,confirmed:true});return {shouldClose:r.status==='cancelled',operation:r,independentAnalysisStopped:false};}
 }
 // All state transitions have one short durable-intent mutex, never a long await.
-for(const method of ['start','status','cancel','scan','attach']){
+for(const method of ['start','status','cancel','scan','attach','registerConfiguration']){
  const original=Operations.prototype[method];
  Operations.prototype[method]=function(...args){
   if(this.lockDepth)return original.apply(this,args);

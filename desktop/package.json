@@ -7,9 +7,10 @@
   "scripts": {
     "start": "electron .",
     "package:mac": "node package.mjs",
-    "test": "node --test test-core.cjs test-design.cjs test-s1.cjs test-s2.cjs",
+    "test": "node --test test-core.cjs test-design.cjs test-s1.cjs test-s2.cjs test-s3-integration.cjs",
     "test:scientific": "node --test test-scientific.cjs",
-    "test:s2": "node --test test-s2.cjs"
+    "test:s2": "node --test test-s2.cjs",
+    "test:s3": "node --test test-s3-integration.cjs"
   },
   "devDependencies": {
     "electron": "44.5.1",

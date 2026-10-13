@@ -4,9 +4,12 @@ const {schema}=require('./stages.cjs');
 const store=new Store(workerData.root);
 const {Operations}=require('./operations.cjs');
 const operations=new Operations(workerData.root);
+const {Configuration}=require('./s3-integration.cjs'),{METHODS:S3_METHODS}=require('./s3-api.cjs');
+const configuration=new Configuration(workerData.root,store,operations);
 const s2={operationStart:p=>operations.start(p),operationStatus:p=>operations.status(p),operationCancel:p=>operations.cancel(p),recoveryScan:p=>operations.scan(p),recoveryAttach:p=>operations.attach(p),logRead:p=>operations.logRead(p),errorExplain:p=>operations.explain(p),checkpointReview:p=>operations.checkpoint(p),closeConfirm:p=>operations.close(p)};
 const methods={schema:()=>schema(),list:()=>store.recordList(),recordList:()=>store.recordList(),capabilities:()=>store.capabilities(),draftList:()=>store.draftList(),draftSave:(p,sources)=>store.draftSave(p,sources),draftLoad:id=>store.draftLoad(id),inputValidate:(id,revision)=>store.inputValidate(id,revision),detail:id=>store.recordDetail(id),viewer:id=>store.viewer(id),
 };
+for(const method of S3_METHODS)methods[method]=p=>configuration.call(method,p);
 let queue=Promise.resolve();
 parentPort.on('message',message=>{
  if(Object.hasOwn(s2,message.method)){
@@ -15,5 +18,5 @@ parentPort.on('message',message=>{
  }
  queue=queue.then(async()=>{
  try{if(!Object.hasOwn(methods,message.method))throw Error('Unknown controlled operation');const value=await methods[message.method](...message.args);parentPort.postMessage({id:message.id,ok:true,value});}
- catch(e){parentPort.postMessage({id:message.id,ok:false,error:e.message});}
+ catch(e){parentPort.postMessage({id:message.id,ok:false,error:e.code||e.message,code:e.code??null});}
 });});

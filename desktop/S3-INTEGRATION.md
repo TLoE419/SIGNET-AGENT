@@ -1,0 +1,33 @@
+# Restricted S3 configuration integration
+
+Integration contract `SIGNET-P3-O2-adapter-v1` uses the unchanged, independently checked `SIGNET-P3-X3-J4-v1` registry from commit `186c5b6`. The historical pure-module README describes that module alone; this document describes its new product adapter. The source starts from S2 `ca9e1c7`; S2's newer test-core is retained.
+
+## Local user flow
+
+In formal mode open **Connections & Environment**, add/name a connection, explicitly configure login/transfer endpoints and remote role roots, and save. Blank host/user/port/root/resource values remain unknown; no site, account, credentials or host key is inferred. The authentication field is read-only. Saved configurations reload through the worker registry and can be explicitly selected by name/revision. A configuration with a missing login endpoint or required root role remains incomplete; its corresponding controls are disabled.
+
+Open a saved draft and its **Settings** tab. Choose an exact saved connection version, enter optional account/partition/QoS and CPU/Memory **GiB**/HH:MM:SS values, then **Save resource configuration**. 1.5 GiB saves 1536 MiB, 00:01:30 saves 90 seconds; the registry rejects unsafe/nonpositive/noninteger values and invalid clock syntax. **Bind saved configuration** is a separate, explicit action after saving the draft/resources. No S3 fields are added to S1 v1 content. Draft changes, input replacement or configuration version changes make the fixed sidecar stale. Reload and explicitly choose/rebind intended versions; there is no latest-version override.
+
+**Review connection prerequisites** and **Review upload prerequisites** persist local blocked plan requests. The production worker has no current authority/capability/source-grant provider and no accepted effect executor. They do not authenticate, probe, upload, download or submit. Persistent local plan status can reload into a new renderer, including history whose frozen profile version is older than the selected current configuration. History is not fresh station evidence. Archive is recoverable and refuses any profile referenced by registry history or O2 plan history.
+
+## Closed bridge and identity
+
+Main/preload/Service/worker expose only configurationList, profileSave, profileDelete, resourcePlanSave, bindingSave, bindingLoad, profileCheckPlan, transferPlan and submissionPlanInput. Inputs follow the adopted registry's exact finite schemas; configurationList takes an empty object. There is no invoke/shell/path/URL/secret/authority-provider API. Remote root strings are bounded configuration under declared endpoint/root roles, never arbitrary local filesystem selectors. S1 native selection references are opaque; the new adapter does not grant them transfer authorization. Download destination handles and trusted storage/source adapters remain unavailable.
+
+Main verifies the owning webContents/mainFrame and exact `signet://app/index.html`; design review denies all real S3 calls. The worker receives only its main-owned isolated root. Only constructor-injected trusted core test ports can supply synthetic authority; they are never IPC arguments. Unexpected provider failures map to a fixed io_conflict code instead of exposing raw paths/secrets. Registry errors are fixed codes, not arbitrary provider text.
+
+S1's exact draft revision/contentHash is read without changing its byte/hash algorithm. A valid current validation is mapped into a finite validationRef and inputManifestHash; changed or missing source evidence cannot supply a current draft reference.
+
+O2 schema-2 envelopes preserve existing monitor semantics and add a discriminated **s3-plan** record. Its analysisId is explicitly null: the subject is a frozen profile or draft reference, not a fabricated analysis. Core-generated op-/at-/owner/revision/requestId/checkedAt identity is persistent. `frozen` contains the adapter/module versions, finite method/input, exact draft/binding/profile/resource/capability refs, and an optional separate `intentId`, `intentHash` and pure plan. O2 planHash/payloadHash cover the complete frozen structure, including rootMappingHash/inputManifestHash when available. The pure registry's intent- ID is never substituted for the O2 op- ID or a scheduler job.
+
+Valid requests with missing prerequisites register **blocked**, retain a specific error and remote/scientific unknown state, and never attach an executor. A successful trusted synthetic plan still registers blocked/executor_unavailable. Same request plus identical frozen identity returns the same operation across loss/restart; different input/hash is operation_conflict. A previously blocked request stays frozen; explicitly review a new request after prerequisites change. S2 attach/cancel cannot treat s3-plan as a monitor. configurationList includes at most 100 lightweight owned plan-history snapshots and bounded issues; operationStatus remains the existing O2 full-record query.
+
+A short exclusive adapter lock serializes the S3 application APIs across workers through intent registration and profile archive/reference checks. It does not hold the S2 status mutex across awaits, steal locks, guarantee exactly-once remote effects, or coordinate a future external authority atomically. O2 accepts at most 64KiB of frozen configuration input per plan and retains its 512-record limit. No unbounded history scan is introduced.
+
+## Validation and remaining gates
+
+`npm test` includes the existing S1/S2/design/core suite and `test-s3-integration.cjs`; `npm run test:s3` runs the adapter/real-worker tests. The adopted module's separate 24 tests must use an owned runtime redirect rather than its historical S3-build-evidence path. Do not overwrite sealed author or verification fixtures. Tests use public synthetic files, tripwires and injected local evidence, not user credentials or station observations.
+
+Hidden owned-window scripted DOM/IPC checks cover save/select/bind/stale/error/review denial and full-process history reload. They are not native clicks or independent acceptance. The original S2 hidden workflow is rerun separately. Static design assets/styles remain unchanged; added finite controls live in the existing page containers and scrollable local evidence section.
+
+Unavailable: real authentication/host-key handling, current per-endpoint capabilities, authorized source/destination/storage adapters, real probe/transfer/executor claims, S4 scheduling/submission approval, scientific jobs and station acceptance. No models, network, SSH, campus submission, push/merge or user-window operation is performed by this integration. Archive restoration requires a separate authorized repair; no restore UI is implied.

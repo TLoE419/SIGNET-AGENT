@@ -1,6 +1,15 @@
 const {contextBridge, ipcRenderer} = require('electron');
 // No generic invoke, filesystem, shell, token, or user-specified URL exposure.
 contextBridge.exposeInMainWorld('desktop', Object.freeze({
+  configurationList: p => ipcRenderer.invoke('desktop:configurationList',p),
+  profileSave: p => ipcRenderer.invoke('desktop:profileSave',p),
+  profileDelete: p => ipcRenderer.invoke('desktop:profileDelete',p),
+  resourcePlanSave: p => ipcRenderer.invoke('desktop:resourcePlanSave',p),
+  bindingSave: p => ipcRenderer.invoke('desktop:bindingSave',p),
+  bindingLoad: p => ipcRenderer.invoke('desktop:bindingLoad',p),
+  profileCheckPlan: p => ipcRenderer.invoke('desktop:profileCheckPlan',p),
+  transferPlan: p => ipcRenderer.invoke('desktop:transferPlan',p),
+  submissionPlanInput: p => ipcRenderer.invoke('desktop:submissionPlanInput',p),
   closeVisualization: () => ipcRenderer.invoke('desktop:closeVisualization'),
   visualization: id => ipcRenderer.invoke('desktop:visualization', id),
   operationStart: p => ipcRenderer.invoke('desktop:operationStart',p),

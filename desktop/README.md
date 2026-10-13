@@ -44,3 +44,7 @@ SIGNET_REVIEW_USER_DATA=/tmp/signet-design-review-user npm start
 ## 英文對照
 
 - **R Shiny** — 官方互動式結果介面框架。
+
+## Restricted S3 configuration
+
+See [S3-INTEGRATION.md](S3-INTEGRATION.md) for configuration/profile/resource sidecars, closed bridge methods and durable blocked plan identities. Configuration is usable locally; authentication, transmission and scientific execution remain unavailable pending trusted core adapters.
