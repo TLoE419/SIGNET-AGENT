@@ -4,11 +4,17 @@ const path = require('node:path');
 const {randomUUID} = require('node:crypto');
 const {Service} = require('./service.cjs');
 const {FILES} = require('./core/stages.cjs');
+const {lookup: localResource} = require('./design-static.cjs');
 
 protocol.registerSchemesAsPrivileged([{scheme: 'signet', privileges: {
   standard: true, secure: true, supportFetchAPI: true,
 }}]);
-if (!app.isPackaged) app.setPath('userData', path.join(__dirname, '.runtime'));
+// A separate user-data directory also isolates Electron's single-instance lock.
+const reviewData = process.env.SIGNET_REVIEW_USER_DATA;
+if (reviewData) {
+  if (!path.isAbsolute(reviewData)) throw Error('Review userData must be absolute');
+  app.setPath('userData', reviewData);
+} else if (!app.isPackaged) app.setPath('userData', path.join(__dirname, '.runtime'));
 app.commandLine.appendSwitch('force-renderer-accessibility');
 const single = app.requestSingleInstanceLock();
 let win, service;
@@ -110,21 +116,20 @@ async function protocols() {
   protocol.handle('signet', async request => {
     const url = new URL(request.url);
     if (url.host !== 'app' || request.method !== 'GET') return new Response('', {status: 403});
-    const fixed = {'/index.html': ['index.html', 'text/html'], '/renderer.js': ['renderer.js', 'text/javascript'],
-      '/style.css': ['style.css', 'text/css']};
-    if (Object.hasOwn(fixed, url.pathname)) {
-      const [file, mime] = fixed[url.pathname];
+    const resource = localResource(url.host, request.method, url.pathname);
+    if (resource) {
+      const [file, mime] = resource;
       return new Response(fs.readFileSync(path.join(__dirname, file)), {headers: {
         'Content-Type': mime + '; charset=utf-8',
-        'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; frame-src http://127.0.0.1:*; img-src 'self'; base-uri 'none'; form-action 'none'",
+        'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; frame-src http://127.0.0.1:*; img-src 'self'; font-src 'self'; base-uri 'none'; form-action 'none'",
       }});
     }
     return new Response('', {status: 404});
   });
 }
 function makeWindow() {
-  win = new BrowserWindow({width: 1280, height: 900, minWidth: 850, minHeight: 650,
-    title: 'SIGNET Desktop Workbench', backgroundColor: '#f2f6f8', webPreferences: {
+  win = new BrowserWindow({width: 1440, height: 960, useContentSize: true, show: process.env.SIGNET_REVIEW_HIDDEN !== '1', minWidth: 850, minHeight: 650,
+    title: 'SIGNET — Design demo', backgroundColor: '#f5f5f5', webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'), nodeIntegration: false,
       contextIsolation: true, sandbox: true, webSecurity: true, webviewTag: false,
     }});
@@ -148,6 +153,8 @@ else {
       {label: 'SIGNET', submenu: [{role: 'about'}, {type: 'separator'}, {role: 'quit', label: 'Quit SIGNET'}]},
       {label: 'Edit', submenu: [{role: 'undo'}, {role: 'redo'}, {type: 'separator'}, {role: 'cut'}, {role: 'copy'}, {role: 'paste'}, {role: 'selectAll'}]},
       {label: 'Window', submenu: [{role: 'minimize'}, {role: 'zoom'}]},
+      {label: 'Review', submenu: [{label: 'Design review routes', accelerator: 'CmdOrCtrl+Shift+R',
+        click: () => win?.webContents.executeJavaScript('window.signetReview.openIndex()')}]},
     ]));
     const root = await projectRoot();
     if (!root) { app.quit(); return; }

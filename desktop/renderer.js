@@ -1,57 +1,78 @@
-const $=id=>document.getElementById(id);
-const names={preparing:'Preparing',ready:'Ready',starting:'Starting',running:'Running',verifying:'Verifying',succeeded:'Verified',failed:'Failed',interrupted:'Interrupted',skipped:'Skipped',cancelling:'Cancelling',cancelled:'Cancelled'};
-let selected=localStorage.getItem('selected-analysis')||'',schema,imports={},busy=false,refreshing=false,connected=false,loadedResult='',listFingerprint='',detailFingerprint='';
-async function call(method,...args){const r=await window.desktop[method](...args);if(!r.ok)throw Error(r.error);return r.value}
-function message(text){$('message').textContent=text}
-async function safe(fn){try{await fn()}catch(e){message(e.message)}}
-async function connection(){const s=await call('status');connected=s.connected;$('connection').textContent=connected?'Ready':'Controller unavailable'; $('create-button').disabled=!connected;}
-function label(a){return a.controller!=='node-v1'&&/[\p{Script=Han}]/u.test(a.label)?'Historical analysis ('+a.id.slice(2,10)+')':a.label;}
-async function reconnect(){try{await call('reconnect');schema=await call('schema');setupForm();await connection();await refresh();message('')}catch(e){connected=false;$('connection').textContent='Controller unavailable: '+e.message;$('create-button').disabled=true}}
-function setupForm(){
- if(!$('parameters').childElementCount){for(const [key,s] of Object.entries(schema.parameters)){const label=document.createElement('label');label.textContent=s.label;const input=document.createElement('input');input.type='number';input.value=s.default;input.min=s.min;input.max=s.max;input.step=s.integer?'1':'any';input.dataset.param=key;input.required=true;label.append(input);$('parameters').append(label)}
- const label=document.createElement('label');label.textContent='GTEx tissue identifier';const input=document.createElement('input');input.value='Lung';input.dataset.param='tissue';label.append(input);$('parameters').append(label);}
- fileFields();
+/* Native design renderer. All controls are local design demonstrations. */
+'use strict';
+const pages = new Map(window.SIGNET_DESIGN.pages.map(p => [p.nodeId,p]));
+const app = document.getElementById('app');
+const feedback = document.getElementById('demo-feedback');
+const demo = {workflow:'network',current:'4:2',values:{},timer:null,history:[],selected:false};
+let feedbackTimer;
+function notice(){feedback.textContent='Design demo only — no files, services or analyses were changed.';feedback.hidden=false;clearTimeout(feedbackTimer);feedbackTimer=setTimeout(()=>feedback.hidden=true,3500);}
+function later(id,delay,next){clearTimeout(demo.timer);demo.timer=setTimeout(()=>{showScreen(id);if(next)later(next,1100);},delay);}
+function action(label,node,el){
+ if(el.disabled)return;
+ if(demo.current==='9:3218'){
+  const page=[...pages.values()].find(p=>p.name.split(' · ')[0]+' · '+p.name.split(' / ').at(-1)===label);if(page){showScreen(page.nodeId,{reset:true});return;}
+ }
+ if(label==='Start scenario'){const buttons=[...document.querySelectorAll('button')].filter(b=>b.textContent==='Start scenario');showScreen(window.SIGNET_ROUTES.scenarios[buttons.indexOf(el)],{reset:true});return;}
+ if(label==='Close anyway'){window.close();return;}
+ if(['All','Active','Needs attention','Completed','Drafts'].includes(label)){showScreen(({All:'4:2',Active:'4:2','Needs attention':'4:18',Completed:'4:12',Drafts:'4:48'})[label]);return;}
+ const inDialog=Boolean(el.closest('[role="dialog"]'));
+ const target=window.SIGNET_ROUTES.target(demo.current,label,demo,inDialog);
+ if(!target){notice();return;}
+ showScreen(target);
+ if(label==='Upload & check'||label==='Retry transfer')later('4:54',1100,'4:9');
+ if(label==='Start analysis'&&target==='4:10')later('4:11',1500);
+ if(['Download & explore','Download selected files','Retry download'].includes(label))later(demo.workflow==='import'?'4:33':'4:14',1500);
+ if(label==='Open visualization'||label==='Retry')later('4:15',1500);
+ if(label==='Reconnect')later('4:26',1500);
+ if(label==='Scan workspace')later('4:27',1500);
 }
-function fileFields(){
- imports={};const custom=$('dataset').value==='custom';$('cohort').disabled=!custom;if(!custom)$('cohort').value='TCGA';$('input-files').hidden=!custom;$('input-files').replaceChildren();
- if(!custom)return;const cohort=$('cohort').value;
- for(const [key,name] of schema.files[cohort]){const row=document.createElement('p'),button=document.createElement('button'),status=document.createElement('span');button.type='button';button.textContent='Choose '+name;status.textContent=' Not selected';
- button.onclick=()=>safe(async()=>{const selected=await call('pick',key,cohort);if(!selected.canceled){imports[key]=selected.token;status.textContent=' '+selected.name;}});row.append(button,status);$('input-files').append(row);}
+function copyAttrs(el,attrs){for(const [key,value] of Object.entries(attrs||{}))if(key==='class'||key.startsWith('data-')||['alt','src','draggable'].includes(key))el.setAttribute(key,value);}
+function component(node){
+ const a=node.attrs||{},label=a.label||'',el=document.createElement(node.tag==='InputField'||node.tag==='SelectField'?'label':node.tag==='Tag'?'span':'button');copyAttrs(el,a);
+ if(node.tag==='Button'||node.tag==='Tab'){
+  el.type='button';el.textContent=label;el.dataset.label=label;el.setAttribute('aria-label',label);
+  el.classList.add(node.tag==='Tab'?'sds-tab':'sds-button');
+  if(node.tag==='Tab'){if(a.active==='On'){el.classList.add('active');el.setAttribute('aria-current','page');}}else el.classList.add((a.variant||'neutral').toLowerCase());
+  el.disabled=a.state==='Disabled';el.addEventListener('click',()=>action(label,node,el));
+ }else if(node.tag==='Tag'){el.textContent=label;el.classList.add('sds-tag',(a.scheme||'Neutral').toLowerCase());}
+ else{
+  el.classList.add('sds-field');if(a.state==='Error')el.classList.add('error');
+  if(a.hasLabel==='true'){const l=document.createElement('span');l.className='sds-field-label';l.textContent=label;el.append(l);}
+  const field=document.createElement(node.tag==='SelectField'?'select':'input');field.className=node.tag==='SelectField'?'sds-select':'sds-input';field.setAttribute('aria-label',label||a.placeholder||'Design field');
+  const value=demo.values[label]??a.value??'';
+  if(node.tag==='SelectField'){
+   const choices=[value];const collect=n=>{if(n.tag==='SelectField'&&n.attrs.label===label)choices.push(n.attrs.value||'');for(const child of n.children||[])collect(child);};for(const page of pages.values())collect(page.tree);
+   for(const choice of new Set(choices)){const o=document.createElement('option');o.textContent=choice;o.value=choice;field.append(o);}
+  }else field.placeholder=a.placeholder||'';
+  field.value=value;field.addEventListener('change',()=>{demo.values[label]=field.value;if(/search/i.test(label)&&field.value&&!/demo|network|expression/i.test(field.value))showScreen('4:50');if(/PC/i.test(label)&&(!/^\d+$/.test(field.value)||Number(field.value)<1||Number(field.value)>5))showScreen('4:64');});el.append(field);
+  if(a.hasDescription==='true'){const d=document.createElement('span');d.className='sds-field-description';d.textContent=a.description||'';el.append(d);}
+  if(a.hasError==='true'){const d=document.createElement('span');d.className='sds-field-error';d.textContent=a.error||'';el.append(d);}
+ }
+ return el;
 }
-$('dataset').onchange=()=>schema&&fileFields();$('cohort').onchange=()=>schema&&fileFields();
-async function refresh(){if(refreshing)return;refreshing=true;try{
- const list=await call('list');if(selected&&!list.some(a=>a.id===selected)){selected='';localStorage.removeItem('selected-analysis')}
- const fingerprint=JSON.stringify([selected,list.map(a=>[a.id,a.label,a.status])]);
- if(fingerprint!==listFingerprint){listFingerprint=fingerprint;$('list').replaceChildren();for(const a of list){const b=document.createElement('button');b.className='item'+(a.id===selected?' selected':'');b.textContent=`${label(a)} · ${names[a.status]||a.status}`;const identifier=document.createElement('div');identifier.className='id';identifier.textContent=a.id;b.append(identifier);b.onclick=()=>safe(async()=>{await call('closeVisualization');selected=a.id;detailFingerprint='';localStorage.setItem('selected-analysis',selected);await refresh()});$('list').append(b)}}
- if(selected)await show();
- }finally{refreshing=false}}
-function saveButton(id,key,label){const b=document.createElement('button');b.textContent=label;b.onclick=()=>safe(async()=>{b.disabled=true;try{const r=await call('save',id,key);message(r.canceled?'Save cancelled.':'Saved: '+r.path)}finally{b.disabled=false}});return b}
-async function show(){
- const a=await call('detail',selected),fingerprint=JSON.stringify(a);if(fingerprint===detailFingerprint)return;
- $('detail').replaceChildren();for(const text of [label(a),'Analysis ID: '+a.id,'Status: '+(names[a.status]||a.status),a.error||a.launcher_warning||'',a.cancel_error?'Cancellation unconfirmed: '+a.cancel_error:''].filter(Boolean)){const p=document.createElement('p');p.textContent=text;$('detail').append(p)}
- $('reveal').hidden=false;$('reveal').onclick=()=>safe(()=>call('reveal',a.id));
- const active=['starting','running','verifying','cancelling'].includes(a.status);$('cancel').hidden=!active||a.controller!=='node-v1';$('cancel').disabled=busy||a.status==='cancelling';$('cancel').onclick=()=>safe(async()=>{busy=true;try{await call('cancel',a.id);message('Cancellation requested; checking remote jobs.');detailFingerprint='';await refresh()}finally{busy=false}});
- $('stage-controls').replaceChildren();
- for(const s of a.stages||[]){const p=document.createElement('p');p.textContent=s.name+': '+(names[s.status]||s.status)+' ';
- if(s.status==='ready'&&a.controller==='node-v1'){const b=document.createElement('button');b.textContent='Run stage';const before=a.stages.slice(0,a.stages.indexOf(s));const independent=s.id==='expression'&&a.cohort==='TCGA';
- b.disabled=busy||active||['failed','interrupted','cancelled'].includes(a.status)||(!independent&&before.some(x=>!['succeeded','skipped'].includes(x.status)));
- b.onclick=()=>safe(async()=>{busy=true;b.disabled=true;try{await call('start',a.id,s.id);message('Stage started.');detailFingerprint='';await refresh()}finally{busy=false}});p.append(b);}
- $('stage-controls').append(p);}
- $('stage-downloads').replaceChildren();for(const [key,name] of Object.entries(a.artifacts||{}))$('stage-downloads').append(saveButton(a.id,key,'Save '+name));
- $('progress').replaceChildren();if(a.active_stage==='network'||(!a.stages&&a.progress))for(const s of a.progress?.stages||[]){const p=document.createElement('p');p.textContent=`Network phase ${s.stage}: ${s.completed} / ${s.total||'not assigned'} commands`;$('progress').append(p)}
- for(const j of a.progress?.scheduler?.jobs||[]){const p=document.createElement('p');p.textContent=`Scheduler job ${j.JobIDRaw}：${j.State}; exit code ${j.ExitCode}; runtime ${j.RunTime}`;$('progress').append(p)}
- if(a.progress?.scheduler?.error){const p=document.createElement('p');p.textContent=a.progress.scheduler.error;$('progress').append(p)}
- $('logs-box').hidden=!!a.legacy;
- if(!a.legacy){const logs=await call('logs',a.id);$('logs').textContent=Object.entries(logs).map(([k,v])=>k+'\n'+v).join('\n\n')||'No logs yet'}
- $('results').hidden=!a.verification&&!Object.keys(a.artifacts||{}).length;
- $('show-result').hidden=!a.officialVisualization||!a.stages?.some(s=>s.id==='visualization'&&s.status==='succeeded');$('downloads').replaceChildren();$('result-summary').textContent='';
- if(a.verification){const v=a.verification;$('result-summary').textContent=`${v.shape[0]} targets × ${v.shape[1]} sources; ${v.job_ids.length} actual scheduler jobs verified; frequency ≥ 0.5: ${v.counts['0.5']} edges.`;
-
- $('show-result').onclick=()=>safe(async()=>{$('show-result').disabled=true;try{message('Starting official Shiny visualization…');const result=await call('visualization',a.id);loadedResult=a.id;$('viewer').src=result.url;$('viewer').hidden=false;message('Official visualization ready.');}finally{$('show-result').disabled=false;}});}
- if(loadedResult!==a.id){$('viewer').hidden=true;$('viewer').removeAttribute('src')}
- detailFingerprint=fingerprint;
+function create(node){
+ if(Object.hasOwn(node,'text'))return document.createTextNode(node.text);
+ if(['Button','Tab','Tag','InputField','SelectField'].includes(node.tag))return component(node);
+ if(node.tag==='ChevronDown')return document.createTextNode('');
+ if(!['div','p','a','span','img'].includes(node.tag))throw Error('Unsupported design element: '+node.tag);
+ const el=document.createElement(node.tag);copyAttrs(el,node.attrs);
+ for(const child of node.children||[])el.append(create(child));
+ const name=node.attrs?.['data-name']||'';
+ if(node.tag==='a'){
+  el.setAttribute('role','link');el.tabIndex=0;
+  const go=()=>{const text=el.textContent;if(demo.current==='4:27'&&el.closest('[role="dialog"]')){demo.selected=true;el.setAttribute('aria-selected','true');el.style.background='#f1f6fd';const b=[...el.closest('[role="dialog"]').querySelectorAll('button')].find(b=>b.textContent==='Recover analysis');if(b)b.disabled=false;return;}if(/Prepare|preprocess|align expression/i.test(text)){demo.workflow='preprocessing';showScreen('4:34');}else if(/cis-eQTL|cis-eqtl/i.test(text)){demo.workflow='cis';showScreen('4:41');}else if(/existing|Import/i.test(text)){demo.workflow='import';showScreen('4:30');}else if(/Build.*network|gene network/i.test(text)){demo.workflow='network';showScreen('4:3');}else if(/Row 1/.test(name))showScreen('4:11');else if(/Row 2/.test(name))showScreen('4:14');else if(/Row 3/.test(name))showScreen('4:34');else notice();};
+  el.addEventListener('click',go);el.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();go();}});
+ }
+ return el;
 }
-$('create').onsubmit=e=>{e.preventDefault();safe(async()=>{$('create-button').disabled=true;try{const parameters={};for(const input of document.querySelectorAll('[data-param]'))parameters[input.dataset.param]=input.type==='number'?Number(input.value):input.value;
- const a=await call('create',{label:$('label').value,dataset:$('dataset').value,cohort:$('cohort').value,parameters,imports});selected=a.id;localStorage.setItem('selected-analysis',selected);detailFingerprint='';message('Analysis created. Run its stages in order.');await refresh();}finally{$('create-button').disabled=!connected}})};
-$('refresh').onclick=()=>safe(refresh);$('reconnect').onclick=()=>safe(reconnect);
-reconnect().finally(()=>setInterval(()=>safe(refresh),5000));
+function showScreen(id,{reset=false}={}){
+ const page=pages.get(id);if(!page)throw Error('Unknown design screen: '+id);
+ clearTimeout(demo.timer);clearTimeout(feedbackTimer);feedback.hidden=true;if(reset)demo.values={};
+ if(/preprocessing|Review PCA/i.test(page.name))demo.workflow='preprocessing';else if(/cis-eqtl/i.test(page.name))demo.workflow='cis';else if(/\/ import/.test(page.name))demo.workflow='import';else if(/\/ network/.test(page.name))demo.workflow='network';
+ demo.current=id;demo.history.push(id);const tree=create(page.tree);tree.classList.add('screen');if(page.review)tree.classList.add('review');tree.dataset.screenId=id;const backdrop=[...tree.children].find(el=>el.dataset.name==='Modal backdrop');if(backdrop?.nextElementSibling){const modal=backdrop.nextElementSibling;modal.setAttribute('role','dialog');modal.setAttribute('aria-modal','true');modal.setAttribute('aria-label',modal.dataset.name);if(id==='4:27'){for(const row of modal.querySelectorAll('[data-name="Row 1"]')){row.setAttribute('role','button');row.tabIndex=0;const select=()=>{demo.selected=true;row.setAttribute('aria-selected','true');row.style.background='#f1f6fd';};row.addEventListener('click',select);row.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();select();}});}}for(const el of tree.children)if(el!==modal&&el!==backdrop){el.inert=true;el.setAttribute('aria-hidden','true');}}
+ app.replaceChildren(tree);document.title=page.name+' — SIGNET design demo';window.scrollTo(0,0);
+ window.dispatchEvent(new CustomEvent('signet:screen',{detail:{nodeId:id,name:page.name,demo:true}}));
+}
+window.signetReview=Object.freeze({open:showScreen,openIndex:()=>showScreen('3:797'),current:()=>({nodeId:demo.current,workflow:demo.workflow,demo:true,history:[...demo.history]})});
+document.addEventListener('keydown',e=>{if((e.metaKey||e.ctrlKey)&&e.shiftKey&&e.key.toLowerCase()==='r'){e.preventDefault();showScreen('3:797');}if(e.key==='Escape'&&document.querySelector('[role="dialog"]'))showScreen(demo.current==='4:72'?window.SIGNET_ROUTES.workflows[demo.workflow][1]:'4:2');});
+showScreen(new URLSearchParams(location.search).has('review')?'3:797':'4:2');

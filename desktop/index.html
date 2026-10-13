@@ -1,20 +1,5 @@
 <!doctype html>
-<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>SIGNET Desktop Workbench</title><link rel="stylesheet" href="style.css">
-<header><h1>SIGNET</h1></header>
-<main>
-<p id="connection" role="status">Initializing…</p><button id="reconnect">Reconnect</button>
-<div class="grid"><aside><section><h2>1. Select processing</h2><form id="create">
-<label>Name<input id="label" maxlength="80" required value="Official simulation"></label>
-<label>Starting point<select id="dataset"><option value="official-simulation">Official simulation: network input</option><option value="official-ciseqtl">Official simulation: cis-eQTL input</option><option value="custom">Import raw data: all six stages</option></select></label>
-<label>Cohort<select id="cohort"><option value="TCGA">TCGA</option><option value="GTEx">GTEx</option></select></label>
-<div id="input-files" hidden></div><details><summary>Parameters</summary><div id="parameters"></div></details>
-
-<button id="create-button" disabled>Create analysis</button></form></section>
-<section><h2>2. Run history</h2><button id="refresh">Refresh</button><div id="list"></div></section></aside>
-<div><section><h2>3. Progress</h2><div id="message" role="status" aria-live="polite"></div><div id="detail">Select an analysis.</div>
-<button id="reveal" hidden>Open analysis folder</button><button id="cancel" hidden>Cancel analysis</button><div id="stage-controls"></div><div id="progress"></div>
-<details id="logs-box" hidden><summary>Logs</summary><pre id="logs"></pre></details></section>
-<section id="results" hidden><h2>4. Results</h2><p id="result-summary"></p><div id="stage-downloads"></div><div id="downloads"></div><button id="show-result">Open official visualization</button><iframe sandbox="allow-scripts allow-same-origin allow-forms allow-downloads" id="viewer" title="Gene regulatory network" hidden></iframe></section>
-</div></div>
-</main><script src="renderer.js"></script></html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SIGNET — Design demo</title><link rel="stylesheet" href="style.css"><link rel="stylesheet" href="design-layout.css"></head>
+<body><main id="app" aria-label="SIGNET design demo"></main><div id="demo-feedback" role="status" aria-live="polite" hidden></div>
+<script src="design-pages.js"></script><script src="design-routes.js"></script><script src="renderer.js"></script></body></html>
