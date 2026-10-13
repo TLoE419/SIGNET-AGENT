@@ -2,7 +2,7 @@ const {parentPort,workerData}=require('node:worker_threads');
 const {Store}=require('./store.cjs');
 const {schema}=require('./stages.cjs');
 const store=new Store(workerData.root);
-const methods={schema:()=>schema(),list:()=>store.list(),detail:id=>{store.recover();return store.detail(id)},logs:id=>store.logs(id),
+const methods={schema:()=>schema(),list:()=>store.recordList(),recordList:()=>store.recordList(),capabilities:()=>store.capabilities(),draftList:()=>store.draftList(),draftSave:(p,sources)=>store.draftSave(p,sources),draftLoad:id=>store.draftLoad(id),inputValidate:(id,revision)=>store.inputValidate(id,revision),detail:id=>store.recordDetail(id),logs:id=>store.logs(id),
  create:p=>store.create(p),start:(id,stage)=>store.start(id,stage),cancel:id=>store.cancel(id),
  artifact:(id,name)=>{store.artifact(id,name);return true},saveArtifact:(id,name,destination)=>store.saveArtifact(id,name,destination),viewer:id=>store.viewer(id)};
 let queue=Promise.resolve();

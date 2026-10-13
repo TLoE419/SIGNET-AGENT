@@ -1,9 +1,9 @@
 const {app, BrowserWindow, protocol, ipcMain, dialog, shell, session, Menu} = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
-const {randomUUID} = require('node:crypto');
 const {Service} = require('./service.cjs');
-const {FILES} = require('./core/stages.cjs');
+const {fields} = require('./core/drafts.cjs');
+const {NativeInputs} = require('./native-inputs.cjs');
 const {lookup: localResource} = require('./design-static.cjs');
 
 protocol.registerSchemesAsPrivileged([{scheme: 'signet', privileges: {
@@ -18,7 +18,9 @@ if (reviewData) {
 app.commandLine.appendSwitch('force-renderer-accessibility');
 const single = app.requestSingleInstanceLock();
 let win, service;
-const selectedInputs = new Map();
+const selectedInputs = new NativeInputs();
+let desktopMode = 'formal';
+const s1Methods = new Set(['mode','status','reconnect','schema','capabilities','list','detail','draftList','draftSave','draftLoad','inputValidate','pick']);
 const home = 'signet://app/index.html';
 const aidPattern = /^(a-[0-9]{8}T[0-9]{6}-[a-f0-9]{12}|macos-vm-smoke-20261006)$/;
 const artifacts = new Set(['network.html', 'edges.csv', 'network.json', 'Afreq', 'CoeffMat0',
@@ -33,7 +35,14 @@ function artifact(id, name) {
   return name;
 }
 async function projectRoot() {
-  if (!app.isPackaged) return path.resolve(__dirname, '..');
+  if (!app.isPackaged) {
+    const isolated = process.env.SIGNET_REVIEW_PROJECT_ROOT;
+    if (isolated) {
+      if (!reviewData || !path.isAbsolute(isolated) || !fs.realpathSync(isolated).startsWith(fs.realpathSync(reviewData) + path.sep + 'fixture-project' + path.sep)) throw Error('Isolated project must be under review userData/fixture-project/');
+      return fs.realpathSync(isolated);
+    }
+    return path.resolve(__dirname, '..');
+  }
   const config = path.join(app.getPath('userData'), 'project.json');
   let root;
   try { root = JSON.parse(fs.readFileSync(config)).root; } catch {}
@@ -54,11 +63,21 @@ function handle(name, fn) {
   ipcMain.handle('desktop:' + name, async (event, ...args) => {
     if (!win || event.sender !== win.webContents || event.senderFrame !== win.webContents.mainFrame ||
         event.senderFrame.url !== home) throw Error('Untrusted desktop request');
-    try { return {ok: true, value: await fn(...args)}; }
+    try {
+      if (!s1Methods.has(name)) throw Error('Not ready: this action belongs to a later stage (S2–S7).');
+      if (desktopMode === 'review' && name !== 'mode') throw Error('Design review is isolated; real operations are disabled.');
+      return {ok: true, value: await fn(...args)};
+    }
     catch (e) { return {ok: false, error: e.message}; }
   });
 }
 function installBridge() {
+  handle('mode', mode => {if (!['formal','review'].includes(mode)) throw Error('Invalid desktop mode');desktopMode=mode;return mode;});
+  handle('capabilities', () => service.call('capabilities'));
+  handle('draftList', () => service.call('draftList'));
+  handle('draftSave', p => {if (!p || typeof p !== 'object' || Array.isArray(p)) throw Error('Invalid draft');return service.call('draftSave', p, selectedInputs.resolve(p));});
+  handle('draftLoad', id => service.call('draftLoad', id));
+  handle('inputValidate', (id, revision) => service.call('inputValidate', id, revision));
   handle('closeVisualization', async () => {await service.visualization.stop();return true;});
   handle('visualization', async id => {await service.call('detail',aid(id));return service.visualization.open(aid(id));});
   handle('status', () => service.status());
@@ -67,14 +86,14 @@ function installBridge() {
   handle('list', () => service.call('list'));
   handle('detail', id => service.call('detail', aid(id)));
   handle('logs', id => service.call('logs', aid(id)));
-  handle('pick', async (key, cohort) => {
-    const field = FILES[cohort]?.find(f => f[0] === key);
+  handle('pick', async (key, cohort, workflow = 'preprocessing') => {
+    const field = fields(workflow,cohort).find(f => f[0] === key);
     if (!field) throw Error('Unknown input field');
     const choice = await dialog.showOpenDialog(win, {title: 'Select ' + field[1],
       properties: [field[2] === 'directory' ? 'openDirectory' : 'openFile']});
     if (choice.canceled) return {canceled: true};
-    const token = randomUUID();
-    selectedInputs.set(token, {key, cohort, path: choice.filePaths[0]});
+    if (desktopMode !== 'formal') return {canceled:true};
+    const token = selectedInputs.add(key,cohort,workflow,choice.filePaths[0]);
     return {token, name: path.basename(choice.filePaths[0])};
   });
   handle('create', params => {
@@ -83,9 +102,9 @@ function installBridge() {
       throw Error('Only defined analysis settings are accepted');
     const imports = {};
     for (const [key, token] of Object.entries(params.imports || {})) {
-      const selected = selectedInputs.get(token);
+      const selected = selectedInputs.items.get(token);
       if (!selected || selected.key !== key || selected.cohort !== params.cohort) throw Error('Import inputs through the native file picker');
-      imports[key] = selected.path;
+      imports[key] = selected.source;
     }
     return service.call('create', {...params, imports});
   });
@@ -129,9 +148,9 @@ async function protocols() {
 }
 function makeWindow() {
   win = new BrowserWindow({width: 1440, height: 960, useContentSize: true, show: process.env.SIGNET_REVIEW_HIDDEN !== '1', minWidth: 850, minHeight: 650,
-    title: 'SIGNET — Design demo', backgroundColor: '#f5f5f5', webPreferences: {
+    title: 'SIGNET', backgroundColor: '#f5f5f5', webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'), nodeIntegration: false,
-      contextIsolation: true, sandbox: true, webSecurity: true, webviewTag: false,
+      contextIsolation: true, sandbox: true, webSecurity: true, webviewTag: false, backgroundThrottling: false,
     }});
   win.webContents.setWindowOpenHandler(() => ({action: 'deny'}));
   win.webContents.on('will-navigate', e => e.preventDefault());
@@ -153,12 +172,14 @@ else {
       {label: 'SIGNET', submenu: [{role: 'about'}, {type: 'separator'}, {role: 'quit', label: 'Quit SIGNET'}]},
       {label: 'Edit', submenu: [{role: 'undo'}, {role: 'redo'}, {type: 'separator'}, {role: 'cut'}, {role: 'copy'}, {role: 'paste'}, {role: 'selectAll'}]},
       {label: 'Window', submenu: [{role: 'minimize'}, {role: 'zoom'}]},
+      {label: 'Workspace', submenu: [{label:'Local records',click:()=>win?.webContents.executeJavaScript('window.signetWorkspace.open()')}]},
       {label: 'Review', submenu: [{label: 'Design review routes', accelerator: 'CmdOrCtrl+Shift+R',
         click: () => win?.webContents.executeJavaScript('window.signetReview.openIndex()')}]},
     ]));
     const root = await projectRoot();
     if (!root) { app.quit(); return; }
     service = new Service(root);
+    await service.connect();
     session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
     session.defaultSession.setPermissionCheckHandler(() => false);
     session.defaultSession.webRequest.onBeforeRequest({urls: ['http://*/*', 'https://*/*', 'file://*/*']},

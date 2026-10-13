@@ -1,6 +1,7 @@
 // Exact local resource allowlist shared by the privileged protocol and tests.
 const assets = require('./design-assets.json');
 const files = Object.assign(Object.create(null), {
+ '/formal.js': ['formal.js','text/javascript'], '/formal-bindings.js': ['formal-bindings.js','text/javascript'], '/formal.css': ['formal.css','text/css'],
  '/index.html': ['index.html','text/html'], '/renderer.js': ['renderer.js','text/javascript'],
  '/style.css': ['style.css','text/css'], '/design-layout.css': ['design-layout.css','text/css'],
  '/design-pages.js': ['design-pages.js','text/javascript'], '/design-routes.js': ['design-routes.js','text/javascript'],

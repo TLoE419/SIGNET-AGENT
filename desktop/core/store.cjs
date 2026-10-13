@@ -12,7 +12,34 @@ function config(file,values){fs.writeFileSync(file,fs.readFileSync(file,'utf8').
 }).join('\n'));}
 function sameHashes(a,b){return JSON.stringify(Object.entries(a).sort())===JSON.stringify(Object.entries(b).sort());}
 class Store{
- constructor(root){this.root=fs.realpathSync(root);this.instance=crypto.randomUUID();this.registry=path.join(this.root,'analyses');fs.mkdirSync(this.registry,{recursive:true});}
+ draftStore(){const {Drafts}=require('./drafts.cjs');return new Drafts(this.root);}
+ draftSave(p,sources){return this.draftStore().save(p,sources);}
+ draftLoad(id){return this.draftStore().load(id);}
+ draftList(){return this.draftStore().list();}
+ inputValidate(id,revision){return this.draftStore().validate(id,revision);}
+ recordDetail(aid){
+  for(const folder of [path.join(this.root,'runs'),path.join(this.root,'runs',aid)])if(fs.existsSync(folder)&&fs.lstatSync(folder).isSymbolicLink())throw Error('Historical run cannot be a symlink');
+  const d=this.detail(aid);d.stateSource='persisted-local-record';d.inputIssues=[];
+  if(aid!==LEGACY){const f=path.join(this.folder(aid),'inputs-manifest.json');if(fs.existsSync(f)){
+   if(fs.lstatSync(f).isSymbolicLink()||fs.statSync(f).size>1024*1024)throw Error('Invalid input manifest');
+   for(const input of F.read(f)){
+    try{const st=fs.lstatSync(input.original);if(st.isSymbolicLink())throw Error('Source is a symlink');const {fingerprint}=require('./drafts.cjs');const actual=fingerprint(input.original,st.isDirectory()?'directory':'file');const hashes=Object.fromEntries(Object.entries(actual.files).map(([k,v])=>[k,v.sha256]));if(!sameHashes(hashes,input.hashes))throw Error('Original input contents changed');}
+    catch(e){d.inputIssues.push({field:input.key,code:e.code==='ENOENT'?'missing-input':'unverified-input',message:path.basename(input.original??'source')+': '+e.message.replaceAll(input.original??'','[source]')});}
+   }
+  }}return d;
+ }
+ recordList(){
+  const ids=fs.readdirSync(this.registry).filter(n=>ID.test(n));
+  if(fs.existsSync(path.join(this.root,'runs',LEGACY,'logs/verification.json')))ids.push(LEGACY);
+  return ids.map(aid=>{try{
+   const f=aid===LEGACY?path.join(this.root,'runs',LEGACY,'logs/verification.json'):path.join(this.registry,aid,'state.json');if(fs.lstatSync(path.dirname(f)).isSymbolicLink()||fs.lstatSync(f).isSymbolicLink()||fs.statSync(f).size>1024*1024)throw Error('Invalid record file');const state=F.read(f);if(aid!==LEGACY&&(state.id!==aid||typeof state.label!=='string'||typeof state.status!=='string'))throw Error('Invalid record identity');
+   // Lists read bounded metadata only; full result/source verification is reserved for the selected record.
+   const s=aid===LEGACY?{id:aid,label:'Historical actual run (2026-10-06)',status:'succeeded',legacy:true,environment:'Local Linux VM; official simulated data',nboots:state.nboots}:state;
+   return {...s,kind:'analysis',stateSource:'persisted-local-record',checkedAt:stamp()};
+  }catch(e){return {id:aid,label:aid,status:'record-error',kind:'analysis',error:e.message};}}).sort((a,b)=>String(b.created_at??'').localeCompare(String(a.created_at??'')));
+ }
+ capabilities(){return require('./drafts.cjs').capabilities(this.root);}
+ constructor(root){this.root=fs.realpathSync(root);this.instance=crypto.randomUUID();this.registry=path.join(this.root,'analyses');if(fs.existsSync(this.registry)&&fs.lstatSync(this.registry).isSymbolicLink())throw Error('Analysis registry cannot be a symlink');fs.mkdirSync(this.registry,{recursive:true});}
  folder(aid){return path.join(this.registry,id(aid));}
  run(aid){return path.join(this.root,'runs',id(aid));}
  state(aid){return F.read(path.join(this.folder(aid),'state.json'));}
