@@ -22,3 +22,4 @@ html:has(.screen.review){scrollbar-width:none}
  .screen>[data-name="Application navigation"]{flex-shrink:0}
  .screen [data-name="Existing Shiny sidebar"]{flex-shrink:0}
 }
+@media(max-width:1439px){.screen [data-name="Search and filters"]>[data-name="Tabs"]{flex-shrink:0;min-width:max-content}}
