@@ -15,3 +15,10 @@
 @media(max-width:1439px){.screen [data-name="Top bar"]>p{flex-shrink:1}.screen>[role="dialog"]{left:50%;transform:translateX(-50%);max-height:calc(100vh - 64px);top:min(200px,10vh);overflow:auto}.screen.review [data-design-width="660"]{flex-shrink:1;min-width:0}}
 
 @media(max-width:1439px){.screen>[role="dialog"][data-design-height="960"]{left:auto;right:0;top:0;transform:none;height:100vh;max-height:100vh;max-width:100vw;overflow:auto}}
+/* Keep narrow-window controls inside their columns, including clipped nested rows. */
+html:has(.screen.review){scrollbar-width:none}
+@media(max-width:1439px){
+ .screen [data-design-width]{flex-shrink:1;min-width:0}
+ .screen>[data-name="Application navigation"]{flex-shrink:0}
+ .screen [data-name="Existing Shiny sidebar"]{flex-shrink:0}
+}
