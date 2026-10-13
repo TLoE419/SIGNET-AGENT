@@ -11,7 +11,7 @@
 @media(max-width:1350px){.screen [data-name="Page content"]>p{width:100%}.screen [data-name="Page content"]>[data-name="Content"]{width:100%}.screen [data-name="Top bar"]>.sds-button{white-space:nowrap}.screen>[data-name="Application workspace"] [data-name="Page content"]{padding-left:24px;padding-right:24px}.screen>[data-name="Application navigation"] .sds-button{white-space:pre-line}.screen [data-name="Shiny navigation and content"]{overflow:auto}.screen [data-name="Shiny controls"]{flex-shrink:0}}
 
 /* Match the design raster while keeping adaptive chrome and scrollable dialogs. */
-.screen>[data-name="Modal backdrop"]{height:100vh;width:100vw;background:rgba(0,0,0,.25)}
+.screen>[data-name="Modal backdrop"]{height:100vh;width:100vw;background:rgba(0,0,0,.22)}
 @media(max-width:1439px){.screen [data-name="Top bar"]>p{flex-shrink:1}.screen>[role="dialog"]{left:50%;transform:translateX(-50%);max-height:calc(100vh - 64px);top:min(200px,10vh);overflow:auto}.screen.review [data-design-width="660"]{flex-shrink:1;min-width:0}}
 
 @media(max-width:1439px){.screen>[role="dialog"][data-design-height="960"]{left:auto;right:0;top:0;transform:none;height:100vh;max-height:100vh;max-width:100vw;overflow:auto}}
