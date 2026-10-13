@@ -34,3 +34,6 @@ id_rsa*
 
 # Superseded standalone viewer
 /tools/viewer.html
+
+# The isolated S2 dependency reference is read-only and never committed.
+/desktop/node_modules

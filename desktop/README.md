@@ -1,3 +1,5 @@
+> S2 isolated engineering branch: only an explicitly isolated fixture runtime is supported here. The original SIGNET repository and user window are read-only. See [S2 local operations](../docs/S2-LOCAL-OPERATIONS.md) for APIs, safety, evidence and unverified integration. This branch does not authorize scientific/SSH/model work, setup, push or merge.
+
 # 桌面程式開發
 
 從專案根目錄執行 `bash tools/setup-dev.sh`，或依 [完整安裝文件](../docs/INSTALL.md) 手動安裝。依賴固定在 `package-lock.json`，不要提交 `node_modules/`。

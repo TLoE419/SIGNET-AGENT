@@ -56,7 +56,7 @@ function create(node){
  if(Object.hasOwn(node,'text'))return document.createTextNode(node.text);
  if(['Button','Tab','Tag','InputField','SelectField'].includes(node.tag))return component(node);
  if(node.tag==='ChevronDown')return document.createTextNode('');
- if(!['div','p','a','span','img'].includes(node.tag))throw Error('Unsupported design element: '+node.tag);
+ if(!['div','p','a','span','img','section','pre'].includes(node.tag))throw Error('Unsupported design element: '+node.tag);
  const el=document.createElement(node.tag);copyAttrs(el,node.attrs);
  for(const child of node.children||[])el.append(create(child));
  const name=node.attrs?.['data-name']||'';
