@@ -19,9 +19,10 @@ window.signetPackages=({unwrap,run,render,onBack})=>{
   if(home||id==='4:65'){holder.children.push({tag:'section',attrs:{class:'formal-s2','data-name':'Result packages entry'},children:[button('open','Open local result packages')]});return;}
   // Design-only completion examples must not survive into the formal result view.
   const header=holder.children.find(n=>n.attrs?.['data-name']==='Page header');holder.children=header?[header]:[];
-  const p=c.package,registered=!!p&&c.catalog.packages.some(r=>r.packageId===p.packageId),children=[button('back','Back to analyses'),text('Local result packages · integrity, provenance and science are separate'),button('refresh','Reload approved sources and saved selection')];
+  const p=c.package,registered=!!p&&c.catalog.packages.some(r=>r.packageId===p.packageId),children=[button('back','Back to analyses'),text('Local result packages · integrity, provenance and science are separate'),button('refresh','Reload approved sources and saved selection'),button('pick','Authorize local result package folder'),button('revoke','Revoke selected source access',!c.source)];
   if(c.catalog.status==='blocked')children.push(text('Blocked: trusted source authorization is unavailable. No files were imported, downloaded or exported.'));
   children.push(field('source','Approved source',c.source,['',...c.catalog.sources.map(s=>s.sourceToken)]),button('inspect','Inspect approved source',!c.source),button('register','Register verified-byte package',!c.source));
+  for(const s of c.catalog.sourceAccess??[])if(s.status==='blocked')children.push(text('Source '+s.sourceToken+' · blocked; reauthorize the prepared source or revoke this reference'),button('revoke:'+s.sourceToken,'Revoke unavailable source'));
   for(const s of c.catalog.sources)children.push(text('Approved source '+s.sourceToken+' · '+s.label));
   for(const r of c.catalog.packages)children.push(button('get:'+r.packageId,r.packageId+' · requires current integrity check'));
   if(c.issue)children.push(text('Unavailable: '+c.issue));
@@ -41,6 +42,8 @@ window.signetPackages=({unwrap,run,render,onBack})=>{
   if(key==='artifact'){c.artifactId=value;c.plan=null;render();return;}
   await run(async()=>{try{
    if(key==='open'||key==='refresh'){await refresh();render('4:13');return;}
+   if(key==='pick'){const r=await unwrap('packageSourcePick',{});if(!r.canceled){c.source=r.sourceToken;await refresh();}render('4:13');return;}
+   if(key==='revoke'||key.startsWith('revoke:')){await unwrap('packageSourceRevoke',{sourceToken:key==='revoke'?c.source:key.slice(7)});await refresh();render('4:13');return;}
    if(key==='inspect'||key==='register'){
     c.package=null;c.plan=null;c.artifactId='';c.issue='';
     c.package=await unwrap(key==='inspect'?'packageInspect':'packageRegister',{sourceToken:c.source,...(key==='register'?{requestId:'package-register-'+crypto.randomUUID()}:{} )});

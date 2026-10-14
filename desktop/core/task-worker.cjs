@@ -14,8 +14,9 @@ const {Stages}=require('./s4-integration.cjs'),{METHODS:S4_METHODS}=require('./s
 const stages=new Stages(configuration,operations);
 for(const method of S4_METHODS)methods[method]=p=>stages.call(method,p);
 const {Packages}=require('./s5-integration.cjs'),{METHODS:S5_METHODS}=require('./s5-api.cjs');
-const packages=new Packages(workerData.root,{authority:workerData.packageAuthority??null});
+let packages=new Packages(workerData.root,{authority:workerData.packageAuthority??null});
 for(const method of S5_METHODS)methods[method]=p=>packages.call(method,p);
+let authorityRevision=0;
 let queue=Promise.resolve();
 parentPort.on('message',message=>{
  if(Object.hasOwn(s2,message.method)){
@@ -23,6 +24,6 @@ parentPort.on('message',message=>{
   catch(e){parentPort.postMessage({id:message.id,ok:false,error:e.code||e.message});}return;
  }
  queue=queue.then(async()=>{
- try{if(!Object.hasOwn(methods,message.method))throw Error('Unknown controlled operation');const value=await methods[message.method](...message.args);parentPort.postMessage({id:message.id,ok:true,value});}
+ try{if(message.type==='package-authority'){if(!Number.isSafeInteger(message.revision)||message.revision<=authorityRevision)throw Error('reference_drift');const next=new Packages(workerData.root,{authority:message.authority});packages=next;authorityRevision=message.revision;parentPort.postMessage({id:message.id,ok:true,value:{revision:authorityRevision}});return;}if(!Object.hasOwn(methods,message.method))throw Error('Unknown controlled operation');const value=await methods[message.method](...message.args);parentPort.postMessage({id:message.id,ok:true,value});}
  catch(e){parentPort.postMessage({id:message.id,ok:false,error:e.code||e.message,code:e.code??null});}
 });});

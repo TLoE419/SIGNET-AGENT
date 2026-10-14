@@ -1,8 +1,10 @@
 const {app, BrowserWindow, protocol, ipcMain, dialog, shell, session, Menu} = require('electron');
 const fs = require('node:fs');
+const {Buffer}=require('node:buffer');
 const path = require('node:path');
 const {Service} = require('./service.cjs');
 const {fields} = require('./core/drafts.cjs');
+const {SourceBroker}=require('./source-broker.cjs');
 const {NativeInputs} = require('./native-inputs.cjs');
 const {lookup: localResource} = require('./design-static.cjs');
 
@@ -17,7 +19,10 @@ if (reviewData) {
 } else if (!app.isPackaged) app.setPath('userData', path.join(__dirname, '.runtime'));
 app.commandLine.appendSwitch('force-renderer-accessibility');
 const single = app.requestSingleInstanceLock();
-let win, service, allowClose=false;
+let win, service, broker, allowClose=false;
+let packageQueue=Promise.resolve(),modeGeneration=0;
+const serialPackage=fn=>{const task=packageQueue.then(fn);packageQueue=task.catch(()=>{});return task;};
+async function syncAuthority(){if(broker)await service.updatePackageAuthority(broker.authority());}
 const selectedInputs = new NativeInputs();
 let desktopMode = 'formal';
 const s1Methods = new Set(['operationStart','operationStatus','operationCancel','recoveryScan','recoveryAttach','logRead','errorExplain','checkpointReview','closeConfirm','mode','status','reconnect','schema','capabilities','list','detail','draftList','draftSave','draftLoad','inputValidate','pick']);
@@ -25,6 +30,7 @@ const {METHODS:S3_METHODS}=require('./core/s3-api.cjs');
 const {METHODS:S4_METHODS}=require('./core/s4-api.cjs');
 const {METHODS:S5_METHODS}=require('./core/s5-api.cjs');
 for(const method of [...S3_METHODS,...S4_METHODS,...S5_METHODS])s1Methods.add(method);
+for(const method of ['packageSourcePick','packageSourceRevoke'])s1Methods.add(method);
 const home = 'signet://app/index.html';
 const aidPattern = /^(a-[0-9]{8}T[0-9]{6}-[a-f0-9]{12}|macos-vm-smoke-20261006)$/;
 const artifacts = new Set(['network.html', 'edges.csv', 'network.json', 'Afreq', 'CoeffMat0',
@@ -68,20 +74,30 @@ function handle(name, fn) {
     if (!win || event.sender !== win.webContents || event.senderFrame !== win.webContents.mainFrame ||
         event.senderFrame.url !== home) throw Error('Untrusted desktop request');
     try {
+      if(name.startsWith('package')&&(args.length!==1||Buffer.byteLength(JSON.stringify(args))>16384))throw Error('schema_invalid');
       if (!s1Methods.has(name)) throw Error('Not ready: this action belongs to a later stage (S2–S7).');
       if (desktopMode === 'review' && name !== 'mode') throw Error('Design review is isolated; real operations are disabled.');
       return {ok: true, value: await fn(...args)};
     }
-    catch (e) { return {ok: false, error: e.message,code:e.code??null}; }
+    catch (e) { if(name.startsWith('package')){const candidate=e.code??e.message,code=/^[a-z][a-z0-9_]{0,79}$/.test(candidate)?candidate:'source_unavailable';return {ok:false,error:code,code};}return {ok: false, error: e.message,code:e.code??null}; }
   });
 }
 function installBridge() {
-  for(const method of [...S3_METHODS,...S4_METHODS,...S5_METHODS])handle(method,p=>service.call(method,p));
+  for(const method of [...S3_METHODS,...S4_METHODS])handle(method,p=>service.call(method,p));
+  for(const method of S5_METHODS)handle(method,p=>{const generation=modeGeneration;return serialPackage(async()=>{if(desktopMode!=='formal'||generation!==modeGeneration)throw Error('reference_drift');await syncAuthority();if(desktopMode!=='formal'||generation!==modeGeneration)throw Error('reference_drift');const result=await service.call(method,p);return method==='packageList'&&broker?{...result,sourceAccess:broker.catalog()}:result;});});
+  handle('packageSourcePick',p=>{if(!p||Object.getPrototypeOf(p)!==Object.prototype||Object.keys(p).length)throw Error('schema_invalid');const generation=modeGeneration;return serialPackage(async()=>{
+    if(desktopMode!=='formal'||generation!==modeGeneration)throw Error('reference_drift');
+    const choice=await dialog.showOpenDialog(win,{title:'Authorize local SIGNET result package',message:'Select one prepared result package with signet-package.json. Only its declared files are read. This does not verify scientific execution.',properties:['openDirectory']});
+    if(choice.canceled)return {canceled:true};
+    if(desktopMode!=='formal'||generation!==modeGeneration||!win||win.webContents.mainFrame.url!==home)throw Error('reference_drift');
+    if(choice.filePaths.length!==1)throw Error('schema_invalid');const source=await broker.add(choice.filePaths[0],()=>{if(desktopMode!=='formal'||generation!==modeGeneration||!win||win.webContents.mainFrame.url!==home)throw Error('reference_drift');});await syncAuthority();return {canceled:false,...source};
+  });});
+  handle('packageSourceRevoke',p=>{const generation=modeGeneration;return serialPackage(async()=>{if(desktopMode!=='formal'||generation!==modeGeneration)throw Error('reference_drift');const result=broker.revoke(p);await syncAuthority();return result;});});
   for(const method of ['operationStart','operationStatus','operationCancel','recoveryScan','recoveryAttach','logRead','errorExplain','checkpointReview'])handle(method,p=>service.call(method,p));
   handle('closeConfirm',async p=>{
     if(!p||typeof p!=='object'||Array.isArray(p)||Object.keys(p).some(k=>!['decision','target'].includes(k)))throw Error('Invalid close request');
     const result=p.decision==='keep-running'?{shouldClose:false,cancelled:false}:p.decision==='close-anyway'?{shouldClose:true,cancelled:false,independentAnalysisStopped:false}:await service.call('closeConfirm',p);if(result.shouldClose){allowClose=true;win?.close();}return result;});
-  handle('mode', mode => {if (!['formal','review'].includes(mode)) throw Error('Invalid desktop mode');desktopMode=mode;return mode;});
+  handle('mode', mode => {if (!['formal','review'].includes(mode)) throw Error('Invalid desktop mode');desktopMode=mode;modeGeneration++;return mode;});
   handle('capabilities', () => service.call('capabilities'));
   handle('draftList', () => service.call('draftList'));
   handle('draftSave', p => {if (!p || typeof p !== 'object' || Array.isArray(p)) throw Error('Invalid draft');return service.call('draftSave', p, selectedInputs.resolve(p));});
@@ -196,7 +212,8 @@ else {
     ]));
     const root = await projectRoot();
     if (!root) { app.quit(); return; }
-    service = new Service(root);
+    broker=await new SourceBroker(root).open();
+    service = new Service(root,{packageAuthority:broker.authority()});
     await service.connect();
     session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
     session.defaultSession.setPermissionCheckHandler(() => false);
@@ -209,6 +226,6 @@ else {
     await dialog.showMessageBox({type: 'error', title: 'SIGNET startup failed', message: e.message});
     app.quit();
   });
-  app.on('before-quit', () => service?.stopOwned());
+  app.on('before-quit', () => {try{broker?.close();}finally{service?.stopOwned();}});
   app.on('window-all-closed', () => app.quit());
 }

@@ -18,9 +18,9 @@ class Packages{
   if(authority===null)return;
   exact(authority,['roots','sources'],512*1024);
   if(!Array.isArray(authority.sources)||authority.sources.length>128||Buffer.byteLength(JSON.stringify(authority))>512*1024)fail('entry_limit');
-  const grants=new Map();
-  for(const item of authority.sources){exact(item,['sourceToken','label','grant'],65536);if(!token(item.sourceToken)||typeof item.label!=='string'||!item.label.trim()||item.label.length>80||/[\x00-\x1f\x7f]/.test(item.label)||grants.has(item.sourceToken))fail('schema_invalid');grants.set(item.sourceToken,copy(item.grant));this.sources.push({sourceToken:item.sourceToken,label:item.label});}
-  this.index=new PackageIndex({stateRoot:path.join(root,'s5','packages'),roots:copy(authority.roots),resolveSource:async key=>grants.has(key)?copy(grants.get(key)):null});
+  const grants=new Map(),guards=new Map(),roots=new Map(authority.roots.map(r=>[r.rootId,r.path]));
+  for(const item of authority.sources){exact(item,Object.hasOwn(item,'localGuard')?['sourceToken','label','grant','localGuard']:['sourceToken','label','grant'],65536);if(item.localGuard){exact(item.localGuard,['manifestHash','identity']);if(!digest(item.localGuard.manifestHash)||typeof item.localGuard.identity!=='string'||!/^\d+:\d+$/.test(item.localGuard.identity))fail('schema_invalid');guards.set(item.sourceToken,copy(item.localGuard));}if(!token(item.sourceToken)||typeof item.label!=='string'||!item.label.trim()||item.label.length>80||/[\x00-\x1f\x7f]/.test(item.label)||grants.has(item.sourceToken))fail('schema_invalid');grants.set(item.sourceToken,copy(item.grant));this.sources.push({sourceToken:item.sourceToken,label:item.label});}
+  this.index=new PackageIndex({stateRoot:path.join(root,'s5','packages'),roots:copy(authority.roots),resolveSource:async key=>{if(!grants.has(key))return null;const g=grants.get(key);if(guards.has(key))require('../source-broker.cjs').checkLocal(roots.get(g.rootId),guards.get(key));return copy(g);}});
  }
  readSelection(){
   const file=path.join(this.index.stateRoot,'selected.json');let fd;
