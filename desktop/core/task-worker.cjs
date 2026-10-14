@@ -26,6 +26,7 @@ const importQueries=new Map();let importQuery=0,importCommandId=null;
 function resolveImport(request){return new Promise(resolve=>{const queryId=++importQuery,timer=setTimeout(()=>{importQueries.delete(queryId);resolve(null);},5000);importQueries.set(queryId,{resolve,timer});parentPort.postMessage({type:'import-resolve',queryId,commandId:importCommandId,payload:{owner:operations.owner,request}});});}
 function imports(){return new Imports(workerData.root,packages,operations.owner,resolveImport);}
 methods.draftList=()=>imports().list();methods.draftLoad=id=>imports().load(id);
+methods.draftSave=async(p,sources)=>{if(p?.workflow==='import'||p?.id&&(await imports().load(p.id)).importOnly)throw Error('use_package_import');return store.draftSave(p,sources);};
 let queue=Promise.resolve();
 parentPort.on('message',message=>{
  if(message.type==='import-resolved'){const pending=importQueries.get(message.queryId);if(pending){importQueries.delete(message.queryId);clearTimeout(pending.timer);pending.resolve(message.grant);}return;}
