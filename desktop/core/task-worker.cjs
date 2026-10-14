@@ -13,6 +13,9 @@ for(const method of S3_METHODS)methods[method]=p=>configuration.call(method,p);
 const {Stages}=require('./s4-integration.cjs'),{METHODS:S4_METHODS}=require('./s4-api.cjs');
 const stages=new Stages(configuration,operations);
 for(const method of S4_METHODS)methods[method]=p=>stages.call(method,p);
+const {Packages}=require('./s5-integration.cjs'),{METHODS:S5_METHODS}=require('./s5-api.cjs');
+const packages=new Packages(workerData.root,{authority:workerData.packageAuthority??null});
+for(const method of S5_METHODS)methods[method]=p=>packages.call(method,p);
 let queue=Promise.resolve();
 parentPort.on('message',message=>{
  if(Object.hasOwn(s2,message.method)){

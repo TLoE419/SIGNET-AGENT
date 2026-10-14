@@ -10,6 +10,7 @@
  const unwrap=async(name,...args)=>{if(!active())throw Error('Review is isolated');const stamp=generation;const r=await bridge[name](...args);if(stamp!==generation||!active())throw Error('Stale response after mode change');if(!r?.ok)throw Error(r?.error??'Local controller unavailable');return r.value;};
  const configuration=window.signetConfiguration({unwrap,run,render,getDraft:()=>state.draft,getDirty:()=>state.dirty});
  const stages=window.signetStages({unwrap,run,render,getDraft:()=>state.draft,getDirty:()=>state.dirty});
+ const packages=window.signetPackages({unwrap,run,render,onBack:()=>run(list)});
  const clone=x=>JSON.parse(JSON.stringify(x));
  const t=(node,value)=>{node.children=[{text:String(value??'—')}];};
  const find=(node,predicate)=>{if(predicate(node))return node;for(const c of node.children||[]){const found=find(c,predicate);if(found)return found;}return null;};
@@ -95,7 +96,7 @@
  }
  if(state.draft&&state.step===2&&state.draft.workflow==='network'){const group=find(tree,n=>n.attrs?.['data-node-id']===(id==='4:53'?'6:9333':'6:605')),template=find(group,n=>n.attrs?.['data-node-id']===(id==='4:53'?'6:9334':'6:606'));if(group&&template)for(const key of ['alpha.cis','freq','ntop']){const field=clone(template);field.attrs['data-node-id']='formal:param:'+key;field.attrs.label=state.caps.parameters[key].label;field.attrs.value=String(state.draft.parameters[key]);group.children.push(field);}}
  if(state.draft&&state.step===3){const resource=find(tree,n=>name(n)==='Resources');if(resource)summary(resource,'Resources','Not configured (S3)');}
- visit(tree,n=>{if(n.tag==='p'&&n.children?.some(c=>c.text?.startsWith('Demo values')))t(n,'Remote resources are not configured (S3).');if(id==='4:4'&&n.attrs?.['data-node-id']==='6:229')t(n,'Input validation is blocked.');if(id==='4:4'&&n.attrs?.['data-node-id']==='6:230')t(n,state.issues.map(i=>i.field+': '+i.message).join(' · ')||state.error);if(n.attrs?.['data-formal-disabled']==='true')n.attrs['data-formal-disabled']='true';});if(id!=='4:4'||state.error)statusPanel(tree);s2Project(tree,id);configuration.project(tree,id,bindings);stages.project(tree,id);return tree;
+ visit(tree,n=>{if(n.tag==='p'&&n.children?.some(c=>c.text?.startsWith('Demo values')))t(n,'Remote resources are not configured (S3).');if(id==='4:4'&&n.attrs?.['data-node-id']==='6:229')t(n,'Input validation is blocked.');if(id==='4:4'&&n.attrs?.['data-node-id']==='6:230')t(n,state.issues.map(i=>i.field+': '+i.message).join(' · ')||state.error);if(n.attrs?.['data-formal-disabled']==='true')n.attrs['data-formal-disabled']='true';});if(id!=='4:4'||state.error)statusPanel(tree);s2Project(tree,id);configuration.project(tree,id,bindings);stages.project(tree,id);packages.project(tree,id);return tree;
  }
 
  const s2Pages=new Set(['4:10','4:11','4:12','4:20','4:21','4:22','4:24','4:25','4:26','4:27','4:28','4:29','4:39','4:56','4:64','4:66','4:67','4:68','4:69','4:70','4:74']);
@@ -168,6 +169,7 @@
  const s2Action=id?.startsWith('formal:s2-')?id.slice('formal:'.length):bindings[page]?.[id]?.[0];
  if(s2Action?.startsWith('s2-')){await s2Act(s2Action,id,value);return;}
  if(state.busy)return;
+ if(id?.startsWith('formal:s5-')){await packages.act(id.slice('formal:s5-'.length),value);return;}
  if(id?.startsWith('formal:s4-')){await stages.act(id.slice('formal:s4-'.length),value);return;}
  const s3=bindings[page]?.[id];if(id?.startsWith('formal:s3-')){await configuration.act('s3-dynamic',id.slice('formal:s3-'.length),value);return;}if(s3?.[0]?.startsWith('s3-')){await configuration.act(s3[0],s3[1],value);return;}
  if(id==='formal:escape'){state.error='';render(state.dialogReturn??routes[state.draft.workflow][state.step]);return;}
@@ -199,7 +201,7 @@
  async function run(fn){const token=++generation;state.busy=true;state.error='';applyBusy();try{await fn();}catch(e){if(active()&&token===generation){state.error=e.message;render(state.step===2&&state.draft?.workflow==='network'?'4:53':state.page);}}finally{if(token===generation){state.busy=false;if(active())applyBusy();}}}
  view.bind(act);
  window.addEventListener('signet:mode',e=>{state.mode=e.detail.mode;if(state.mode==='review'){generation++;state.busy=false;bridge.mode('review');} });
- window.signetWorkspace=Object.freeze({open:async()=>{state.mode='formal';await bridge.mode('formal');await run(async()=>{if(state.draft)render(state.page);else await list();});},current:()=>({mode:state.mode,page:state.page,draftId:state.draft?.id,revision:state.draft?.revision,dirty:state.dirty,busy:state.busy,validation:state.validation?.status,error:state.error,records:state.records.length,drafts:state.drafts.length,operationId:state.s2.operation?.operationId,operationStatus:state.s2.operation?.status,remoteStatus:state.s2.operation?.projection?.remoteController,logComplete:state.s2.log?.complete,planStatus:state.s2.plan?.status,availablePCs:state.s2.checkpoint?.availablePCs,failedBatches:state.s2.checkpoint?.failedBatches?.map(x=>x.id),configuration:configuration.current(),stages:stages.current()})});
+ window.signetWorkspace=Object.freeze({open:async()=>{state.mode='formal';await bridge.mode('formal');await run(async()=>{if(state.draft)render(state.page);else await list();});},current:()=>({mode:state.mode,page:state.page,draftId:state.draft?.id,revision:state.draft?.revision,dirty:state.dirty,busy:state.busy,validation:state.validation?.status,error:state.error,records:state.records.length,drafts:state.drafts.length,operationId:state.s2.operation?.operationId,operationStatus:state.s2.operation?.status,remoteStatus:state.s2.operation?.projection?.remoteController,logComplete:state.s2.log?.complete,planStatus:state.s2.plan?.status,availablePCs:state.s2.checkpoint?.availablePCs,failedBatches:state.s2.checkpoint?.failedBatches?.map(x=>x.id),configuration:configuration.current(),stages:stages.current(),packages:packages.current()})});
  document.getElementById('app').hidden=true;
  run(async()=>{await unwrap('mode','formal');state.caps=await unwrap('capabilities');await configuration.refresh();await list();});
 })();

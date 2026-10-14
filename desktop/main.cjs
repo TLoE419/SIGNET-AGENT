@@ -23,7 +23,8 @@ let desktopMode = 'formal';
 const s1Methods = new Set(['operationStart','operationStatus','operationCancel','recoveryScan','recoveryAttach','logRead','errorExplain','checkpointReview','closeConfirm','mode','status','reconnect','schema','capabilities','list','detail','draftList','draftSave','draftLoad','inputValidate','pick']);
 const {METHODS:S3_METHODS}=require('./core/s3-api.cjs');
 const {METHODS:S4_METHODS}=require('./core/s4-api.cjs');
-for(const method of [...S3_METHODS,...S4_METHODS])s1Methods.add(method);
+const {METHODS:S5_METHODS}=require('./core/s5-api.cjs');
+for(const method of [...S3_METHODS,...S4_METHODS,...S5_METHODS])s1Methods.add(method);
 const home = 'signet://app/index.html';
 const aidPattern = /^(a-[0-9]{8}T[0-9]{6}-[a-f0-9]{12}|macos-vm-smoke-20261006)$/;
 const artifacts = new Set(['network.html', 'edges.csv', 'network.json', 'Afreq', 'CoeffMat0',
@@ -75,7 +76,7 @@ function handle(name, fn) {
   });
 }
 function installBridge() {
-  for(const method of [...S3_METHODS,...S4_METHODS])handle(method,p=>service.call(method,p));
+  for(const method of [...S3_METHODS,...S4_METHODS,...S5_METHODS])handle(method,p=>service.call(method,p));
   for(const method of ['operationStart','operationStatus','operationCancel','recoveryScan','recoveryAttach','logRead','errorExplain','checkpointReview'])handle(method,p=>service.call(method,p));
   handle('closeConfirm',async p=>{
     if(!p||typeof p!=='object'||Array.isArray(p)||Object.keys(p).some(k=>!['decision','target'].includes(k)))throw Error('Invalid close request');
