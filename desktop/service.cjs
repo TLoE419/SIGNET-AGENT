@@ -8,12 +8,12 @@ const METHODS=new Set([...S5_METHODS,...S4_METHODS,...S3_METHODS,'schema','list'
 
 // Background computation runs outside the Electron main thread; no HTTP server.
 class Service{
- constructor(root,{packageAuthority=null}={}){this.exportResolvers=new Map();this.packageAuthority=packageAuthority;this.authorityRevision=0;const real=require('node:fs').realpathSync(root);if(real===path.resolve(__dirname,'..')||real==='/Users/tloe/Developer/SIGNET'||real.startsWith('/Users/tloe/Developer/SIGNET/'))throw Error('S2 runtime is not isolated');this.root=real;this.worker=null;this.next=0;this.pending=new Map();this.visualization={url:null,stop:async()=>{},open:async()=>{throw Error('Not ready (S6)')}};}
+ constructor(root,{packageAuthority=null}={}){this.importResolvers=new Map();this.exportResolvers=new Map();this.packageAuthority=packageAuthority;this.authorityRevision=0;const real=require('node:fs').realpathSync(root);if(real===path.resolve(__dirname,'..')||real==='/Users/tloe/Developer/SIGNET'||real.startsWith('/Users/tloe/Developer/SIGNET/'))throw Error('S2 runtime is not isolated');this.root=real;this.worker=null;this.next=0;this.pending=new Map();this.visualization={url:null,stop:async()=>{},open:async()=>{throw Error('Not ready (S6)')}};}
  async connect(){
   if(!this.worker){
    this.worker=new Worker(path.join(__dirname,'core/task-worker.cjs'),{workerData:{root:this.root,packageAuthority:this.packageAuthority}});
    const w=this.worker;
-   w.on('message',m=>{if(m.type==='export-resolve'){const active=this.exportResolvers.get(m.token);let grant=null;try{if(w===this.worker&&active)grant=active(m.token,m.payload);}catch{}w.postMessage({type:'export-resolved',queryId:m.queryId,grant});return;}const p=this.pending.get(m.id);if(!p||p.worker!==w)return;this.pending.delete(m.id);clearTimeout(p.timer);m.ok?p.resolve(m.value):p.reject(Object.assign(Error(m.error),{code:m.code??m.error}));});
+   w.on('message',m=>{if(m.type==='import-resolve'){const active=this.importResolvers.get(m.commandId);let grant=null;try{if(w===this.worker&&active)grant=active(m.payload);}catch{}w.postMessage({type:'import-resolved',queryId:m.queryId,grant});return;}if(m.type==='export-resolve'){const active=this.exportResolvers.get(m.token);let grant=null;try{if(w===this.worker&&active)grant=active(m.token,m.payload);}catch{}w.postMessage({type:'export-resolved',queryId:m.queryId,grant});return;}const p=this.pending.get(m.id);if(!p||p.worker!==w)return;this.pending.delete(m.id);clearTimeout(p.timer);m.ok?p.resolve(m.value):p.reject(Object.assign(Error(m.error),{code:m.code??m.error}));});
    w.on('error',e=>this.fail(e,w));
    w.on('exit',code=>{if(this.worker===w)this.worker=null;this.fail(Error('Local controller exited; operation status is unknown'),w);});
   }
@@ -40,6 +40,7 @@ class Service{
  async prepareExport(p){require('./core/export-api.cjs').request(p);return this.exportCommand('export-prepare',p);}
  async executeExport(p,token,resolver){require('./core/export-api.cjs').request(p);this.exportResolvers.set(token,resolver);try{return await this.exportCommand('export-execute',{...p,destinationToken:token});}finally{this.exportResolvers.delete(token);}}
  async exportStatus(p){require('./core/export-api.cjs').request(p,true);return this.exportCommand('export-status',p);}
- async stopOwned(){this.exportResolvers.clear();await this.visualization.stop();if(this.worker){const w=this.worker;this.worker=null;await w.terminate();}}
+ async importCommand(action,p,resolver=null){if(!this.worker)throw Error('Analysis controller is not ready');return new Promise((resolve,reject)=>{const id=++this.next,timer=setTimeout(()=>{this.pending.delete(id);this.importResolvers.delete(id);reject(Error('Import pending; recheck before creating another request'));},120000);if(resolver)this.importResolvers.set(id,resolver);this.pending.set(id,{resolve:v=>{this.importResolvers.delete(id);resolve(v);},reject:e=>{this.importResolvers.delete(id);reject(e);},timer,worker:this.worker});this.worker.postMessage({id,type:'import-command',action,payload:p});});}
+ async stopOwned(){this.importResolvers.clear();this.exportResolvers.clear();await this.visualization.stop();if(this.worker){const w=this.worker;this.worker=null;await w.terminate();}}
 }
 module.exports={Service};

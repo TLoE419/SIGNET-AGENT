@@ -6,6 +6,7 @@ const {Service} = require('./service.cjs');
 const {fields} = require('./core/drafts.cjs');
 const {ExportBroker}=require('./export-broker.cjs');
 const {request:exportRequest}=require('./core/export-api.cjs');
+const {request:importRequest,resolver:importResolver}=require('./core/import-api.cjs');
 const {SourceBroker}=require('./source-broker.cjs');
 const {NativeInputs} = require('./native-inputs.cjs');
 const {lookup: localResource} = require('./design-static.cjs');
@@ -32,7 +33,7 @@ const {METHODS:S3_METHODS}=require('./core/s3-api.cjs');
 const {METHODS:S4_METHODS}=require('./core/s4-api.cjs');
 const {METHODS:S5_METHODS}=require('./core/s5-api.cjs');
 for(const method of [...S3_METHODS,...S4_METHODS,...S5_METHODS])s1Methods.add(method);
-for(const method of ['packageSourcePick','packageSourceRevoke','packageExport','packageExportStatus'])s1Methods.add(method);
+for(const method of ['packageSourcePick','packageSourceRevoke','packageExport','packageExportStatus','packageImport','packageImportStatus'])s1Methods.add(method);
 const home = 'signet://app/index.html';
 const aidPattern = /^(a-[0-9]{8}T[0-9]{6}-[a-f0-9]{12}|macos-vm-smoke-20261006)$/;
 const artifacts = new Set(['network.html', 'edges.csv', 'network.json', 'Afreq', 'CoeffMat0',
@@ -84,7 +85,12 @@ function handle(name, fn,frameBound=false) {
     catch (e) { if(name.startsWith('package')){const candidate=e.code??e.message,code=/^[a-z][a-z0-9_]{0,79}$/.test(candidate)?candidate:'source_unavailable';return {ok:false,error:code,code};}return {ok: false, error: e.message,code:e.code??null}; }
   });
 }
+function frameGuard(event){const generation=modeGeneration,frame=event.senderFrame,sender=event.sender;return ()=>{try{return !!win&&sender===win.webContents&&frame===win.webContents.mainFrame&&frame.url===home&&desktopMode==='formal'&&generation===modeGeneration;}catch{return false;}};}
+function importRead(action,p,event){const valid=frameGuard(event);return serialPackage(async()=>{if(!valid())throw Error('reference_drift');await syncAuthority();if(!valid())throw Error('reference_drift');const result=await service.importCommand(action,p,importResolver(valid));if(!valid())throw Error('reference_drift');return result;});}
 function installBridge() {
+ handle('packageImportStatus',(p,event)=>importRead('inspect',importRequest(p,true),event),true);
+ handle('packageImport',(input,event)=>{const p=importRequest(input),valid=frameGuard(event);return serialPackage(async()=>{if(!valid())throw Error('reference_drift');await syncAuthority();if(!valid())throw Error('reference_drift');await service.importCommand('prepare',p);if(!valid())throw Error('reference_drift');const choice=await dialog.showMessageBox(win,{type:'question',title:'Create imported result draft?',message:'Create a new local draft: '+p.label,detail:'Declared cohort: '+(p.cohort??'unknown')+'. TCGA/Lung schema defaults are not source facts. No scientific computation or session will start.',buttons:['Cancel','Create new draft'],defaultId:0,cancelId:0});if(!valid())throw Error('reference_drift');if(choice.response!==1){const history=await service.importCommand('inspect',{requestId:p.requestId},importResolver(valid));return {...history,status:'cancelled',canceled:true,noNewWrites:true};}const result=await service.importCommand('execute',p,importResolver(valid,p));return valid()?result:{...result,status:result.actualDraftCreated===true?'partial':result.actualDraftCreated===null?'incomplete':'blocked',bindingReady:false,importView:null,error:'reference_drift',authorizationRevoked:true};});},true);
+
   handle('packageExportStatus',p=>{const generation=modeGeneration;return serialPackage(async()=>{if(desktopMode!=='formal'||generation!==modeGeneration)throw Error('reference_drift');const r=await service.exportStatus(exportRequest(p,true));if(desktopMode!=='formal'||generation!==modeGeneration)throw Error('reference_drift');return r;});});
   handle('packageExport',(input,event)=>{const p=exportRequest(input),generation=modeGeneration,frame=event.senderFrame,sender=event.sender;const valid=()=>{try{return !!win&&sender===win.webContents&&frame===win.webContents.mainFrame&&frame.url===home&&desktopMode==='formal'&&generation===modeGeneration;}catch{return false;}};
    return serialPackage(async()=>{if(!valid())throw Error('reference_drift');await syncAuthority();if(!valid())throw Error('reference_drift');const descriptor=await service.prepareExport(p);if(!valid())throw Error('reference_drift');const choice=await dialog.showOpenDialog(win,{title:'Export verified SIGNET files',message:'Select an existing private folder with access limited to your account. Existing filenames and shared writable ancestry are refused. This copies original bytes; it does not verify science.',properties:['openDirectory']});if(!valid())throw Error('reference_drift');if(choice.canceled){const history=await service.exportStatus({requestId:p.requestId});return {...history,status:'cancelled',canceled:true,noNewWrites:true};}if(choice.filePaths.length!==1)throw Error('schema_invalid');const grant=exportBroker.authorize(p,descriptor,choice.filePaths[0],valid);try{const result=await service.executeExport(p,grant.grantId,(token,payload)=>exportBroker.resolve(token,payload));if(result.status==='cancelled')return {...result,status:'blocked',error:'permission_denied'};return valid()?result:{...result,status:result.receipts.length?'partial':'blocked',error:'reference_drift',authorizationRevoked:true};}finally{exportBroker.release(grant.grantId);}});
@@ -106,9 +112,9 @@ function installBridge() {
     const result=p.decision==='keep-running'?{shouldClose:false,cancelled:false}:p.decision==='close-anyway'?{shouldClose:true,cancelled:false,independentAnalysisStopped:false}:await service.call('closeConfirm',p);if(result.shouldClose){allowClose=true;win?.close();}return result;});
   handle('mode', mode => {if (!['formal','review'].includes(mode)) throw Error('Invalid desktop mode');desktopMode=mode;modeGeneration++;exportBroker?.revoke();return mode;});
   handle('capabilities', () => service.call('capabilities'));
-  handle('draftList', () => service.call('draftList'));
+  handle('draftList', (_event) => importRead('list',null,_event),true);
   handle('draftSave', p => {if (!p || typeof p !== 'object' || Array.isArray(p)) throw Error('Invalid draft');return service.call('draftSave', p, selectedInputs.resolve(p));});
-  handle('draftLoad', id => service.call('draftLoad', id));
+  handle('draftLoad', (id,event) => importRead('load',id,event),true);
   handle('inputValidate', (id, revision) => service.call('inputValidate', id, revision));
   handle('closeVisualization', async () => {await service.visualization.stop();return true;});
   handle('visualization', async id => {await service.call('detail',aid(id));return service.visualization.open(aid(id));});
