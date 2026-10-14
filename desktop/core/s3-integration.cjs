@@ -51,7 +51,7 @@ class Configuration{
    if(method==='configurationList')return await this.list(p);
    if(Object.hasOwn(PLAN_KEYS,method))return await this.plan(method,p);
    if(!['profileSave','profileDelete','resourcePlanSave','bindingSave','bindingLoad'].includes(method))fail('schema_invalid');
-   if(method==='profileDelete'&&p?.profileRef?.profileId)for(const name of this.operations.names()){const r=this.operations.record(name.slice(0,-5));if(r.kind==='s3-plan'&&r.frozen.refs.profileRef?.profileId===p.profileRef.profileId)fail('profile_in_use');}
+   if(method==='profileDelete'&&p?.profileRef?.profileId)for(const name of this.operations.names()){const r=this.operations.record(name.slice(0,-5));if(['s3-plan','s4-plan'].includes(r.kind)&&r.frozen.refs.profileRef?.profileId===p.profileRef.profileId)fail('profile_in_use');}
    return await this.registry[method](p);
   }catch(e){if(ERRORS.has(e.code))throw e;fail('io_conflict');}finally{fs.closeSync(fd);fs.unlinkSync(lock);}
  }

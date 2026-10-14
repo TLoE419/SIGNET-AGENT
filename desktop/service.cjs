@@ -2,7 +2,8 @@ const {Worker}=require('node:worker_threads');
 const path=require('node:path');
 const S2_METHODS=new Set(['operationStart','operationStatus','operationCancel','recoveryScan','recoveryAttach','logRead','errorExplain','checkpointReview','closeConfirm']);
 const {METHODS:S3_METHODS}=require('./core/s3-api.cjs');
-const METHODS=new Set([...S3_METHODS,'schema','list','recordList','viewer','detail','capabilities','draftList','draftSave','draftLoad','inputValidate',...S2_METHODS]);
+const {METHODS:S4_METHODS}=require('./core/s4-api.cjs');
+const METHODS=new Set([...S4_METHODS,...S3_METHODS,'schema','list','recordList','viewer','detail','capabilities','draftList','draftSave','draftLoad','inputValidate',...S2_METHODS]);
 
 // Background computation runs outside the Electron main thread; no HTTP server.
 class Service{
@@ -20,8 +21,8 @@ class Service{
  fail(error,worker){for(const [id,p] of this.pending){if(worker&&p.worker!==worker)continue;clearTimeout(p.timer);p.reject(error);this.pending.delete(id);}}
  status(){return {root:this.root,ownership:'electron',transport:'restricted IPC',connected:!!this.worker,localController:!!this.worker?'connected':'disconnected',remoteController:'unknown',remoteConnected:false,scope:'isolated local monitor and S3 configuration'};}
  async call(method,...args){
-  if(!METHODS.has(method))throw Error('Unknown controlled operation; not ready outside S1/S2/S3');
-  if((S2_METHODS.has(method)||S3_METHODS.includes(method))&&Buffer.byteLength(JSON.stringify(args))>(S3_METHODS.includes(method)?65536:16384))throw Error('Invalid bounded controlled arguments');
+  if(!METHODS.has(method))throw Error('Unknown controlled operation; not ready outside S1/S2/S3/S4');
+  if((S2_METHODS.has(method)||S3_METHODS.includes(method)||S4_METHODS.includes(method))&&Buffer.byteLength(JSON.stringify(args))>(S3_METHODS.includes(method)?65536:16384))throw Error('Invalid bounded controlled arguments');
   if(!this.worker)throw Error('Analysis controller is not ready; reconnect');
   return new Promise((resolve,reject)=>{
    const id=++this.next,timer=setTimeout(()=>{this.pending.delete(id);reject(Error('Operation is still pending; inspect the analysis list before retrying creation or launch.'));},S2_METHODS.has(method)?5000:120000);
