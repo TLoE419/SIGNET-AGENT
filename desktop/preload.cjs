@@ -32,6 +32,8 @@ contextBridge.exposeInMainWorld('desktop', Object.freeze({
   profileCheckPlan: p => ipcRenderer.invoke('desktop:profileCheckPlan',p),
   transferPlan: p => ipcRenderer.invoke('desktop:transferPlan',p),
   submissionPlanInput: p => ipcRenderer.invoke('desktop:submissionPlanInput',p),
+  visualizationStatus: () => ipcRenderer.invoke('desktop:visualizationStatus'),
+  visualizationBrowser: () => ipcRenderer.invoke('desktop:visualizationBrowser'),
   closeVisualization: () => ipcRenderer.invoke('desktop:closeVisualization'),
   visualization: id => ipcRenderer.invoke('desktop:visualization', id),
   operationStart: p => ipcRenderer.invoke('desktop:operationStart',p),

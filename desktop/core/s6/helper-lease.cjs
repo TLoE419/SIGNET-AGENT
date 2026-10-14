@@ -1,0 +1,16 @@
+'use strict';
+// Controlled non-network helper for lease engineering. It never certifies a service or R session.
+const fs=require('node:fs'),crypto=require('node:crypto'),{spawn,execFileSync}=require('node:child_process');
+const {Storage,hash,exact,fail}=require('./registry.cjs');
+class HelperLease{
+ constructor({root,failStop=()=>false}){this.store=new Storage(root);this.failStop=failStop;this.rootIdentity=fs.lstatSync(root);this.child=null;this.record=null;}
+ guard(){const s=fs.lstatSync(this.store.root);if(s.isSymbolicLink()||s.dev!==this.rootIdentity.dev||s.ino!==this.rootIdentity.ino)fail('HELPER_ROOT_CHANGED');}
+ write(record){this.store.write('process.json',record,16384,()=>this.guard());this.record=record;}
+ proof(pid,token){const raw=execFileSync('/bin/ps',['-p',String(pid),'-o','lstart=','-o','command='],{encoding:'utf8',timeout:1000,maxBuffer:16384}).trim();if(!raw||!raw.includes(token))fail('OS_OWNER_UNVERIFIED');return {source:'OS ps lstart and command token',birthText:raw.slice(0,24),pid,fingerprint:crypto.createHash('sha256').update(raw).digest('hex')};}
+ lease(input){const old=this.store.read('process.json',16384);if(old&&old.phase!=='stopped')fail('HELPER_OWNER_UNKNOWN');const identity={ownerId:input.ownerId,token:input.token,birthId:input.birthId},commandToken='signet-helper-'+crypto.randomUUID();let launch=null,cancelled=false,exited=false;
+  const ready=()=>{if(launch)return launch;launch=(async()=>{if(cancelled)fail('STOPPED');this.write({schemaVersion:1,kind:'non-network-helper',identity,commandToken,pid:null,osBirthEvidence:null,phase:'reserved'});const child=spawn(process.execPath,['-e',"setInterval(()=>{},1000)",commandToken],{stdio:'ignore',shell:false});this.child=child;child.once('exit',()=>{exited=true;if(!cancelled)input.onExit?.();});await new Promise((resolve,reject)=>{child.once('spawn',resolve);child.once('error',reject);});this.write({...this.record,pid:child.pid,osBirthEvidence:null,phase:'birth-unverified'});const osBirthEvidence=this.proof(child.pid,commandToken);this.write({...this.record,pid:child.pid,osBirthEvidence,phase:'active'});return {...identity,port:47777,listening:false,httpOk:false,url:null};})();return launch;};
+  const stop=async expected=>{exact(expected,['ownerId','token','birthId']);if(hash(expected)!==hash(identity))fail('LEASE_MISMATCH');cancelled=true;if(launch)await launch.catch(()=>{});const r=this.store.read('process.json',16384);if(!r){if(!this.child)return;fail('HELPER_OWNER_UNKNOWN');}if(hash(r.identity)!==hash(identity)||r.commandToken!==commandToken)fail('HELPER_OWNER_UNKNOWN');if(this.failStop())fail('HELPER_CLEANUP_FAILED');if(this.child&&!exited){if(!r.pid||!r.osBirthEvidence||hash(this.proof(r.pid,commandToken))!==hash(r.osBirthEvidence))fail('OS_OWNER_UNVERIFIED');this.write({...r,phase:'cleanup-required'});const wait=new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Object.assign(Error('HELPER_STOP_TIMEOUT'),{code:'HELPER_STOP_TIMEOUT'})),2000);this.child.once('exit',()=>{clearTimeout(timer);resolve();});});this.child.kill('SIGTERM');await wait;}this.write({...r,phase:'stopped',observedExit:true});};
+  return {...identity,port:47777,ready,stop};
+ }
+}
+module.exports={HelperLease};

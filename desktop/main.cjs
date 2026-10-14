@@ -8,6 +8,7 @@ const {ExportBroker}=require('./export-broker.cjs');
 const {request:exportRequest}=require('./core/export-api.cjs');
 const {request:importRequest,resolver:importResolver}=require('./core/import-api.cjs');
 const {SourceBroker}=require('./source-broker.cjs');
+const {VisualizationCoordinator}=require('./s6-coordinator.cjs');
 const {NativeInputs} = require('./native-inputs.cjs');
 const {lookup: localResource} = require('./design-static.cjs');
 
@@ -28,7 +29,7 @@ const serialPackage=fn=>{const task=packageQueue.then(fn);packageQueue=task.catc
 async function syncAuthority(){if(broker)await service.updatePackageAuthority(broker.authority());}
 const selectedInputs = new NativeInputs();
 let desktopMode = 'formal';
-const s1Methods = new Set(['operationStart','operationStatus','operationCancel','recoveryScan','recoveryAttach','logRead','errorExplain','checkpointReview','closeConfirm','mode','status','reconnect','schema','capabilities','list','detail','draftList','draftSave','draftLoad','inputValidate','pick']);
+const s1Methods = new Set(['operationStart','operationStatus','operationCancel','recoveryScan','recoveryAttach','logRead','errorExplain','checkpointReview','closeConfirm','mode','status','reconnect','schema','capabilities','list','detail','draftList','draftSave','draftLoad','inputValidate','pick','visualization','visualizationStatus','visualizationBrowser','closeVisualization']);
 const {METHODS:S3_METHODS}=require('./core/s3-api.cjs');
 const {METHODS:S4_METHODS}=require('./core/s4-api.cjs');
 const {METHODS:S5_METHODS}=require('./core/s5-api.cjs');
@@ -77,6 +78,8 @@ function handle(name, fn,frameBound=false) {
     if (!win || event.sender !== win.webContents || event.senderFrame !== win.webContents.mainFrame ||
         event.senderFrame.url !== home) throw Error('Untrusted desktop request');
     try {
+      if(name==='visualization'&&(args.length!==1||Buffer.byteLength(JSON.stringify(args))>4096))throw Error('INVALID_REQUEST');
+      if(['visualizationStatus','visualizationBrowser','closeVisualization'].includes(name)&&args.length)throw Error('INVALID_REQUEST');
       if(name.startsWith('package')&&(args.length!==1||Buffer.byteLength(JSON.stringify(args))>16384))throw Error('schema_invalid');
       if (!s1Methods.has(name)) throw Error('Not ready: this action belongs to a later stage (S2–S7).');
       if (desktopMode === 'review' && name !== 'mode') throw Error('Design review is isolated; real operations are disabled.');
@@ -110,14 +113,16 @@ function installBridge() {
   handle('closeConfirm',async p=>{
     if(!p||typeof p!=='object'||Array.isArray(p)||Object.keys(p).some(k=>!['decision','target'].includes(k)))throw Error('Invalid close request');
     const result=p.decision==='keep-running'?{shouldClose:false,cancelled:false}:p.decision==='close-anyway'?{shouldClose:true,cancelled:false,independentAnalysisStopped:false}:await service.call('closeConfirm',p);if(result.shouldClose){allowClose=true;win?.close();}return result;});
-  handle('mode', mode => {if (!['formal','review'].includes(mode)) throw Error('Invalid desktop mode');desktopMode=mode;modeGeneration++;exportBroker?.revoke();return mode;});
+  handle('mode', mode => {if (!['formal','review'].includes(mode)) throw Error('Invalid desktop mode');desktopMode=mode;modeGeneration++;exportBroker?.revoke();service.visualization.invalidate?.('MODE_CHANGED');return mode;});
   handle('capabilities', () => service.call('capabilities'));
   handle('draftList', (_event) => importRead('list',null,_event),true);
   handle('draftSave', p => {if (!p || typeof p !== 'object' || Array.isArray(p)) throw Error('Invalid draft');return service.call('draftSave', p, selectedInputs.resolve(p));});
   handle('draftLoad', (id,event) => importRead('load',id,event),true);
   handle('inputValidate', (id, revision) => service.call('inputValidate', id, revision));
-  handle('closeVisualization', async () => {await service.visualization.stop();return true;});
-  handle('visualization', async id => {await service.call('detail',aid(id));return service.visualization.open(aid(id));});
+  handle('closeVisualization', () => service.visualization.stop());
+  handle('visualizationStatus',()=>service.visualization.status());
+  handle('visualizationBrowser',async()=>{await service.visualization.status();const url=service.visualization.url;if(!url||!service.visualization.canNavigate(url))throw Error('VISUALIZATION_NOT_READY');await shell.openExternal(url);return {opened:true};});
+  handle('visualization',(p,event)=>{const valid=frameGuard(event);return serialPackage(async()=>{if(!valid())throw Error('AUTHORIZATION_REVOKED');await syncAuthority();if(!valid())throw Error('AUTHORIZATION_REVOKED');if(typeof p==='string')return {state:'blocked',url:null,error:'IMPORTED_DRAFT_REQUIRED',evidence:'unknown'};return service.visualization.open(p,{valid});});},true);
   handle('status', () => service.status());
   handle('reconnect', () => service.connect());
   handle('schema', () => service.call('schema'));
@@ -184,21 +189,29 @@ async function protocols() {
     return new Response('', {status: 404});
   });
 }
+function installSessionPolicy(){
+    session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
+    session.defaultSession.setPermissionCheckHandler(() => false);
+    session.defaultSession.webRequest.onBeforeRequest({urls: ['http://*/*','https://*/*','ws://*/*','wss://*/*','file://*/*']},
+      (details,callback)=>{service.visualization.authorizeURL(details.url).then(allowed=>callback({cancel:!allowed}),()=>callback({cancel:true}));});
+}
 function makeWindow() {
   win = new BrowserWindow({width: 1440, height: 960, useContentSize: true, show: process.env.SIGNET_REVIEW_HIDDEN !== '1', minWidth: 850, minHeight: 650,
     title: 'SIGNET', backgroundColor: '#f5f5f5', webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'), nodeIntegration: false,
       contextIsolation: true, sandbox: true, webSecurity: true, webviewTag: false, backgroundThrottling: false,
     }});
-  win.webContents.setWindowOpenHandler(() => ({action: 'deny'}));
-  win.webContents.on('did-start-navigation',(_event,_url,_inPlace,isMainFrame)=>{if(isMainFrame){modeGeneration++;exportBroker?.revoke();}});
+  // Popups always denied; external opening has a separate owned-URL-only command.
+  win.webContents.setWindowOpenHandler(() => ({action:'deny'}));
+  win.webContents.on('did-start-navigation',(_event,_url,_inPlace,isMainFrame)=>{if(isMainFrame){modeGeneration++;exportBroker?.revoke();service.visualization.invalidate?.('NAVIGATION_CHANGED');}});
   win.webContents.on('will-navigate', e => e.preventDefault());
   win.webContents.on('will-frame-navigate', e => {
     const url = e.url;
-    if (service.visualization.url && url?.startsWith(service.visualization.url)) return;
+    if (service.visualization.canNavigate?.(url)) return;
     if (url !== home)
       e.preventDefault();
   });
+  win.webContents.on('will-redirect',(e,url)=>{const target=e.url??url;if(target!==home&&!service.visualization.canNavigate?.(target))e.preventDefault();});
   win.webContents.on('will-attach-webview', e => e.preventDefault());
   win.on('close',e=>{
     if(allowClose)return;
@@ -208,7 +221,7 @@ function makeWindow() {
       if(choice.response===1){allowClose=true;win.close();}
     }).catch(()=>{});
   });
-  win.on('closed', () => { win = null; app.quit(); });
+  win.on('closed', () => {service.visualization.invalidate?.('WINDOW_CLOSED');win = null; app.quit();});
   win.loadURL(home);
 }
 if (!single) app.quit();
@@ -229,10 +242,8 @@ else {
     broker=await new SourceBroker(root).open();exportBroker=new ExportBroker(root);
     service = new Service(root,{packageAuthority:broker.authority()});
     await service.connect();
-    session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
-    session.defaultSession.setPermissionCheckHandler(() => false);
-    session.defaultSession.webRequest.onBeforeRequest({urls: ['http://*/*', 'https://*/*', 'file://*/*']},
-      (details, callback) => callback({cancel: !(service.visualization.url && details.url.startsWith(service.visualization.url))}));
+    service.visualization=new VisualizationCoordinator({root,readImport:(id,valid)=>service.importCommand('context',id,importResolver(valid))});
+    installSessionPolicy();
     installBridge();
     await protocols();
     makeWindow();
@@ -240,6 +251,7 @@ else {
     await dialog.showMessageBox({type: 'error', title: 'SIGNET startup failed', message: e.message});
     app.quit();
   });
-  app.on('before-quit', () => {try{exportBroker?.revoke();broker?.close();}finally{service?.stopOwned();}});
+  let quitting=false,quitPending=false;
+  app.on('before-quit',event=>{if(quitting)return;event.preventDefault();if(quitPending)return;quitPending=true;exportBroker?.revoke();service?.visualization.invalidate?.('APPLICATION_QUIT');(async()=>{let timer;try{await Promise.race([service?.visualization.shutdown?.(),new Promise(resolve=>{timer=setTimeout(resolve,5000);})]);}finally{clearTimeout(timer);broker?.close();await service?.stopOwned();quitting=true;app.quit();}})().catch(()=>{quitting=true;app.quit();});});
   app.on('window-all-closed', () => app.quit());
 }
