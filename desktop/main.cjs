@@ -4,6 +4,8 @@ const {Buffer}=require('node:buffer');
 const path = require('node:path');
 const {Service} = require('./service.cjs');
 const {fields} = require('./core/drafts.cjs');
+const {ExportBroker}=require('./export-broker.cjs');
+const {request:exportRequest}=require('./core/export-api.cjs');
 const {SourceBroker}=require('./source-broker.cjs');
 const {NativeInputs} = require('./native-inputs.cjs');
 const {lookup: localResource} = require('./design-static.cjs');
@@ -19,7 +21,7 @@ if (reviewData) {
 } else if (!app.isPackaged) app.setPath('userData', path.join(__dirname, '.runtime'));
 app.commandLine.appendSwitch('force-renderer-accessibility');
 const single = app.requestSingleInstanceLock();
-let win, service, broker, allowClose=false;
+let win, service, broker, exportBroker, allowClose=false;
 let packageQueue=Promise.resolve(),modeGeneration=0;
 const serialPackage=fn=>{const task=packageQueue.then(fn);packageQueue=task.catch(()=>{});return task;};
 async function syncAuthority(){if(broker)await service.updatePackageAuthority(broker.authority());}
@@ -30,7 +32,7 @@ const {METHODS:S3_METHODS}=require('./core/s3-api.cjs');
 const {METHODS:S4_METHODS}=require('./core/s4-api.cjs');
 const {METHODS:S5_METHODS}=require('./core/s5-api.cjs');
 for(const method of [...S3_METHODS,...S4_METHODS,...S5_METHODS])s1Methods.add(method);
-for(const method of ['packageSourcePick','packageSourceRevoke'])s1Methods.add(method);
+for(const method of ['packageSourcePick','packageSourceRevoke','packageExport','packageExportStatus'])s1Methods.add(method);
 const home = 'signet://app/index.html';
 const aidPattern = /^(a-[0-9]{8}T[0-9]{6}-[a-f0-9]{12}|macos-vm-smoke-20261006)$/;
 const artifacts = new Set(['network.html', 'edges.csv', 'network.json', 'Afreq', 'CoeffMat0',
@@ -69,7 +71,7 @@ async function projectRoot() {
   }
   return root;
 }
-function handle(name, fn) {
+function handle(name, fn,frameBound=false) {
   ipcMain.handle('desktop:' + name, async (event, ...args) => {
     if (!win || event.sender !== win.webContents || event.senderFrame !== win.webContents.mainFrame ||
         event.senderFrame.url !== home) throw Error('Untrusted desktop request');
@@ -77,12 +79,17 @@ function handle(name, fn) {
       if(name.startsWith('package')&&(args.length!==1||Buffer.byteLength(JSON.stringify(args))>16384))throw Error('schema_invalid');
       if (!s1Methods.has(name)) throw Error('Not ready: this action belongs to a later stage (S2–S7).');
       if (desktopMode === 'review' && name !== 'mode') throw Error('Design review is isolated; real operations are disabled.');
-      return {ok: true, value: await fn(...args)};
+      return {ok: true, value: await fn(...args,...(frameBound?[event]:[]))};
     }
     catch (e) { if(name.startsWith('package')){const candidate=e.code??e.message,code=/^[a-z][a-z0-9_]{0,79}$/.test(candidate)?candidate:'source_unavailable';return {ok:false,error:code,code};}return {ok: false, error: e.message,code:e.code??null}; }
   });
 }
 function installBridge() {
+  handle('packageExportStatus',p=>{const generation=modeGeneration;return serialPackage(async()=>{if(desktopMode!=='formal'||generation!==modeGeneration)throw Error('reference_drift');const r=await service.exportStatus(exportRequest(p,true));if(desktopMode!=='formal'||generation!==modeGeneration)throw Error('reference_drift');return r;});});
+  handle('packageExport',(input,event)=>{const p=exportRequest(input),generation=modeGeneration,frame=event.senderFrame,sender=event.sender;const valid=()=>{try{return !!win&&sender===win.webContents&&frame===win.webContents.mainFrame&&frame.url===home&&desktopMode==='formal'&&generation===modeGeneration;}catch{return false;}};
+   return serialPackage(async()=>{if(!valid())throw Error('reference_drift');await syncAuthority();const descriptor=await service.prepareExport(p);if(!valid())throw Error('reference_drift');const choice=await dialog.showOpenDialog(win,{title:'Export verified SIGNET files',message:'Select an existing private folder with access limited to your account. Existing filenames and shared writable ancestry are refused. This copies original bytes; it does not verify science.',properties:['openDirectory']});if(!valid())throw Error('reference_drift');if(choice.canceled){const history=await service.exportStatus({requestId:p.requestId});return {...history,status:'cancelled',canceled:true,noNewWrites:true};}if(choice.filePaths.length!==1)throw Error('schema_invalid');const grant=exportBroker.authorize(p,descriptor,choice.filePaths[0],valid);try{const result=await service.executeExport(p,grant.grantId,(token,payload)=>exportBroker.resolve(token,payload));if(result.status==='cancelled')return {...result,status:'blocked',error:'permission_denied'};return valid()?result:{...result,status:result.receipts.length?'partial':'blocked',error:'reference_drift',authorizationRevoked:true};}finally{exportBroker.release(grant.grantId);}});
+  },true);
+
   for(const method of [...S3_METHODS,...S4_METHODS])handle(method,p=>service.call(method,p));
   for(const method of S5_METHODS)handle(method,p=>{const generation=modeGeneration;return serialPackage(async()=>{if(desktopMode!=='formal'||generation!==modeGeneration)throw Error('reference_drift');await syncAuthority();if(desktopMode!=='formal'||generation!==modeGeneration)throw Error('reference_drift');const result=await service.call(method,p);return method==='packageList'&&broker?{...result,sourceAccess:broker.catalog()}:result;});});
   handle('packageSourcePick',p=>{if(!p||Object.getPrototypeOf(p)!==Object.prototype||Object.keys(p).length)throw Error('schema_invalid');const generation=modeGeneration;return serialPackage(async()=>{
@@ -97,7 +104,7 @@ function installBridge() {
   handle('closeConfirm',async p=>{
     if(!p||typeof p!=='object'||Array.isArray(p)||Object.keys(p).some(k=>!['decision','target'].includes(k)))throw Error('Invalid close request');
     const result=p.decision==='keep-running'?{shouldClose:false,cancelled:false}:p.decision==='close-anyway'?{shouldClose:true,cancelled:false,independentAnalysisStopped:false}:await service.call('closeConfirm',p);if(result.shouldClose){allowClose=true;win?.close();}return result;});
-  handle('mode', mode => {if (!['formal','review'].includes(mode)) throw Error('Invalid desktop mode');desktopMode=mode;modeGeneration++;return mode;});
+  handle('mode', mode => {if (!['formal','review'].includes(mode)) throw Error('Invalid desktop mode');desktopMode=mode;modeGeneration++;exportBroker?.revoke();return mode;});
   handle('capabilities', () => service.call('capabilities'));
   handle('draftList', () => service.call('draftList'));
   handle('draftSave', p => {if (!p || typeof p !== 'object' || Array.isArray(p)) throw Error('Invalid draft');return service.call('draftSave', p, selectedInputs.resolve(p));});
@@ -178,6 +185,7 @@ function makeWindow() {
       contextIsolation: true, sandbox: true, webSecurity: true, webviewTag: false, backgroundThrottling: false,
     }});
   win.webContents.setWindowOpenHandler(() => ({action: 'deny'}));
+  win.webContents.on('did-start-navigation',(_event,_url,_inPlace,isMainFrame)=>{if(isMainFrame){modeGeneration++;exportBroker?.revoke();}});
   win.webContents.on('will-navigate', e => e.preventDefault());
   win.webContents.on('will-frame-navigate', e => {
     const url = e.url;
@@ -212,7 +220,7 @@ else {
     ]));
     const root = await projectRoot();
     if (!root) { app.quit(); return; }
-    broker=await new SourceBroker(root).open();
+    broker=await new SourceBroker(root).open();exportBroker=new ExportBroker(root);
     service = new Service(root,{packageAuthority:broker.authority()});
     await service.connect();
     session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
@@ -226,6 +234,6 @@ else {
     await dialog.showMessageBox({type: 'error', title: 'SIGNET startup failed', message: e.message});
     app.quit();
   });
-  app.on('before-quit', () => {try{broker?.close();}finally{service?.stopOwned();}});
+  app.on('before-quit', () => {try{exportBroker?.revoke();broker?.close();}finally{service?.stopOwned();}});
   app.on('window-all-closed', () => app.quit());
 }

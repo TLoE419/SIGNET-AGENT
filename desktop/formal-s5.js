@@ -1,16 +1,17 @@
 'use strict';
-// Local bounded package projection; no path, grant, destination, downloader or R bridge.
+// Local bounded package projection; renderer never supplies a path or grant; native export authority stays in main.
 window.signetPackages=({unwrap,run,render,onBack})=>{
- const c={catalog:{sources:[],packages:[]},source:'',package:null,selection:null,selectionRevision:0,artifactId:'',plan:null,issue:''};
+ const c={catalog:{sources:[],packages:[]},source:'',package:null,selection:null,selectionRevision:0,artifactId:'',plan:null,issue:'',exportResult:null,lastExport:null};
+ try{const raw=localStorage.getItem('signet-last-export');if(raw&&raw.length<=16384)c.lastExport=JSON.parse(raw);}catch{}
  const find=(n,p)=>p(n)?n:(n.children??[]).map(x=>find(x,p)).find(Boolean);
  const text=value=>({tag:'p',children:[{text:String(value)}]});
  const button=(key,label,disabled=false)=>({tag:'Button',attrs:{class:'sds-button','data-node-id':'formal:s5-'+key,label,state:disabled?'Disabled':'Default'}});
  const field=(key,label,value,options)=>({tag:'SelectField',attrs:{class:'sds-field','data-node-id':'formal:s5-'+key,label,value,options,hasLabel:'true',state:'Default'}});
- const clear=()=>{c.package=null;c.selection=null;c.artifactId='';c.plan=null;c.issue='';};
+ const clear=()=>{c.package=null;c.selection=null;c.artifactId='';c.plan=null;c.issue='';c.exportResult=null;};
  function selected(r){c.selection=r.selection??null;c.selectionRevision=r.revision??0;if(r.status==='selected'){c.package=r.package;c.artifactId=r.selection.artifactId;}else if(r.status==='blocked'){c.package=null;c.artifactId='';c.issue=r.error??'trusted_source_authority unavailable';}}
  async function refresh(){
   clear();c.catalog=await unwrap('packageList',{});c.source=c.catalog.sources.some(s=>s.sourceToken===c.source)?c.source:c.catalog.sources[0]?.sourceToken??'';
-  selected(c.catalog.selected??{status:c.catalog.status,revision:0,selection:null});
+  selected(c.catalog.selected??{status:c.catalog.status,revision:0,selection:null});if(c.lastExport?.requestId)c.exportResult=await unwrap('packageExportStatus',{requestId:c.lastExport.requestId});
  }
  const target=()=>{if(!c.package)throw Error('Choose and recheck a registered result package');return {packageId:c.package.packageId,packageHash:c.package.packageHash};};
  function project(tree,id){
@@ -32,6 +33,8 @@ window.signetPackages=({unwrap,run,render,onBack})=>{
    for(const a of p.artifacts)children.push(text(a.artifactId+' · '+a.role+' · '+a.state+' · expected '+a.bytes+' B / '+a.sha256+' · actual '+(a.actualBytes??'missing')+' B / '+(a.actualSha256??'missing')));
    const ready=p.artifacts.filter(a=>a.state==='ready').map(a=>a.artifactId);children.push(field('artifact','Verified-byte artifact',c.artifactId,['',...ready]),button('select','Save this artifact selection',!c.artifactId||!registered),text('Saved selection revision '+c.selectionRevision+(c.selection?' · '+c.selection.artifactId:' · none')),button('import','Review import prerequisites',p.networkState!=='ready'||!p.sourceTransferComplete||!registered),button('export','Review export prerequisites',!c.artifactId||!p.sourceTransferComplete||!registered));
   }
+  if(p){children.push(button('execute-export','Choose private folder and export selected original',!c.artifactId||!registered),button('retry-export','Reauthorize and reconcile last export',!c.lastExport||c.lastExport.packageId!==p.packageId||c.lastExport.packageHash!==p.packageHash));}
+  if(c.exportResult){const r=c.exportResult;children.push(text('Export '+r.status+' · request '+(r.requestId??'unknown')),text('Actual files written: '+(r.actualFilesWritten===null?'unknown':String(r.actualFilesWritten))+' · temporary bytes '+(r.temporaryBytesWritten??0)+(r.historicalOnly?' · historical receipt only; destination must be reauthorized':'')));if(r.error)children.push(text('Export issue: '+r.error));for(const f of r.receipts??[])children.push(text('Confirmed '+f.name+' · '+f.bytes+' B · SHA256 '+f.sha256));if(r.publicationUnknown)children.push(text('Publication is uncertain. Inspect the receipt and reauthorize the same destination before reconciling.'));}
   if(c.plan)children.push(text('Plan only · '+c.plan.kind+' · '+c.plan.status+' · '+c.plan.missing.join(' · ')),text('No artifact files written; no download; no new analysis draft; original data preserved.'),{tag:'pre',children:[{text:JSON.stringify(c.plan.reproducibility,null,2)}]});
   children.push(text('This view validates existing bytes and derives matrix edges. It does not run scientific inference or load an official session.'));
   holder.children.push({tag:'section',attrs:{class:'formal-s2 formal-s5','data-name':'Result package evidence'},children});
@@ -51,9 +54,10 @@ window.signetPackages=({unwrap,run,render,onBack})=>{
     if(key==='register'){const current=c.package;c.catalog=await unwrap('packageList',{});c.package=current;c.selectionRevision=c.catalog.selected?.revision??0;}
    }else if(key.startsWith('get:')){clear();c.package=await unwrap('packageGet',{packageId:key.slice(4)});c.artifactId=c.package.artifacts.find(a=>a.state==='ready')?.artifactId??'';}
    else if(key==='select'){const r=await unwrap('packageSelect',{...target(),artifactId:c.artifactId,expectedRevision:c.selectionRevision});selected(r);c.plan=null;}
+   else if(key==='execute-export'||key==='retry-export'){const p=key==='retry-export'?c.lastExport:{...target(),artifactIds:[c.artifactId],requestId:'export-'+crypto.randomUUID()};c.lastExport=p;try{localStorage.setItem('signet-last-export',JSON.stringify(p));}catch{}c.exportResult=await unwrap('packageExport',p);c.plan=null;}
    else if(key==='import'||key==='export'){c.plan=null;c.plan=await unwrap(key==='import'?'packageImportPlan':'packageExportPlan',{...target(),...(key==='export'?{artifactIds:[c.artifactId]}:{}),requestId:'package-'+key+'-'+crypto.randomUUID()});}
    render('4:13');
   }catch(e){clear();c.issue=e.message;render('4:13');throw e;}});
  }
- return Object.freeze({project,act,refresh,current:()=>({packageId:c.package?.packageId,source:c.source,artifactId:c.artifactId,selectionRevision:c.selectionRevision,selection:c.selection,planStatus:c.plan?.status,issue:c.issue,catalogStatus:c.catalog.status})});
+ return Object.freeze({project,act,refresh,current:()=>({packageId:c.package?.packageId,source:c.source,artifactId:c.artifactId,selectionRevision:c.selectionRevision,selection:c.selection,planStatus:c.plan?.status,exportRequest:c.lastExport,exportResult:c.exportResult,issue:c.issue,catalogStatus:c.catalog.status})});
 };

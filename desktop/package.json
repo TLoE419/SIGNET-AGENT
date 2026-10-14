@@ -7,13 +7,14 @@
   "scripts": {
     "start": "electron .",
     "package:mac": "node package.mjs",
-    "test": "node --test test-core.cjs test-design.cjs test-s1.cjs test-s2.cjs test-s3-integration.cjs test-s4-integration.cjs test-s4-mode-restore.cjs test-s5-integration.cjs test-a5-provider.cjs",
+    "test": "node --test test-core.cjs test-design.cjs test-s1.cjs test-s2.cjs test-s3-integration.cjs test-s4-integration.cjs test-s4-mode-restore.cjs test-s5-integration.cjs test-a5-provider.cjs test-a5-export-integration.cjs core/s5/test-exporter.cjs",
     "test:scientific": "node --test test-scientific.cjs",
     "test:s2": "node --test test-s2.cjs",
     "test:s3": "node --test test-s3-integration.cjs",
     "test:s4": "node --test test-s4-integration.cjs",
     "test:s5": "node --test test-s5-integration.cjs core/s5/test-package.cjs",
-    "test:a5": "node --test test-a5-provider.cjs"
+    "test:a5": "node --test test-a5-provider.cjs",
+    "test:a5-export": "node --test test-a5-export-integration.cjs core/s5/test-exporter.cjs"
   },
   "devDependencies": {
     "electron": "44.5.1",

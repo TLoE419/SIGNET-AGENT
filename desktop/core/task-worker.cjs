@@ -17,13 +17,19 @@ const {Packages}=require('./s5-integration.cjs'),{METHODS:S5_METHODS}=require('.
 let packages=new Packages(workerData.root,{authority:workerData.packageAuthority??null});
 for(const method of S5_METHODS)methods[method]=p=>packages.call(method,p);
 let authorityRevision=0;
+const {Exporter}=require('./s5/exporter.cjs'),{request:exportRequest}=require('./export-api.cjs');
+const exportQueries=new Map();let exportQuery=0;
+function resolveDestination(payload){return new Promise(resolve=>{const queryId=++exportQuery,timer=setTimeout(()=>{exportQueries.delete(queryId);resolve(null);},5000);exportQueries.set(queryId,{resolve,timer});parentPort.postMessage({type:'export-resolve',queryId,token:payload.destinationToken,payload});});}
+function exporter(){if(!packages.index)throw Error('source_authority_unavailable');return new Exporter({stateRoot:require('node:path').join(workerData.root,'s5/exports'),packageIndex:packages.index,resolveDestination,owner:operations.owner,now:Date.now});}
 let queue=Promise.resolve();
 parentPort.on('message',message=>{
+ if(message.type==='export-resolved'){const pending=exportQueries.get(message.queryId);if(pending){exportQueries.delete(message.queryId);clearTimeout(pending.timer);pending.resolve(message.grant);}return;}
+
  if(Object.hasOwn(s2,message.method)){
   try{const value=s2[message.method](...message.args);parentPort.postMessage({id:message.id,ok:true,value});}
   catch(e){parentPort.postMessage({id:message.id,ok:false,error:e.code||e.message});}return;
  }
  queue=queue.then(async()=>{
- try{if(message.type==='package-authority'){if(!Number.isSafeInteger(message.revision)||message.revision<=authorityRevision)throw Error('reference_drift');const next=new Packages(workerData.root,{authority:message.authority});packages=next;authorityRevision=message.revision;parentPort.postMessage({id:message.id,ok:true,value:{revision:authorityRevision}});return;}if(!Object.hasOwn(methods,message.method))throw Error('Unknown controlled operation');const value=await methods[message.method](...message.args);parentPort.postMessage({id:message.id,ok:true,value});}
+ try{if(message.type==='export-prepare'){const p=exportRequest(message.payload),s=await packages.call('packageGet',{packageId:p.packageId});if(s.packageHash!==p.packageHash)throw Error('reference_drift');for(const id of p.artifactIds)if(!s.artifacts.some(a=>a.artifactId===id&&a.state==='ready'))throw Error('not_ready');parentPort.postMessage({id:message.id,ok:true,value:{owner:operations.owner,packageId:s.packageId,packageHash:s.packageHash,artifacts:s.artifacts}});return;}if(message.type==='export-execute'){const {destinationToken,...p}=message.payload;exportRequest(p);const result=await exporter().execute({...p,destinationToken});parentPort.postMessage({id:message.id,ok:true,value:result});return;}if(message.type==='export-status'){exportRequest(message.payload,true);const result=exporter().status(message.payload);parentPort.postMessage({id:message.id,ok:true,value:{...result,historicalOnly:true,destinationReauthorizationRequired:true}});return;}if(message.type==='package-authority'){if(!Number.isSafeInteger(message.revision)||message.revision<=authorityRevision)throw Error('reference_drift');const next=new Packages(workerData.root,{authority:message.authority});packages=next;authorityRevision=message.revision;parentPort.postMessage({id:message.id,ok:true,value:{revision:authorityRevision}});return;}if(!Object.hasOwn(methods,message.method))throw Error('Unknown controlled operation');const value=await methods[message.method](...message.args);parentPort.postMessage({id:message.id,ok:true,value});}
  catch(e){parentPort.postMessage({id:message.id,ok:false,error:e.code||e.message,code:e.code??null});}
 });});
