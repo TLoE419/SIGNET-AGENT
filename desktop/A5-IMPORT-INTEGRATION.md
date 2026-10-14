@@ -1,6 +1,6 @@
 # A5 controlled desktop import
 
-Base df7d412e15a8c457bc5323dfd46de69b98f69f49 (accepted desktop export). Adopted importer/test/IMPORT-README only from f4e1fff095c070152a6c265fa98990a579cf42c0. A dedicated follow-up commit replaces staging readdirSync with bounded opendir iteration; unknown entries are retained/refused. No old S5 tree replacement, schema/hash/default change, legacy import support enablement, scientific computation, session generation/load/start, or raw artifact copying.
+Base df7d412e15a8c457bc5323dfd46de69b98f69f49 (accepted desktop export). Adopted importer/test/IMPORT-README only from f4e1fff095c070152a6c265fa98990a579cf42c0. A dedicated follow-up commit replaces staging readdirSync with bounded opendir iteration; unknown entries are retained/refused. Recognized Drafts atomic-write .json.UUID.tmp remnants are retained and ignored, preserving original disk-error recovery; they count toward the four-entry bound, and four remnants refuse new staging. No old S5 tree replacement, schema/hash/default change, legacy import support enablement, scientific computation, session generation/load/start, or raw artifact copying.
 
 ## User flow and authority
 
