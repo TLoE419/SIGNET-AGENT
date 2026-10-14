@@ -40,3 +40,9 @@ No trusted preflight/manifest/output/observation/cancellation provider, accepted
 `npm test` covers inherited suites and S4 integration. Also run the unmodified S3 and S4 module suites with an explicitly isolated runtime redirect as described in the delivery evidence. `test-s4-integration.cjs` tests real Service/worker IPC, persistence/restart/dedup, source drift and drift during producer await, CAS, budgets/barriers, all layouts, missing dependencies, time expiry/future observations, strict identity, cancellation/new attempts, main/preload review rejection, status read-only behavior, and guarded-worker zero external-effect attempts.
 
 No native desktop/user, real station, university HPC or scientific acceptance is asserted. Independent verification remains separate.
+
+## S4-I-V01 selection restoration repair
+
+The selected persisted operation is authoritative for the displayed stage/layout. Loading or opening it copies `frozen.selection.stage/mode`, clears transient node/confirmation selection, and never rewrites the record. Refresh keeps an explicitly selected operation when it remains in the returned list; otherwise it chooses the latest available operation. Draft defaults apply only when no saved operation is selected. Preparing or retrying a new operation also synchronizes its saved selection. A manual save after reload therefore uses the restored mode, including network-allocation-steps.
+
+Run `node --test test-s4-mode-restore.cjs` from desktop for the focused renderer-factory regressions. Owned hidden Electron coverage separately saves steps/controller/single-stage operations, reloads and switches them, preserves old records, then verifies an entirely new process restores the same steps operation/attempt/stopped state and saves again in steps mode. These are synthetic DOM/IPC checks, not native or remote scientific acceptance. Backend stage graph, authority and execution guards are unchanged.
