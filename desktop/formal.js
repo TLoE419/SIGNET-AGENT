@@ -180,7 +180,7 @@
  if(action==='edit'||action==='parameter'){if(action==='parameter')state.draft.parameters[key]=value===''?NaN:Number(value);else {state.draft[key]=value;if(key==='cohort'){state.draft.inputs={};state.manifest=[];state.selectedInput=null;}}invalidate();if(['cohort','species'].includes(key))render();return;}
  if(action==='search'){state.query=value;render('4:2');return;}
  if(action==='filter'){state.filter=key;render('4:2');return;}
- if(action==='workflow'){setWorkflow(key);return;}
+ if(action==='workflow'){if(key==='import'){configuration.clearDraft();stages.clear();state.draft=null;state.loaded=null;state.validation=null;state.issues=[];state.dirty=false;await packages.act('open');return;}setWorkflow(key);return;}
  if(action==='review'){window.signetReview.openIndex();return;}
  if(action==='new'){newDraft();return;}
  if(action==='cancel'){state.dialogReturn=state.page;render('4:71');return;}
