@@ -252,6 +252,6 @@ else {
     app.quit();
   });
   let quitting=false,quitPending=false;
-  app.on('before-quit',event=>{if(quitting)return;event.preventDefault();if(quitPending)return;quitPending=true;exportBroker?.revoke();service?.visualization.invalidate?.('APPLICATION_QUIT');(async()=>{let timer;try{await Promise.race([service?.visualization.shutdown?.(),new Promise(resolve=>{timer=setTimeout(resolve,5000);})]);}finally{clearTimeout(timer);broker?.close();await service?.stopOwned();quitting=true;app.quit();}})().catch(()=>{quitting=true;app.quit();});});
+  app.on('before-quit',event=>{if(quitting)return;event.preventDefault();if(win&&!allowClose){win.close();return;}if(quitPending)return;quitPending=true;exportBroker?.revoke();service?.visualization.invalidate?.('APPLICATION_QUIT');(async()=>{let timer;try{await Promise.race([service?.visualization.shutdown?.(),new Promise(resolve=>{timer=setTimeout(resolve,5000);})]);}finally{clearTimeout(timer);broker?.close();await service?.stopOwned();quitting=true;app.quit();}})().catch(()=>{quitting=true;app.quit();});});
   app.on('window-all-closed', () => app.quit());
 }
