@@ -8,6 +8,7 @@ const {ExportBroker}=require('./export-broker.cjs');
 const {request:exportRequest}=require('./core/export-api.cjs');
 const {request:importRequest,resolver:importResolver}=require('./core/import-api.cjs');
 const {SourceBroker}=require('./source-broker.cjs');
+const {OfficialVisualizationProvider}=require('./official-visualization-provider.cjs');
 const {VisualizationCoordinator}=require('./s6-coordinator.cjs');
 const {NativeInputs} = require('./native-inputs.cjs');
 const {lookup: localResource} = require('./design-static.cjs');
@@ -108,7 +109,7 @@ function installBridge() {
     if(desktopMode!=='formal'||generation!==modeGeneration||!win||win.webContents.mainFrame.url!==home)throw Error('reference_drift');
     if(choice.filePaths.length!==1)throw Error('schema_invalid');const source=await broker.add(choice.filePaths[0],()=>{if(desktopMode!=='formal'||generation!==modeGeneration||!win||win.webContents.mainFrame.url!==home)throw Error('reference_drift');});await syncAuthority();return {canceled:false,...source};
   });});
-  handle('packageSourceRevoke',p=>{const generation=modeGeneration;return serialPackage(async()=>{if(desktopMode!=='formal'||generation!==modeGeneration)throw Error('reference_drift');const result=broker.revoke(p);await syncAuthority();return result;});});
+  handle('packageSourceRevoke',p=>{service.visualization.invalidate?.('SOURCE_REVOKED')?.catch(()=>{});const generation=modeGeneration;return serialPackage(async()=>{if(desktopMode!=='formal'||generation!==modeGeneration)throw Error('reference_drift');const result=broker.revoke(p);await syncAuthority();return result;});});
   for(const method of ['operationStart','operationStatus','operationCancel','recoveryScan','recoveryAttach','logRead','errorExplain','checkpointReview'])handle(method,p=>service.call(method,p));
   handle('closeConfirm',async p=>{
     if(!p||typeof p!=='object'||Array.isArray(p)||Object.keys(p).some(k=>!['decision','target'].includes(k)))throw Error('Invalid close request');
@@ -242,7 +243,8 @@ else {
     broker=await new SourceBroker(root).open();exportBroker=new ExportBroker(root);
     service = new Service(root,{packageAuthority:broker.authority()});
     await service.connect();
-    service.visualization=new VisualizationCoordinator({root,readImport:(id,valid)=>service.importCommand('context',id,importResolver(valid))});
+    const officialVisualization=new OfficialVisualizationProvider({root,broker,projectRoot:process.env.SIGNET_OFFICIAL_PROJECT_ROOT||root});
+    service.visualization=new VisualizationCoordinator({root,readImport:(id,valid)=>service.importCommand('context',id,importResolver(valid)),providers:officialVisualization.ports()});
     installSessionPolicy();
     installBridge();
     await protocols();
