@@ -1,7 +1,7 @@
 'use strict';
 // Main-owned local authority. Only an explicit native directory choice can add a source.
 const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto');
-const {PackageIndex}=require('./core/s5/package.cjs');
+const {PackageIndex,parseNetwork,LIMITS}=require('./core/s5/package.cjs');
 const fail=code=>{throw Object.assign(Error(code),{code});},sha=x=>crypto.createHash('sha256').update(x).digest('hex');
 function exact(x,keys){if(!x||Object.getPrototypeOf(x)!==Object.prototype||Object.keys(x).length!==keys.length||Object.keys(x).some(k=>!keys.includes(k)))fail('schema_invalid');}
 function directory(p,create=false){if(typeof p!=='string'||!path.isAbsolute(p)||path.resolve(p)!==p||p==='/')fail('unsafe_path');let at='/';for(const part of p.slice(1).split('/')){at=path.join(at,part);let st;try{st=fs.lstatSync(at);}catch(e){if(e.code!=='ENOENT'||!create)throw e;fs.mkdirSync(at,{mode:0o700});st=fs.lstatSync(at);}if(st.isSymbolicLink()||!st.isDirectory())fail('unsafe_path');}const st=fs.statSync(p);return `${st.dev}:${st.ino}`;}
@@ -22,7 +22,23 @@ class SourceBroker{
   for(const e of this.entries.filter(e=>!e.revoked)){try{await this.validate(e);}catch{this.invalid??=new Set();this.invalid.add(e.token);}}
   return this;
  }
- async add(root,authorize=()=>{}){this.guard();const d=this.declaration(root),old=this.entries.find(e=>!e.revoked&&e.root===root&&e.manifestHash===d.manifestHash&&e.identity===d.identity);if(old){await this.validate(old);authorize();this.invalid?.delete(old.token);return {sourceToken:old.token,label:d.d.label};}if(this.entries.length>=128||this.entries.filter(e=>!e.revoked).length>=8)fail('entry_limit');const e={token:'local-'+crypto.randomBytes(16).toString('hex'),root,identity:d.identity,manifestHash:d.manifestHash,revoked:false};await this.validate(e);const source=this.source(e),authority=this.authority(),item={...source,localGuard:{manifestHash:e.manifestHash,identity:e.identity}};if(Buffer.byteLength(JSON.stringify(item))>65536)fail('entry_limit');const prospective={roots:[...authority.roots.filter(r=>r.rootId!=='empty'),{rootId:e.token,path:e.root}],sources:[...authority.sources,item]};if(Buffer.byteLength(JSON.stringify(prospective))>512*1024)fail('entry_limit');authorize();this.save([...this.entries,e]);return {sourceToken:e.token,label:d.d.label};}
+ prepareMatrices(source,authorize){
+  const identity=directory(source),names=['signet_Afreq','signet_CoeffMat0','signet_net.genepos'],roles=['matrix-frequency','matrix-coefficient','gene-positions'];
+  const bytes=names.map(n=>read(path.join(source,n),LIMITS.fileBytes));if(bytes.reduce((n,b)=>n+b.length,0)>LIMITS.totalBytes)fail('size_limit');
+  const decode=b=>new TextDecoder('utf-8',{fatal:true}).decode(b);parseNetwork({frequencyText:decode(bytes[0]),coefficientText:decode(bytes[1]),positionsText:decode(bytes[2]),direction:'column/source->row/target',axes:null});
+  const hashes=bytes.map(sha),official=['d38bbcf94c5b4e722eabaaaa3d6b627a94ef05dac0f4f2e8fc43a9c946457193','354f56d2d1d19029474e77306d04ebb167a2d0705d6ee378fa911a99bb7b02f9','8f4ffd71673f512b5451cc13f9b041e166be4b33d6278d9deead4cfe227843b8'].every((h,i)=>h===hashes[i]);
+  const batch=sha(JSON.stringify(hashes)),sourceRef={sourceId:official?'official-netvis-simulated':'local-network-matrices',batchId:'sha-'+batch.slice(0,32),revision:1};
+  const declaration={schemaVersion:1,kind:official?'synthetic':'external',label:official?'Official SIGNET example (simulated)':'Local network matrices (unverified)',manifest:{schemaVersion:1,sourceRef,direction:'column/source->row/target',axes:null,claims:official?{status:'simulated',sourceCommit:'bed55b3e121de0edf5fd43da683dc59850ff82d3'}:null,visualization:null,artifacts:names.map((relativePath,i)=>({artifactId:['frequency','coefficient','positions'][i],role:roles[i],relativePath,bytes:bytes[i].length,sha256:hashes[i],sourceRef}))}};
+  // Validate the exact native choice again before creating only derived, bounded bytes.
+  authorize();if(directory(source)!==identity||names.some((n,i)=>!read(path.join(source,n),LIMITS.fileBytes).equals(bytes[i])))fail('source_changed');
+  const target=path.join(this.root,'network-imports',batch);directory(target,true);
+  for(const [n,b] of [...names.map((n,i)=>[n,bytes[i]]),['signet-package.json',Buffer.from(JSON.stringify(declaration))]]){
+   const file=path.join(target,n);if(fs.existsSync(file)){if(!read(file,n==='signet-package.json'?65536:LIMITS.fileBytes).equals(b))fail('source_changed');continue;}
+   const fd=fs.openSync(file,'wx',0o600);try{fs.writeFileSync(fd,b);fs.fsyncSync(fd);}finally{fs.closeSync(fd);}
+  }
+  authorize();return target;
+ }
+ async add(root,authorize=()=>{}){this.guard();directory(root);if(!fs.existsSync(path.join(root,'signet-package.json')))root=this.prepareMatrices(root,authorize);const d=this.declaration(root),old=this.entries.find(e=>!e.revoked&&e.root===root&&e.manifestHash===d.manifestHash&&e.identity===d.identity);if(old){await this.validate(old);authorize();this.invalid?.delete(old.token);return {sourceToken:old.token,label:d.d.label};}if(this.entries.length>=128||this.entries.filter(e=>!e.revoked).length>=8)fail('entry_limit');const e={token:'local-'+crypto.randomBytes(16).toString('hex'),root,identity:d.identity,manifestHash:d.manifestHash,revoked:false};await this.validate(e);const source=this.source(e),authority=this.authority(),item={...source,localGuard:{manifestHash:e.manifestHash,identity:e.identity}};if(Buffer.byteLength(JSON.stringify(item))>65536)fail('entry_limit');const prospective={roots:[...authority.roots.filter(r=>r.rootId!=='empty'),{rootId:e.token,path:e.root}],sources:[...authority.sources,item]};if(Buffer.byteLength(JSON.stringify(prospective))>512*1024)fail('entry_limit');authorize();this.save([...this.entries,e]);return {sourceToken:e.token,label:d.d.label};}
  revoke(p){exact(p,['sourceToken']);if(typeof p.sourceToken!=='string')fail('schema_invalid');const e=this.entries.find(e=>e.token===p.sourceToken);if(!e)fail('permission_denied');if(!e.revoked)this.save(this.entries.map(x=>x===e?{...e,revoked:true}:x));return {revoked:true,sourceToken:e.token};}
  catalog(){return this.entries.filter(e=>!e.revoked).map(e=>{try{if(this.invalid?.has(e.token))throw Error();this.source(e);return {sourceToken:e.token,status:'approved'};}catch{return {sourceToken:e.token,status:'blocked'};}});}
  authority(){this.guard();const sources=[],roots=[];for(const e of this.entries){if(e.revoked||this.invalid?.has(e.token))continue;try{const s=this.source(e);sources.push({...s,localGuard:{manifestHash:e.manifestHash,identity:e.identity}});roots.push({rootId:e.token,path:e.root});}catch{}}return {roots:roots.length?roots:[{rootId:'empty',path:this.empty}],sources};}
