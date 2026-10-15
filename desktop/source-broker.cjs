@@ -23,6 +23,7 @@ class SourceBroker{
   return this;
  }
  prepareMatrices(source,authorize){
+  if(source===this.root||source.startsWith(this.root+'/s5/')||this.root.startsWith(source+'/'))fail('unsafe_path');
   const identity=directory(source),names=['signet_Afreq','signet_CoeffMat0','signet_net.genepos'],roles=['matrix-frequency','matrix-coefficient','gene-positions'];
   const bytes=names.map(n=>read(path.join(source,n),LIMITS.fileBytes));if(bytes.reduce((n,b)=>n+b.length,0)>LIMITS.totalBytes)fail('size_limit');
   const decode=b=>new TextDecoder('utf-8',{fatal:true}).decode(b);parseNetwork({frequencyText:decode(bytes[0]),coefficientText:decode(bytes[1]),positionsText:decode(bytes[2]),direction:'column/source->row/target',axes:null});
