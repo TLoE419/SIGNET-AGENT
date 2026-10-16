@@ -1,5 +1,5 @@
 """Fixed child boundary: no outbound connections; never accepts user code or paths."""
-import os,sys,resource,ctypes,errno,shutil,fcntl,stat
+import os,sys,resource,ctypes,errno,shutil,fcntl,stat,subprocess,select,signal,json
 if os.uname().machine!='x86_64':raise RuntimeError('ARCH_UNSUPPORTED')
 resource.setrlimit(resource.RLIMIT_FSIZE,(128*1024**2,128*1024**2))
 resource.setrlimit(resource.RLIMIT_AS,(4*1024**3,4*1024**3))
@@ -21,7 +21,31 @@ if lib.prctl(38,1,0,0,0) or lib.prctl(22,2,ctypes.byref(program),0,0):raise OSEr
 if stat.S_ISREG(os.fstat(0).st_mode):
  if fcntl.fcntl(0,fcntl.F_GET_SEALS)!=15:raise RuntimeError('SESSION_STDIN_NOT_SEALED')
  os.lseek(0,0,0);print('SIGNET_SEALED_STDIN',flush=True)
+def run_r(binary,arguments,profile_dir=None):
+ # A narrow same-boundary waiter: the R child inherits every existing limit, UID, seccomp and FD0.
+ read_fd=write_fd=None;profile=None;kept=dropped=0;env=os.environ.copy()
+ if profile_dir:
+  read_fd,write_fd=os.pipe();env['SIGNET_R_PROFILE']='/proc/self/fd/'+str(write_fd)
+  profile=open(os.path.join(profile_dir,'r-profile.txt'),'xb',buffering=0)
+ try:
+  p=subprocess.Popen([binary,*arguments],env=env,pass_fds=(write_fd,) if write_fd is not None else ())
+  birth=open('/proc/'+str(p.pid)+'/stat').read().split()[21]
+  if write_fd is not None:os.close(write_fd);write_fd=None
+  while read_fd is not None:
+   if select.select([read_fd],[],[],.1)[0]:
+    b=os.read(read_fd,65536)
+    if not b:break
+    n=min(len(b),max(0,1048576-kept));profile.write(b[:n]);kept+=n;dropped+=len(b)-n
+  code=p.wait();sig=-code if code<0 else None
+  print('SIGNET_R_EXIT '+json.dumps({'pid':p.pid,'birth':birth,'returncode':code,'signal':sig,'signalName':signal.Signals(sig).name if sig else None,'profileBytes':kept,'profileDroppedBytes':dropped}),flush=True)
+  return code
+ finally:
+  if profile:profile.close()
+  for fd in (read_fd,write_fd):
+   if fd is not None:os.close(fd)
 binary=shutil.which('Rscript',path='/usr/local/bin:/usr/bin:/bin')
 if not binary:raise RuntimeError('RSCRIPT_UNAVAILABLE')
 print('SIGNET_R_EXEC '+binary,flush=True)
-os.execv(binary,['Rscript',*sys.argv[2:]])
+code=run_r(binary,sys.argv[2:],sys.argv[3] if len(sys.argv)>3 and os.path.basename(sys.argv[2])=='prepare.R' else None)
+if code<0:os.kill(os.getpid(),-code)
+sys.exit(code)

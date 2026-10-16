@@ -1,11 +1,11 @@
-import ast, pathlib, subprocess, tempfile, signal, sys, time, resource, unittest, os
+import ast, pathlib, subprocess, tempfile, signal, sys, time, resource, unittest, os, json, re, hashlib
 source=pathlib.Path(__file__).with_name('guest.py').read_text();tree=ast.parse(source)
 functions=[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name in ('bounded_wait','wait_evidence')]
 class Contract(unittest.TestCase):
  def test_real_children(self):
   with tempfile.TemporaryDirectory(prefix='signet-wait-') as folder:
    root=pathlib.Path(folder);(root/'process.log').write_bytes(b'x'*20000+b'\nSIGNET_PHASE real-test\n')
-   events=[];ns=dict(root=root,time=time,resource=resource,signal=signal,emit=events.append,interrupted=lambda:None,check_total=lambda:0)
+   events=[];ns=dict(root=root,time=time,resource=resource,signal=signal,json=json,re=re,hashlib=hashlib,emit=events.append,interrupted=lambda:None,check_total=lambda:0)
    exec(compile(ast.Module(body=functions,type_ignores=[]),'actual-guest-wait','exec'),ns)
    for code,expected in [('pass',0),('raise SystemExit(7)',7),('import os,signal;os.kill(os.getpid(),signal.SIGTERM)',-signal.SIGTERM)]:
     p=subprocess.Popen([sys.executable,'-c',code]);
