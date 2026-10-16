@@ -4,7 +4,7 @@
  const bridge=window.desktop,view=window.signetView;if(!bridge)return;
  const pages=new Map(window.SIGNET_DESIGN.pages.map(p=>[p.nodeId,p])),bindings=window.SIGNET_FORMAL_BINDINGS;
  const routes={network:['4:3','4:5','4:6','4:7'],preprocessing:['4:34','4:35','4:36','4:7'],cis:['4:41','4:42','4:43','4:7'],import:['4:30','4:31','4:31','4:7']};
- const state={mode:'formal',records:[],drafts:[],query:'',filter:'All',page:'4:2',step:0,draft:null,loaded:null,validation:null,issues:[],manifest:[],selectedInput:null,dirty:false,busy:false,error:'',caps:null,record:null,dialogReturn:null};
+ const state={mode:'formal',records:[],drafts:[],query:'',filter:'All',page:'4:2',step:0,draft:null,loaded:null,validation:null,issues:[],manifest:[],selectedInput:null,dirty:false,busy:false,error:'',caps:null,record:null,dialogReturn:null,s2:{operation:null,candidates:[],selected:null,log:null,logId:'controller',explanation:null,plan:null,checkpoint:null,npc:'',batchIds:[],returnPage:'4:24'}};
  let generation=0;
  const active=()=>state.mode==='formal';
  const unwrap=async(name,...args)=>{if(!active())throw Error('Review is isolated');const stamp=generation;const r=await bridge[name](...args);if(stamp!==generation||!active())throw Error('Stale response after mode change');if(!r?.ok)throw Error(r?.error??'Local controller unavailable');return r.value;};
@@ -23,12 +23,14 @@
    if(!control){a.state='Disabled';if(n.tag==='InputField'||n.tag==='SelectField'){a.value='Not ready (S2–S7)';a.options=[a.value];}if(a.label==='UCI HPC3 · Connected')a.label='Remote connection · Not ready';}
    else{
     a.state='Default';const [action,key]=control;
+    if(action==='s2-scope'){a.value='This isolated runtime only';a.state='Disabled';}
+    if(action==='s2-npc'){a.value=state.s2.npc;a.options=['',...(state.s2.checkpoint?.availablePCs??[]).map(String)];if(a.options.length===1)a.state='Disabled';}
     if(action==='edit'){a.value=state.draft?.[key]??'';if(key==='finishAfter')a.options=state.caps.workflows[state.draft.workflow].finishes;if(key==='cohort')a.options=['TCGA','GTEx'];if(key==='species')a.options=['',...new Set(state.caps.annotation.map(c=>c.species))];if(key==='assembly')a.options=['',...state.caps.annotation.filter(c=>c.species===state.draft.species).map(c=>c.assembly)];}
     if(action==='parameter')a.value=String(state.draft.parameters[key]);
     if(action==='search')a.value=state.query;
     if(action==='filter')a.active=key===state.filter?'On':'Off';
     if(['validate-review','continue'].includes(action)&&state.step>0&&!state.validation?.capabilities?.reviewReady)a.state='Disabled';
-    if(action==='continue'&&!state.caps.workflows[state.draft.workflow].supported)a.state='Disabled';
+    if(action==='continue'&&state.draft&&!state.caps.workflows[state.draft.workflow].supported)a.state='Disabled';
     if(action==='pick'&&!state.selectedInput)a.state='Disabled';
     if(action==='validate-review'&&state.step===2)a.state='Default';
    }
@@ -91,18 +93,79 @@
  }
  if(state.draft&&state.step===2&&state.draft.workflow==='network'){const group=find(tree,n=>n.attrs?.['data-node-id']===(id==='4:53'?'6:9333':'6:605')),template=find(group,n=>n.attrs?.['data-node-id']===(id==='4:53'?'6:9334':'6:606'));if(group&&template)for(const key of ['alpha.cis','freq','ntop']){const field=clone(template);field.attrs['data-node-id']='formal:param:'+key;field.attrs.label=state.caps.parameters[key].label;field.attrs.value=String(state.draft.parameters[key]);group.children.push(field);}}
  if(state.draft&&state.step===3){const resource=find(tree,n=>name(n)==='Resources');if(resource)summary(resource,'Resources','Not configured (S3)');}
- visit(tree,n=>{if(n.tag==='p'&&n.children?.some(c=>c.text?.startsWith('Demo values')))t(n,'Remote resources are not configured (S3).');if(id==='4:4'&&n.attrs?.['data-node-id']==='6:229')t(n,'Input validation is blocked.');if(id==='4:4'&&n.attrs?.['data-node-id']==='6:230')t(n,state.issues.map(i=>i.field+': '+i.message).join(' · ')||state.error);if(n.attrs?.['data-formal-disabled']==='true')n.attrs['data-formal-disabled']='true';});if(id!=='4:4'||state.error)statusPanel(tree);return tree;
+ visit(tree,n=>{if(n.tag==='p'&&n.children?.some(c=>c.text?.startsWith('Demo values')))t(n,'Remote resources are not configured (S3).');if(id==='4:4'&&n.attrs?.['data-node-id']==='6:229')t(n,'Input validation is blocked.');if(id==='4:4'&&n.attrs?.['data-node-id']==='6:230')t(n,state.issues.map(i=>i.field+': '+i.message).join(' · ')||state.error);if(n.attrs?.['data-formal-disabled']==='true')n.attrs['data-formal-disabled']='true';});if(id!=='4:4'||state.error)statusPanel(tree);s2Project(tree,id);return tree;
  }
+
+ const s2Pages=new Set(['4:10','4:11','4:12','4:20','4:21','4:22','4:24','4:25','4:26','4:27','4:28','4:29','4:39','4:56','4:64','4:66','4:67','4:68','4:69','4:70','4:74']);
+ const s2Target=()=>{const r=state.s2.operation;if(!r)throw Error('Select a persisted local monitor first');return Object.fromEntries(['operationId','analysisId','attemptId','owner','revision'].map(k=>[k,r[k]]));};
+ function s2Accept(r){if(state.record&&r.analysisId!==state.record.id)return false;const old=state.s2.operation;if(old?.operationId===r.operationId&&old.revision>r.revision)return false;state.s2.operation=r;return true;}
+ function s2Project(tree,id){
+  if(!s2Pages.has(id)&&id!=='4:65'&&id!=='4:2')return;
+  if(s2Pages.has(id))visit(tree,n=>{if(n.tag==='p')t(n,'');if(n.tag==='Tag')n.attrs.label=state.s2.operation?.status??'Unknown';if(['svg','img'].includes(n.tag)){n.children=[];if(n.tag==='img')n.attrs.src='';}});
+  const backdropIndex=(tree.children||[]).findIndex(n=>name(n)==='Modal backdrop');
+  const holder=backdropIndex>=0?tree.children[backdropIndex+1]:find(tree,n=>name(n)==='Page content');if(!holder)return;
+  const op=state.s2.operation,children=[{tag:'p',children:[{text:'Local monitoring; remote controller, jobs and scientific completion remain unknown.'}]}];
+  if(op)children.push({tag:'p',children:[{text:op.analysisId+' · '+op.status+' · revision '+op.revision+' · checked '+op.checkedAt}]});
+  const button=(action,label,disabled=false)=>({tag:'Button',attrs:{class:'sds-button',label,state:disabled?'Disabled':'Default','data-node-id':'formal:'+action}});
+  if(state.record&&!op)children.push(button('s2-start','Monitor this local record'));
+  if(op){children.push(button('s2-status','Refresh local observation'),button('s2-stop-open','Stop local monitoring',op.status==='cancelled'),button('s2-log','Read local log'),button('s2-log-worker','Read analysis worker log'),button('s2-explain','Explain recorded error'),button('s2-pca-open','Review PCA checkpoint'),button('s2-retry-open','Review retry checkpoint'),button('s2-close-open','Close this window'));
+   children.push({tag:'pre',attrs:{class:'formal-s2-status'},children:[{text:JSON.stringify(op.projection??{},null,2)}]});}
+  if(['4:27','4:28','4:29'].includes(id)){
+   const table=find(tree,n=>name(n)==='Data table');if(table)table.children=table.children.filter(n=>name(n)==='Column headings');
+   for(const r of state.s2.candidates){const row=button('s2-select:'+r.operationId,r.analysisId+' · '+r.status);row.attrs['data-op-id']=r.operationId;children.push(row);}
+   if(!state.s2.candidates.length)children.push({tag:'p',children:[{text:state.error?'Scan failed; this is not an empty success.':'No owned local monitoring manifests found.'}]});
+   children.push(button('s2-attach','Attach selected local monitor',!state.s2.selected));
+  }
+  if(id==='4:74'){const log=state.s2.log;children.push({tag:'p',children:[{text:log?.status==='ok'?(log.complete?'Complete bounded snapshot':log.truncated?'Bounded page limit reached; incomplete':'Partial page; more remains'):log?.status??'No log observation'}]},{tag:'pre',attrs:{class:'formal-s2-log'},children:[{text:log?.text??''}]},button('s2-log-next','Read next page',!log?.cursor));}
+  if(['4:66','4:67'].includes(id))children.push({tag:'p',children:[{text:(state.s2.explanation?.title??'No supported explanation')+' · '+(state.s2.explanation?.advice??'Read the source log.')} ]});
+  if(['4:20','4:22'].includes(id)){
+   const table=find(tree,n=>name(n)==='Data table');if(table)table.children=table.children.filter(n=>name(n)==='Column headings');
+   if(state.s2.plan?.status==='confirmation_required')children.push(button('s2-retry','Confirm selection; science unavailable'));
+   for(const b of state.s2.checkpoint?.failedBatches??[])children.push(button('s2-batch:'+b.id,(state.s2.batchIds.includes(b.id)?'Selected · ':'Select · ')+b.id+' · failed'));
+  }
+  if(['4:39','4:64','4:20','4:22'].includes(id))children.push({tag:'p',children:[{text:'No PCA curve or batch is fabricated. Checkpoint validation only; scientific continuation is unavailable.'}]});
+  holder.children.push({tag:'section',attrs:{class:'formal-s2','data-name':'Local operation evidence'},children});
+ }
+ async function s2Checkpoint(kind){await run(async()=>{const r=s2Target();state.s2.checkpoint=await unwrap('checkpointReview',{analysisId:r.analysisId,attemptId:r.attemptId,kind});state.s2.plan=null;state.s2.npc='';state.s2.batchIds=[];render(kind==='pca'?'4:39':'4:20');});}
+ async function s2Log(next=false){if(!state.s2.operation)throw Error('Select a local monitor');const old=state.s2.log;const result=await unwrap('logRead',{operationId:state.s2.operation.operationId,logId:state.s2.logId,cursor:next?old?.cursor:null,limit:8192});state.s2.log={...result,text:next&&result.status==='ok'?(old?.text??'')+result.text:result.text};render('4:74');}
+ async function s2Act(action,id,value){
+  if(action.startsWith('s2-batch:')){const batch=action.slice('s2-batch:'.length);state.s2.batchIds=state.s2.batchIds.includes(batch)?state.s2.batchIds.filter(x=>x!==batch):[...state.s2.batchIds,batch];state.s2.plan=null;render();return;}
+  if(action.startsWith('s2-select:')){state.s2.selected=action.slice('s2-select:'.length);render();return;}
+  if(action==='s2-npc'){state.s2.npc=value;state.s2.plan=null;return;}
+  if(action==='s2-scope'||action==='s2-select')return;
+  if(action==='s2-scan-cancel'||action==='s2-keep'){generation++;state.busy=false;state.error='';render(state.s2.returnPage);return;}
+  if(action==='s2-stop-open'){state.s2.returnPage=state.page;render('4:69');return;}
+  if(action==='s2-close-open'){state.s2.returnPage=state.page;render('4:68');return;}
+  if(action==='s2-pca-open'){await s2Checkpoint('pca');return;}
+  if(action==='s2-retry-open'){await s2Checkpoint('retry');return;}
+  await run(async()=>{
+   if(action==='s2-start'){const result=await unwrap('operationStart',{requestId:'monitor-'+state.record.id,analysisId:state.record.id,kind:'monitor'});if(s2Accept(result))render('4:24');}
+   else if(action==='s2-status'){if(!state.s2.operation){render('4:65');return;}const result=await unwrap('operationStatus',{operationId:state.s2.operation.operationId});if(s2Accept(result))render(result.status==='cancelled'?'4:70':'4:24');}
+   else if(action==='s2-reconnect'){await unwrap('reconnect');if(state.s2.operation)s2Accept(await unwrap('operationStatus',{operationId:state.s2.operation.operationId}));render('4:24');}
+   else if(action==='s2-scan'){state.s2.returnPage=state.page;render('4:28');const scan=await unwrap('recoveryScan',{limit:100});state.s2.candidates=scan.candidates;state.s2.selected=null;state.error=scan.issues.map(x=>x.code).join(' · ');render(scan.candidates.length?'4:27':'4:29');}
+   else if(action==='s2-attach'){const chosen=state.s2.candidates.find(x=>x.operationId===state.s2.selected);if(!chosen)throw Error('Choose an owned manifest');state.record=await unwrap('detail',chosen.analysisId);state.s2.operation=chosen;s2Accept(await unwrap('recoveryAttach',s2Target()));render('4:24');}
+   else if(action==='s2-cancel'){const result=await unwrap('operationCancel',{...s2Target(),confirmed:true});if(s2Accept(result))render(result.status==='cancelled'?'4:70':'4:24');}
+   else if(action==='s2-log'){state.s2.logId='controller';await s2Log();}else if(action==='s2-log-worker'){state.s2.logId='worker';await s2Log();}else if(action==='s2-log-next')await s2Log(true);
+   else if(action==='s2-explain'){state.s2.explanation=await unwrap('errorExplain',state.s2.operation?{operationId:state.s2.operation.operationId}:{code:'unavailable'});render(state.s2.explanation.status==='explained'?'4:66':'4:67');}
+   else if(action==='s2-history')render('4:65');
+   else if(action==='s2-close')await unwrap('closeConfirm',{decision:'close-anyway'});
+   else if(action==='s2-pca'||action==='s2-retry'){const target=s2Target(),kind=action==='s2-pca'?'pca':'retry';const p={analysisId:target.analysisId,attemptId:target.attemptId,kind,...(kind==='pca'?{npc:Number(state.s2.npc)}:{batchIds:state.s2.batchIds})};if(state.s2.plan?.planHash){p.planHash=state.s2.plan.planHash;p.confirmed=true;}state.s2.plan=await unwrap('checkpointReview',p);state.error=state.s2.plan.status+' · scientific continuation disabled';render(kind==='pca'?'4:64':'4:22');}
+  });
+ }
+
  function applyBusy(){for(const el of document.querySelectorAll('input,select,button')){if(state.busy&&!Object.hasOwn(el.dataset,'s1Disabled')){el.dataset.s1Disabled=String(el.disabled);el.disabled=true;}else if(!state.busy&&Object.hasOwn(el.dataset,'s1Disabled')){el.disabled=el.dataset.s1Disabled==='true';delete el.dataset.s1Disabled;}}document.querySelector('[data-screen-id]')?.setAttribute('aria-busy',String(state.busy));}
  function render(id=state.page){if(!active())return;view.render(id,project(id));document.getElementById('app').hidden=false;if(state.record)document.title=state.record.label+' — SIGNET history ('+state.record.status+')';else if(state.draft&&state.step===1)document.title='SIGNET — Input validation ('+(state.validation?.status??'not validated')+')';for(const el of document.querySelectorAll('[data-formal-disabled]')){el.setAttribute('aria-disabled','true');el.tabIndex=-1;}for(const el of document.querySelectorAll('input,select')){if(el.closest('label')?.classList.contains('disabled')||el.closest('label')?.dataset.formalDisabled==='true')el.disabled=true;}applyBusy();}
  function route(step){if(!state.draft)return;state.step=step;render(step===1&&state.draft.workflow==='network'&&(state.validation?.status==='blocked'||state.issues.length)?'4:4':routes[state.draft.workflow][step]);}
  async function refresh(){const [records,drafts]=await Promise.all([unwrap('list'),unwrap('draftList')]);if(!active())return;state.records=records;state.drafts=drafts;}
- async function list(){await refresh();state.draft=null;state.loaded=null;state.record=null;state.validation=null;state.dirty=false;state.issues=[];render('4:2');}
+ async function list(){await refresh();state.draft=null;state.loaded=null;state.record=null;state.s2.operation=null;state.validation=null;state.dirty=false;state.issues=[];render('4:2');}
  function newDraft(){state.error='';state.draft={revision:0,label:'',notes:'',workflow:'network',cohort:'TCGA',entryStage:'network',finishAfter:'network',species:'',assembly:'',inputs:{},parameters:{nboots:state.caps.parameters.nboots.default,ncis:state.caps.parameters.ncis.default,cor:state.caps.parameters.cor.default,'alpha.cis':state.caps.parameters['alpha.cis'].default,freq:state.caps.parameters.freq.default,ntop:state.caps.parameters.ntop.default}};state.loaded=null;state.validation=null;state.manifest=[];state.issues=[];state.dirty=false;state.selectedInput=null;state.record=null;route(0);}
  async function save(){for(const [key,value]of Object.entries(state.draft.parameters))if(key!=='tissue'&&(typeof value!=='number'||!Number.isFinite(value)))throw Error('Invalid parameter: '+key);const payload=clone(state.draft);for(const input of Object.values(payload.inputs))delete input.name;const r=await unwrap('draftSave',payload);if(!active())return;state.draft=r.draft;state.loaded=clone(r.draft);state.manifest=r.inputManifest;state.issues=r.issues;state.validation=r.validation;state.dirty=false;return r;}
  async function validate(){if(!state.draft.id||state.dirty)await save();const v=await unwrap('inputValidate',state.draft.id,state.draft.revision);if(!active())return;state.validation=v;state.issues=v.issues;state.manifest=v.inputManifest;return v;}
- async function openRecord(id,kind){if(kind==='draft'){const r=await unwrap('draftLoad',id);state.draft=r.draft;state.loaded=clone(r.draft);state.validation=r.validation;state.manifest=r.inputManifest;state.issues=r.issues;state.dirty=false;state.selectedInput=null;state.record=null;route(r.issues.length?1:0);}else{state.record=await unwrap('detail',id);state.draft=null;state.issues=[];render(state.record.inputIssues?.length?'4:23':'4:65');}}
- async function act(page,id,value,el){if(!active()||state.busy)return;
+ async function openRecord(id,kind){if(kind==='draft'){const r=await unwrap('draftLoad',id);state.draft=r.draft;state.loaded=clone(r.draft);state.validation=r.validation;state.manifest=r.inputManifest;state.issues=r.issues;state.dirty=false;state.selectedInput=null;state.record=null;route(r.issues.length?1:0);}else{state.record=await unwrap('detail',id);state.draft=null;state.issues=[];const scan=await unwrap('recoveryScan',{});state.s2.operation=scan.candidates.find(x=>x.analysisId===id)??null;render(state.record.inputIssues?.length?'4:23':'4:65');}}
+ async function act(page,id,value,el){if(!active())return;
+ const s2Action=id?.startsWith('formal:s2-')?id.slice('formal:'.length):bindings[page]?.[id]?.[0];
+ if(s2Action?.startsWith('s2-')){await s2Act(s2Action,id,value);return;}
+ if(state.busy)return;
  if(id==='formal:escape'){state.error='';render(state.dialogReturn??routes[state.draft.workflow][state.step]);return;}
  if(id?.startsWith('formal:param:')){const key=id.slice('formal:param:'.length);if(['alpha.cis','freq','ntop'].includes(key)){state.draft.parameters[key]=value===''?NaN:Number(value);invalidate();}return;}
  if(id?.startsWith('formal:input:')){state.selectedInput=value;render();return;}
@@ -132,7 +195,7 @@
  async function run(fn){const token=++generation;state.busy=true;state.error='';applyBusy();try{await fn();}catch(e){if(active()&&token===generation){state.error=e.message;render(state.step===2&&state.draft?.workflow==='network'?'4:53':state.page);}}finally{if(token===generation){state.busy=false;if(active())applyBusy();}}}
  view.bind(act);
  window.addEventListener('signet:mode',e=>{state.mode=e.detail.mode;if(state.mode==='review'){generation++;state.busy=false;bridge.mode('review');} });
- window.signetWorkspace=Object.freeze({open:async()=>{state.mode='formal';await bridge.mode('formal');await run(async()=>{if(state.draft)render(state.page);else await list();});},current:()=>({mode:state.mode,page:state.page,draftId:state.draft?.id,revision:state.draft?.revision,dirty:state.dirty,busy:state.busy,validation:state.validation?.status,error:state.error,records:state.records.length,drafts:state.drafts.length})});
+ window.signetWorkspace=Object.freeze({open:async()=>{state.mode='formal';await bridge.mode('formal');await run(async()=>{if(state.draft)render(state.page);else await list();});},current:()=>({mode:state.mode,page:state.page,draftId:state.draft?.id,revision:state.draft?.revision,dirty:state.dirty,busy:state.busy,validation:state.validation?.status,error:state.error,records:state.records.length,drafts:state.drafts.length,operationId:state.s2.operation?.operationId,operationStatus:state.s2.operation?.status,remoteStatus:state.s2.operation?.projection?.remoteController,logComplete:state.s2.log?.complete,planStatus:state.s2.plan?.status,availablePCs:state.s2.checkpoint?.availablePCs,failedBatches:state.s2.checkpoint?.failedBatches?.map(x=>x.id)})});
  document.getElementById('app').hidden=true;
  run(async()=>{await unwrap('mode','formal');state.caps=await unwrap('capabilities');await list();});
 })();

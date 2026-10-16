@@ -5,6 +5,14 @@ const aid='a-20261007T000000-123456abcdef';
 function temporary(t){const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'signet-node-')));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));return root}
 const fixtures=require('./test-support/fixtures.cjs');
 const source=fixtures.source;
+const viewerTemplate=fs.readFileSync(path.join(__dirname,'core/viewer.html'),'utf8');
+function englishViewerData(html,template=viewerTemplate){
+ const parts=template.split('__NETWORK_DATA__');assert.equal(parts.length,2,'Viewer has exactly one data slot');
+ assert.doesNotMatch(template,/[\p{Script=Han}]/u,'Fixed viewer UI must remain English');
+ const [before,after]=parts;
+ assert.ok(html.startsWith(before)&&html.endsWith(after),'Viewer must preserve the complete fixed UI template');
+ return JSON.parse(html.slice(before.length,html.length-after.length));
+}
 function syntheticRun(root){fixtures.network(root,aid);}
 test('synthetic network validates edge direction, coefficients and bootstrap frequencies',t=>{
  const root=temporary(t),run=fixtures.network(root,aid),network=R.network(path.join(run,'res/resn'));
@@ -81,8 +89,18 @@ test('background controller reads synthetic evidence and reconnects without Pyth
  const root=temporary(t);fixtures.network(root,LEGACY);
  const service=new Service(root);t.after(()=>service.stopOwned());await service.connect();assert.equal(service.status().transport,'restricted IPC');
  assert.equal((await service.call('schema')).stages.length,6);assert.equal((await service.call('list'))[0].status,'succeeded');
- const html=await service.call('viewer',LEGACY);assert.match(html,/Gene Regulatory Network/);assert.doesNotMatch(html,/[\p{Script=Han}]/u);
+ const html=await service.call('viewer',LEGACY);assert.match(html,/Gene Regulatory Network/);const data=englishViewerData(html);
+ assert.deepEqual(data.genes,['g1','g2']);assert.deepEqual(data.verification.outputs,R.network(path.join(root,'runs',LEGACY,'res/resn')).files);
+ t.diagnostic(JSON.stringify({fixtureRoot:root,preservedOutputPaths:data.verification.outputs.map(f=>f.file)}));
  await assert.rejects(service.call('arbitraryShell','echo nope'),/Unknown controlled/);await service.stopOwned();await service.connect();assert.equal((await service.call('detail',LEGACY)).verification.counts['0.5'],1);
+});
+test('viewer language guard accepts Unicode data and rejects translated fixed UI',()=>{
+ const data={genes:['基因甲','geneβ'],verification:{outputs:[{file:'/資料/網路.txt'}]},note:'Literal < in data'};
+ const encoded=JSON.stringify(data).replaceAll('<','\\u003c'),html=viewerTemplate.replace('__NETWORK_DATA__',encoded);
+ assert.deepEqual(englishViewerData(html),data);
+ const translated=viewerTemplate.replace('Gene Regulatory Network','基因調控網路');
+ assert.throws(()=>englishViewerData(translated.replace('__NETWORK_DATA__',encoded),translated),/Fixed viewer UI must remain English/);
+ assert.throws(()=>englishViewerData(html.replace('<h2>Edges</h2>','<h2>邊</h2>')),/complete fixed UI template/);
 });
 test('official visualization requires its session and edge list, exports verified files only',t=>{
  const root=temporary(t),run=path.join(root,'runs',aid),store=new Store(root),folder=store.folder(aid),p=S.parameters();

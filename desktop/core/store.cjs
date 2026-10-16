@@ -19,7 +19,16 @@ class Store{
  inputValidate(id,revision){return this.draftStore().validate(id,revision);}
  recordDetail(aid){
   for(const folder of [path.join(this.root,'runs'),path.join(this.root,'runs',aid)])if(fs.existsSync(folder)&&fs.lstatSync(folder).isSymbolicLink())throw Error('Historical run cannot be a symlink');
-  const d=this.detail(aid);d.stateSource='persisted-local-record';d.inputIssues=[];
+  let d;
+  try{d=this.detail(aid);}catch(e){
+   if(aid===LEGACY||e.code!=='ENOENT')throw e;
+   const file=path.join(this.folder(aid),'state.json');
+   if(fs.lstatSync(this.folder(aid)).isSymbolicLink()||fs.lstatSync(file).isSymbolicLink()||fs.statSync(file).size>1024*1024)throw Error('Invalid record file');
+   const saved=F.read(file);if(saved.id!==aid||typeof saved.status!=='string')throw Error('Invalid record identity');
+   // Missing verification artifacts are missing evidence, not a remote failure/success.
+   d={...saved,status:'unknown',evidenceIssue:'missing-output-evidence',verification:null};
+  }
+  d.stateSource='persisted-local-record';d.inputIssues=[];
   if(aid!==LEGACY){const f=path.join(this.folder(aid),'inputs-manifest.json');if(fs.existsSync(f)){
    if(fs.lstatSync(f).isSymbolicLink()||fs.statSync(f).size>1024*1024)throw Error('Invalid input manifest');
    for(const input of F.read(f)){

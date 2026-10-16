@@ -2,6 +2,8 @@ const {app, BrowserWindow, protocol, ipcMain, dialog, shell, session, Menu} = re
 const fs = require('node:fs');
 const path = require('node:path');
 const {Service} = require('./service.cjs');
+const {sourceContext} = require('./core/runtime-root-policy.cjs');
+const sources = sourceContext();
 const {fields} = require('./core/drafts.cjs');
 const {NativeInputs} = require('./native-inputs.cjs');
 const {lookup: localResource} = require('./design-static.cjs');
@@ -17,10 +19,10 @@ if (reviewData) {
 } else if (!app.isPackaged) app.setPath('userData', path.join(__dirname, '.runtime'));
 app.commandLine.appendSwitch('force-renderer-accessibility');
 const single = app.requestSingleInstanceLock();
-let win, service;
+let win, service, allowClose=false;
 const selectedInputs = new NativeInputs();
 let desktopMode = 'formal';
-const s1Methods = new Set(['mode','status','reconnect','schema','capabilities','list','detail','draftList','draftSave','draftLoad','inputValidate','pick']);
+const s1Methods = new Set(['operationStart','operationStatus','operationCancel','recoveryScan','recoveryAttach','logRead','errorExplain','checkpointReview','closeConfirm','mode','status','reconnect','schema','capabilities','list','detail','draftList','draftSave','draftLoad','inputValidate','pick']);
 const home = 'signet://app/index.html';
 const aidPattern = /^(a-[0-9]{8}T[0-9]{6}-[a-f0-9]{12}|macos-vm-smoke-20261006)$/;
 const artifacts = new Set(['network.html', 'edges.csv', 'network.json', 'Afreq', 'CoeffMat0',
@@ -41,7 +43,7 @@ async function projectRoot() {
       if (!reviewData || !path.isAbsolute(isolated) || !fs.realpathSync(isolated).startsWith(fs.realpathSync(reviewData) + path.sep + 'fixture-project' + path.sep)) throw Error('Isolated project must be under review userData/fixture-project/');
       return fs.realpathSync(isolated);
     }
-    return path.resolve(__dirname, '..');
+    throw Error('S2 isolated build requires explicit review userData and fixture project root');
   }
   const config = path.join(app.getPath('userData'), 'project.json');
   let root;
@@ -72,6 +74,10 @@ function handle(name, fn) {
   });
 }
 function installBridge() {
+  for(const method of ['operationStart','operationStatus','operationCancel','recoveryScan','recoveryAttach','logRead','errorExplain','checkpointReview'])handle(method,p=>service.call(method,p));
+  handle('closeConfirm',async p=>{
+    if(!p||typeof p!=='object'||Array.isArray(p)||Object.keys(p).some(k=>!['decision','target'].includes(k)))throw Error('Invalid close request');
+    const result=p.decision==='keep-running'?{shouldClose:false,cancelled:false}:p.decision==='close-anyway'?{shouldClose:true,cancelled:false,independentAnalysisStopped:false}:await service.call('closeConfirm',p);if(result.shouldClose){allowClose=true;win?.close();}return result;});
   handle('mode', mode => {if (!['formal','review'].includes(mode)) throw Error('Invalid desktop mode');desktopMode=mode;return mode;});
   handle('capabilities', () => service.call('capabilities'));
   handle('draftList', () => service.call('draftList'));
@@ -161,6 +167,14 @@ function makeWindow() {
       e.preventDefault();
   });
   win.webContents.on('will-attach-webview', e => e.preventDefault());
+  win.on('close',e=>{
+    if(allowClose)return;
+    e.preventDefault();
+    service.call('closeConfirm',{decision:'review'}).catch(()=>({confirmationRequired:true,controller:'unknown'})).then(async review=>{
+      const choice=await dialog.showMessageBox(win,{type:'question',title:'Close isolated SIGNET?',message:'Close this local monitor only. Independent analyses and other windows remain untouched.',buttons:['Keep running','Close anyway'],defaultId:0,cancelId:0});
+      if(choice.response===1){allowClose=true;win.close();}
+    }).catch(()=>{});
+  });
   win.on('closed', () => { win = null; app.quit(); });
   win.loadURL(home);
 }
@@ -168,6 +182,7 @@ if (!single) app.quit();
 else {
   app.on('second-instance', () => { if (win) { if (win.isMinimized()) win.restore(); win.show(); win.focus(); } });
   app.whenReady().then(async () => {
+    if(process.env.SIGNET_REVIEW_HIDDEN==='1')app.dock?.hide();
     Menu.setApplicationMenu(Menu.buildFromTemplate([
       {label: 'SIGNET', submenu: [{role: 'about'}, {type: 'separator'}, {role: 'quit', label: 'Quit SIGNET'}]},
       {label: 'Edit', submenu: [{role: 'undo'}, {role: 'redo'}, {type: 'separator'}, {role: 'cut'}, {role: 'copy'}, {role: 'paste'}, {role: 'selectAll'}]},
@@ -178,7 +193,7 @@ else {
     ]));
     const root = await projectRoot();
     if (!root) { app.quit(); return; }
-    service = new Service(root);
+    service = new Service(root,sources);
     await service.connect();
     session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
     session.defaultSession.setPermissionCheckHandler(() => false);
