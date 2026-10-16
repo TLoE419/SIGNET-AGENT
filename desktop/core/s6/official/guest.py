@@ -102,7 +102,7 @@ try:
     launch('prepare',str(root/'load.R'),str(root),'check');bounded_wait(child,30)
     if 'SIGNET_SESSION_LOADED' not in (root/'process.log').read_text(errors='replace'):raise RuntimeError('LOAD_UNVERIFIED')
     verify();emit({'seq':seq,'value':{**manifest,'manifestHash':manifest_hash,'loadState':'loaded','guestRoot':str(root)}})
-   elif op=='verify':verify();emit({'seq':seq,'value':{'sessionHash':session_hash,'manifestHash':manifest_hash,'loadState':'loaded'}})
+   elif op=='verify':verify();emit({'seq':seq,'value':{'sessionHash':session_hash,'manifestHash':manifest_hash,'loadState':'loaded','serviceAlive':server is not None and server.poll() is None}})
    elif op=='serve':
     verify()
     if server and server.poll() is None:raise RuntimeError('SERVICE_BUSY')
