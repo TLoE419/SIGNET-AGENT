@@ -6,6 +6,15 @@ const fail=code=>{throw Object.assign(Error(code),{code});},sha=x=>crypto.create
 function exact(x,keys){if(!x||Object.getPrototypeOf(x)!==Object.prototype||Object.keys(x).length!==keys.length||Object.keys(x).some(k=>!keys.includes(k)))fail('schema_invalid');}
 function directory(p,create=false){if(typeof p!=='string'||!path.isAbsolute(p)||path.resolve(p)!==p||p==='/')fail('unsafe_path');let at='/';for(const part of p.slice(1).split('/')){at=path.join(at,part);let st;try{st=fs.lstatSync(at);}catch(e){if(e.code!=='ENOENT'||!create)throw e;fs.mkdirSync(at,{mode:0o700});st=fs.lstatSync(at);}if(st.isSymbolicLink()||!st.isDirectory())fail('unsafe_path');}const st=fs.statSync(p);return `${st.dev}:${st.ino}`;}
 function read(p,max){directory(path.dirname(p));let fd;try{const st=fs.lstatSync(p);if(!st.isFile()||st.isSymbolicLink()||st.size>max)fail('state_invalid');fd=fs.openSync(p,fs.constants.O_RDONLY|fs.constants.O_NOFOLLOW|fs.constants.O_NONBLOCK);const before=fs.fstatSync(fd);if(['dev','ino','size','mtimeMs','ctimeMs'].some(k=>before[k]!==st[k]))fail('source_changed');const b=Buffer.alloc(st.size);let off=0,n;while(off<b.length&&(n=fs.readSync(fd,b,off,b.length-off,null)))off+=n;const after=fs.fstatSync(fd),now=fs.lstatSync(p);if(off!==b.length||now.isSymbolicLink()||['dev','ino','size','mtimeMs','ctimeMs'].some(k=>before[k]!==after[k]||before[k]!==now[k]))fail('source_changed');return b;}finally{if(fd!==undefined)fs.closeSync(fd);}}
+// Roll back only entries created by this attempt, under the same verified parent.
+function rollbackCopies(created){
+ for(const item of [...created].reverse())try{
+  if(directory(path.dirname(item.path))!==item.parent)continue;
+  const st=fs.lstatSync(item.path);
+  if(st.isSymbolicLink()||`${st.dev}:${st.ino}`!==item.identity)continue;
+  if(item.directory){if(st.isDirectory())fs.rmdirSync(item.path);}else if(st.isFile()&&st.nlink===1)fs.unlinkSync(item.path);
+ }catch{/* A replaced path, nonempty directory or uncertain cleanup must be retained. */}
+}
 class SourceBroker{
  constructor(root){
   this.root=root;this.dir=path.join(root,'s5/provider');this.identity=directory(this.dir,true);this.file=path.join(this.dir,'catalog.json');this.lock=path.join(this.dir,'provider.lock');this.fd=fs.openSync(this.lock,'wx',0o600);this.lockIdentity=fs.fstatSync(this.fd);this.entries=[];
@@ -22,7 +31,7 @@ class SourceBroker{
   for(const e of this.entries.filter(e=>!e.revoked)){try{await this.validate(e);}catch{this.invalid??=new Set();this.invalid.add(e.token);}}
   return this;
  }
- prepareMatrices(source,authorize){
+ prepareMatrices(source,authorize,created){
   if(source===this.root||source.startsWith(this.root+'/s5/')||this.root.startsWith(source+'/'))fail('unsafe_path');
   const identity=directory(source),names=['signet_Afreq','signet_CoeffMat0','signet_net.genepos'],roles=['matrix-frequency','matrix-coefficient','gene-positions'];
   const bytes=names.map(n=>read(path.join(source,n),LIMITS.fileBytes));if(bytes.reduce((n,b)=>n+b.length,0)>LIMITS.totalBytes)fail('size_limit');
@@ -32,14 +41,28 @@ class SourceBroker{
   const declaration={schemaVersion:1,kind:official?'synthetic':'external',label:official?'Official SIGNET example (simulated)':'Local network matrices (unverified)',manifest:{schemaVersion:1,sourceRef,direction:'column/source->row/target',axes:null,claims:official?{status:'simulated',sourceCommit:'bed55b3e121de0edf5fd43da683dc59850ff82d3'}:null,visualization:null,artifacts:names.map((relativePath,i)=>({artifactId:['frequency','coefficient','positions'][i],role:roles[i],relativePath,bytes:bytes[i].length,sha256:hashes[i],sourceRef}))}};
   // Validate the exact native choice again before creating only derived, bounded bytes.
   authorize();if(directory(source)!==identity||names.some((n,i)=>!read(path.join(source,n),LIMITS.fileBytes).equals(bytes[i])))fail('source_changed');
-  const target=path.join(this.root,'network-imports',batch);directory(target,true);
+  const target=path.join(this.root,'network-imports',batch);
+  for(const dir of [path.dirname(target),target]){
+   const parent=directory(path.dirname(dir));
+   try{fs.mkdirSync(dir,{mode:0o700});const st=fs.lstatSync(dir);created.push({path:dir,parent,identity:`${st.dev}:${st.ino}`,directory:true});}catch(e){if(e.code!=='EEXIST')throw e;}
+   directory(dir);
+  }
+  const parent=directory(target);
   for(const [n,b] of [...names.map((n,i)=>[n,bytes[i]]),['signet-package.json',Buffer.from(JSON.stringify(declaration))]]){
    const file=path.join(target,n);if(fs.existsSync(file)){if(!read(file,n==='signet-package.json'?65536:LIMITS.fileBytes).equals(b))fail('source_changed');continue;}
-   const fd=fs.openSync(file,'wx',0o600);try{fs.writeFileSync(fd,b);fs.fsyncSync(fd);}finally{fs.closeSync(fd);}
+   const fd=fs.openSync(file,'wx',0o600);try{const st=fs.fstatSync(fd);created.push({path:file,parent,identity:`${st.dev}:${st.ino}`,directory:false});fs.writeFileSync(fd,b);fs.fsyncSync(fd);}finally{fs.closeSync(fd);}
   }
   authorize();return target;
  }
- async add(root,authorize=()=>{}){this.guard();directory(root);if(!fs.existsSync(path.join(root,'signet-package.json')))root=this.prepareMatrices(root,authorize);const d=this.declaration(root),old=this.entries.find(e=>!e.revoked&&e.root===root&&e.manifestHash===d.manifestHash&&e.identity===d.identity);if(old){await this.validate(old);authorize();this.invalid?.delete(old.token);return {sourceToken:old.token,label:d.d.label};}if(this.entries.length>=128||this.entries.filter(e=>!e.revoked).length>=8)fail('entry_limit');const e={token:'local-'+crypto.randomBytes(16).toString('hex'),root,identity:d.identity,manifestHash:d.manifestHash,revoked:false};await this.validate(e);const source=this.source(e),authority=this.authority(),item={...source,localGuard:{manifestHash:e.manifestHash,identity:e.identity}};if(Buffer.byteLength(JSON.stringify(item))>65536)fail('entry_limit');const prospective={roots:[...authority.roots.filter(r=>r.rootId!=='empty'),{rootId:e.token,path:e.root}],sources:[...authority.sources,item]};if(Buffer.byteLength(JSON.stringify(prospective))>512*1024)fail('entry_limit');authorize();this.save([...this.entries,e]);return {sourceToken:e.token,label:d.d.label};}
+ async add(root,authorize=()=>{}){
+  const created=[];let saving=false;
+  try{this.guard();directory(root);if(!fs.existsSync(path.join(root,'signet-package.json')))root=this.prepareMatrices(root,authorize,created);const d=this.declaration(root),old=this.entries.find(e=>!e.revoked&&e.root===root&&e.manifestHash===d.manifestHash&&e.identity===d.identity);if(old){await this.validate(old);authorize();this.invalid?.delete(old.token);return {sourceToken:old.token,label:d.d.label};}if(this.entries.length>=128||this.entries.filter(e=>!e.revoked).length>=8)fail('entry_limit');const e={token:'local-'+crypto.randomBytes(16).toString('hex'),root,identity:d.identity,manifestHash:d.manifestHash,revoked:false};await this.validate(e);const source=this.source(e),authority=this.authority(),item={...source,localGuard:{manifestHash:e.manifestHash,identity:e.identity}};if(Buffer.byteLength(JSON.stringify(item))>65536)fail('entry_limit');const prospective={roots:[...authority.roots.filter(r=>r.rootId!=='empty'),{rootId:e.token,path:e.root}],sources:[...authority.sources,item]};if(Buffer.byteLength(JSON.stringify(prospective))>512*1024)fail('entry_limit');authorize();saving=true;this.save([...this.entries,e]);return {sourceToken:e.token,label:d.d.label};}
+  catch(e){
+   // A catalog write may already have committed; retain its referenced bytes on uncertain failure.
+   if(!saving)try{this.guard();rollbackCopies(created);}catch{/* Lost broker ownership: retain all uncertain copies. */}
+   throw e;
+  }
+ }
  async networkFiles(binding){
   const e=this.entries.find(e=>e.token===binding.sourceToken&&!e.revoked);if(!e)fail('permission_denied');const current=this.source(e),index=new PackageIndex({stateRoot:path.join(this.dir,'check'),roots:[{rootId:e.token,path:e.root}],resolveSource:async token=>token===e.token?this.source(e).grant:null}),snapshot=await index.inspect({sourceToken:e.token});
   if(snapshot.packageHash!==binding.packageHash||['frequency','coefficient','positions'].some(k=>snapshot.networkHashes[k]!==binding.networkHashes[k]))fail('reference_drift');
