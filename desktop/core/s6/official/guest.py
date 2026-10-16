@@ -168,17 +168,18 @@ try:
     os.chown(root,65534,65534)
     launch('prepare',str(root/'prepare.R'),str(root),str(q['freq']),str(q['ntop']));bounded_wait(child,300)
     p=root/'official-session.RData';s=p.lstat()
-    if not s.st_size or s.st_size>128*1024**2:raise RuntimeError('SESSION_SIZE')
+    if not stat.S_ISREG(s.st_mode) or not s.st_size or s.st_size>128*1024**2:raise RuntimeError('SESSION_SIZE')
     # Copy the generated file through its held descriptor into a kernel-sealed immutable FD.
     original=os.open(p,os.O_RDONLY|os.O_NOFOLLOW)
     try:
-     before=os.fstat(original);held=os.memfd_create('signet-session',os.MFD_ALLOW_SEALING);h=hashlib.sha256()
+     before=os.fstat(original);before_identity=(before.st_dev,before.st_ino,before.st_size,before.st_mtime_ns,before.st_ctime_ns);held=os.memfd_create('signet-session',os.MFD_ALLOW_SEALING);h=hashlib.sha256()
      while True:
       data=os.read(original,1024*1024)
       if not data:break
       h.update(data);view=memoryview(data)
       while view:view=view[os.write(held,view):]
-     if os.fstat(original)!=before:raise RuntimeError('SESSION_CHANGED')
+     after=os.fstat(original)
+     if (after.st_dev,after.st_ino,after.st_size,after.st_mtime_ns,after.st_ctime_ns)!=before_identity:raise RuntimeError('SESSION_CHANGED')
      fcntl.fcntl(held,fcntl.F_ADD_SEALS,15);session_hash=h.hexdigest()
      os.lseek(held,0,0);check=hashlib.sha256()
      for data in iter(lambda:os.read(held,1024*1024),b''):check.update(data)
