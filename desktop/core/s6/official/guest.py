@@ -104,7 +104,7 @@ try:
    if op=='resources-begin':
     if root is not None:raise RuntimeError('NO_REPLAY')
     root=create_root();(root/'resources').mkdir()
-    emit({'seq':seq,'value':{'started':True}})
+    emit({'seq':seq,'value':{'started':True,'guestRoot':str(root)}})
    elif op=='resource-begin':
     name=q['name']
     if root is None or prepared or resource_file or name not in RESOURCE_PINS or name in resources_done:raise RuntimeError('RESOURCE_PURPOSE')

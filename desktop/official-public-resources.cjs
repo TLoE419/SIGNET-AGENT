@@ -11,7 +11,7 @@ class PublicResources{
  constructor(root,parameters,networkHashes){admitBinding(parameters,networkHashes);if(typeof root!=='string'||!path.isAbsolute(root)||fs.realpathSync(root)!==root||fs.realpathSync(path.join(root,'snapshots'))!==path.join(root,'snapshots'))fail('PUBLIC_RESOURCE_UNCONFIGURED');this.root=root;
  for(const [name,pin] of [['acquisition.json',pins.acquisitionSHA256],['enrichment.json',pins.enrichmentSHA256]])if(sha(readFixed(path.join(root,name),65536))!==pin)fail('PUBLIC_RESOURCE_PROVENANCE_CHANGED');
  }
- async upload(channel,valid){await channel.call('resources-begin');for(const [name,pin] of Object.entries(pins.files)){if(!valid())fail('AUTHORIZATION_REVOKED');const derived=name==='identifiers.txt';let fd=null;try{const bytes=derived?Buffer.from(pins.binding.identifiers.join('\n')+'\n'):null;
+ async upload(channel,valid){const started=await channel.call('resources-begin',{},10000);channel.guestRoot=started?.guestRoot??null;for(const [name,pin] of Object.entries(pins.files)){if(!valid())fail('AUTHORIZATION_REVOKED');const derived=name==='identifiers.txt';let fd=null;try{const bytes=derived?Buffer.from(pins.binding.identifiers.join('\n')+'\n'):null;
  if(!derived)fd=fs.openSync(path.join(this.root,'snapshots',name),fs.constants.O_RDONLY|fs.constants.O_NOFOLLOW);
  const before=fd===null?null:fs.fstatSync(fd,{bigint:true});if(before&&(!before.isFile()||before.size!==BigInt(pin.bytes)))fail('PUBLIC_RESOURCE_INVALID');
  const digest=crypto.createHash('sha256');await channel.call('resource-begin',{name});let offset=0;
