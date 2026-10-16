@@ -29,13 +29,20 @@ def run_r(binary,arguments,profile_dir=None):
   profile=open(os.path.join(profile_dir,'r-profile.txt'),'xb',buffering=0)
  try:
   p=subprocess.Popen([binary,*arguments],env=env,pass_fds=(write_fd,) if write_fd is not None else ())
-  birth=open('/proc/'+str(p.pid)+'/stat').read().split()[21]
+  try:
+   with open('/proc/'+str(p.pid)+'/stat') as identity:birth=identity.read().split()[21]
+  except OSError:birth=None
   if write_fd is not None:os.close(write_fd);write_fd=None
   while read_fd is not None:
    if select.select([read_fd],[],[],.1)[0]:
     b=os.read(read_fd,65536)
     if not b:break
-    n=min(len(b),max(0,1048576-kept));profile.write(b[:n]);kept+=n;dropped+=len(b)-n
+    n=min(len(b),max(0,1048576-kept)) if profile else 0
+    try:
+     if profile:profile.write(b[:n])
+    except OSError:
+     profile.close();profile=None;n=0
+    kept+=n;dropped+=len(b)-n
   code=p.wait();sig=-code if code<0 else None
   print('SIGNET_R_EXIT '+json.dumps({'pid':p.pid,'birth':birth,'returncode':code,'signal':sig,'signalName':signal.Signals(sig).name if sig else None,'profileBytes':kept,'profileDroppedBytes':dropped}),flush=True)
   return code
