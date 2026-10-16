@@ -2,6 +2,9 @@ args <- commandArgs(TRUE);root <- normalizePath(args[1],mustWork=TRUE)
 setwd(file.path(root,'res/resv'))
 for (package in c('igraph','dnet','visNetwork','STRINGdb','TFutils','shiny','shinyfullscreen','shinycustomloader','shinydashboard','plotly','DT','circlize','ggthemes','fmsb')) suppressPackageStartupMessages(library(package,character.only=TRUE))
 load(file.path(root,'official-session.RData'),envir=.GlobalEnv)
+# save.image also restores prepare's args; service/check arguments remain native inputs.
+args <- base::commandArgs(TRUE)
+root <- normalizePath(args[1],mustWork=TRUE)
 stopifnot(exists('ui'),exists('server'),is.function(server))
 if(args[2]=='check'){cat('SIGNET_SESSION_LOADED\n');quit(status=0)}
 Sys.setenv(resv=file.path(root,'res/resv/signet'),assembly='hg38',nchr='22')
