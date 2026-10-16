@@ -50,6 +50,47 @@ def check_total():
   if stat.S_ISREG(s.st_mode):total+=s.st_size
   if total>256*1024**2:raise RuntimeError('DISK_LIMIT')
  return total
+def seal_session(original):
+ # Reserve the second copy before allocation, while the original is still charged to tmpfs.
+ total_budget=256*1024**2
+ page=os.sysconf('SC_PAGE_SIZE');before=os.fstat(original)
+ identity=(before.st_dev,before.st_ino,before.st_size,before.st_mtime_ns,before.st_ctime_ns)
+ size=before.st_size
+ if not stat.S_ISREG(before.st_mode) or not 0<size<=128*1024**2:raise RuntimeError('SESSION_SIZE')
+ reserve=((size+page-1)//page)*page
+ remaining=((total_budget-reserve)//page)*page
+ cap=os.statvfs(root);used=(cap.f_blocks-cap.f_bfree)*cap.f_frsize
+ if used>remaining:raise RuntimeError('QUOTA_SEAL_RESERVATION_UNAVAILABLE')
+ data=('size='+str(remaining)+',nr_inodes=4096').encode()
+ if ctypes.CDLL(None,use_errno=True).mount(b'tmpfs',os.fsencode(root),b'tmpfs',32|2|4|8,data):raise RuntimeError('QUOTA_SEAL_RESERVATION_UNAVAILABLE')
+ cap=os.statvfs(root)
+ if cap.f_blocks*cap.f_frsize+reserve>total_budget or (cap.f_blocks-cap.f_bfree)*cap.f_frsize>cap.f_blocks*cap.f_frsize:raise RuntimeError('QUOTA_BINDING_INVALID')
+ quota_proof.update(sealedSessionReservedBytes=reserve,remainingFilesystemBytes=cap.f_blocks*cap.f_frsize,reservationBeforeAllocation=True)
+ sealed=None
+ try:
+  interrupted();sealed=os.memfd_create('signet-session',os.MFD_ALLOW_SEALING);h=hashlib.sha256();copied=0
+  os.lseek(original,0,0)
+  while copied<size:
+   interrupted();data=os.read(original,min(1024*1024,size-copied))
+   if not data:raise RuntimeError('SESSION_CHANGED')
+   h.update(data);view=memoryview(data)
+   while view:
+    written=os.write(sealed,view)
+    if written<=0:raise RuntimeError('SESSION_COPY_FAILED')
+    copied+=written;view=view[written:]
+   if copied>size:raise RuntimeError('SESSION_CHANGED')
+  interrupted()
+  after=os.fstat(original)
+  if os.read(original,1) or (after.st_dev,after.st_ino,after.st_size,after.st_mtime_ns,after.st_ctime_ns)!=identity:raise RuntimeError('SESSION_CHANGED')
+  fcntl.fcntl(sealed,fcntl.F_ADD_SEALS,15);session_hash=h.hexdigest();os.lseek(sealed,0,0);check=hashlib.sha256()
+  for data in iter(lambda:os.read(sealed,1024*1024),b''):check.update(data)
+  if os.fstat(sealed).st_size!=size or check.hexdigest()!=session_hash or fcntl.fcntl(sealed,fcntl.F_GET_SEALS)!=15:raise RuntimeError('SESSION_CHANGED')
+  quota_proof['sealedSessionBytes']=size
+  return sealed,session_hash
+ except BaseException:
+  if sealed is not None:os.close(sealed)
+  # Keep the tighter filesystem bound until the caller closes the owned root; never expand on failure.
+  raise
 def command(mode,*args):
  check_image()
  binds=str(root)+':'+str(root)+','+str(root/'tmp')+':/tmp,'+str(root/'tmp')+':/var/tmp'
@@ -171,28 +212,9 @@ try:
     if not stat.S_ISREG(s.st_mode) or not s.st_size or s.st_size>128*1024**2:raise RuntimeError('SESSION_SIZE')
     # Copy the generated file through its held descriptor into a kernel-sealed immutable FD.
     original=os.open(p,os.O_RDONLY|os.O_NOFOLLOW)
-    try:
-     before=os.fstat(original);before_identity=(before.st_dev,before.st_ino,before.st_size,before.st_mtime_ns,before.st_ctime_ns);held=os.memfd_create('signet-session',os.MFD_ALLOW_SEALING);h=hashlib.sha256()
-     while True:
-      data=os.read(original,1024*1024)
-      if not data:break
-      h.update(data);view=memoryview(data)
-      while view:view=view[os.write(held,view):]
-     after=os.fstat(original)
-     if (after.st_dev,after.st_ino,after.st_size,after.st_mtime_ns,after.st_ctime_ns)!=before_identity:raise RuntimeError('SESSION_CHANGED')
-     fcntl.fcntl(held,fcntl.F_ADD_SEALS,15);session_hash=h.hexdigest()
-     os.lseek(held,0,0);check=hashlib.sha256()
-     for data in iter(lambda:os.read(held,1024*1024),b''):check.update(data)
-     if check.hexdigest()!=session_hash:raise RuntimeError('SESSION_CHANGED')
+    try:held,session_hash=seal_session(original)
     finally:os.close(original)
-    # The original temporary output is replaced by a zero-byte bind target; actual load uses sealed FD bytes.
     p.unlink()
-    remaining=((256*1024**2-os.fstat(held).st_size)//4096)*4096
-    # After sealing, charge its bytes against the same total, enforced by a smaller live filesystem.
-    data=('size='+str(remaining)+',nr_inodes=4096').encode()
-    if ctypes.CDLL(None,use_errno=True).mount(b'tmpfs',os.fsencode(root),b'tmpfs',32|2|4|8,data):raise RuntimeError('QUOTA_SEALED_CHARGE_UNAVAILABLE')
-    cap=os.statvfs(root);quota_proof['sealedSessionBytes']=os.fstat(held).st_size;quota_proof['remainingFilesystemBytes']=cap.f_blocks*cap.f_frsize
-    if quota_proof['remainingFilesystemBytes']+quota_proof['sealedSessionBytes']>256*1024**2:raise RuntimeError('QUOTA_BINDING_INVALID')
     st=os.fstat(held);session_identity=(st.st_dev,st.st_ino,st.st_size,st.st_mtime_ns,st.st_ctime_ns)
     manifest={'networkHashes':hashes,'parameters':{'freq':q['freq'],'ntop':q['ntop']},'sessionHash':session_hash,'officialHash':official_hash,'containerHash':IMAGE_HASH,'generated':True,'scientificStatus':'unknown','offlineResources':{n:p['sha256'] for n,p in RESOURCE_PINS.items()},'identifiersMatched':True,'adaptationHash':adaptation_hash,'originalFiles':original_files,'adaptedFiles':official_files,'quota':quota_proof,'sessionBinding':'sealed-memfd-inherited-fd0'}
     (root/'manifest.json').write_text(json.dumps(manifest,sort_keys=True))

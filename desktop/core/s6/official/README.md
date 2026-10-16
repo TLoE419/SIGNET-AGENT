@@ -6,7 +6,7 @@
 
 先比對10份官方原碼 pins，再在自有副本精確處理空富集表與內建 hg38 染色體資料；不改原來源、邊／權重／分群／統計公式。manifest 分列原碼與適配後指紋，內建 cytoband 另核 SHA-256。資料為官方模擬範例，科學狀態仍未知；獨立 Python 集合重算不等於官方 R 比對。
 
-V-S6-SVC-01：客體只在新自有 mount namespace 建立 nodev/nosuid/noexec、256MiB、4096 inode 的 tmpfs；不可用即拒絕。prepare/load 完成以及發布/服務迴圈均檢查邏輯大小。核心檔案系統限制的是同時實際占用，並非每次覆寫累加的生命週期寫入量；不宣稱後者。工作階段封存後，其 bytes 從 tmpfs 可用總量扣除且向下頁對齊，使限額根與封存工作階段的穩態占用合計不超過256MiB。稀疏檔案邏輯大小另有完成/服務檢查，不把輪詢稱為邏輯大小的核心硬限制。
+V-S6-SVC-01：客體只在新自有 mount namespace 建立 nodev/nosuid/noexec、256MiB、4096 inode 的 tmpfs；不可用即拒絕。prepare/load 完成以及發布/服務迴圈均檢查邏輯大小。核心檔案系統限制的是同時實際占用，並非每次覆寫累加的生命週期寫入量；不宣稱後者。工作階段封存前，先從已持有來源 FD 取得大小，向上頁對齊預留副本額度；tmpfs 在配置 memfd 前縮額並核當前占用能容納，否則拒絕。複製最多只寫原定長度，失敗關副本 FD，縮額保持到自有根卸載；原檔仍占空間時也不得超同256MiB。稀疏檔案邏輯大小另有完成/服務檢查，不把輪詢稱為邏輯大小的核心硬限制。
 
 V-S6-SVC-02：真生成輸出先經 NOFOLLOW 持有、前後身分檢查及雜湊，再拷入 kernel-sealed memfd，核封存後雜湊；R 的標準輸入繼承同一 FD（不是另開可變原路徑）。exec 在降權及網路禁制下核 FD0 seals，R 透過自身 FD0 載入，前後核 SHA-256/身分。原生成暫存檔移除，只有同一私有 owner 能維持該 FD。prepare 禁 socket，serve 僅固定回環 listener；connect/datagram/x32 仍拒絕。原 AS4GiB、CPU240秒、單檔128MiB、FD256、prepare300秒/load30秒不變。
 
