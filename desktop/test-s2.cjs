@@ -1,6 +1,6 @@
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),os=require('node:os'),path=require('node:path');
 const aid='a-20261013T210000-0123456789ab';
-const setup=()=>{const root=fs.mkdtempSync(path.join(os.tmpdir(),'signet-s2-'));fs.mkdirSync(path.join(root,'analyses',aid),{recursive:true});fs.writeFileSync(path.join(root,'analyses',aid,'state.json'),JSON.stringify({id:aid,label:'SYNTHETIC analysis',status:'running',stages:[{id:'network',status:'succeeded'}]}));return root;};
+const setup=()=>{const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'signet-s2-')));fs.mkdirSync(path.join(root,'analyses',aid),{recursive:true});fs.writeFileSync(path.join(root,'analyses',aid,'state.json'),JSON.stringify({id:aid,label:'SYNTHETIC analysis',status:'running',stages:[{id:'network',status:'succeeded'}]}));return root;};
 test('T4 lost response deduplicates persisted request and restart does not resubmit',()=>{
  const {Operations}=require('./core/operations.cjs');const root=setup();try{
  const one=new Operations(root),args={requestId:'req-first',analysisId:aid,kind:'monitor'};

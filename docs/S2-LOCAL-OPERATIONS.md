@@ -26,7 +26,15 @@ s2/checkpoints/<analysisId>.json必須有schema2、owner/analysis/attempt、來�
 
 穩定control ID沿原75畫面，S2正規畫面清演示成功值/曲線，投影有來源的本地狀態。恢復列按operation ID，不靠Row1；真候選在dialog中，背景保持inert。舊revision、模式generation丟棄舊回覆；review不允S2副作用。
 
-副本測試：先以本地啟動環境將SIGNET_ORIGINAL_SOURCE_ROOT設為本人自建原來源fixture絕對目錄（不要填私人值進檔案），再在desktop執行 `npm test`（原31＋S2）或 `npm run test:s2`。test-support/s2-hidden.cjs是作者自有hidden Electron DOM／IPC整合，需本人userData/runtime及SIGNET_S2_TEST_OUTPUT；不是原生輸入、原App或科學驗收。
+副本測試必須先由可信本地主程序環境提供SIGNET_ORIGINAL_SOURCE_ROOT，指向實際既存、正規、無符號連結祖先的原來源絕對目錄；不可留空，也不可改由renderer指定。runtime同樣須為既存正規目錄，不接受路徑本身或祖先的符號連結。測試只會對**本人剛建立的暫存fixture**取fs.realpathSync後交給產品，並未讓產品接受符號連結。無須覆寫TMPDIR，使用本機預設暫存目錄即可。
+
+在上述必要來源配置已滿足且工作目錄為desktop時，完整軟體回歸命令為：
+
+```sh
+node --test --test-reporter=tap test-core.cjs test-design.cjs test-s1.cjs test-s2.cjs
+```
+
+此命令涵蓋原47項與新增ROOT六組共53項；`npm test`為同組測試，`npm run test:s2`只跑S2子集。單獨執行也必須保留上述來源上下文，缺配置的拒絕不代表測試通過。test-support/s2-hidden.cjs是作者自有hidden Electron DOM／IPC整合，另需本人userData/runtime及SIGNET_S2_TEST_OUTPUT；不是本命令的一部分，也不是原生輸入、原App或科學驗收。
 
 本分支未push/merge。S1未驗原生、正式整合、S3–S7／校方條件保留；整合前必須三方比較原根當時差異，另取得修改權。verify／polish按固定提交，改碼另複驗。
 
