@@ -1,15 +1,15 @@
-# 官方匯入視覺化接點（尚未整鏈驗收）
+# 官方公開範例離線視覺化接點（尚未整鏈驗收）
 
-main 的 `OfficialVisualizationProvider` 只讀目前已核匯入 binding 的三矩陣，準備工作在 Registry 原有1秒metadata期限之外，完成後重新核對匯入context。Host原15秒啟動、3秒清理及Registry期限不變。未知或失敗準備不在同一provider內自動重試；工作階段來源仍science unknown。
+主程序設定 `SIGNET_OFFICIAL_PROJECT_ROOT=/Users/tloe/Developer/SIGNET` 及 `SIGNET_PUBLIC_RESOURCE_ROOT=<已核 public-acquisition 絕對實體目錄>`；這些不是 renderer 輸入，也不授予新來源。原 SourceBroker 授權、來源撤銷、fresh context、Registry 1秒、Host啟動15秒／清理3秒不變。只有明確辨識的官方模擬三矩陣與 freq=1/ntop=1 可以消費固定公共快取。舊0.5/2草稿明拒，不自動換參數。
 
-隔離開發啟動須由主程序指定 `SIGNET_OFFICIAL_PROJECT_ROOT=/Users/tloe/Developer/SIGNET`，作為既有公開official source、provenance及vm材料根；不從renderer接受路徑或命令。此設定不授予新的遠端站台權限：仍固定原嚴格SSH、root@127.0.0.1:2226。未配置就OFFICIAL_EXECUTOR_UNCONFIGURED。不得把此開發設定當新來源授權；矩陣仍須走原匯入授權與新鮮context。
+`public-resource-pins.json` 固定既有 acquisition/enrichment 紀錄、七個已取得公共回應及79個識別碼。主機只按固定檔名 NOFOLLOW 讀取，逐1MiB傳給同一私有客體通道，兩端核對總長／SHA-256；沒有外連回退。R STRINGdb 2.4.2 適配器保留原初始化預設、aliases、PPI門檻／背景篩選、類別過濾；只替換固定網路回應。真正 R 所求識別碼必須與快取集合完全一致，否則保存精確缺少／多餘集合並拒絕。官方 tryCatch 吞掉富集例外也不能繞過最後消費確認。
 
-`guest.py`在客體建立一個隨機自有根，用固定源10個netvis檔案與本地pins比對，讀同一持有SIF FD（重用已有完整雜湊與dev/ino/size/mtime/ctime綁定，身分不同就拒絕，不重新宣稱雜湊通過）。只接受3個已核hash的有界資料Buffer、固定參數及主程序工具。
+先比對10份官方原碼 pins，再在自有副本精確處理空富集表與內建 hg38 染色體資料；不改原來源、邊／權重／分群／統計公式。manifest 分列原碼與適配後指紋，內建 cytoband 另核 SHA-256。資料為官方模擬範例，科學狀態仍未知；獨立 Python 集合重算不等於官方 R 比對。
 
-`prepare.R`沿官方extract_edges.R→netshiny.R，僅調整headless保存；`load.R`必須實際load且驗UI/server。真生成／真載入後才提供Registry描述；沒有使用包宣告或成功退出碼造session證據。服務仍需真Listening、新日誌、精確token HTTP及原Host租約驗證；HTTP不代表三頁可用。
+V-S6-SVC-01：客體只在新自有 mount namespace 建立 nodev/nosuid/noexec、256MiB、4096 inode 的 tmpfs；不可用即拒絕。prepare/load 完成以及發布/服務迴圈均檢查邏輯大小。核心檔案系統限制的是同時實際占用，並非每次覆寫累加的生命週期寫入量；不宣稱後者。工作階段封存後，其 bytes 從 tmpfs 可用總量扣除且向下頁對齊，使限額根與封存工作階段的穩態占用合計不超過256MiB。稀疏檔案邏輯大小另有完成/服務檢查，不把輪詢稱為邏輯大小的核心硬限制。
 
-子程序只可讀公開矩陣／來源及自己根。prepare禁socket；serve僅容許AF_INET stream listener，connect/send datagram/x32一律拒絕；使用原固定loopback Shiny host。新子程序降權、no_new_privs、檔案128MiB／總根256MiB／AS4GiB／CPU240秒／NOFILE256；prepare300秒、load30秒的外層界限不等於Host啟動期限。控制管道EOF或close終止自己process group、等待退出、關FD並刪本次隨機根；未知清理不視為完成，不處置其他根。
+V-S6-SVC-02：真生成輸出先經 NOFOLLOW 持有、前後身分檢查及雜湊，再拷入 kernel-sealed memfd，核封存後雜湊；R 的標準輸入繼承同一 FD（不是另開可變原路徑）。exec 在降權及網路禁制下核 FD0 seals，R 透過自身 FD0 載入，前後核 SHA-256/身分。原生成暫存檔移除，只有同一私有 owner 能維持該 FD。prepare 禁 socket，serve 僅固定回環 listener；connect/datagram/x32 仍拒絕。原 AS4GiB、CPU240秒、單檔128MiB、FD256、prepare300秒/load30秒不變。
 
-限制：未接入先前其他分支的離線STRINGdb公開回應適配器。原官方程式的網路存取在此被拒絕，缺公開資源時會如實失敗，不會下載、外送或以合成富集代替。真prepare/session/load、服務啟動時長及三頁尚待同固定版驗證。既有15秒Host啟動是否足夠仍未實測，不能因本接線放大期限。冷啟動不採用已刪客體根；沒有跨應用重啟的已生成session恢復能力。
+初始資源握手有單獨10秒界限以涵蓋原 SSH ConnectTimeout=8；它不是 Host 或 Registry 的延長。後續 metadata check 仍1秒，分段傳入5秒/段。有界失敗不在同一 provider 自動重試。EOF/close 停自有程序群組、關 FD、卸載自有命名空間中的限額根；無明確退出/收尾證據就保留未知。
 
-作者原生整鏈嘗試有兩個前置錯誤（Rscript硬路徑、NOFILE128），都已保留；修後只做Rscript --version與核心socket契約，不把它稱為科學準備成功。桌面操作權不屬於本輪build。
+本輪首個整鏈在初始1秒握手逾時，未進 R prepare。修後只核公共資源階段；全部快取核符、客體退出0且自有根移除。核心256MiB ENOSPC、封存 FD 禁改、容器內 R 同FD實讀及全套件前置已核；真正官方 prepare/session/load/服務與三頁仍未驗。沒有跨應用重啟恢復工作階段能力。桌面權不屬於 build，不能用這些證據宣稱頁面可用。
