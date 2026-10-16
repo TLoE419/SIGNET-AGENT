@@ -1,0 +1,15 @@
+{
+  "source": "../S6-package-source-evidence/container-functions.txt",
+  "package": "STRINGdb",
+  "version": "2.4.2",
+  "methods": {
+    "initialize": "91946b8b1a4b344916876d4fbed6e8c574d3f648f5a3a9809a897f38b4531965",
+    "get_proteins": "bc0e6c08a0054528ff45515e8cc25fc5ef7fddc2cbff1c72c5af4dd74553c779",
+    "get_aliases": "429c2873a52ca3e46023bd52cd8cb314af101f6fc4c0523fee839e2043b5433e",
+    "load": "9bf70ff41d0ac5314f40035adc6e82552080a9f04f26b1087e722c0350ba7eb5",
+    "get_enrichment": "4eccd3a0c3d939c7a6b900cac872e060e741b15dd742b452ccfe59c89f417271"
+  },
+  "adapterSHA256": "22a68d77599a0c91337e007c50a0b6bafdaa28231446b98fb8f0d367f74899c3",
+  "subclass": "S6OfflineSTRINGdb",
+  "initialize": "initFields instead of network-bearing parent initialize"
+}

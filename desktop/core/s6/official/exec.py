@@ -1,5 +1,5 @@
 """Fixed child boundary: no outbound connections; never accepts user code or paths."""
-import os,sys,resource,ctypes,errno,shutil
+import os,sys,resource,ctypes,errno,shutil,fcntl,stat
 if os.uname().machine!='x86_64':raise RuntimeError('ARCH_UNSUPPORTED')
 resource.setrlimit(resource.RLIMIT_FSIZE,(128*1024**2,128*1024**2))
 resource.setrlimit(resource.RLIMIT_AS,(4*1024**3,4*1024**3))
@@ -18,6 +18,9 @@ else:
  rows += [F(0x15,0,6,41),F(0x20,0,0,16),F(0x15,0,3,2),F(0x20,0,0,24),F(0x54,0,0,15),F(0x15,1,0,1),F(0x06,0,0,0x50000|errno.EPERM)]
 rows += [F(0x06,0,0,0x7fff0000)];arr=(F*len(rows))(*rows);program=P(len(rows),arr)
 if lib.prctl(38,1,0,0,0) or lib.prctl(22,2,ctypes.byref(program),0,0):raise OSError(ctypes.get_errno(),'SECCOMP_FAILED')
+if stat.S_ISREG(os.fstat(0).st_mode):
+ if fcntl.fcntl(0,fcntl.F_GET_SEALS)!=15:raise RuntimeError('SESSION_STDIN_NOT_SEALED')
+ os.lseek(0,0,0);print('SIGNET_SEALED_STDIN',flush=True)
 binary=shutil.which('Rscript',path='/usr/local/bin:/usr/bin:/bin')
 if not binary:raise RuntimeError('RSCRIPT_UNAVAILABLE')
 print('SIGNET_R_EXEC '+binary,flush=True)
