@@ -11,9 +11,12 @@ source(file.path(root,'resource-client.R'),local=.GlobalEnv)
 # Shadow only the STRINGdb constructor; exact private source adaptations are recorded separately.
 STRINGdb <- S6OfflineSTRINGdb
 # Follow the official netvis.sh sequence; only headless save/load is adapted.
+cat('SIGNET_PHASE extract-edges\n')
 source(file.path(root,'script/netvis/extract_edges.R'),local=.GlobalEnv)
+cat('SIGNET_PHASE official-netshiny\n')
 source(file.path(root,'script/netvis/netshiny.R'),local=.GlobalEnv)
 if(file.exists(file.path(root,'official-failed')) || !setequal(s6_enrichment_categories,c('KEGG','Process'))) stop('RESOURCE_CONSUMPTION_UNVERIFIED')
 cat('SIGNET_OFFLINE_IDENTIFIERS_MATCHED\n')
 stopifnot(exists('ui'),exists('server'),is.function(server))
+cat('SIGNET_PHASE save-session\n')
 save.image(file=file.path(root,'official-session.RData'))

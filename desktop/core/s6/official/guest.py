@@ -1,5 +1,5 @@
 """One owned local-VM session, fixed files, framed control, bounded work and cleanup."""
-import ctypes,fcntl,os,sys,json,base64,hashlib,tempfile,pathlib,subprocess,signal,time,select,shutil,stat
+import ctypes,fcntl,os,sys,json,base64,hashlib,tempfile,pathlib,subprocess,signal,time,select,shutil,stat,resource
 OUT=sys.stdout
 children=[];root=None;child=None;server=None;session_hash=None;manifest_hash=None;held=None;session_identity=None;image_fd=None;mounted=False;quota_proof=None
 RESOURCE_PINS={'version.tsv': {'bytes': 40, 'sha256': '9f05a212be447560b980dacac4af78a2be5ae21c48099b3f3fad49b80e95322c', 'method': 'GET', 'url': 'https://string-db.org/api/tsv-no-header/version'}, 'versions.tsv': {'bytes': 202, 'sha256': 'b31fd4723e08ac7c08430633abc51ca3a21cd86f8ab4417838e07846190fa889', 'method': 'GET', 'url': 'https://string-db.org/api/tsv-no-header/available_api_versions'}, '9606.protein.info.v12.0.txt.gz': {'bytes': 1970090, 'sha256': '144de4b0d98c6a7dfde6ddc2591cf88657f27b989eadff4f501450c3ed1f0f1c', 'method': 'GET', 'url': 'https://stringdb-static.org/download/protein.info.v12.0/9606.protein.info.v12.0.txt.gz'}, '9606.protein.aliases.v12.0.txt.gz': {'bytes': 19777800, 'sha256': 'b65f730b993ed0c1bd72edf4565d3d425db42861101b29699704810e8f125680', 'method': 'GET', 'url': 'https://stringdb-static.org/download/protein.aliases.v12.0/9606.protein.aliases.v12.0.txt.gz'}, '9606.protein.links.v12.0.txt.gz': {'bytes': 83164437, 'sha256': '3e22f32572211aa341d5b4bd08d30c32e693e294603202120936872f87719d4f', 'method': 'GET', 'url': 'https://stringdb-static.org/download/protein.links.v12.0/9606.protein.links.v12.0.txt.gz'}, 'enrichment_KEGG.tsv': {'bytes': 3025, 'sha256': 'b06684502f5de93510549992f409df81f9e28ecfa50d09eaf8df60e9abdeca7e', 'method': 'POST', 'url': 'https://version-12-0.string-db.org/api/tsv/enrichment'}, 'enrichment_Process.tsv': {'bytes': 3025, 'sha256': 'b06684502f5de93510549992f409df81f9e28ecfa50d09eaf8df60e9abdeca7e', 'method': 'POST', 'url': 'https://version-12-0.string-db.org/api/tsv/enrichment'}, 'identifiers.txt': {'bytes': 1659, 'sha256': '0f9d9864372e1c5ab9161de8e2f3550bd5558d83043e018ad11db4bdfabac53c', 'derivedFrom': 'enrichment.json publicBinding.identifiers'}}
@@ -111,15 +111,34 @@ def interrupted():
    raw,buffered=buffered.split(b'\n',1);m=json.loads(raw)
    if m.get('op')=='close':raise RuntimeError('CANCELLED')
    raise RuntimeError('CONTROL_BUSY')
-def bounded_wait(p,seconds):
- end=time.monotonic()+seconds
- while p.poll() is None:
-  interrupted()
-  if time.monotonic()>=end:raise RuntimeError('OFFICIAL_WORK_TIMEOUT')
+def wait_evidence(p,reason,phase,started,usage):
+ # Capture the actual wait boundary before any cleanup signal; evidence never changes the verdict.
+ try:
+  tail=b''
+  if root and (root/'process.log').exists():
+   with open(root/'process.log','rb') as f:
+    f.seek(0,2);f.seek(max(0,f.tell()-4096));tail=f.read(4096)
+  text=tail.decode('utf-8',errors='replace')
+  markers=[x[:200] for x in text.splitlines() if x.startswith(('SIGNET_PHASE ','RESOURCE_CONSUMED ','Generating ','Loading '))]
+  code=p.poll();sig=-code if code is not None and code<0 else None
+  current=resource.getrusage(resource.RUSAGE_CHILDREN)
+  emit({'event':'r-wait','phase':phase,'pid':p.pid,'returncode':code,'signal':sig,'signalName':signal.Signals(sig).name if sig else None,'waitReason':reason,'capturedBeforeCleanup':True,'elapsedSeconds':time.monotonic()-started,'childCpuSeconds':current.ru_utime+current.ru_stime-usage,'lastOfficialPhase':markers[-1] if markers else None,'tail':text})
+ except Exception:pass
+
+def bounded_wait(p,seconds,phase='prepare'):
+ started=time.monotonic();end=started+seconds;reason='completed'
+ usage=resource.getrusage(resource.RUSAGE_CHILDREN);usage=usage.ru_utime+usage.ru_stime
+ try:
+  while p.poll() is None:
+   interrupted()
+   if time.monotonic()>=end:raise RuntimeError('OFFICIAL_WORK_TIMEOUT')
+   check_total()
+   time.sleep(.05)
   check_total()
-  time.sleep(.05)
- check_total()
- if p.returncode:raise RuntimeError('OFFICIAL_R_FAILED')
+  if p.returncode:raise RuntimeError('OFFICIAL_R_FAILED')
+ except Exception as e:
+  reason=str(e);raise
+ finally:wait_evidence(p,reason,phase,started,usage)
 def verify():
  check_image();check_total()
  if held is not None and fcntl.fcntl(held,fcntl.F_GET_SEALS)!=15:raise RuntimeError('SESSION_NOT_IMMUTABLE')
@@ -145,6 +164,7 @@ try:
    if op=='resources-begin':
     if root is not None:raise RuntimeError('NO_REPLAY')
     root=create_root();(root/'resources').mkdir()
+    emit({'event':'owner','guestRoot':str(root),'pid':os.getpid(),'birth':open('/proc/self/stat').read().split()[21]})
     emit({'seq':seq,'value':{'started':True,'guestRoot':str(root)}})
    elif op=='resource-begin':
     name=q['name']
@@ -219,7 +239,7 @@ try:
     manifest={'networkHashes':hashes,'parameters':{'freq':q['freq'],'ntop':q['ntop']},'sessionHash':session_hash,'officialHash':official_hash,'containerHash':IMAGE_HASH,'generated':True,'scientificStatus':'unknown','offlineResources':{n:p['sha256'] for n,p in RESOURCE_PINS.items()},'identifiersMatched':True,'adaptationHash':adaptation_hash,'originalFiles':original_files,'adaptedFiles':official_files,'quota':quota_proof,'sessionBinding':'sealed-memfd-inherited-fd0'}
     (root/'manifest.json').write_text(json.dumps(manifest,sort_keys=True))
     manifest_hash=digest(root/'manifest.json');verify()
-    launch('prepare',str(root/'load.R'),str(root),'check',session_hash);bounded_wait(child,30)
+    launch('prepare',str(root/'load.R'),str(root),'check',session_hash);bounded_wait(child,30,'load')
     if 'SIGNET_SESSION_LOADED' not in (root/'process.log').read_text(errors='replace'):raise RuntimeError('LOAD_UNVERIFIED')
     if 'SIGNET_OFFLINE_IDENTIFIERS_MATCHED' not in (root/'process.log').read_text(errors='replace'):raise RuntimeError('RESOURCE_CONSUMPTION_UNVERIFIED')
     verify();emit({'seq':seq,'value':{**manifest,'manifestHash':manifest_hash,'loadState':'loaded','guestRoot':str(root)}})

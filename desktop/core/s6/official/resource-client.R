@@ -146,7 +146,9 @@ load = function ()
     url <- paste("https://stringdb-static.org/download/protein.links.v", file_version, "/", species, ".protein.links.v", 
         file_version, ".txt.gz", sep = "")
     temp = s6_snapshot(url, oD = input_directory)
+    cat("SIGNET_PHASE STRING-links-read-table begin\n")
     PPI <- read.table(temp, sep = " ", header = TRUE, stringsAsFactors = FALSE, fill = TRUE)
+    cat("SIGNET_PHASE STRING-links-read-table end\n")
     PPIselected = PPI
     if (length(score_threshold) != 0) 
         PPIselected <- PPI[PPI$combined_score >= score_threshold, ]

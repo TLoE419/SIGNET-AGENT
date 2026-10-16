@@ -10,7 +10,7 @@ class Protocol(unittest.TestCase):
    code=code.replace('root=create_root();',"root=pathlib.Path(tempfile.mkdtemp(prefix='signet-import-'));")
    code='\n'.join('PIN='+repr(pin) if line.startswith('PIN=') else line for line in code.splitlines())
    p=subprocess.run(['python3','-I','-B','-c',code],input=''.join(json.dumps(dict(seq=i+1,**m))+'\n' for i,m in enumerate(messages)),text=True,capture_output=True,timeout=5)
-   self.assertEqual(p.returncode,0,p.stderr);rows=[json.loads(s) for s in p.stdout.splitlines()]
+   self.assertEqual(p.returncode,0,p.stderr);rows=[json.loads(s) for s in p.stdout.splitlines() if json.loads(s).get('event') not in ('owner','r-wait')]
    self.assertTrue(rows[-1]['resourcesClosed']);self.assertFalse(pathlib.Path(rows[-1]['rootRemoved']).exists());return rows
  def test_exact_hash_and_no_replay(self):
   b=(pathlib.Path(__file__).with_name('public-resource-pins.json'));pins=json.loads(b.read_text());ids=('\n'.join(pins['binding']['identifiers'])+'\n').encode()
