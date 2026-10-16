@@ -1,7 +1,7 @@
 """One owned local-VM session, fixed files, framed control, bounded work and cleanup."""
 import os,sys,json,base64,hashlib,tempfile,pathlib,subprocess,signal,time,select,shutil,stat
 OUT=sys.stdout
-root=None;child=None;server=None;session_hash=None;manifest_hash=None;held=None;session_identity=None;image_fd=None
+children=[];root=None;child=None;server=None;session_hash=None;manifest_hash=None;held=None;session_identity=None;image_fd=None
 IMAGE='/work/evidence/signet-0.0.6.sif';OFFICIAL='/work/official-signet'
 PIN={'dev':41,'ino':20,'size':6383458834,'mtime_ns':1791314959944771412,'ctime_ns':1791314959944771412}
 IMAGE_HASH='de28f224f3da41b17ff08a03d0f04b1d5c033b2afbad18ed448b646b2feda277'
@@ -31,7 +31,7 @@ def launch(mode,*args):
  global child
  log=open(root/'process.log','ab',buffering=0)
  child=subprocess.Popen(command(mode,*args),stdin=subprocess.DEVNULL,stdout=log,stderr=log,start_new_session=True,env={'PATH':'/usr/bin:/bin','OPENBLAS_NUM_THREADS':'1','OMP_NUM_THREADS':'1'})
- log.close();return child
+ children.append(child);log.close();return child
 buffered=b''
 def interrupted():
  global buffered
@@ -128,4 +128,4 @@ finally:
  if held is not None:os.close(held)
  if image_fd is not None:os.close(image_fd)
  if root:shutil.rmtree(root)
- emit({'event':'closed','resourcesClosed':True,'rootRemoved':str(root) if root else None})
+ emit({'event':'closed','resourcesClosed':all(p.poll() is not None for p in children),'children':[{'pid':p.pid,'exit':p.poll()} for p in children],'rootRemoved':str(root) if root else None})
