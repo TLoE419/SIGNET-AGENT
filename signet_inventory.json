@@ -1,0 +1,1496 @@
+{
+  "repository": "https://github.com/signet4grn/SIGNET.git",
+  "revision": "bed55b3e121de0edf5fd43da683dc59850ff82d3",
+  "source": ".dependencies/official-signet",
+  "scripts": [
+    {
+      "path": "signet",
+      "category": "dispatcher",
+      "tool": "",
+      "reason": "Internal pipeline component, library, generated chromosome worker, template or legacy alternate; invoked through its owning analysis.",
+      "sha256": "4aa0420c86da340c3001ec0138bf77bac181fa65e1740b9e316e8e94e6718b81",
+      "referenced_by": [
+        "script/adj/adj_filter.sh:2",
+        "script/adj/adj_filter.sh:3",
+        "script/adj_portal.sh:8",
+        "script/adj_portal.sh:19",
+        "script/adj_portal.sh:27",
+        "script/adj_portal.sh:28",
+        "script/adj_portal.sh:29",
+        "script/adj_portal.sh:30",
+        "script/adj_portal.sh:31",
+        "script/adj_portal.sh:42",
+        "script/adj_portal.sh:46",
+        "script/adj_portal_gtex.sh:4",
+        "script/adj_portal_gtex.sh:12",
+        "script/adj_portal_gtex.sh:13",
+        "script/adj_portal_gtex.sh:14",
+        "script/adj_portal_gtex.sh:15",
+        "script/adj_portal_gtex.sh:16",
+        "script/adj_portal_gtex.sh:17",
+        "script/adj_portal_gtex.sh:18",
+        "script/adj_portal_gtex.sh:19",
+        "script/adj_portal_gtex.sh:31",
+        "script/adj_portal_gtex.sh:35",
+        "script/cis-eQTL/low.ciseQTL.sh:2",
+        "script/cis-eQTL/rare.ciseQTL.sh:2",
+        "script/cis_portal.sh:3",
+        "script/cis_portal.sh:15",
+        "script/cis_portal.sh:19",
+        "script/cis_portal.sh:94",
+        "script/config_controller.sh:3",
+        "script/config_controller_back.sh:3",
+        "script/geno_prep_portal.sh:8",
+        "script/geno_prep_portal.sh:20",
+        "script/geno_prep_portal.sh:38",
+        "script/geno_prep_portal.sh:39",
+        "script/geno_prep_portal.sh:40",
+        "script/geno_prep_portal.sh:41",
+        "script/geno_prep_portal.sh:42",
+        "script/geno_prep_portal.sh:43",
+        "script/geno_prep_portal.sh:44",
+        "script/geno_prep_portal.sh:45",
+        "script/geno_prep_portal.sh:46",
+        "script/geno_prep_portal.sh:47",
+        "script/geno_prep_portal.sh:48",
+        "script/geno_prep_portal.sh:49",
+        "script/geno_prep_portal.sh:50",
+        "script/geno_prep_portal.sh:62",
+        "script/geno_prep_portal.sh:67",
+        "script/geno_prep_portal.sh:71",
+        "script/geno_prep_portal.sh:75",
+        "script/geno_prep_portal.sh:79",
+        "script/geno_prep_portal.sh:83",
+        "script/geno_prep_portal.sh:87",
+        "script/geno_prep_portal.sh:92",
+        "script/geno_prep_portal.sh:97",
+        "script/geno_prep_portal.sh:101",
+        "script/geno_prep_portal.sh:105",
+        "script/geno_prep_portal.sh:109",
+        "script/geno_prep_portal_gtex.sh:5",
+        "script/geno_prep_portal_gtex.sh:18",
+        "script/geno_prep_portal_gtex.sh:19",
+        "script/geno_prep_portal_gtex.sh:20",
+        "script/geno_prep_portal_gtex.sh:21",
+        "script/geno_prep_portal_gtex.sh:22",
+        "script/geno_prep_portal_gtex.sh:23",
+        "script/geno_prep_portal_gtex.sh:24",
+        "script/geno_prep_portal_gtex.sh:36",
+        "script/geno_prep_portal_gtex.sh:41",
+        "script/geno_prep_portal_gtex.sh:46",
+        "script/geno_prep_portal_gtex.sh:51",
+        "script/geno_prep_portal_gtex.sh:55",
+        "script/geno_prep_portal_gtex.sh:59",
+        "script/gexp_prep/gexp_prep_gtex.sh:1",
+        "script/gexp_prep/gexp_prep_gtex.sh:2",
+        "script/gexp_prep_portal.sh:8",
+        "script/gexp_prep_portal.sh:19",
+        "script/gexp_prep_portal.sh:30",
+        "script/gexp_prep_portal.sh:31",
+        "script/gexp_prep_portal.sh:32",
+        "script/gexp_prep_portal.sh:33",
+        "script/gexp_prep_portal.sh:34",
+        "script/gexp_prep_portal.sh:46",
+        "script/gexp_prep_portal.sh:51",
+        "script/gexp_prep_portal.sh:55",
+        "script/gexp_prep_portal.sh:59",
+        "script/gexp_prep_portal_gtex.sh:4",
+        "script/gexp_prep_portal_gtex.sh:15",
+        "script/gexp_prep_portal_gtex.sh:16",
+        "script/gexp_prep_portal_gtex.sh:17",
+        "script/gexp_prep_portal_gtex.sh:18",
+        "script/gexp_prep_portal_gtex.sh:19",
+        "script/gexp_prep_portal_gtex.sh:31",
+        "script/gexp_prep_portal_gtex.sh:36",
+        "script/gexp_prep_portal_gtex.sh:41",
+        "script/gexp_prep_portal_gtex.sh:45",
+        "script/netvis_portal.sh:3",
+        "script/netvis_portal.sh:14",
+        "script/netvis_portal.sh:20",
+        "script/network_portal.sh:3",
+        "script/network_portal.sh:18",
+        "script/network_portal.sh:19",
+        "script/network_portal.sh:20",
+        "script/network_portal.sh:21",
+        "script/network_portal.sh:22",
+        "script/network_portal.sh:28",
+        "script/network_portal.sh:124",
+        "script/network_portal.sh:129",
+        "script/network_portal.sh:137"
+      ]
+    },
+    {
+      "path": "script/adj/adj.sh",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/adj; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "c8d955bb9832e71c8b17166996d699ddc5fc98d44d5501d06a8dbf933c0dc9ea",
+      "referenced_by": [
+        "script/adj_portal.sh:80"
+      ]
+    },
+    {
+      "path": "script/adj/adj_adjust.R",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/adj; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "5d8593970cc09053c312a9a54dbbbae32503190876361626dfd23af1b8d35081",
+      "referenced_by": [
+        "script/adj/adj.sh:15"
+      ]
+    },
+    {
+      "path": "script/adj/adj_adjust_gtex.sh",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/adj; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "6922718778ccd6ac875ab23b5c9bd0be71de8bf3931fb5803851db6236d331f9",
+      "referenced_by": [
+        "script/adj/adj_gtex.sh:17"
+      ]
+    },
+    {
+      "path": "script/adj/adj_filter.sh",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/adj; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "170c980ee66c39efafb4652ad9d660300634e125565e3f4490bc7014dadaced5",
+      "referenced_by": [
+        "script/adj/adj.sh:4"
+      ]
+    },
+    {
+      "path": "script/adj/adj_gexp.R",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/adj; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "46f14068a2a58f50c48d2970105a91df778fb309c00f163e435746236c037875",
+      "referenced_by": [
+        "script/adj/adj.sh:1"
+      ]
+    },
+    {
+      "path": "script/adj/adj_gtex.sh",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/adj; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "d91ae4c1fb41cd04f5fc931423ec641eca8716c300f5bd277f4192fd645a572e",
+      "referenced_by": [
+        "script/adj_portal_gtex.sh:70"
+      ]
+    },
+    {
+      "path": "script/adj/adj_pca.sh",
+      "category": "entry",
+      "tool": "run_pca",
+      "reason": "3: TCGA PCA; requires existing intermediate data",
+      "sha256": "b2e5bc7906589e55847933d27cf41bb4e4ec6c0f96685a39261203b8187efe7e",
+      "referenced_by": [
+        "script/adj/adj.sh:5"
+      ]
+    },
+    {
+      "path": "script/adj/adj_pca_gtex.sh",
+      "category": "entry",
+      "tool": "run_pca",
+      "reason": "3: GTEx PCA; requires existing intermediate data",
+      "sha256": "60e6f01c0a990fb581316c0072df0e9d487f08f19faf4cd5fd70cf6bbcf3df07",
+      "referenced_by": [
+        "script/adj/adj_gtex.sh:4"
+      ]
+    },
+    {
+      "path": "script/adj/combine_covariates.py",
+      "category": "entry",
+      "tool": "combine_covariates",
+      "reason": "3: standalone explicit argument parser",
+      "sha256": "a8a786daf3b8eadc70a22010a9fa2f1b5613dda7d0dff51adb504cd98b21ca2a",
+      "referenced_by": [
+        "script/adj/adj_adjust_gtex.sh:9",
+        "script/adj/adj_adjust_gtex.sh:14"
+      ]
+    },
+    {
+      "path": "script/adj/extractgeno.pl",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/adj; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "71a09bf192a18bdf9da1cea2fd57a00b0d0b88410d07a2d5dd4c4608dad5321a",
+      "referenced_by": [
+        "script/adj/adj.sh:3"
+      ]
+    },
+    {
+      "path": "script/adj/extractsnp.pl",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/adj; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "1d03c6712cc8c9c6f393a1981ee57fc3ad0319959d76646cd645cfb4c0cae8e9",
+      "referenced_by": [
+        "script/adj/adj_filter.sh:43"
+      ]
+    },
+    {
+      "path": "script/adj/filterma5.R",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/adj; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "2806c8cb4b8b8b02c9d6f207c5e0d2469cefb7840e930b25bb10ca22c9b64c29",
+      "referenced_by": [
+        "script/adj/adj_filter.sh:36"
+      ]
+    },
+    {
+      "path": "script/adj/genosum.R",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/adj; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "afc184d0b5c20a37977433e7d874c063a057fd01bbb899618006c88bb395fa89",
+      "referenced_by": [
+        "script/adj/adj_filter.sh:27"
+      ]
+    },
+    {
+      "path": "script/adj/genosum_chr1.R",
+      "category": "internal",
+      "tool": "",
+      "reason": "Chromosome worker generated by adj/adj_filter.sh from adj/genosum.R; never expose chromosome workers separately.",
+      "sha256": "0e31b590076ea37ef06828b0169d498d8c891a2dfa4a1f7e9a2ecd7441aac031",
+      "referenced_by": []
+    },
+    {
+      "path": "script/adj/genosum_chr10.R",
+      "category": "internal",
+      "tool": "",
+      "reason": "Chromosome worker generated by adj/adj_filter.sh from adj/genosum.R; never expose chromosome workers separately.",
+      "sha256": "cc1e5e0ac15d9b0af7e2fd6419f0787fd49c82a5c15f941f0ca2d1d70cc26848",
+      "referenced_by": []
+    },
+    {
+      "path": "script/adj/genosum_chr11.R",
+      "category": "internal",
+      "tool": "",
+      "reason": "Chromosome worker generated by adj/adj_filter.sh from adj/genosum.R; never expose chromosome workers separately.",
+      "sha256": "0ccc985a1015cbd3f65bf4d29edacb794b8849831c7b136253bbdf39b0f8c55e",
+      "referenced_by": []
+    },
+    {
+      "path": "script/adj/genosum_chr12.R",
+      "category": "internal",
+      "tool": "",
+      "reason": "Chromosome worker generated by adj/adj_filter.sh from adj/genosum.R; never expose chromosome workers separately.",
+      "sha256": "294e37c041b89e80ab343e0650d44969018b539e9e96d73881a4445eae054c8e",
+      "referenced_by": []
+    },
+    {
+      "path": "script/adj/genosum_chr13.R",
+      "category": "internal",
+      "tool": "",
+      "reason": "Chromosome worker generated by adj/adj_filter.sh from adj/genosum.R; never expose chromosome workers separately.",
+      "sha256": "c9d6661b13cb2363668e3c9d1ebd6e0df1c833118dacb1412f5dfd869710316d",
+      "referenced_by": []
+    },
+    {
+      "path": "script/adj/genosum_chr14.R",
+      "category": "internal",
+      "tool": "",
+      "reason": "Chromosome worker generated by adj/adj_filter.sh from adj/genosum.R; never expose chromosome workers separately.",
+      "sha256": "f39440b760a1976285164ff888c6ed19f4aff5d4c4464d1bb9ed0201380cce48",
+      "referenced_by": []
+    },
+    {
+      "path": "script/adj/genosum_chr15.R",
+      "category": "internal",
+      "tool": "",
+      "reason": "Chromosome worker generated by adj/adj_filter.sh from adj/genosum.R; never expose chromosome workers separately.",
+      "sha256": "f3ea5b33902ae0db9e534bba249d48f7e0dd2c8712707a02e6bcc79a60a870b0",
+      "referenced_by": []
+    },
+    {
+      "path": "script/adj/genosum_chr16.R",
+      "category": "internal",
+      "tool": "",
+      "reason": "Chromosome worker generated by adj/adj_filter.sh from adj/genosum.R; never expose chromosome workers separately.",
+      "sha256": "c1e4fb15f3602d24abd26c180ce59f2aac468b2f5f717024725bd2e00c4ac0df",
+      "referenced_by": []
+    },
+    {
+      "path": "script/adj/genosum_chr17.R",
+      "category": "internal",
+      "tool": "",
+      "reason": "Chromosome worker generated by adj/adj_filter.sh from adj/genosum.R; never expose chromosome workers separately.",
+      "sha256": "2156787e68a78449a3bf5372e82f12180087a4ab0e567194409368c862b09d85",
+      "referenced_by": []
+    },
+    {
+      "path": "script/adj/genosum_chr18.R",
+      "category": "internal",
+      "tool": "",
+      "reason": "Chromosome worker generated by adj/adj_filter.sh from adj/genosum.R; never expose chromosome workers separately.",
+      "sha256": "1f50cc9b6fbc8e745df27be421ed0af2f96e1ed40cb38e738b62aa147aba79e7",
+      "referenced_by": []
+    },
+    {
+      "path": "script/adj/genosum_chr19.R",
+      "category": "internal",
+      "tool": "",
+      "reason": "Chromosome worker generated by adj/adj_filter.sh from adj/genosum.R; never expose chromosome workers separately.",
+      "sha256": "81cb74e91af3278977b9203ff5d582698b18c22f61d90333c361a9bbe1366673",
+      "referenced_by": []
+    },
+    {
+      "path": "script/adj/genosum_chr2.R",
+      "category": "internal",
+      "tool": "",
+      "reason": "Chromosome worker generated by adj/adj_filter.sh from adj/genosum.R; never expose chromosome workers separately.",
+      "sha256": "44286165cec631b703122117d47bed2ed57806ae7f1062488dfc590115c0e73a",
+      "referenced_by": []
+    },
+    {
+      "path": "script/adj/genosum_chr20.R",
+      "category": "internal",
+      "tool": "",
+      "reason": "Chromosome worker generated by adj/adj_filter.sh from adj/genosum.R; never expose chromosome workers separately.",
+      "sha256": "d3f34113d9e2a99cf9fb59d0f04ddd0b2f859853079c82a7e8113bcedff51537",
+      "referenced_by": []
+    },
+    {
+      "path": "script/adj/genosum_chr21.R",
+      "category": "internal",
+      "tool": "",
+      "reason": "Chromosome worker generated by adj/adj_filter.sh from adj/genosum.R; never expose chromosome workers separately.",
+      "sha256": "993798e5e04001f04d14e8bb235ba7be4f7b55ee714ecbfd1698151a9d276004",
+      "referenced_by": []
+    },
+    {
+      "path": "script/adj/genosum_chr22.R",
+      "category": "internal",
+      "tool": "",
+      "reason": "Chromosome worker generated by adj/adj_filter.sh from adj/genosum.R; never expose chromosome workers separately.",
+      "sha256": "5d95cae9cb66e8e12a15c63ac01c19acb718e3261fc597e705f87eef855c6c45",
+      "referenced_by": []
+    },
+    {
+      "path": "script/adj/genosum_chr3.R",
+      "category": "internal",
+      "tool": "",
+      "reason": "Chromosome worker generated by adj/adj_filter.sh from adj/genosum.R; never expose chromosome workers separately.",
+      "sha256": "8d2b1bce3c7164c474b342eaea65a2301a413fc69b14a1f94cd97a4de8b265a5",
+      "referenced_by": []
+    },
+    {
+      "path": "script/adj/genosum_chr4.R",
+      "category": "internal",
+      "tool": "",
+      "reason": "Chromosome worker generated by adj/adj_filter.sh from adj/genosum.R; never expose chromosome workers separately.",
+      "sha256": "e89e3eb4c3e4aa1871d97f26ab203f750c07eeca004ae6e060de6cf090ca1775",
+      "referenced_by": []
+    },
+    {
+      "path": "script/adj/genosum_chr5.R",
+      "category": "internal",
+      "tool": "",
+      "reason": "Chromosome worker generated by adj/adj_filter.sh from adj/genosum.R; never expose chromosome workers separately.",
+      "sha256": "1b39922965f53b445c51459fe027605c10d65f83bd87682a54350f94dbb6092c",
+      "referenced_by": []
+    },
+    {
+      "path": "script/adj/genosum_chr6.R",
+      "category": "internal",
+      "tool": "",
+      "reason": "Chromosome worker generated by adj/adj_filter.sh from adj/genosum.R; never expose chromosome workers separately.",
+      "sha256": "b2a47dfda3ab96c8c831889fc46909309795c91448ca0d7d87ea30bc8d470640",
+      "referenced_by": []
+    },
+    {
+      "path": "script/adj/genosum_chr7.R",
+      "category": "internal",
+      "tool": "",
+      "reason": "Chromosome worker generated by adj/adj_filter.sh from adj/genosum.R; never expose chromosome workers separately.",
+      "sha256": "1684732018518200757f03ea61a9c2bf67f21cb970e79577e76218239aeeb367",
+      "referenced_by": []
+    },
+    {
+      "path": "script/adj/genosum_chr8.R",
+      "category": "internal",
+      "tool": "",
+      "reason": "Chromosome worker generated by adj/adj_filter.sh from adj/genosum.R; never expose chromosome workers separately.",
+      "sha256": "e2e6632bd39dcf8b8b52c48e5405cc93c43fec6c5ea3ad4aff49021a1735d26d",
+      "referenced_by": []
+    },
+    {
+      "path": "script/adj/genosum_chr9.R",
+      "category": "internal",
+      "tool": "",
+      "reason": "Chromosome worker generated by adj/adj_filter.sh from adj/genosum.R; never expose chromosome workers separately.",
+      "sha256": "5325522aa6e146b0c0cc60b085ab979ba650c2c1afa709e186e9925ad5754258",
+      "referenced_by": []
+    },
+    {
+      "path": "script/adj/gexp_cov_adjust.py",
+      "category": "entry",
+      "tool": "adjust_expression",
+      "reason": "3: standalone explicit argument parser",
+      "sha256": "c91a2282a20b04d28b378d615a51d0d7c63f6fe21362d1429d8b8659268d98db",
+      "referenced_by": [
+        "script/adj/adj_adjust_gtex.sh:22",
+        "script/adj/adj_adjust_gtex.sh:26"
+      ]
+    },
+    {
+      "path": "script/adj/ld.sh",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/adj; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "786531dbe40dba450e66ebd47aa85e188194e2c3e0561f5dc9a8f1eb0a7fee85",
+      "referenced_by": [
+        "script/adj/adj_gtex.sh:2"
+      ]
+    },
+    {
+      "path": "script/adj/masummary.R",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/adj; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "25ec940a350c7b692a27d09fe6b60d19a5cce2f16c850014302764d32f6838cc",
+      "referenced_by": [
+        "script/adj/adj_filter.sh:50"
+      ]
+    },
+    {
+      "path": "script/adj/orderge.R",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/adj; no direct literal caller found; may be a generated/dynamic worker, library or legacy alternate; not promoted to a public analysis entry.",
+      "sha256": "c77e3a940a005b9e59531daaaec2880c8e49d41929971454e01295c4d31c58bd",
+      "referenced_by": []
+    },
+    {
+      "path": "script/adj/pca_prepare.R",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/adj; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "6830ecd05a0da54664bc1c820720d48fbb38ec047d43b4ca3795695eb0aeb014",
+      "referenced_by": [
+        "script/adj/adj_pca.sh:5"
+      ]
+    },
+    {
+      "path": "script/adj/pca_vis.R",
+      "category": "entry",
+      "tool": "plot_pca",
+      "reason": "3: PCA plots; requires existing eigenvectors/eigenvalues",
+      "sha256": "fe18d235a8a1dfd245f4681ac41e6f659362f09ad006020d1d7e341fa9789de1",
+      "referenced_by": [
+        "script/adj/adj_pca.sh:8",
+        "script/adj/adj_pca_gtex.sh:10"
+      ]
+    },
+    {
+      "path": "script/adj/pre_cov_gtex.R",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/adj; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "6b34b71a460023adcd8ec3bdb3b89a42f2a08b49e3dfd748e9177a81f11f2f89",
+      "referenced_by": [
+        "script/adj/adj_gtex.sh:16"
+      ]
+    },
+    {
+      "path": "script/adj/protein_coding_gtex.R",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/adj; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "a83fcf0655f14be5a2bfea67d9102529c7a2c929477a1da26e556b05c7c10381",
+      "referenced_by": [
+        "script/adj/adj_adjust_gtex.sh:30"
+      ]
+    },
+    {
+      "path": "script/adj/snps5.R",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/adj; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "0dcfc405256d364d9abb4b77f8094c577a3e57c347ed860688a234e73ac853d1",
+      "referenced_by": [
+        "script/adj/adj_filter.sh:39"
+      ]
+    },
+    {
+      "path": "script/adj_portal.sh",
+      "category": "entry",
+      "tool": "adjust_tcga",
+      "reason": "3: matching, PCA and adjustment",
+      "sha256": "629be3911695f196ab0cd704babf7f2c6b5b2c5e251b0ddb76ff8aa911b400d7",
+      "referenced_by": [
+        "signet:63"
+      ]
+    },
+    {
+      "path": "script/adj_portal_gtex.sh",
+      "category": "entry",
+      "tool": "adjust_gtex",
+      "reason": "3: matching, PCA and adjustment",
+      "sha256": "a59edc5cedc37f43927aebccd229897066b453d3c3eae03568a5a4e0a961ce0b",
+      "referenced_by": [
+        "script/adj_portal.sh:12"
+      ]
+    },
+    {
+      "path": "script/cis-eQTL/SumTest.r",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/cis-eQTL; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "5bd63304cfba570d2683252f0f02fbff38536ae7cf6fa63aab1f385896becd4d",
+      "referenced_by": [
+        "script/cis-eQTL/low.ciseQTL.r:20",
+        "script/cis-eQTL/low.ciseQTL_2.r:19",
+        "script/cis-eQTL/rare.ciseQTL.r:20",
+        "script/cis-eQTL/rare.ciseQTL_2.r:19"
+      ]
+    },
+    {
+      "path": "script/cis-eQTL/all.ciseQTL.r",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/cis-eQTL; no direct literal caller found; may be a generated/dynamic worker, library or legacy alternate; not promoted to a public analysis entry.",
+      "sha256": "9059559110a46a026df5d6bf9e21c19942c0a257e0429041bd08b700e2bf0f41",
+      "referenced_by": []
+    },
+    {
+      "path": "script/cis-eQTL/cis-SNPs.sh",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/cis-eQTL; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "69878af0695b889ea783a25674b04e60d50f9d30e888a5e4bf2ed04cff3e8f04",
+      "referenced_by": [
+        "script/cis-eQTL/cis-eQTL.sh:6"
+      ]
+    },
+    {
+      "path": "script/cis-eQTL/cis-eQTL.sh",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/cis-eQTL; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "1ba5a484accc61605dbe1a1582df125e041547a8c744339dc4a0f806566e396e",
+      "referenced_by": [
+        "script/cis_portal.sh:130"
+      ]
+    },
+    {
+      "path": "script/cis-eQTL/combine.sh",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/cis-eQTL; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "8e5fa9f45ff7c1ea3ee82ed275664a7e282161371c84a47e51577a7507dfff25",
+      "referenced_by": [
+        "script/cis-eQTL/cis-eQTL.sh:17"
+      ]
+    },
+    {
+      "path": "script/cis-eQTL/combine.sigcis.r",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/cis-eQTL; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "ed1817809016afda7daa800e82d2f1077ed8c759659edcda9140430ffb04fe8a",
+      "referenced_by": [
+        "script/cis-eQTL/combine.sh:5"
+      ]
+    },
+    {
+      "path": "script/cis-eQTL/common.ciseQTL.r",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/cis-eQTL; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "4cb35de38315c5ed9d773bbca1287c847304b921c5c2a520f1f2d7df16711584",
+      "referenced_by": [
+        "script/cis-eQTL/common.ciseQTL.sh:6"
+      ]
+    },
+    {
+      "path": "script/cis-eQTL/common.ciseQTL.sh",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/cis-eQTL; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "2f7f89e309ab55d87cdba366fd4e764fa38226ef163fbc1964bc8274ae714b82",
+      "referenced_by": [
+        "script/cis-eQTL/cis-eQTL.sh:10"
+      ]
+    },
+    {
+      "path": "script/cis-eQTL/common.cispair.r",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/cis-eQTL; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "cafe1a805559b7b89582c66f25f78eae7752a8224cc7e9cd14dda10088e2339d",
+      "referenced_by": [
+        "script/cis-eQTL/cis-SNPs.sh:20"
+      ]
+    },
+    {
+      "path": "script/cis-eQTL/common.eQTLdata.r",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/cis-eQTL; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "82528aeaec77193a6d38c6273792ce5f8a4ce1146b6c0ea919e4c289931ebc50",
+      "referenced_by": [
+        "script/cis-eQTL/common.ciseQTL.sh:14"
+      ]
+    },
+    {
+      "path": "script/cis-eQTL/grpsnps.R",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/cis-eQTL; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "e8612b32d518d3a878b89e420e6ce41bbd3b46b134b1251cba2f54b6004565c0",
+      "referenced_by": [
+        "script/cis-eQTL/snpsplit.sh:6"
+      ]
+    },
+    {
+      "path": "script/cis-eQTL/low.ciseQTL.r",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/cis-eQTL; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "9901c4cb5a1f99acb7ee055a5896553f8246889a0e321122cd13d66d1a71c46c",
+      "referenced_by": [
+        "script/cis-eQTL/low.ciseQTL.sh:15"
+      ]
+    },
+    {
+      "path": "script/cis-eQTL/low.ciseQTL.sh",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/cis-eQTL; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "b0139c52980471dde167b224dfac9623fbe4563f5274c68f351afdf63e2d6c5e",
+      "referenced_by": [
+        "script/cis-eQTL/cis-eQTL.sh:11"
+      ]
+    },
+    {
+      "path": "script/cis-eQTL/low.ciseQTL_2.r",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/cis-eQTL; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "b507ef3f801850c0ab1df02feb793ac378d3eeb2290333db8efabb55b15181d2",
+      "referenced_by": [
+        "script/cis-eQTL/low.ciseQTL.sh:15",
+        "script/cis-eQTL/low.ciseQTL.sh:25",
+        "script/cis-eQTL/low.ciseQTL.sh:30"
+      ]
+    },
+    {
+      "path": "script/cis-eQTL/low.cispair.r",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/cis-eQTL; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "425f6cb5350f66ddda805ab87d4ae4eddb898de3701ccbaf88ae0209f56e6ddf",
+      "referenced_by": [
+        "script/cis-eQTL/cis-SNPs.sh:21"
+      ]
+    },
+    {
+      "path": "script/cis-eQTL/low.eQTLdata.r",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/cis-eQTL; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "895b504b3f18d4c2e9a61b7ec019536754ad5dc474ac6b1bf3ea32f0e89433d4",
+      "referenced_by": [
+        "script/cis-eQTL/low.ciseQTL.sh:50"
+      ]
+    },
+    {
+      "path": "script/cis-eQTL/rSumTest.r",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/cis-eQTL; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "e4599e3de460a4b09bb96019d8c5df760cc8e441ca659f3b2a4549a34eec3b98",
+      "referenced_by": [
+        "script/cis-eQTL/low.ciseQTL.r:21",
+        "script/cis-eQTL/low.ciseQTL_2.r:20",
+        "script/cis-eQTL/rare.ciseQTL.r:21",
+        "script/cis-eQTL/rare.ciseQTL_2.r:20"
+      ]
+    },
+    {
+      "path": "script/cis-eQTL/rare.cisQTL.sh",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/cis-eQTL; no direct literal caller found; may be a generated/dynamic worker, library or legacy alternate; not promoted to a public analysis entry.",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "referenced_by": []
+    },
+    {
+      "path": "script/cis-eQTL/rare.ciseQTL.r",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/cis-eQTL; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "3014b28a221577968fc70aaa94fcd9c4eb3cfacbc2a20291bb8b5a7500075a04",
+      "referenced_by": [
+        "script/cis-eQTL/rare.ciseQTL.sh:15"
+      ]
+    },
+    {
+      "path": "script/cis-eQTL/rare.ciseQTL.sh",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/cis-eQTL; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "4dcc1686a9fcf391c4ff85204fa5549ee857af49bfbc679eb45e277d31fe9087",
+      "referenced_by": [
+        "script/cis-eQTL/cis-eQTL.sh:12"
+      ]
+    },
+    {
+      "path": "script/cis-eQTL/rare.ciseQTL_2.r",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/cis-eQTL; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "73e02a67b5beeafc73f8a3e19cfee675448b0e44319785ae3ad47f22561dd3b0",
+      "referenced_by": [
+        "script/cis-eQTL/rare.ciseQTL.sh:15",
+        "script/cis-eQTL/rare.ciseQTL.sh:25",
+        "script/cis-eQTL/rare.ciseQTL.sh:30"
+      ]
+    },
+    {
+      "path": "script/cis-eQTL/rare.cispair.r",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/cis-eQTL; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "620e1054e55b37c5c413f2d3956bfb98ab93cde76f53530778eaeb480439a094",
+      "referenced_by": [
+        "script/cis-eQTL/cis-SNPs.sh:19"
+      ]
+    },
+    {
+      "path": "script/cis-eQTL/rare.eQTLdata.r",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/cis-eQTL; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "a6387d82d9f87527d9f4995bebe93af6f3eba0847f90560888f58ffe48ff837e",
+      "referenced_by": [
+        "script/cis-eQTL/rare.ciseQTL.sh:50"
+      ]
+    },
+    {
+      "path": "script/cis-eQTL/sig.commoncis.r",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/cis-eQTL; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "be36d894b6dd449bb08e367dc1ce05255ce3e50208e879b842f2ed27c7f6e455",
+      "referenced_by": [
+        "script/cis-eQTL/common.ciseQTL.sh:11"
+      ]
+    },
+    {
+      "path": "script/cis-eQTL/sig.lowcis.r",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/cis-eQTL; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "28aa321dc762cb8a2188e98aa352a75f6484b5d48cc184be86eb51ea754eae93",
+      "referenced_by": [
+        "script/cis-eQTL/low.ciseQTL.sh:49"
+      ]
+    },
+    {
+      "path": "script/cis-eQTL/sig.rarecis.r",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/cis-eQTL; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "9b899f09db81e9d942363215adf0b86c7d0586caec540996b8d50677bc093a4d",
+      "referenced_by": [
+        "script/cis-eQTL/rare.ciseQTL.sh:49"
+      ]
+    },
+    {
+      "path": "script/cis-eQTL/snpsplit.sh",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/cis-eQTL; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "bdda7daede8a96dce35018cd2759f8235a616db0e544fa9dafc071eb8e895552",
+      "referenced_by": [
+        "script/cis-eQTL/cis-eQTL.sh:4"
+      ]
+    },
+    {
+      "path": "script/cis_portal.sh",
+      "category": "entry",
+      "tool": "cis_eqtl",
+      "reason": "4: cis-eQTL",
+      "sha256": "c08920671af40ee0035f7aa5aa0c1ef514d4d71f8d52d79bd2e54c2a3bb0230f",
+      "referenced_by": [
+        "signet:57"
+      ]
+    },
+    {
+      "path": "script/config_controller.sh",
+      "category": "entry",
+      "tool": "get_signet_settings / configure_signet",
+      "reason": "configuration; controlled Python equivalent",
+      "sha256": "9030d278c093a544144947b53cbe4dbd53aad615eeb32402077f8d1a3b9263f2",
+      "referenced_by": [
+        "signet:49"
+      ]
+    },
+    {
+      "path": "script/config_controller_back.sh",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script; no direct literal caller found; may be a generated/dynamic worker, library or legacy alternate; not promoted to a public analysis entry.",
+      "sha256": "addc67e84730805b0752274aa914dc7d1aa1b14a7f831c59f97770d7904017ba",
+      "referenced_by": []
+    },
+    {
+      "path": "script/file_manage.sh",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "d75b39180f2e604ca288e2425f3891522b5cb5c8068b74fba80bda94f83bd184",
+      "referenced_by": [
+        "signet:37"
+      ]
+    },
+    {
+      "path": "script/geno_prep/check_ped.sh",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/geno_prep; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "932fdf3942079c25a84be3a903a19172e84f56eb287df60423856a36b5b11b98",
+      "referenced_by": [
+        "script/geno_prep/plink.sh:11"
+      ]
+    },
+    {
+      "path": "script/geno_prep/combine_geno.sh",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/geno_prep; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "fc4ebed4b04ca385ffc4bd864a7f7037b06afaea8299525991a8448e82b2bd69",
+      "referenced_by": [
+        "script/geno_prep/geno_prep.sh:5"
+      ]
+    },
+    {
+      "path": "script/geno_prep/extract.R",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/geno_prep; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "825ad09c1606e691ea0209571def0dc43c1dd92898cd22ac72bc45c80623c970",
+      "referenced_by": [
+        "script/geno_prep/extract.sh:14"
+      ]
+    },
+    {
+      "path": "script/geno_prep/extract.sh",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/geno_prep; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "1a5587b3c69b3914e4e586854a6292142c2826b759b4b687c4fffcb1b04440b0",
+      "referenced_by": [
+        "script/geno_prep/geno_prep_gtex.sh:1"
+      ]
+    },
+    {
+      "path": "script/geno_prep/gen_sample.R",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/geno_prep; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "b466ec847a6727d929fff6c45788c2b79ef5ff96035a0bd5a99e9dcc91dce32d",
+      "referenced_by": [
+        "script/geno_prep/extract.sh:11"
+      ]
+    },
+    {
+      "path": "script/geno_prep/geno_prep.sh",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/geno_prep; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "2419f492d81d0a2b470880342b7643902d00d9e5bda07a126443850b44809f0b",
+      "referenced_by": [
+        "script/geno_prep_portal.sh:150"
+      ]
+    },
+    {
+      "path": "script/geno_prep/geno_prep_gtex.sh",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/geno_prep; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "6f821cd32cbfa3324967fc850cf92354c4ae872965ecf7dd2eb0df4f0a6866ef",
+      "referenced_by": [
+        "script/geno_prep_portal_gtex.sh:96"
+      ]
+    },
+    {
+      "path": "script/geno_prep/imputation.sh",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/geno_prep; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "c70d4e24d79af1a31a0cd8cc40742c6832764ac219668c2557e5e5eb7e0cb5ba",
+      "referenced_by": [
+        "script/geno_prep/geno_prep.sh:4"
+      ]
+    },
+    {
+      "path": "script/geno_prep/plink.sh",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/geno_prep; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "8c56e663c4527b19527f8f9a440c7d2af518f6962325f72a9a6c095c663b402e",
+      "referenced_by": [
+        "script/geno_prep/geno_prep.sh:3"
+      ]
+    },
+    {
+      "path": "script/geno_prep/plink_gtex.sh",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/geno_prep; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "d163d452d98ccdec3228a2641f5d3bd45046e1957ef8563b0f051ff2b7f63c31",
+      "referenced_by": [
+        "script/geno_prep/geno_prep_gtex.sh:2"
+      ]
+    },
+    {
+      "path": "script/geno_prep/splitchr.pl",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/geno_prep; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "262fb0ec6597800179ce645d2876d2a800a7a5e5dd7f9cebf40c8703c3cba503",
+      "referenced_by": [
+        "script/adj/adj_filter.sh:8"
+      ]
+    },
+    {
+      "path": "script/geno_prep/splitchr_ped.pl",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/geno_prep; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "e24c2a9bfa79ccace0f5bca84284165ea10e5527a618957f5683acb17452bfa9",
+      "referenced_by": [
+        "script/geno_prep/imputation.sh:29"
+      ]
+    },
+    {
+      "path": "script/geno_prep_portal.sh",
+      "category": "entry",
+      "tool": "genotype_tcga",
+      "reason": "1: genotype preprocessing",
+      "sha256": "d017b863ec4b3b80f772379acf912ad4eb8cdd535dc92f9bdd84028072107dfe",
+      "referenced_by": [
+        "signet:40"
+      ]
+    },
+    {
+      "path": "script/geno_prep_portal_gtex.sh",
+      "category": "entry",
+      "tool": "genotype_gtex",
+      "reason": "1: genotype preprocessing",
+      "sha256": "c020c140dd14e414adffe637d20b166d1c11b0476da29ee3c0e0a750f2497122",
+      "referenced_by": [
+        "script/geno_prep_portal.sh:12"
+      ]
+    },
+    {
+      "path": "script/gexp_prep/eqtl_prepare_expression_igt2log.py",
+      "category": "entry",
+      "tool": "normalize_expression",
+      "reason": "2: standalone explicit argument parser",
+      "sha256": "34da9a06ea4f4357faf08287f51a721466a34cb8ca47963af2234100c802285c",
+      "referenced_by": [
+        "script/gexp_prep/gexp_prep_gtex.sh:18"
+      ]
+    },
+    {
+      "path": "script/gexp_prep/gexp_prep.R",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/gexp_prep; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "078354bff08c6a9f3c51882b5f39d1366563af9d727e243f040e65533d7f24e2",
+      "referenced_by": [
+        "script/gexp_prep/gexp_prep.sh:1"
+      ]
+    },
+    {
+      "path": "script/gexp_prep/gexp_prep.sh",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/gexp_prep; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "a42b6bbdbef81d98d771197816a170ec3f55aa597422e4486435d3b939126e3c",
+      "referenced_by": [
+        "script/gexp_prep_portal.sh:99"
+      ]
+    },
+    {
+      "path": "script/gexp_prep/gexp_prep_back.R",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/gexp_prep; no direct literal caller found; may be a generated/dynamic worker, library or legacy alternate; not promoted to a public analysis entry.",
+      "sha256": "f9a4f477c944e803b3aee5deb72e809f8d06750af16bb49874896bbc34d7dbf6",
+      "referenced_by": []
+    },
+    {
+      "path": "script/gexp_prep/gexp_prep_gtex.R",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/gexp_prep; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "8655df24b882402877a860b89a585d7b46aa6788b29e9e7b47b3b93715963ab7",
+      "referenced_by": [
+        "script/gexp_prep/gexp_prep_gtex.sh:12"
+      ]
+    },
+    {
+      "path": "script/gexp_prep/gexp_prep_gtex.sh",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/gexp_prep; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "2a5a6746cb8c85ea29bb40d9aa1e714f41f26514418e8ed78a16bb17fb8bd778",
+      "referenced_by": [
+        "script/gexp_prep_portal_gtex.sh:84"
+      ]
+    },
+    {
+      "path": "script/gexp_prep/gpos.R",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/gexp_prep; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "2eb63ed0c9149fb5b8048017b0e67b0b2cb0566f77f2d2ce9c0d567e0c8ccf31",
+      "referenced_by": [
+        "script/gexp_prep/gexp_prep.sh:2"
+      ]
+    },
+    {
+      "path": "script/gexp_prep/restrict.R",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/gexp_prep; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "5e6d3e240a8ee1d4383a3efc3dc7a6762b7721f1a1d95f3a7cb1790a914d4bba",
+      "referenced_by": [
+        "script/gexp_prep/gpos.R:36"
+      ]
+    },
+    {
+      "path": "script/gexp_prep/rnaseqnorm.py",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/gexp_prep; no direct literal caller found; may be a generated/dynamic worker, library or legacy alternate; not promoted to a public analysis entry.",
+      "sha256": "77424e4e28ebea90de09fa5a558ee6c94802a2a4642b5e0e0445c933c6c47740",
+      "referenced_by": []
+    },
+    {
+      "path": "script/gexp_prep_portal.sh",
+      "category": "entry",
+      "tool": "expression_tcga",
+      "reason": "2: expression preprocessing",
+      "sha256": "16f0484d11483c5f8fea9167d73800d7344388cc7fc2451c6c6d27b2e180d136",
+      "referenced_by": [
+        "signet:44"
+      ]
+    },
+    {
+      "path": "script/gexp_prep_portal_gtex.sh",
+      "category": "entry",
+      "tool": "expression_gtex",
+      "reason": "2: expression preprocessing",
+      "sha256": "5c066b12014bb4e021d791fd095ef1d71855df0b1f215fc1fa0e2464cf9c319e",
+      "referenced_by": [
+        "script/gexp_prep_portal.sh:12"
+      ]
+    },
+    {
+      "path": "script/netvis/circular.R",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/netvis; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "4479acb07fce60fcf4d3db235bbfeecf8ae19a9e38f096e0c1a795f6b03bd209",
+      "referenced_by": [
+        "script/netvis/netshiny.R:34"
+      ]
+    },
+    {
+      "path": "script/netvis/enrichment_hist.R",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/netvis; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "ac95d86e18f5eff871bfbd1c337542f166c9f3f0af035a7ba583f08547e1e0c1",
+      "referenced_by": [
+        "script/netvis/sub_summary.R:113"
+      ]
+    },
+    {
+      "path": "script/netvis/enrichment_radar.R",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/netvis; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "4459de0177332fa1d082be80a348fdbf5959249d4edc0a2a8b5fff6ceb53d2fa",
+      "referenced_by": [
+        "script/netvis/sub_summary.R:111"
+      ]
+    },
+    {
+      "path": "script/netvis/extract_edges.R",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/netvis; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "8720b44e19e3e123cf64a9045eecdf5dec189a2dcc5de3ea1946df7d63c219ad",
+      "referenced_by": [
+        "script/netvis/netvis.sh:6"
+      ]
+    },
+    {
+      "path": "script/netvis/netshiny.R",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/netvis; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "2df4eaa45da12b35cdafd35e62166673b95d2752358477558dc05a831171e6c9",
+      "referenced_by": [
+        "script/netvis/netvis.sh:9"
+      ]
+    },
+    {
+      "path": "script/netvis/netvis.sh",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/netvis; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "c23ad61a31c2cab235b85c6d65383615d5148c4e1326bf255d319a687997ace3",
+      "referenced_by": [
+        "script/netvis_portal.sh:121"
+      ]
+    },
+    {
+      "path": "script/netvis/server.R",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/netvis; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "dd0068f1852781ef1c615b3a4a3e56a6f88544c6f5d60cde21c252e54300f1c6",
+      "referenced_by": [
+        "script/netvis/netshiny.R:35"
+      ]
+    },
+    {
+      "path": "script/netvis/sub_summary.R",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/netvis; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "221eeab9658b5573dd3c3ad3738e22433d15d435934320a2707791c399d8f754",
+      "referenced_by": [
+        "script/netvis/netshiny.R:33"
+      ]
+    },
+    {
+      "path": "script/netvis/tot_summary.R",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/netvis; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "e15bae25b1e0d73832f02cbcd52ce5ea22ac1f0319ee623ef75a60914adfe120",
+      "referenced_by": [
+        "script/netvis/netshiny.R:31"
+      ]
+    },
+    {
+      "path": "script/netvis/ui.R",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/netvis; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "1b9449279183377a0243fe140e08d1f29275bd0347b23fcab848ba14ec23c485",
+      "referenced_by": [
+        "script/netvis/netshiny.R:32"
+      ]
+    },
+    {
+      "path": "script/netvis_portal.sh",
+      "category": "entry",
+      "tool": "prepare_visualization",
+      "reason": "6: visualization; preparation only",
+      "sha256": "daec98c7967f9cd3eeccc7b841d701d311e36ecbdd57c86254f5f30179134fd1",
+      "referenced_by": [
+        "signet:60"
+      ]
+    },
+    {
+      "path": "script/network/SIS.R",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/network; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "c5d77bb2dd016f786a65b3bffe44a8ba2df2f4841fc1b6e92a6f33148a693e99",
+      "referenced_by": [
+        "script/network/bstest2.r:30",
+        "script/network/bts2template.r:24",
+        "script/network/bts2template_cloud.r:26"
+      ]
+    },
+    {
+      "path": "script/network/bstest1.r",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/network; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "50384ecf27e91d0ebf47ff7ba4b69439eb10d0e5b419eb5b7474b0a9fc8f77d4",
+      "referenced_by": [
+        "script/network/bts1gensub.sh:5",
+        "script/network/bts1gensub_cloud.sh:5"
+      ]
+    },
+    {
+      "path": "script/network/bstest2.r",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/network; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "b93a4da1bf7a1d8e29681412f5fc060629ce1208acbd59435b4b4a9769452614",
+      "referenced_by": [
+        "script/network/bts2gensub.sh:5",
+        "script/network/bts2gensub_cloud.sh:18"
+      ]
+    },
+    {
+      "path": "script/network/bts1gensub.sh",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/network; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "3e1dfa9ad12ba7a915c6c6dcd418f4b2e05deb16f43d77a88337a6a3d0aa2e0f",
+      "referenced_by": [
+        "script/network/stage1.sh:9"
+      ]
+    },
+    {
+      "path": "script/network/bts1gensub_cloud.sh",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/network; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "63b083a27240fad08b1e430052292db97eeb7f6faf48d55b13f6c77400eaed39",
+      "referenced_by": [
+        "script/network/stage1_cloud.sh:9"
+      ]
+    },
+    {
+      "path": "script/network/bts1template.r",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/network; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "1fdcb9089685a5a5be2c279bf1d1d59bbebdf81cce4efcffb3eb7b12441b80be",
+      "referenced_by": [
+        "script/network/bts1gensub.sh:34",
+        "script/network/bts1gensub.sh:41"
+      ]
+    },
+    {
+      "path": "script/network/bts1template_cloud.r",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/network; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "1a6655be46c994aec4895c5edfc6818538b3b7064337850d88687abee3514526",
+      "referenced_by": [
+        "script/network/bts1gensub_cloud.sh:34",
+        "script/network/bts1gensub_cloud.sh:41"
+      ]
+    },
+    {
+      "path": "script/network/bts2gensub.sh",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/network; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "f582c3a0185c4030d8d291de0da8cd538c8d42b5864c16da564a79722c81e173",
+      "referenced_by": [
+        "script/network/stage2.sh:9"
+      ]
+    },
+    {
+      "path": "script/network/bts2gensub_cloud.sh",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/network; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "b42c4324a892fc9320b234ea4da2b4143d2f2587673827c3bb9e24c36bed02a1",
+      "referenced_by": [
+        "script/network/stage2_cloud.sh:9"
+      ]
+    },
+    {
+      "path": "script/network/bts2template.r",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/network; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "ba2fc580cc1f7dd80b3c0a9f63b25320ccb775e18385c1fbc1bb5de8dc4eddb1",
+      "referenced_by": [
+        "script/network/bts2gensub.sh:37",
+        "script/network/bts2gensub.sh:44"
+      ]
+    },
+    {
+      "path": "script/network/bts2template_cloud.r",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/network; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "f8bdb1e9be8083ae72aaa95fb3ad293ce0ec1420b9501bcf817549aa893e06fd",
+      "referenced_by": [
+        "script/network/bts2gensub_cloud.sh:49",
+        "script/network/bts2gensub_cloud.sh:56"
+      ]
+    },
+    {
+      "path": "script/network/gendata.R",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/network; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "43608f10999c3d31a9404d79183340bb748694ae0b2f5c96c505cc8f2a4b2b87",
+      "referenced_by": [
+        "script/network/network.sh:12",
+        "script/network/network_cloud.sh:12"
+      ]
+    },
+    {
+      "path": "script/network/network.sh",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/network; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "ee593d43725dbe65151cd4f0efd913bf9c5676922b5099052c16018f8dbaa171",
+      "referenced_by": [
+        "script/network_portal.sh:198"
+      ]
+    },
+    {
+      "path": "script/network/network_cloud.sh",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/network; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "8db093a0303fb75acbfe2bc68ca068bb95fc9ec9e74da8c1e4ae6b7c7b60fa82",
+      "referenced_by": [
+        "script/network_portal.sh:200"
+      ]
+    },
+    {
+      "path": "script/network/rmcons.R",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/network; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "0b287e396cfd611b3dd4f257e8c3cf6dd26f0db61780dd95d49d1ba13845def3",
+      "referenced_by": [
+        "script/network/network.sh:13",
+        "script/network/network_cloud.sh:13"
+      ]
+    },
+    {
+      "path": "script/network/stage1.sh",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/network; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "e7f37e1208875c4712c48ef7228c0313707a7441f07cf531443b7e3f8a37fdce",
+      "referenced_by": [
+        "script/network/network.sh:28"
+      ]
+    },
+    {
+      "path": "script/network/stage1_cloud.sh",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/network; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "73b5d5a2b762fe7766c599f7dc053c30cf54a897ae9832fd4cd5f649cefc7adc",
+      "referenced_by": [
+        "script/network/network_cloud.sh:22"
+      ]
+    },
+    {
+      "path": "script/network/stage2.sh",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/network; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "1a21e69367e2d581744fe589ce544bf423034c80ac877945547f320fa0c0763d",
+      "referenced_by": [
+        "script/network/network.sh:35"
+      ]
+    },
+    {
+      "path": "script/network/stage2_cloud.sh",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/network; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "ff9d0f38b1681476c302dadf794d178f6c47c22dc02b9734eb006371b573159d",
+      "referenced_by": [
+        "script/network/network_cloud.sh:24"
+      ]
+    },
+    {
+      "path": "script/network/subfuns.R",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/network; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "a8a9cbf003264d5666a2a0efdc500cf609c83456dc57352b9a5a221b5d43aba4",
+      "referenced_by": [
+        "script/network/bstest2.r:31",
+        "script/network/bts2template.r:25",
+        "script/network/bts2template_cloud.r:27"
+      ]
+    },
+    {
+      "path": "script/network/summarize.r",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/network; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "63282e22484581757aad56faec5f31eecfd7a73e9e4cd59ec4c68393b9c0d430",
+      "referenced_by": [
+        "script/network/network.sh:39"
+      ]
+    },
+    {
+      "path": "script/network/summarize_cloud.r",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/network; no direct literal caller found; may be a generated/dynamic worker, library or legacy alternate; not promoted to a public analysis entry.",
+      "sha256": "a5498db9cb163de7af70fee2979e4b315b8701c7238d679778f4ca2b142288a9",
+      "referenced_by": []
+    },
+    {
+      "path": "script/network/uncor.R",
+      "category": "internal",
+      "tool": "",
+      "reason": "Internal to script/network; active textual callers are listed in referenced_by; no separately exposed stable analysis contract.",
+      "sha256": "27bc80e510de15e1927b2a8c7737d4b21005e094202a0e2251c1645f7b4e78c4",
+      "referenced_by": [
+        "script/network/network.sh:11",
+        "script/network/network_cloud.sh:11"
+      ]
+    },
+    {
+      "path": "script/network_portal.sh",
+      "category": "entry",
+      "tool": "prepare_network",
+      "reason": "5: network construction; preparation only",
+      "sha256": "4cc9d3be8d3a57aa2cb6572c1de57f7fe9e5ba8b8f17304d94218d1352a5051f",
+      "referenced_by": [
+        "signet:53"
+      ]
+    }
+  ],
+  "development_files": [
+    "docs/Makefile",
+    "docs/make.bat",
+    "docs/conf.py"
+  ],
+  "excluded": [
+    "script/logo (text)",
+    "script/adj/modification (notes)",
+    "script/gexp_prep/rnaseqnorm.pyc (bytecode)",
+    "script/network/template.sub* (4 scheduler templates)",
+    "docs/build/** (generated documentation assets)"
+  ],
+  "count_method": "Audited dispatcher, portal branch calls, standalone argument parsers, environment/intermediate contracts and docs; then deduplicated program files. All 138 files include classification, hash and literal caller evidence (dynamic calls may not appear).",
+  "support_files": [
+    {
+      "path": "config.ini.default",
+      "sha256": "bc8d7657a553b7008db55ff23f018ce22314022e3f0331d58c3c69409764927b"
+    },
+    {
+      "path": "script/network/template.sub",
+      "sha256": "e3865d104ffdb85e5b8e60e4d78d1c61e96fce9684b030fdb862fae57a915ffb"
+    },
+    {
+      "path": "script/network/template.sub.cloud",
+      "sha256": "c0d342f1cb210be27b0d5e66c7f9aada73974cf6e85dc3e265b6c222d7c1f606"
+    },
+    {
+      "path": "script/network/template.sub.cloud.ori",
+      "sha256": "c0d342f1cb210be27b0d5e66c7f9aada73974cf6e85dc3e265b6c222d7c1f606"
+    },
+    {
+      "path": "script/network/template.sub.ori",
+      "sha256": "ec4258e04a15b8e1ee057956266918818112279c17641116be011bd5dc733884"
+    }
+  ]
+}
