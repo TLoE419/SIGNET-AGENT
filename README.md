@@ -1,20 +1,20 @@
-# SIGNET 本機研究助手
+# SIGNET Local Research Assistant
 
-透過本機聊天介面查詢 SIGNET 分析能力、檢查使用者提供的檔案，再由受控工具執行操作。介面提供繁體中文／英文切換、工具進度，以及第六階段網路結果的參數提案與比較。
+Use a local chat interface to explore SIGNET's analysis capabilities, inspect files you provide, and run operations through controlled tools. The interface supports English and Traditional Chinese, tool progress, and parameter proposals and comparisons for Stage 6 network results.
 
-**此版本不附任何研究資料、範例資料、參考資料或預先產生的結果。**安裝後可啟動網頁；設定自己的模型登入後，可聊天、查詢分析目錄與檔案。網路圖與比較功能須先有使用者自己的、完成技術檢查的分析結果，不會在初次啟動時出現範例圖。
+**This version includes no study data, example datasets, reference datasets, or precomputed results.** After installation, you can open the web interface. With your own model sign-in configured, you can chat, query the analysis catalog, and list project files. Network visualization and comparison require your own analysis results that have passed the technical output checks; no example graph appears on first launch.
 
-## 版本替換與舊桌面版
+## Replacing the Former Desktop Workbench
 
-此版本以本機聊天研究助手取代原桌面工作台。`desktop/`、舊 `tools/` 安裝／執行入口、桌面架構文件與歷史驗證紀錄已從目前檔案樹移除。請改用下方的 Python 安裝與啟動步驟；原本的 `npm start` 與 `tools/setup-dev.sh` 不再是此版本入口。
+This version replaces the desktop workbench with the local chat research assistant. The current tree no longer contains `desktop/`, the former `tools/` setup and execution entry points, desktop architecture documents, or historical validation records. Use the Python installation and startup steps below; `npm start` and `tools/setup-dev.sh` are no longer entry points for this version.
 
-這是程式入口與檔案配置的替換，不會自動轉換舊桌面版的工作資料或執行紀錄；需要科學分析時仍須自行準備環境。舊版程式與環境工具保留在 [桌面版歷史提交](https://github.com/TLoE419/SIGNET-AGENT/tree/cfd64e0ceaeabc6d8aa285285bd991587b8272e0)。
+This replaces the application entry point and file layout. It does not automatically migrate desktop work data or run records, and scientific analysis still requires a separately prepared environment. The old application and environment tools remain available in the [desktop history](https://github.com/TLoE419/SIGNET-AGENT/tree/cfd64e0ceaeabc6d8aa285285bd991587b8272e0).
 
-## 快速啟動
+## Quick Start
 
-目前以 macOS、Python 3.11 驗證。需要 Python 3.11 以上；Windows 原生環境尚未驗證，部分程序管理與科學工具需要類 Unix 環境。
+The application has been checked on macOS with Python 3.11. Python 3.11 or later is required. Native Windows operation has not been verified; some process-management and scientific tools require a Unix-like environment.
 
-下載並解壓此專案後，在專案根目錄執行：
+Download and extract this project, then run these commands from its root directory:
 
 ```sh
 python3.11 -m venv .venv
@@ -22,35 +22,35 @@ python3.11 -m venv .venv
 .venv/bin/python chat_ui.py
 ```
 
-開啟 [本機介面](http://127.0.0.1:8880)。網頁能開啟不代表模型已登入或科學環境已就緒。
+Open the [local interface](http://127.0.0.1:8880). A page loading successfully does not establish that your model is signed in or that the scientific environment is ready.
 
-預設聊天使用下載者自己已登入的 Codex 命令列。安裝方式、登入檢查與其他模型選項見 [安裝指南](docs/INSTALL.md)。目前檢查過的命令列版本為 `0.162.1`；其他版本須確認命令參數與結構化回覆相容。
+Chat uses your own signed-in Codex CLI by default. See the [installation guide](docs/INSTALL.md) for installation, sign-in checks, and other model providers. The CLI version checked for this project is `0.162.1`; other versions need compatible command arguments and structured responses.
 
-## 能做什麼
+## Capabilities and Prerequisites
 
-| 層次 | 需要準備 | 行為 |
+| Level | Prerequisites | Behavior |
 |---|---|---|
-| 開啟介面 | Python 相依套件 | 顯示聊天頁與使用說明，不呼叫模型 |
-| 自然語言互動 | 自己的模型登入或金鑰 | 問答、查詢工具目錄、列出本專案檔案；不代表已執行分析 |
-| 準備科學操作 | 固定版本官方來源、自己的輸入資料 | 建立隔離工作目錄並檢查條件 |
-| 實際科學分析 | 對應科學依賴／虛擬機／排程器 | 依工具限制執行並保留日誌；完成不代表生物學有效性 |
-| 第六階段比較 | 自己的已驗證結果與科學環境 | 提出修改、由使用者確認後另建執行，再比較結果 |
+| Open the interface | Python dependencies | Displays the chat page and guidance without calling a model |
+| Natural-language interaction | Your own model sign-in or key | Answers questions, queries the tool catalog, and lists project files; this does not establish that an analysis ran |
+| Prepare scientific operations | Pinned official source and your own inputs | Creates an isolated working directory and checks prerequisites |
+| Run scientific analysis | The corresponding scientific dependencies, VM, or scheduler | Runs within each tool's limits and retains logs; completion does not establish biological validity |
+| Compare Stage 6 results | Your own technically verified results and scientific environment | Proposes changes, starts a separate run after your confirmation, and compares results |
 
-目前有 **23 個 SIGNET 工具，加上 2 個一般檔案工具，共 25 個模型工具**。完整科學來源盤點見 [signet_inventory.json](signet_inventory.json)。科學程式固定使用 [SIGNET 上游提交](https://github.com/signet4grn/SIGNET/tree/bed55b3e121de0edf5fd43da683dc59850ff82d3)，不任意執行其他腳本。
+There are **23 SIGNET tools and 2 general file tools, for a total of 25 model tools**. See [signet_inventory.json](signet_inventory.json) for the complete scientific-source inventory. Scientific code is pinned to the [official SIGNET commit](https://github.com/signet4grn/SIGNET/tree/bed55b3e121de0edf5fd43da683dc59850ff82d3); the assistant does not execute arbitrary scripts.
 
-## 操作與資料
+## Usage and Data
 
-先依 [無資料展示流程](docs/demo-stage6-2026-10-22.zh-TW.md) 測試聊天、能力介紹與缺少條件回報。需要真實分析時，再閱讀 [進階科學環境](docs/ADVANCED.md)。
+Follow the [no-data demonstration guide](docs/demo-stage6-2026-10-22.zh-TW.md) to try chat, capability queries, and missing-prerequisite reporting. For scientific analysis, read the [advanced environment guide](docs/ADVANCED.md). These linked guides are currently in Traditional Chinese.
 
-使用者自行建立 `data/` 放輸入；`runs/` 由科學工具建立。兩者全部排除版本控制。`.env`、聊天紀錄、工作狀態、執行日誌、截圖與虛擬機資產也不提交。
+Create `data/` yourself for inputs; scientific tools create `runs/`. Both directories are excluded from version control. Credentials in `.env`, chat histories, workspace state, execution logs, screenshots, and VM assets are also excluded.
 
-聊天下方的「執行過程」會在送出時展開，顯示狀態、耗時與工具紀錄；完成後可收合並重新查看。它不依賴第六階段是否啟用，收合網路視覺化也不會隱藏聊天進度。
+The **Activity** control below the conversation opens when you send a request. It shows status, elapsed time, and tool records, and you can collapse and reopen it after completion. It is independent of Stage 6 activation; collapsing network visualization does not hide chat progress.
 
-服務僅監聽 `127.0.0.1`。聊天內容與工具所需內容會送往所選模型服務；本機介面不代表模型離線執行。網頁聊天紀錄保存在本機 `.chat-state.json`，請勿分享。關閉分頁不會取消已啟動工具；程序中斷時需先查詢狀態，不自行重跑。
+The service listens only on `127.0.0.1`. Chat messages and content needed by the tools are sent to your selected model service; a local interface does not mean the model runs offline. Web chat history is saved locally in `.chat-state.json`; do not share this file. Closing a tab does not cancel tools that have already started. If a process is interrupted, inspect its recorded status before retrying instead of automatically running it again.
 
-## 開發與檢查
+## Development and Checks
 
-完整工具測試需要已盤點的官方程式，但不需要真實資料、模型金鑰或虛擬機：
+The full tool test suite needs the audited official code, but no real datasets, model keys, or VM:
 
 ```sh
 .venv/bin/python scripts/setup_source.py
@@ -61,17 +61,17 @@ node tests/test_stage6_graph.cjs
 node tests/test_chat_progress.cjs
 ```
 
-合併請求與主分支的自動測試會在 Ubuntu 24.04 使用 Python 3.11 與 Node.js 24 執行上列流程，不使用模型金鑰或真實研究資料。這些檢查不是完整科學環境驗證。
+Pull-request and main-branch CI runs this process on Ubuntu 24.04 with Python 3.11 and Node.js 24, without model keys or real study data. These checks do not validate the complete scientific environment.
 
-來源準備需要 Git 與網路；前端與網路輸出驗證需要 Node.js 20 以上。測試在暫存目錄建立極小的合成測試內容；這不是隨專案提供的研究／展示資料，也不是生物學驗證。
+Source preparation needs Git and network access. Frontend checks and network-output verification need Node.js 20 or later. Tests create minimal synthetic content in temporary directories; that content is not a bundled research or demonstration dataset and does not provide biological validation.
 
-檔案用途見 [檔案樹與用途](docs/FILE_TREE.md)。授權與來源狀態見 [第三方說明](docs/THIRD_PARTY.md)；本專案授權種類仍待擁有者決定。
+See the [file tree](docs/FILE_TREE.md) for file responsibilities and [third-party notes](docs/THIRD_PARTY.md) for source and licensing status. These documents are currently in Traditional Chinese. The project owner has not yet selected a license for the project itself.
 
-## 英文對照
+## Terminology
 
-- **Python** — 執行聊天服務與工具的程式語言。
-- **Ubuntu** — 自動測試使用的 Linux 作業系統。
-- **Unix** — 此處指支援相關程序管理與命令列操作的作業環境。
-- **Codex** — 預設使用的模型命令列工具；使用者需自行登入。
-- **Git** — 取得固定版本官方程式的版本管理工具。
-- **Node.js** — 執行前端測試與網路結果驗證器的環境。
+- **Python:** the language and runtime used for the chat service and tools.
+- **Ubuntu:** the Linux distribution used by CI.
+- **Unix-like environment:** an operating environment supporting the process-management and command-line operations required by some tools.
+- **Codex CLI:** the default model command-line tool; users sign in with their own accounts.
+- **Git:** the version-control tool used to obtain the pinned official source.
+- **Node.js:** the runtime used for frontend checks and network-output verification.
