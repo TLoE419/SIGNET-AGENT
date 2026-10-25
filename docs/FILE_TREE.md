@@ -32,6 +32,7 @@ SIGNET-agent/
 │       └── LICENSE               # Upstream license for tokenizer data
 ├── docs/
 │   ├── INSTALL.md                # First installation, model sign-in, and interface startup
+│   ├── SCIENTIFIC_VM.md          # Fresh local scientific VM preparation and readiness checks
 │   ├── ADVANCED.md               # Official source, user-supplied data, and advanced scientific environment
 │   ├── THIRD_PARTY.md            # Third-party sources and pending licensing decision
 │   ├── FILE_TREE.md              # This file tree and per-file responsibilities

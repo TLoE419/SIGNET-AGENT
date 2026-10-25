@@ -2,6 +2,8 @@
 
 Basic chat does not depend on this environment. This document describes the existing code's environment requirements; it is not an automated scientific-environment installer. This project includes no study data, example datasets, reference datasets, precomputed results, container images, or VM disks.
 
+For the basic tools, Python environment, model setup, and chat demonstration, start with [INSTALL.md](INSTALL.md). For a new local guest rather than existing developer assets, follow [SCIENTIFIC_VM.md](SCIENTIFIC_VM.md). That manual recipe states its unverified boundaries and stops at missing image dependencies; it is not a promise of a working six-stage scientific environment.
+
 ## Official Scientific Source
 
 Run from the project root:
@@ -25,6 +27,23 @@ This exports the specified commit and does not use uncommitted changes. Use `--d
 Create `data/` yourself for inputs. Tools accept only permitted files inside this project's `data/` and `runs/`. Some official scripts do not safely handle spaces or special characters, so input paths are restricted to English letters, digits, underscores, dots, slashes, and hyphens. Place the project at a path that meets these restrictions.
 
 Preparing source does not complete the scientific environment. Local Linux preprocessing still requires each tool's R packages, PLINK, imputation tools, and other dependencies. Tools check dependencies and prerequisite outputs. Refer to the pinned [official source](https://github.com/signet4grn/SIGNET/tree/bed55b3e121de0edf5fd43da683dc59850ff82d3). This project does not guarantee that all six stages can run end to end.
+
+## Native Linux Preprocessing
+
+Stages 1–3 are local subprocesses, not automatically executed in the Stage 4–6 VM. Preparing the VM does not install preprocessing dependencies on the host. Run the agent on a compatible Linux environment for these operations and consult the pinned [upstream dependency list](https://github.com/signet4grn/SIGNET/blob/bed55b3e121de0edf5fd43da683dc59850ff82d3/DEPENDENCY.md) and each cohort's input requirements.
+
+| Tool family | Executables / Python packages checked by the wrapper |
+|---|---|
+| TCGA genotype | bash, Rscript, perl, PLINK, IMPUTE2, ParaFly |
+| GTEx genotype | bash, Rscript, bcftools, tabix, PLINK |
+| TCGA expression | bash, Rscript |
+| GTEx expression | bash, Rscript, python3, bgzip, tabix; numpy, pandas, scipy, feather |
+| TCGA covariate adjustment | bash, Rscript, perl, ParaFly, smartpca.perl |
+| GTEx covariate adjustment | bash, Rscript, PLINK, smartpca.perl, python3; numpy, pandas, statsmodels |
+
+These checks are not a full transitive dependency inventory. Official R scripts require additional packages listed upstream, and reference/annotation files are user supplied. The chat requirements intentionally do not install scientific packages. Host-side wrappers do not automatically inherit packages from a SIF image, and some standalone helpers use the agent's Python interpreter. Do not advertise all stages as ready based only on `pip install -r requirements.txt` or the VM checks.
+
+For a dedicated Ubuntu scientific host, the distribution can provide basic tools with `sudo apt-get install r-base perl bcftools tabix plink1.9`. Before using that PLINK package, check whether it supplies the exact executable name `plink` expected by the scripts (`plink1.9` alone is insufficient). Obtain IMPUTE2, ParaFly, EIGENSTRAT's `smartpca.perl`, required R packages, and cohort-specific references using the pinned upstream instructions and their own licenses. This project does not provide a reproducible installer for that entire legacy stack. If those packages are unavailable, the supported stopping point is the chat demonstration and source checks, not an assumed scientific run.
 
 ## Existing Local VM Interface
 
