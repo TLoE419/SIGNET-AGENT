@@ -36,3 +36,9 @@ id_rsa*
 /desktop/.runtime/
 /desktop/build/
 /desktop/evidence/
+
+# HPC3 baseline (Spec 01): env.sh holds account names; raw fixtures stay on HPC3.
+hpc/baseline/env.sh
+hpc/baseline/fixtures/
+# Sanitized fixtures are committed, including their Slurm stdout/stderr logs.
+!tests/fixtures/slurm/**/*.log

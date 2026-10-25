@@ -1,0 +1,11 @@
+#!/bin/bash
+#SBATCH --job-name=signet_c
+# --output/--error come from submit_step.sh: #SBATCH lines cannot expand $FIXTURE_DIR.
+# Partition, account, CPUs, memory and time also come from the sbatch command line.
+# shellcheck source=common.sh
+source "$BASELINE_DIR/templates/common.sh"
+baseline_start c
+prepare_signet
+signet_args
+in_container ./signet -c "${SIGNET_EXTRA[@]}"
+baseline_end $?

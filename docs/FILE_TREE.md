@@ -54,6 +54,14 @@ SIGNET-agent/
 │   ├── package-lock.json         # Pinned desktop dependencies
 │   ├── README.md                 # Desktop setup, state and lifecycle limitations
 │   └── tests/                    # Real-service lifecycle and native Electron smoke tests
+├── hpc/
+│   └── baseline/                 # Monitor Spec 01: runs on HPC3, not imported by the app
+│       ├── README.md             # Setup, experiments, fixture format, and sanitizing before commit
+│       ├── env.sh.example        # Template for SIGNET path and lab account; env.sh is excluded
+│       ├── config/baseline.overrides  # SIGNET settings applied through `signet -s` before each job
+│       ├── templates/            # sbatch templates for -g/-t/-a/-c and a scheduler-only sleep job
+│       ├── scripts/              # Submission, Slurm observers, output listing, experiments, sanitizer
+│       └── reports/README.md     # Where partition limits and the observation report go
 ├── web/
 │   ├── index.html                # Chat and Stage 6 page structure
 │   ├── chat.js                   # Chat, progress, and response formatting, including the markup parser
@@ -66,6 +74,8 @@ SIGNET-agent/
 │       ├── vis-network-LICENSE.txt  # Network graph library license
 │       └── markdown-it-LICENSE.txt  # Response markup parser license
 └── tests/
+    ├── fixtures/slurm/           # Sanitized HPC3 baseline fixtures (added after the HPC3 runs)
+    ├── test_baseline_monitor.py  # Slurm parsing, observers, sanitizer, and baseline shell scripts
     ├── test_chat.py              # Conversation and tool flow
     ├── test_chat_progress.cjs     # Chat progress visibility, restoration, errors, and visualization isolation
     ├── test_chat_ui.py           # Web request protection, streamed progress, and conversation isolation

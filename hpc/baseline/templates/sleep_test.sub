@@ -1,0 +1,18 @@
+#!/bin/bash
+#SBATCH --job-name=signet_sleep
+# Scheduler-only experiments (timeout, OOM, cancel, pending); does not touch SIGNET.
+# shellcheck source=common.sh
+source "$BASELINE_DIR/templates/common.sh"
+baseline_start sleep
+echo "[BASELINE] SLEEP_SECONDS=${SLEEP_SECONDS:-60} ALLOC_MB=${ALLOC_MB:-0}"
+# Touch every page so the allocation counts toward RSS instead of staying lazily zero-mapped.
+python3 -c '
+import sys, time
+mb, seconds = int(sys.argv[1]), int(sys.argv[2])
+block = bytearray(mb * 1024 * 1024)
+for i in range(0, len(block), 4096):
+    block[i] = 1
+print("[BASELINE] allocated_mb=%d" % mb, flush=True)
+time.sleep(seconds)
+' "${ALLOC_MB:-0}" "${SLEEP_SECONDS:-60}"
+baseline_end $?
