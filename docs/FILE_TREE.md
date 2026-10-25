@@ -23,6 +23,7 @@ SIGNET-agent/
 ├── signet_inventory.json         # Official code version, classification, and file hashes
 ├── signet_runtime.py             # Local VM connection, packaging, and output collection
 ├── network_runtime.py            # Network inference submission, queries, cancellation, and result checks
+├── hpc3_ssh.py                # HPC3 SSH reachability check, one-time login and logout
 ├── network_worker.py             # Background control and supervision of owned jobs inside the VM
 ├── visualization_runtime.py      # Stage 6 plotting and input/output checks
 ├── stage6_workspace.py           # Parameter proposals, human confirmation, history, and comparison
@@ -75,6 +76,7 @@ SIGNET-agent/
     ├── test_diagnostics.py      # Error reporting and sensitive-content redaction
     ├── test_genotype_reference.py # Reference-data conversion
     ├── test_groq_provider.py    # Groq responses, rate limits, and tool format
+    ├── test_hpc3_ssh.py         # HPC3 connection check: each failing layer, without network
     ├── test_i18n.cjs            # Language switching and content retention
     ├── test_list_files.py      # Recursive file listing and hidden-file / symlink exclusion
     ├── test_markdown.cjs       # Response formatting and unsafe-content handling
