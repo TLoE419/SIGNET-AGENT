@@ -16,8 +16,10 @@ The application has been checked on macOS with Python 3.11. Python 3.11 or later
 
 Download and extract this project, then run these commands from its root directory:
 
+If Python is not installed yet or you need to set up Codex CLI, follow the [from-scratch installation guide](docs/INSTALL.md) first.
+
 ```sh
-python3.11 -m venv .venv
+python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
 .venv/bin/python chat_ui.py
 ```
