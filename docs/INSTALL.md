@@ -1,85 +1,121 @@
-# Installation and First Launch
+# Install from Scratch and Run the Chat Demo
 
-The former desktop application's `desktop/` and `tools/setup-dev.sh` have been retired. This version starts a Python chat service from the project root. Desktop work data is not migrated automatically; retain your old data and environment assets.
+This guide starts with a newly downloaded copy of SIGNET and ends with the local chat page open. The basic demo needs Python and one model provider. It does not need study data, Node.js, R, Docker, a VM, or a scheduler.
 
-## 1. Prepare the Runtime
+The verified desktop platform is macOS with Python 3.11. The project requires Python 3.11 or later. CI checks run on Ubuntu 24.04, but that is not a full Linux desktop acceptance test. Native Windows operation has not been verified; use [Windows Subsystem for Linux (WSL)](https://learn.microsoft.com/windows/wsl/install) if you need a Unix-like command line on Windows, and treat that route as unverified.
 
-Download and extract the project, then open a terminal in its root directory. The basic chat interface needs no scientific data, R, containers, or scheduler. Python 3.11 or later is required; the checked platform is macOS with Python 3.11. Native Windows operation has not been verified, and advanced tools rely on Unix-like process management.
+## 1. Install Python
+
+On macOS, install a Python 3.11 or later macOS package from the [official Python downloads](https://www.python.org/downloads/macos/). On Linux, use your distribution's Python 3 package and confirm it is version 3.11 or later. On WSL Ubuntu, install Python and the virtual-environment package in step 2.
+
+Check that Python is available in a terminal:
 
 ```sh
-python3.11 --version
-python3.11 -m venv .venv
+python3 --version
+```
+
+The output must show Python 3.11 or later. If `python3` is missing or older, finish installing a supported version before continuing. Do not change or remove the operating system's system-managed Python.
+
+## 2. Download and extract SIGNET
+
+Download the [latest main-branch ZIP](https://github.com/TLoE419/SIGNET-AGENT/archive/refs/heads/main.zip) and extract it. Open a terminal in the extracted `SIGNET-AGENT-main` folder. Avoid spaces and special characters in the project path if you plan to use scientific tools; some pinned upstream scripts cannot handle them safely.
+
+On WSL Ubuntu, you can download and extract the same archive from the terminal instead:
+
+```sh
+sudo apt update
+sudo apt install -y curl unzip python3 python3-venv
+curl -fL -o SIGNET-AGENT-main.zip https://github.com/TLoE419/SIGNET-AGENT/archive/refs/heads/main.zip
+unzip SIGNET-AGENT-main.zip
+cd SIGNET-AGENT-main
+python3 --version
+```
+
+Check that Python is 3.11 or later. If Ubuntu provides an older version, install a newer Python using the Ubuntu release's official instructions before continuing.
+
+## 3. Create the application environment
+
+Run these commands in the project root. They create an isolated Python environment and install the pinned direct dependencies without changing system Python packages:
+
+```sh
+python3 -m venv .venv
+.venv/bin/python -m pip install --upgrade pip
 .venv/bin/python -m pip install -r requirements.txt
 .venv/bin/python -m pip check
 ```
 
-`requirements.txt` pins direct dependencies. Transitive dependencies are resolved by the package installer; this is not a complete dependency lock. Frontend packages are bundled, so no web build packages need to be installed.
+The last command should report `No broken requirements found.` The project pins direct dependency versions; transitive dependencies are resolved by the package installer, so this is not a complete lock of every installed package. Frontend files are bundled. Node.js and a web build tool are not needed to run the chat demo.
 
-## 2. Configure Your Model
+## 4. Set up a model provider
 
-Codex CLI is the default provider. The version checked for this project is `0.162.1`, using structured responses, ephemeral sessions, and a read-only sandbox; other versions may be incompatible. See the [Codex CLI documentation](https://learn.chatgpt.com/docs/codex/cli) for installation and the [official OpenAI command reference](https://learn.chatgpt.com/docs/developer-commands#codex-login) for sign-in and command behavior.
+Choose one provider. The default is Codex CLI, which uses your own sign-in:
 
-After installation, check:
+1. Install Codex CLI with the official macOS/Linux installer, or follow the [official installation instructions](https://learn.chatgpt.com/docs/codex/cli):
+
+   ```sh
+   curl -fsSL https://chatgpt.com/codex/install.sh | sh
+   ```
+
+2. Open a new terminal and run:
+
+   ```sh
+   codex --version
+   codex login
+   codex login status
+   ```
+
+3. Complete sign-in yourself when prompted. `codex login status` should report that you are logged in. This project was checked with Codex CLI `0.162.1`; other versions may use incompatible command options or response formats. The CLI uses your account's available usage allowance.
+
+Alternatively, provide your own [Groq API key](https://console.groq.com/keys) or [Gemini API key](https://aistudio.google.com/app/apikey). Create the key in the provider console, then copy `.env.example` only when `.env` does not already exist:
 
 ```sh
-codex --version
-codex login
-codex login status
+cp -n .env.example .env
 ```
 
-Sign in yourself. This project does not provide or copy account credentials. The model follows your local Codex configuration by default; to select a model explicitly, set `SIGNET_CODEX_MODEL` in `.env`. Chat consumes your account's usage allowance.
+Add the key to the matching `GROQ_API_KEY` or `GEMINI_API_KEY` line in `.env`. Keep `.env` private; it is excluded from version control. Never paste API keys into source files, issues, or chat messages. Provider account terms, quotas, and possible charges are controlled by that provider.
 
-Groq and Gemini are also supported:
+## 5. Start and check the chat page
 
-```sh
-cp .env.example .env
-```
-
-Copy this file only on first setup, when `.env` does not already exist. Edit it to supply your own `GROQ_API_KEY` or `GEMINI_API_KEY`. `.env` is excluded from version control; do not paste keys into chat or source code.
-
-```sh
-.venv/bin/python chat_ui.py --provider groq
-# or
-.venv/bin/python chat_ui.py --provider gemini
-```
-
-## 3. Start the Service
+From the project root, start the default Codex provider:
 
 ```sh
 .venv/bin/python chat_ui.py
 ```
 
-Open the [local interface](http://127.0.0.1:8880). The page can load without model sign-in, but real chat responses require it. If the port is already in use, run:
+Open [http://127.0.0.1:8880](http://127.0.0.1:8880). The page should load. Send a short question to check the model connection, then follow the [no-data demonstration](DEMO.md). A loaded page alone does not confirm model sign-in or scientific readiness. The first launch has no study data, completed results, or example network graph.
+
+If you chose Groq or Gemini, start the selected provider instead:
+
+```sh
+.venv/bin/python chat_ui.py --provider groq
+```
+
+```sh
+.venv/bin/python chat_ui.py --provider gemini
+```
+
+If port 8880 is already in use, start on another port and open the matching address:
 
 ```sh
 .venv/bin/python chat_ui.py --port 8881
 ```
 
-Open `http://127.0.0.1:8881` instead. Press Ctrl+C in the terminal to stop the service. Check status records for scientific tools that have already started; closing the page does not cancel them.
+Press Ctrl+C in the terminal to stop the chat service. It listens only on `127.0.0.1`. Chat messages and the information needed by tools are sent to the model provider you selected; local hosting does not mean model requests run offline. Closing the browser tab does not cancel a tool that has already started.
 
-## 4. Verify a Minimal Demonstration
+## Troubleshooting
 
-Follow the [demonstration guide](DEMO.md) to ask about tool capabilities and input requirements. The download includes no `data/`, `runs/`, or completed results. An absent network graph is expected and does not indicate a loading failure.
-
-For terminal chat, run:
-
-```sh
-.venv/bin/python main.py
-```
-
-## 5. Common Missing Prerequisites
-
-| Symptom | Action |
+| Problem | What to check |
 |---|---|
-| Codex is unavailable or sign-in fails | Confirm that the command runs and sign-in is valid, or select a model with a configured key |
-| Official source is not prepared | Run `scripts/setup_source.py` as described in the advanced guide; basic chat does not require this step |
-| Input data cannot be found | Create `data/` yourself and provide inputs in the format required by the tool |
-| Scientific environment is unavailable | Read the advanced guide; this project does not automatically create a VM or install scientific tools |
-| Waiting after a rate limit | Groq retains the same model request for retry without repeating completed tools; Ctrl+C interrupts the wait |
+| `python3` is missing or older than 3.11 | Install a supported Python version, open a new terminal, and rerun `python3 --version`. |
+| `venv` creation fails on Ubuntu | Install `python3-venv` with `sudo apt install python3-venv`, then retry. |
+| `pip install` fails | Check network access, confirm the terminal is in the project root, and retry the install command. Do not use `sudo pip`. |
+| `codex` is not found | Complete the official CLI installation, open a new terminal, and run `codex --version`. |
+| Model sign-in fails | Run `codex login status` and complete sign-in again, or switch to a provider with a valid key in `.env`. |
+| The page opens but chat fails | Check the selected provider's sign-in or key and inspect the terminal where `chat_ui.py` is running. |
+| Port 8880 is busy | Use `--port 8881` and open `http://127.0.0.1:8881`. |
 
-## Terminology
+## Scientific analysis requires a separate setup
 
-- **Python:** the language and runtime required by this project.
-- **Unix-like:** an operating environment supporting the relevant process-management operations.
-- **Codex CLI:** the default model command-line tool.
-- **API:** the model-service interface accessed with a key.
+The steps above install and run the chat interface; they do not prepare the scientific analysis environment. Analysis also requires user-supplied inputs and, depending on the operation, the pinned official source, scientific software, and an existing VM or scheduler. This repository does not include study or reference datasets, VM disks, or container images, and it does not provide a from-scratch scientific-environment installer. Read the [advanced environment requirements](ADVANCED.md) before preparing assets. The repository has not been verified to run all six scientific stages from a clean machine.
+
+For terminal chat instead of the web page, run `.venv/bin/python main.py` from the project root.
