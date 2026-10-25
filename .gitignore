@@ -1,36 +1,33 @@
-# Downloaded official code and local scientific runtime
-/official-signet/
-/vm/
-/runs/
-/results/
-/analyses/
-
-# Keep only the two small runtime provenance/validation records
-/evidence/*
-!/evidence/input-validation.json
-!/evidence/provenance.json
-/desktop/evidence/
-
-# Dependencies, generated apps and desktop user data
-node_modules/
-/desktop/dist/
-/desktop/.runtime/
-__pycache__/
-*.pyc
-.DS_Store
-*.log
-
-# Diagram scratch files; the published architecture lives in docs/
-/.archify/
-
-# Local credentials/configuration
 .env
 .env.*
 !.env.example
+.DS_Store
+.chat-state*.json
+.chat-state.tmp
+.chat-visible-backup.json
+.chat-activity-before-markdown.json
+.stage6-workspace*.json
+.archify/
+artifacts/
+evidence/
+.venv/
+__pycache__/
+runs/
+data/
+
+.dependencies/
+.pytest_cache/
+*.egg-info/
+
+# Preserve exclusions for locally retained assets from the retired desktop version.
+/official-signet/
+/vm/
+/results/
+/analyses/
+node_modules/
+*.pyc
+*.log
 *.pem
 *.key
 id_ed25519*
 id_rsa*
-
-# Superseded standalone viewer
-/tools/viewer.html
