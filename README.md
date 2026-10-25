@@ -40,7 +40,7 @@ There are **23 SIGNET tools and 2 general file tools, for a total of 25 model to
 
 ## Usage and Data
 
-Follow the [no-data demonstration guide](docs/demo-stage6-2026-10-22.zh-TW.md) to try chat, capability queries, and missing-prerequisite reporting. For scientific analysis, read the [advanced environment guide](docs/ADVANCED.md). These linked guides are currently in Traditional Chinese.
+Follow the [no-data demonstration guide](docs/DEMO.md) to try chat, capability queries, and missing-prerequisite reporting. For scientific analysis, read the [advanced environment guide](docs/ADVANCED.md).
 
 Create `data/` yourself for inputs; scientific tools create `runs/`. Both directories are excluded from version control. Credentials in `.env`, chat histories, workspace state, execution logs, screenshots, and VM assets are also excluded.
 
@@ -65,7 +65,7 @@ Pull-request and main-branch CI runs this process on Ubuntu 24.04 with Python 3.
 
 Source preparation needs Git and network access. Frontend checks and network-output verification need Node.js 20 or later. Tests create minimal synthetic content in temporary directories; that content is not a bundled research or demonstration dataset and does not provide biological validation.
 
-See the [file tree](docs/FILE_TREE.md) for file responsibilities and [third-party notes](docs/THIRD_PARTY.md) for source and licensing status. These documents are currently in Traditional Chinese. The project owner has not yet selected a license for the project itself.
+See the [file tree](docs/FILE_TREE.md) for file responsibilities and [third-party notes](docs/THIRD_PARTY.md) for source and licensing status. The project owner has not yet selected a license for the project itself.
 
 ## Terminology
 

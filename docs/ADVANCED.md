@@ -1,77 +1,77 @@
-# 進階科學環境
+# Advanced Scientific Environment
 
-基本聊天不依賴此環境。本文件說明現有程式的環境契約，並非全自動科學環境安裝器。此專案不附研究資料、範例資料、參考資料、預先產生結果、容器映像或虛擬機磁碟。
+Basic chat does not depend on this environment. This document describes the existing code's environment requirements; it is not an automated scientific-environment installer. This project includes no study data, example datasets, reference datasets, precomputed results, container images, or VM disks.
 
-## 官方科學來源
+## Official Scientific Source
 
-在專案根目錄執行：
+Run from the project root:
 
 ```sh
 .venv/bin/python scripts/setup_source.py
 ```
 
-需要 Git 與網路。腳本取得 `signet_inventory.json` 指定的提交 `bed55b3e121de0edf5fd43da683dc59850ff82d3`，只安裝已盤點的 138 個程式檔、設定／排程模板與授權文件。下載 Git 物件時可能包含上游資料物件，但不會把資料安裝到此專案；暫存下載會清理。
+Git and network access are required. The script obtains commit `bed55b3e121de0edf5fd43da683dc59850ff82d3` specified by `signet_inventory.json`, installing only the 138 inventoried code files, configuration and scheduler templates, and license documents. Downloaded Git objects may include upstream data objects, but data is not installed into this project; temporary downloads are cleaned up.
 
-安裝位置預設 `.dependencies/official-signet`，全部排除版本控制。每個盤點檔案核對 SHA-256，失敗不安裝，不覆寫既有目錄。若已有含該提交的本機 Git 儲存庫：
+The default installation directory is `.dependencies/official-signet`, which is entirely excluded from version control. Each inventoried file is checked against its SHA-256 hash. A failed check prevents installation, and existing directories are not overwritten. If a local Git repository already contains the commit, use:
 
 ```sh
 .venv/bin/python scripts/setup_source.py --from-checkout /path/to/official-signet
 ```
 
-此操作從指定提交匯出，不採用未提交修改。可用 `--destination` 安裝至其他新目錄，再在 `.env` 設定 `SIGNET_SOURCE`。應用程式從專案根目錄解析相對路徑；獨立來源準備腳本使用明列的命令參數，不載入 `.env`。
+This exports the specified commit and does not use uncommitted changes. Use `--destination` to install into another new directory, then set `SIGNET_SOURCE` in `.env`. The application resolves relative paths from the project root. The standalone source-preparation script uses explicit command arguments and does not load `.env`.
 
-## 使用者資料
+## User-Supplied Data
 
-使用者自行建立 `data/` 放輸入；工具只接受本專案 `data/`、`runs/` 內的合規檔案。部分官方腳本不安全處理空白／特殊字元，因此輸入路徑限制為英文字母、數字、底線、點、斜線與連字號。請把專案放在符合此條件的路徑。
+Create `data/` yourself for inputs. Tools accept only permitted files inside this project's `data/` and `runs/`. Some official scripts do not safely handle spaces or special characters, so input paths are restricted to English letters, digits, underscores, dots, slashes, and hyphens. Place the project at a path that meets these restrictions.
 
-來源準備不等於科學環境完成。Linux 本機前處理仍需各工具對應的 R 套件、PLINK、補值工具等；工具會檢查依賴與前置輸出。請參考固定版本 [官方來源](https://github.com/signet4grn/SIGNET/tree/bed55b3e121de0edf5fd43da683dc59850ff82d3)。本專案不提供完整一至六階段皆可執行的保證。
+Preparing source does not complete the scientific environment. Local Linux preprocessing still requires each tool's R packages, PLINK, imputation tools, and other dependencies. Tools check dependencies and prerequisite outputs. Refer to the pinned [official source](https://github.com/signet4grn/SIGNET/tree/bed55b3e121de0edf5fd43da683dc59850ff82d3). This project does not guarantee that all six stages can run end to end.
 
-## 既有本機虛擬機介面
+## Existing Local VM Interface
 
-第 4 階段在 macOS 使用此虛擬機；第 5、6 階段的執行入口也使用此連線。其他本機工具仍依平台與依賴檢查決定能否執行。
+Stage 4 uses this VM on macOS. The Stage 5 and Stage 6 execution entry points also use this connection. Other local tools remain subject to platform and dependency checks.
 
-| 設定 | 預設／要求 |
+| Setting | Default or requirement |
 |---|---|
-| `SIGNET_RUNTIME_PROJECT` | 主機端 `.dependencies/scientific-runtime`；需自行準備資產 |
-| `SIGNET_SSH_PORT` | 本機 `2226`；僅連至 `127.0.0.1` |
-| SSH 使用者 | 既有虛擬機的 `root`，僅限本機 |
-| SSH 金鑰 | 執行環境目錄下的 `vm/id_ed25519`，由使用者自行管理 |
-| 主機驗證 | `vm/known_hosts`，保留嚴格主機金鑰驗證，不接受略過 |
-| `SIGNET_CONTAINER_IMAGE` | 虛擬機內 `/work/evidence/signet-0.0.6.sif`；須為既有可用映像 |
-| 第 5 階段 | SLURM 的 `local` 佇列、4 核心與 4 GB、所需 R 套件與 ParaFly |
-| 第 6 階段 | 所需 R 視覺化套件與可能使用的線上註解服務 |
+| `SIGNET_RUNTIME_PROJECT` | Host directory `.dependencies/scientific-runtime`; prepare the assets yourself |
+| `SIGNET_SSH_PORT` | Local port `2226`; connects only to `127.0.0.1` |
+| SSH user | `root` in the existing VM, for local use only |
+| SSH key | `vm/id_ed25519` under the runtime directory, managed by the user |
+| Host verification | `vm/known_hosts`; strict host-key verification is retained and cannot be bypassed |
+| `SIGNET_CONTAINER_IMAGE` | `/work/evidence/signet-0.0.6.sif` inside the VM; an existing usable image is required |
+| Stage 5 | SLURM's `local` partition, 4 cores and 4 GB, required R packages, and ParaFly |
+| Stage 6 | Required R visualization packages and any online annotation services used |
 
-設定範本見根目錄 `.env.example`。不得提交私鑰、主機憑證、磁碟或映像。缺少環境時回報不可用，不自動啟動或重建。
+See `.env.example` in the project root for settings. Do not commit private keys, host credentials, disks, or images. Missing environments are reported as unavailable; they are not automatically started or rebuilt.
 
-`scripts/advanced/start_scientific_vm.sh` 僅用於原有 Apple Silicon 修復環境：需要既有 `signet-qemu:20261006` 映像、原容器、`vm/signet.qcow2` 與 `vm/seed.img`。腳本採單執行緒模擬與增量磁碟，不是新使用者的安裝器。若需使用，先在目前 shell 明確設定 `SIGNET_RUNTIME_PROJECT` 與選用的 `SIGNET_SSH_PORT`；此 shell 腳本不讀 `.env`。已有修復容器時只啟動它，不會重新套用埠號／掛載變更，必須先自行核對原容器設定。
+`scripts/advanced/start_scientific_vm.sh` is only for the existing Apple Silicon recovery environment. It requires the existing `signet-qemu:20261006` image, original container, `vm/signet.qcow2`, and `vm/seed.img`. It uses single-threaded emulation and an overlay disk; it is not an installer for new users. Before using it, explicitly set `SIGNET_RUNTIME_PROJECT` and optionally `SIGNET_SSH_PORT` in the current shell. This shell script does not read `.env`. If the recovery container already exists, the script only starts it; it does not reapply port or mount changes. Check the existing container configuration yourself first.
 
-第 5 階段結果驗證器已隨專案附帶，位於 `scripts/advanced/verify_network.cjs`，不再依賴其他桌面專案。它核對排程工作、指令完成清單、矩陣與重抽樣平均值；需要 Node.js 20 以上。
+The Stage 5 result verifier is bundled at `scripts/advanced/verify_network.cjs` and no longer depends on another desktop project. It checks scheduler jobs, the command-completion list, matrices, and resampling averages. Node.js 20 or later is required.
 
-## 參考資料工具
+## Reference-Data Utilities
 
-這些工具不下載或提供資料，必須明確指定自己的輸入：
+These utilities neither download nor supply data. Explicitly provide your own inputs:
 
 ```sh
 .venv/bin/python scripts/prepare_genotype_reference.py --help
 .venv/bin/python scripts/check_genotype_example.py --help
 ```
 
-前者轉換已備妥參考檔並檢查位置／等位基因；不代替基因組版本的科學核對。後者在既有虛擬機內執行固定來源入口。
+The first converts prepared reference files and checks positions and alleles; it does not replace scientific verification of the genome assembly. The second runs the pinned source entry point inside an existing VM.
 
-## 中斷與驗證界線
+## Interruption and Verification Boundaries
 
-工作建立後保留於 `runs/`。連線中斷或狀態未知時先查詢，不重新提交同一操作。程式完成、技術驗證、生物學有效性是三種不同狀態；只回報已有證據能支持的狀態。
+Created jobs remain in `runs/`. If a connection is interrupted or status is unknown, query the status before resubmitting the same operation. Program completion, technical verification, and biological validity are distinct states. Report only the state supported by available evidence.
 
-## 英文對照
+## Terminology
 
-- **Git** — 取得官方固定提交的版本管理工具。
-- **SHA-256** — 檢查來源檔案內容的雜湊。
-- **Linux** — 部分科學工具所需的作業系統。
-- **R** — 官方科學分析與視覺化使用的程式環境。
-- **PLINK** — 基因型資料處理工具。
-- **SSH** — 連線至本機虛擬機的通訊方式。
-- **root** — 此既有虛擬機使用的系統管理帳號。
-- **SLURM** — 管理科學工作佇列與資源的排程器。
-- **ParaFly** — 執行官方平行分析指令的工具。
-- **shell** — 執行進階啟動腳本的命令列環境。
-- **Node.js** — 執行結果驗證器的環境。
+- **Git:** the version-control tool used to obtain the pinned official commit.
+- **SHA-256:** the hash used to check source-file contents.
+- **Linux:** the operating system required by some scientific tools.
+- **R:** the runtime used for official scientific analysis and visualization.
+- **PLINK:** a genotype-processing tool.
+- **SSH:** the protocol used to connect to the local VM.
+- **root:** the administrator account used by this existing VM.
+- **SLURM:** the scheduler managing scientific jobs and resources.
+- **ParaFly:** the tool used to execute the official parallel analysis commands.
+- **shell:** the command-line environment running the advanced startup script.
+- **Node.js:** the runtime used by the result verifier.
