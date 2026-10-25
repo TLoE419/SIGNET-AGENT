@@ -56,6 +56,7 @@ SIGNET-agent/
 │       └── markdown-it-LICENSE.txt  # 回答排版解析器授權
 └── tests/
     ├── test_chat.py              # 對話與工具流程
+    ├── test_chat_progress.cjs     # 聊天進度可見性、還原、錯誤與視覺化隔離
     ├── test_chat_ui.py           # 網頁請求防護、串流進度與對話隔離
     ├── test_codex_provider.py    # 模型命令列、格式與憑證隔離
     ├── test_context_budget.py   # 輸入長度與證據壓縮

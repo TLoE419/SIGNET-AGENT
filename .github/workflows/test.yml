@@ -31,3 +31,4 @@ jobs:
           node tests/test_markdown.cjs
           node tests/test_i18n.cjs
           node tests/test_stage6_graph.cjs
+          node tests/test_chat_progress.cjs

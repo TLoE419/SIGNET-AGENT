@@ -44,6 +44,8 @@ python3.11 -m venv .venv
 
 使用者自行建立 `data/` 放輸入；`runs/` 由科學工具建立。兩者全部排除版本控制。`.env`、聊天紀錄、工作狀態、執行日誌、截圖與虛擬機資產也不提交。
 
+聊天下方的「執行過程」會在送出時展開，顯示狀態、耗時與工具紀錄；完成後可收合並重新查看。它不依賴第六階段是否啟用，收合網路視覺化也不會隱藏聊天進度。
+
 服務僅監聽 `127.0.0.1`。聊天內容與工具所需內容會送往所選模型服務；本機介面不代表模型離線執行。網頁聊天紀錄保存在本機 `.chat-state.json`，請勿分享。關閉分頁不會取消已啟動工具；程序中斷時需先查詢狀態，不自行重跑。
 
 ## 開發與檢查
@@ -56,6 +58,7 @@ python3.11 -m venv .venv
 node tests/test_markdown.cjs
 node tests/test_i18n.cjs
 node tests/test_stage6_graph.cjs
+node tests/test_chat_progress.cjs
 ```
 
 合併請求與主分支的自動測試會在 Ubuntu 24.04 使用 Python 3.11 與 Node.js 24 執行上列流程，不使用模型金鑰或真實研究資料。這些檢查不是完整科學環境驗證。

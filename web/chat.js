@@ -79,6 +79,8 @@ function createTurn() {
   transport.append(node('summary', '', '連線與計時細節'), node('pre', '', ''));
   root.append(head, steps, transport);
   $('activity').append(root);
+  $('chat-progress').hidden = false;
+  $('chat-progress').open = true;
   return {root, steps, timer, transport:transport.lastChild, started:performance.now(), current:null, mode:null};
 }
 function card(turn, title, kind) {
@@ -137,8 +139,8 @@ async function send(text) {
   $('activity-empty')?.remove();
   message('user', text);
   $('prompt').value = '';
-  const answer = message('assistant', '處理中…請查看右側執行過程。');
-  uiText(answer, '處理中…請查看右側執行過程。');
+  const answer = message('assistant', '處理中…請查看聊天下方的執行過程。');
+  uiText(answer, '處理中…請查看聊天下方的執行過程。');
   const turn = createTurn();
   $('state').classList.add('live');
   uiText($('state'), '連線中');
@@ -223,5 +225,6 @@ if (initialChat.messages?.length) {
     turn.append(detail);
     $('activity').append(turn);
   }
+  $('chat-progress').hidden = turns === 0;
   uiText($('state'), '已恢復對話');
 }

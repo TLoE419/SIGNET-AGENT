@@ -32,7 +32,7 @@
 @media(max-width:850px){.rail{display:flex;position:fixed;bottom:12px;left:12px;width:auto;padding:0;border:0;background:transparent;z-index:10}.rail>*:not(#language-toggle){display:none}#language-toggle{margin:0;background:var(--paper);box-shadow:0 2px 8px #243b2d14}main{padding-bottom:70px}}
 .suggestions button>[data-i18n]{float:none;color:inherit}
 .welcome p [data-i18n],.activity-empty p [data-i18n]{white-space:pre-line}
-/* Stage 6 comparison workspace uses the existing chat and keeps activity under history. */
+/* Scientific visualization stays separate from ordinary conversation progress. */
 .workspace{grid-template-columns:minmax(320px,.8fr) minmax(600px,1.45fr)}
 .stage6-pane{overflow-y:auto;background:#f8faf8;min-height:0;display:block}
 .stage6-pane .pane-title{position:sticky;top:0;background:#fff;z-index:2}
@@ -90,3 +90,11 @@
 .s6-difference-controls{display:flex;align-items:center;gap:18px;flex-wrap:wrap;padding:12px 15px;border:1px solid #d8e2db;border-radius:8px;background:#fff}
 .s6-difference-controls button{margin-left:auto}
 .s6-difference-controls strong{font-size:15px}
+
+/* Keep live status and tool records accessible even with visualization collapsed. */
+.chat-progress{flex:none;min-width:0;margin:0 22px 12px;border:1px solid var(--line);border-radius:8px;background:#fcfdfa}
+.chat-progress[hidden]{display:none}
+.chat-progress>summary{padding:10px 12px;cursor:pointer;font-size:12px;color:var(--accent)}
+.chat-progress #state{float:right;font-size:11px;color:var(--muted)}
+.chat-progress .activity{min-height:0;max-height:30vh;overflow:auto;padding:0 12px 12px}
+.chat-progress .activity-empty{margin:12px 0}

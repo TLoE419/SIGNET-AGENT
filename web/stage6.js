@@ -297,7 +297,6 @@
       }
       parent.append(row);
     }
-    parent.append(make('h3','',text('Original conversation activity','原有對話執行紀錄')));
   }
   function render() {
     if(!data)return;
@@ -316,7 +315,6 @@
       const t=$('s6-'+name+'-tab');t.setAttribute('aria-selected',String(name===tab));t.tabIndex=name===tab?0:-1;t.setAttribute('aria-controls','s6-'+name);
       t.textContent={parameters:text('Parameters','參數'),comparison:text('Comparison','結果比較'),history:text('Run history','執行紀錄')}[name];
     });
-    $('activity').hidden=tab!=='history';
     if(visible && tab==='parameters')parameterPanel();
     if(visible && tab==='comparison')showComparison();
     if(visible && tab==='history')historyPanel();

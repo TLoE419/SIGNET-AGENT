@@ -22,6 +22,7 @@ assert.equal(label.textContent,'Chat');
 assert.equal(state.textContent,'Turn finished');
 assert.equal(tr('模型請求 2/5：模型=gpt-6.1-sol；訊息數=10；可用工具=22；等待回覆。'),'Model request 2/5: model=gpt-6.1-sol; messages=10; available tools=22; awaiting response.');
 assert.equal(tr('工具耗時：0.31 秒。'),'Tool duration: 0.31 s.');
+assert.equal(tr('處理中…請查看聊天下方的執行過程。'),'Working… See execution progress below the chat.');
 assert.equal(tr('已完成並通過輸出核對'),'Completed; outputs verified');
 assert.equal(tr('目前進度：本次需求已有 2 個工具結果；失敗發生在後續模型請求。'),'Progress: 2 tool results are retained; a later model request failed.');
 assert.equal(tr('runs/test/medical-results.tsv'),'runs/test/medical-results.tsv');
