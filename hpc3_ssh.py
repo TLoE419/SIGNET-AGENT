@@ -21,8 +21,9 @@ result says *where* it broke and what to do about it:
 
 Usage:
   python3 hpc3_ssh.py check [--json]   # exit 0 when connected, 1 otherwise
-  python3 hpc3_ssh.py login            # open the shared connection (password + Duo once)
-  python3 hpc3_ssh.py logout           # close the shared connection
+  python3 hpc3_ssh.py login            # open the shared connection (password + Duo once);
+                                       # does nothing if one is already open
+  python3 hpc3_ssh.py logout           # close the shared connection, if there is one
 
 Settings come from the environment or .env: HPC3_USER (your UCInetID, required) and
 HPC3_HOST (default hpc3.rcic.uci.edu).
@@ -146,6 +147,40 @@ def last_line(text):
     return lines[-1] if lines else ''
 
 
+def has_shared_connection(user, host):
+    """True if a control-master connection from an earlier login is open (`ssh -O check`)."""
+    code, _, _ = run(master_command(user, host, 'check'), timeout=10)
+    return code == 0
+
+
+def login(user, host):
+    """Open the shared connection unless one is already open; returns (exit code, message).
+
+    Without the pre-check, a second login would find the control socket taken, fall back to a
+    separate unshared connection and ask for the password and Duo again for nothing.
+    """
+    if has_shared_connection(user, host):
+        return 0, 'Already logged in to %s@%s; the shared connection is open.' % (user, host)
+    # ssh needs ~/.ssh to exist for the control socket and known_hosts.
+    (Path.home() / '.ssh').mkdir(mode=0o700, exist_ok=True)
+    print('Opening a shared connection to %s@%s (kept for %s)...' % (user, host, CONTROL_PERSIST))
+    # ssh itself prompts for the password and Duo on this terminal; this program never reads them.
+    code = subprocess.call(login_command(user, host))
+    if code != 0:
+        return code, 'Login failed (ssh exit %d). Run `python3 hpc3_ssh.py check` to see why.' % code
+    return 0, 'Logged in. Run `python3 hpc3_ssh.py check` to confirm.'
+
+
+def logout(user, host):
+    """Close the shared connection if one is open; returns (exit code, message)."""
+    if not has_shared_connection(user, host):
+        return 0, 'Not logged in; there is no shared connection to close.'
+    code, _, err = run(master_command(user, host, 'exit'), timeout=10)
+    if code != 0:
+        return code or 1, 'Could not close the shared connection: ' + (last_line(err) or 'unknown error')
+    return 0, 'Logged out of %s@%s.' % (user, host)
+
+
 def check():
     """Diagnose the connection layer by layer; returns a JSON-serializable dict.
 
@@ -188,8 +223,7 @@ def check():
                                            '(or the campus network) and try again.')
     step('network', True, 'port %d open' % PORT)
 
-    code, _, err = run(master_command(user, host, 'check'), timeout=10)
-    has_master = code == 0
+    has_master = has_shared_connection(user, host)
     step('master', True, 'shared connection open' if has_master else 'no shared connection')
 
     code, out, err = run(check_command(user, host), timeout=SSH_TIMEOUT)
@@ -245,13 +279,9 @@ def main(argv=None):
     except ValueError as error:
         print(error, file=sys.stderr)
         return 2
-    if command == 'login':
-        # ssh itself prompts for the password and Duo; this program never reads them.
-        # ssh needs ~/.ssh to exist for the control socket and known_hosts.
-        (Path.home() / '.ssh').mkdir(mode=0o700, exist_ok=True)
-        print('Opening a shared connection to %s@%s (kept for %s)...' % (user, host, CONTROL_PERSIST))
-        return subprocess.call(login_command(user, host))
-    return subprocess.call(master_command(user, host, 'exit'))
+    code, message = (login if command == 'login' else logout)(user, host)
+    print(message, file=sys.stderr if code else sys.stdout)
+    return code
 
 
 if __name__ == '__main__':

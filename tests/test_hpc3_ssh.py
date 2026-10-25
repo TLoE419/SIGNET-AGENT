@@ -4,8 +4,10 @@ DNS, the TCP probe and ssh are replaced by fakes, so these tests never contact H
 VPN and use no credentials. The user name below is made up.
 """
 import os
+from pathlib import Path
 import socket
 import subprocess
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -149,6 +151,62 @@ class CommandTest(unittest.TestCase):
                                             {'name': 'network', 'ok': False, 'detail': 'timed out'}]})
         self.assertIn('[!!] network', report)
         self.assertIn('Next: Connect to the VPN.', report)
+
+
+class LoginLogoutTest(unittest.TestCase):
+    """login and logout look at the shared connection first, so they never prompt for nothing."""
+
+    OPEN = (0, '', 'Master running (pid=4242)')
+    CLOSED = (255, '', 'Control socket connect(/x): No such file or directory')
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.home = patch.object(h.Path, 'home', lambda: Path(self.temp.name))
+        self.home.start()
+
+    def tearDown(self):
+        self.home.stop()
+        self.temp.cleanup()
+
+    def run_with(self, function, master, login_code=0):
+        ssh, interactive = FakeSsh(master=master), []
+
+        def call(argv):
+            interactive.append(argv)
+            return login_code
+        with patch.object(h.subprocess, 'run', ssh), patch.object(h.subprocess, 'call', call), \
+                patch('sys.stdout'):
+            code, message = function('jdoe', h.DEFAULT_HOST)
+        return code, message, ssh.calls, interactive
+
+    def test_login_when_already_logged_in_does_not_start_ssh_again(self):
+        code, message, _, interactive = self.run_with(h.login, self.OPEN)
+        self.assertEqual(code, 0)
+        self.assertIn('Already logged in', message)
+        self.assertEqual(interactive, [])
+
+    def test_login_without_a_connection_runs_the_interactive_ssh_once(self):
+        code, message, _, interactive = self.run_with(h.login, self.CLOSED)
+        self.assertEqual((code, interactive), (0, [h.login_command('jdoe', h.DEFAULT_HOST)]))
+        self.assertIn('Logged in', message)
+        self.assertTrue((Path(self.temp.name) / '.ssh').is_dir())
+
+    def test_failed_login_points_to_check(self):
+        code, message, _, _ = self.run_with(h.login, self.CLOSED, login_code=255)
+        self.assertEqual(code, 255)
+        self.assertIn('hpc3_ssh.py check', message)
+
+    def test_logout_without_a_connection_says_so_plainly(self):
+        code, message, calls, _ = self.run_with(h.logout, self.CLOSED)
+        self.assertEqual(code, 0)
+        self.assertIn('Not logged in', message)
+        self.assertNotIn('exit', [argv[2] for argv in calls])
+
+    def test_logout_closes_an_open_connection(self):
+        code, message, calls, _ = self.run_with(h.logout, self.OPEN)
+        self.assertEqual(code, 0)
+        self.assertIn('Logged out', message)
+        self.assertEqual([argv[2] for argv in calls], ['check', 'exit'])
 
 
 class FakeSocket:
