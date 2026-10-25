@@ -1,4 +1,11 @@
-"""HPC3 baseline observers (Spec 01) against scripted Slurm output; no scheduler or SIGNET needed."""
+"""Offline tests for the HPC3 baseline scripts in hpc/baseline (Monitor Spec 01).
+
+No Slurm, SIGNET, container or HPC3 access is needed:
+  - Python observers run against FakeSlurm, which replays scripted squeue/sstat/sacct output.
+  - Shell entry points run with fake sbatch, squeue, git and signet executables on PATH,
+    inside a temporary copy of hpc/baseline.
+All names, accounts, paths and job IDs below are made up.
+"""
 import json
 import os
 from pathlib import Path
@@ -11,6 +18,7 @@ import unittest
 from unittest.mock import patch
 import datetime
 
+# The baseline scripts are not a package; import them from their folder.
 BASELINE = Path(__file__).resolve().parents[1] / 'hpc/baseline'
 sys.path.insert(0, str(BASELINE / 'scripts'))
 import fixture_io  # noqa: E402
@@ -20,12 +28,14 @@ import outputs  # noqa: E402
 import sanitize_fixture  # noqa: E402
 import slurm_parse as sp  # noqa: E402
 
+# Sample Slurm output in the exact formats requested by slurm_parse.
 SQUEUE_PENDING = '4242|signet_t|PENDING|Priority|0:00|2:00:00|4|16G|(Priority)|free|lab_acct\n'
 SQUEUE_RUNNING = '4242|signet_t|RUNNING|None|1:02|2:00:00|4|16G|hpc3-14-07|free|lab_acct\n'
 SSTAT = '4242.batch|812344K|00:00:58\n'
 
 
 def sacct(state, exit_code='0:0'):
+    """Two sacct rows (allocation and .batch step) for job 4242 in the given state."""
     return ('4242|signet_t|free|lab_acct|%s|%s|2026-10-25T14:00:00|2026-10-25T14:00:30|'
             '2026-10-25T14:05:00|00:04:30|02:00:00|4|4|16G||hpc3-14-07\n'
             '4242.batch|batch||lab_acct|%s|%s|2026-10-25T14:00:30|2026-10-25T14:00:30|'
@@ -46,6 +56,8 @@ class FakeSlurm:
 
 
 class ParseTest(unittest.TestCase):
+    """slurm_parse: command builders, field-count checks and state handling."""
+
     def test_squeue_and_sacct_rows_keep_every_field_and_reject_wrong_counts(self):
         row = sp.parse_squeue(SQUEUE_RUNNING)[0]
         self.assertEqual((row['job_id'], row['state'], row['nodes'], row['account']),
@@ -72,6 +84,8 @@ class ParseTest(unittest.TestCase):
 
 
 class ObserveTest(unittest.TestCase):
+    """observe.py: job lifecycle, sacct lag, error capture and the polling floor."""
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.fixture = Path(self.temp.name)
@@ -145,6 +159,8 @@ class ObserveTest(unittest.TestCase):
 
 
 class NetworkObserverTest(unittest.TestCase):
+    """observe_network.py: child discovery, stage tagging and when to stop."""
+
     START = datetime.datetime(2026, 10, 25, 14, 0, 0)
 
     def setUp(self):
@@ -206,6 +222,8 @@ class NetworkObserverTest(unittest.TestCase):
 
 
 class OutputsTest(unittest.TestCase):
+    """outputs.py: res*/tmp* listing and the before/after diff."""
+
     def test_snapshot_lists_res_and_tmp_only_and_diff_classifies_changes(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
@@ -229,26 +247,29 @@ class OutputsTest(unittest.TestCase):
 
 
 class SanitizeTest(unittest.TestCase):
+    """sanitize_fixture.py: private values replaced, structure kept, nothing overwritten."""
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
         self.raw = self.root / 'raw'
         self.raw.mkdir()
         (self.raw / 'meta.json').write_text(json.dumps({
-            'sbatch_command': ['sbatch', '--account=zhanglab', '--output=/pub/pchen/signet-monitor/x'],
-            'hostname': 'login-i15', 'signet': '/pub/pchen/SIGNET'}))
+            'sbatch_command': ['sbatch', '--account=example_lab', '--output=/pub/jdoe/signet-monitor/x'],
+            'hostname': 'login-i15', 'signet': '/pub/jdoe/SIGNET'}))
         (self.raw / 'snapshots.jsonl').write_text(
-            '{"raw": "4242|signet_t|CANCELLED by 31337|hpc3-14-07,hpc3-15-[01-02]|zhanglab"}\n')
-        (self.raw / 'stdout.log').write_text('pchen ran; pchenx and epchen are other words\n')
+            '{"raw": "4242|signet_t|CANCELLED by 31337|hpc3-14-07,hpc3-15-[01-02]|example_lab"}\n')
+        (self.raw / 'stdout.log').write_text('jdoe ran; jdoex and ejdoe are other words\n'
+                                             'mail jdoe.x@example.edu from 10.1.2.3\n')
         (self.raw / 'plot.png').write_bytes(b'\x89PNG')
-        self.paths = {'SIGNET_DIR': '/pub/pchen/SIGNET', 'BASELINE_DIR': '/pub/pchen/signet-monitor',
-                      'HOME': '/data/homezvol0/pchen'}
+        self.paths = {'SIGNET_DIR': '/pub/jdoe/SIGNET', 'BASELINE_DIR': '/pub/jdoe/signet-monitor',
+                      'HOME': '/data/homezvol0/jdoe'}
 
     def tearDown(self):
         self.temp.cleanup()
 
     def test_private_values_are_replaced_and_structure_is_kept(self):
-        result = sanitize_fixture.sanitize(self.raw, self.root / 'clean', 'pchen', 'zhanglab', self.paths)
+        result = sanitize_fixture.sanitize(self.raw, self.root / 'clean', 'jdoe', 'example_lab', self.paths)
         clean = self.root / 'clean'
         meta = json.loads((clean / 'meta.json').read_text())
         self.assertEqual(meta['sbatch_command'][1:], ['--account=<ACCOUNT>', '--output=<BASELINE_DIR>/x'])
@@ -256,14 +277,37 @@ class SanitizeTest(unittest.TestCase):
         snapshot = json.loads((clean / 'snapshots.jsonl').read_text())
         self.assertEqual(snapshot['raw'], '4242|signet_t|CANCELLED by <UID>|hpc3-node-01|<ACCOUNT>')
         self.assertEqual((clean / 'stdout.log').read_text(),
-                         '<USER> ran; pchenx and epchen are other words\n')
+                         '<USER> ran; jdoex and ejdoe are other words\n'
+                         'mail <EMAIL> from <IP>\n')
         self.assertEqual(result['skipped_non_text'], ['plot.png'])
         self.assertFalse((clean / 'plot.png').exists())
 
     def test_existing_destination_is_never_overwritten(self):
         (self.root / 'clean').mkdir()
         with self.assertRaises(FileExistsError):
-            sanitize_fixture.sanitize(self.raw, self.root / 'clean', 'pchen', 'zhanglab', self.paths)
+            sanitize_fixture.sanitize(self.raw, self.root / 'clean', 'jdoe', 'example_lab', self.paths)
+
+
+class CommittedFixtureTest(unittest.TestCase):
+    """Every file under tests/fixtures/slurm must already be sanitized (the repo is public)."""
+
+    RAW_PATTERNS = {
+        'pub path': re.compile(r'/(?:dfs\d+/)?pub/(?!<)[A-Za-z0-9]'),
+        'home path': re.compile(r'/data/homezvol\d'),
+        'login node': re.compile(r'\blogin-i\d+'),
+        'compute node': re.compile(r'\bhpc3-(?!node-\d\d\b)[A-Za-z0-9]'),
+        'cancel uid': re.compile(r'CANCELLED by \d'),
+        'email': sanitize_fixture.EMAIL,
+        'ipv4': sanitize_fixture.IPV4,
+    }
+
+    def test_committed_fixtures_contain_no_raw_hpc3_values(self):
+        root = Path(__file__).resolve().parent / 'fixtures/slurm'
+        for path in sorted(p for p in root.rglob('*') if p.is_file() and p.name != 'README.md'):
+            text = path.read_text(errors='replace')
+            for name, pattern in self.RAW_PATTERNS.items():
+                with self.subTest(path=str(path.relative_to(root)), pattern=name):
+                    self.assertIsNone(pattern.search(text), 'run sanitize_fixture.py on this fixture')
 
 
 class ShellTest(unittest.TestCase):
@@ -354,6 +398,8 @@ class ShellTest(unittest.TestCase):
 
 
 class TemplateTest(unittest.TestCase):
+    """Static checks on the sbatch templates and the experiment runner."""
+
     def test_templates_carry_only_a_job_name_and_print_markers(self):
         for path in sorted((BASELINE / 'templates').glob('*.sub')):
             with self.subTest(path=path.name):

@@ -1,9 +1,13 @@
 #!/bin/bash
 #SBATCH --job-name=signet_c
+# signet_c.sub - run `signet -c`, cis-eQTL detection on the shipped example/ciseqtl inputs (B4).
+#
+# Submitted by submit_step.sh; see templates/common.sh for the helpers used below.
 # --output/--error come from submit_step.sh: #SBATCH lines cannot expand $FIXTURE_DIR.
 # Partition, account, CPUs, memory and time also come from the sbatch command line.
 # shellcheck source=common.sh
 source "$BASELINE_DIR/templates/common.sh"
+# Start marker, config reset and extra flags, then the step itself.
 baseline_start c
 prepare_signet
 signet_args

@@ -1,11 +1,23 @@
-"""Shared helpers for writing fixtures: command capture, timestamps, log tails, JSON files."""
+"""Shared helpers for the baseline observers (Monitor Spec 01).
+
+  - run_command / capture: run a fixed argv and keep its raw output, parsed rows and any
+    error, so a failing Slurm command is recorded in the fixture instead of crashing.
+  - now_iso / iso_from_timestamp: local timestamps with UTC offset, as in the spec examples.
+  - log_state: the tail, mtime and size of a job log, read cheaply from the end.
+  - append_jsonl / write_json: fixture writers; write_json replaces files atomically.
+  - check_interval: enforces the 15-second minimum between polls.
+
+Stdlib only; no shell is ever involved (argv lists, never strings).
+"""
 import datetime
 import json
 import os
 from pathlib import Path
 import subprocess
 
+# Spec 01 section 9: no script may poll Slurm more often than every 15 seconds.
 MIN_INTERVAL = 15
+# Lines of the job log stored with each snapshot.
 TAIL_LINES = 20
 
 
@@ -33,10 +45,12 @@ def capture(source, argv, parser):
 
 
 def now_iso():
+    """Current local time, e.g. 2026-10-25T14:03:30-07:00."""
     return datetime.datetime.now().astimezone().isoformat(timespec='seconds')
 
 
 def iso_from_timestamp(value):
+    """A file mtime (seconds since the epoch) in the same format as now_iso."""
     return datetime.datetime.fromtimestamp(value).astimezone().isoformat(timespec='seconds')
 
 
@@ -54,11 +68,13 @@ def log_state(path, lines=TAIL_LINES):
 
 
 def append_jsonl(path, record):
+    """Append one record as a single JSON line (snapshots.jsonl)."""
     with Path(path).open('a') as handle:
         handle.write(json.dumps(record, sort_keys=True) + '\n')
 
 
 def write_json(path, value):
+    """Write pretty JSON through a temporary file so readers never see a half-written file."""
     path = Path(path)
     temporary = path.with_name(path.name + '.tmp')
     temporary.write_text(json.dumps(value, indent=2, sort_keys=True) + '\n')
@@ -66,6 +82,7 @@ def write_json(path, value):
 
 
 def check_interval(interval):
+    """Return interval, or raise ValueError if it is below MIN_INTERVAL."""
     if interval < MIN_INTERVAL:
         raise ValueError('Polling interval must be at least %d seconds.' % MIN_INTERVAL)
     return interval

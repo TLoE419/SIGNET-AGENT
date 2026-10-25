@@ -1,6 +1,17 @@
 #!/bin/bash
-# N1: run `signet -n` in the foreground (inside tmux) while observe_network.py records children.
-# Usage: start_network.sh <attempt_label>
+# start_network.sh - experiment N1: observe `signet -n` and its child jobs (Spec 01, 8.3).
+#
+# `signet -n` is meant to run on the login node and submits its own Slurm jobs, so it is
+# not wrapped in sbatch. This script:
+#   1. creates fixtures/<timestamp>_n_<label>/ with meta.json and outputs_before.json;
+#   2. resets config.ini with apply_config.sh (nboots=2, queue=free, ncores=4, ...);
+#   3. starts observe_network.py in the background, watching this script's PID;
+#   4. runs `signet -n` in the foreground, copying its output to stdout.log.
+#
+# Usage:   start_network.sh <attempt_label>          (run inside tmux)
+# Env:     OBSERVE_INTERVAL seconds between polls (default 30, minimum 15)
+#          BASELINE_NO_TMUX_CHECK=1 to skip the tmux check
+# Exit:    the exit code of `signet -n`
 set -u
 BASELINE_DIR=$(cd "$(dirname "$0")/.." && pwd)
 export BASELINE_DIR
@@ -20,6 +31,7 @@ bash "$BASELINE_DIR/scripts/apply_config.sh" > "$fixture/apply_config.log" 2>&1 
     || { echo "apply_config failed; see $fixture/apply_config.log" >&2; exit 1; }
 python3 "$BASELINE_DIR/scripts/outputs.py" before --signet-dir "$SIGNET_DIR" --fixture-dir "$fixture"
 
+# The observer counts every job submitted at or after this moment as a candidate child.
 start=$(date +%Y-%m-%dT%H:%M:%S)
 commit=$(git -C "$SIGNET_DIR" rev-parse HEAD 2>/dev/null || echo unknown)
 python3 -c 'import json,sys; json.dump(dict(zip(sys.argv[2::2], sys.argv[3::2])), open(sys.argv[1], "w"), indent=2)' \
@@ -33,7 +45,7 @@ echo "run_id=$run_id observer_pid=$!"
 cd "$SIGNET_DIR" || exit 1
 echo "[BASELINE] START step=n host=$(hostname) ts=$(date -Iseconds)" | tee "$fixture/stdout.log"
 ./signet -n 2>&1 | tee -a "$fixture/stdout.log"
-rc=${PIPESTATUS[0]}
+rc=${PIPESTATUS[0]}                # exit code of signet, not of tee
 echo "[BASELINE] END step=n exit=$rc ts=$(date -Iseconds)" | tee -a "$fixture/stdout.log"
 python3 "$BASELINE_DIR/scripts/outputs.py" after --signet-dir "$SIGNET_DIR" --fixture-dir "$fixture"
 exit "$rc"

@@ -1,9 +1,15 @@
 #!/bin/bash
 #SBATCH --job-name=signet_a
+# signet_a.sub - run `signet -a`, covariate adjustment with PCA (B3, E7).
+#
+# Submitted by submit_step.sh; see templates/common.sh for the helpers used below.
+# Env: PC_ANSWER_MODE=stdin (default) pipes $NPC (default 3) to the PC-count prompt;
+#      PC_ANSWER_MODE=none leaves stdin as Slurm provides it, to observe what happens (E7).
 # --output/--error come from submit_step.sh: #SBATCH lines cannot expand $FIXTURE_DIR.
 # Partition, account, CPUs, memory and time also come from the sbatch command line.
 # shellcheck source=common.sh
 source "$BASELINE_DIR/templates/common.sh"
+# Start marker, config reset and extra flags, then the step itself.
 baseline_start a
 prepare_signet
 signet_args

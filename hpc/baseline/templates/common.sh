@@ -1,4 +1,15 @@
-# Sourced by every template: environment, SIGNET config reset, and START/END markers.
+# common.sh - helpers sourced by every sbatch template in this folder (Monitor Spec 01, 6.1).
+#
+# Provides:
+#   baseline_start STEP  print "[BASELINE] START step=... job=... host=... cpus=... ts=..."
+#   baseline_end CODE    print "[BASELINE] END step=... exit=CODE ts=..." and exit with CODE
+#   prepare_signet       reset config.ini (apply_config.sh), cd to SIGNET, set ncore_local
+#   signet_args          split $SIGNET_ARGS into the SIGNET_EXTRA array
+#   in_container CMD...  run CMD inside the SIGNET container ($SIGNET_SIF)
+#
+# The START/END markers give the monitor an exit code that SIGNET itself does not provide:
+# the `signet` entry script always ends with `exit 0`.
+# Exit codes 90-92 mean the job failed while preparing SIGNET, before the step started.
 # shellcheck shell=bash
 : "${BASELINE_DIR:?BASELINE_DIR must be exported by submit_step.sh}"
 # shellcheck source=/dev/null

@@ -1,5 +1,17 @@
 #!/usr/bin/env python3
-"""List SIGNET res*/tmp* files (path, size, mtime only) and diff against a submit-time snapshot."""
+"""Record which files a SIGNET step produced (Monitor Spec 01, 6.4).
+
+SIGNET writes intermediate files to tmp* and results to res* under its install directory.
+This module lists those files with path, size and mtime only. File contents are never
+read or copied, so fixtures stay small and carry no data values.
+
+Usage:
+  outputs.py before --signet-dir DIR --fixture-dir DIR   # writes outputs_before.json
+  outputs.py after  --signet-dir DIR --fixture-dir DIR   # writes outputs.json, outputs_diff.json
+
+submit_step.sh runs "before" at submission; collect_outputs.sh runs "after" when the
+observer sees a terminal state. outputs_diff.json lists new, changed and removed paths.
+"""
 import argparse
 import json
 import os
@@ -14,6 +26,7 @@ def snapshot(signet_dir):
     """Map relative path -> {size, mtime}; never reads file contents, never follows symlinks."""
     root = Path(signet_dir)
     paths = []
+    # Symlinked folders are skipped so a link cannot pull in files outside SIGNET.
     for top in sorted(root.glob('res*')) + sorted(root.glob('tmp*')):
         if top.is_dir() and not top.is_symlink():
             paths.extend(Path(folder) / name for folder, _, names in os.walk(str(top)) for name in names)
@@ -29,6 +42,7 @@ def snapshot(signet_dir):
 
 
 def diff(before, after):
+    """Compare two snapshots; files holds size/mtime for every new or changed path."""
     return {
         'new': sorted(p for p in after if p not in before),
         'changed': sorted(p for p in after if p in before and after[p] != before[p]),
@@ -38,6 +52,7 @@ def diff(before, after):
 
 
 def main(argv=None):
+    """Command-line entry point for the before/after snapshots."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('mode', choices=('before', 'after'))
     parser.add_argument('--signet-dir', required=True)

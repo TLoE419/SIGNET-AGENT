@@ -1,8 +1,19 @@
 #!/bin/bash
-# Submit one baseline step, snapshot outputs, start the observer; print run_id and job ID.
-# Usage: submit_step.sh <g|t|a|c|sleep> <attempt_label> [sbatch options...]
-# Experiment knobs (SLEEP_SECONDS, ALLOC_MB, PC_ANSWER_MODE, NPC, SIGNET_ARGS) are read from
-# the environment and forwarded with --export=ALL.
+# submit_step.sh - submit one baseline step and start its observer (Monitor Spec 01, 6.2).
+#
+# Usage:   submit_step.sh <g|t|a|c|sleep> <attempt_label> [sbatch options...]
+#          e.g. submit_step.sh t B2 --partition=free --account=$LAB_ACCOUNT \
+#                   --cpus-per-task=4 --mem=16G --time=02:00:00
+# Env:     experiment knobs SLEEP_SECONDS, ALLOC_MB, PC_ANSWER_MODE, NPC, SIGNET_ARGS are
+#          forwarded to the job with --export=ALL and recorded in meta.json;
+#          OBSERVE_INTERVAL (default 30, minimum 15); BASELINE_NO_OBSERVER=1 (tests);
+#          BASELINE_ALLOW_CONCURRENT=1 to skip the one-SIGNET-step-at-a-time check
+# Output:  "run_id=<id> job_id=<id>" on stdout
+#
+# Steps: refuse unsafe options, check no other SIGNET step is active, create
+# fixtures/<YYYYMMDD-HHMMSS>_<step>_<label>/, write meta.json and outputs_before.json,
+# submit with sbatch --parsable, then start observe.py with nohup.
+# An existing fixture is never overwritten; a rejected submission is recorded in meta.json.
 set -u
 BASELINE_DIR=$(cd "$(dirname "$0")/.." && pwd)
 export BASELINE_DIR
@@ -21,6 +32,7 @@ case "$step" in
     *) die "unknown step '$step'";;
 esac
 [[ "$label" =~ ^[A-Za-z0-9_-]+$ ]] || die "attempt_label may contain only letters, digits, _ and -"
+# These options are owned by this script; letting callers override them would break the fixture.
 for option in "$@"; do
     case "$option" in
         --output*|--error*|-o|-e|--export*|--parsable) die "$option is set by submit_step.sh";;
@@ -43,6 +55,7 @@ command=(sbatch --parsable "--output=$fixture/stdout.log" "--error=$fixture/stde
          "--export=ALL,BASELINE_DIR=$BASELINE_DIR,FIXTURE_DIR=$fixture" "$@" "$template")
 commit=$(git -C "$SIGNET_DIR" rev-parse HEAD 2>/dev/null || echo unknown)
 
+# meta KEY JSON [KEY JSON...]: merge values into meta.json (values are already JSON-encoded).
 meta() {
     python3 - "$fixture/meta.json" "$@" <<'PY'
 import json, os, sys
@@ -57,6 +70,7 @@ with open(tmp, 'w') as handle:
 os.replace(tmp, path)
 PY
 }
+# JSON-encode a string / an argv list / the experiment knobs that are set.
 json_str() { python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$1"; }
 json_argv() { python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "$@"; }
 experiment_env=$(python3 -c 'import json,os; print(json.dumps({k: os.environ[k] for k in
@@ -74,7 +88,7 @@ if ! submitted=$("${command[@]}" 2> "$fixture/sbatch_stderr.txt"); then
     meta submit_error "$(json_str "$(cat "$fixture/sbatch_stderr.txt")")"
     die "sbatch rejected the job; see $fixture/sbatch_stderr.txt"
 fi
-job_id=${submitted%%;*}
+job_id=${submitted%%;*}            # --parsable prints "<id>" or "<id>;<cluster>"
 [[ "$job_id" =~ ^[0-9]+$ ]] || die "unexpected sbatch output: $submitted"
 meta job_id "$(json_str "$job_id")"
 

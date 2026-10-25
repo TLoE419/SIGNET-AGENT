@@ -1,10 +1,31 @@
 #!/usr/bin/env python3
-"""Poll one Slurm job until sacct reports a stable terminal state; write snapshots.jsonl."""
+"""Observe one Slurm job from submission to a stable terminal state (Monitor Spec 01, 6.3).
+
+submit_step.sh starts this in the background on the HPC3 login node right after sbatch.
+Every poll appends one JSON line to <fixture>/snapshots.jsonl with the raw command output,
+the parsed rows, the job state and the last lines of the job's stdout log.
+
+Polling sequence:
+  1. While squeue still lists the job, record squeue (and sstat while RUNNING).
+  2. Once squeue no longer lists it, switch to sacct, the authoritative record.
+  3. Stop when sacct reports the same terminal state on two consecutive polls,
+     because sacct can lag behind the real end of the job.
+  4. Write sacct_final.txt / sacct_final.json and observer_status.json, then run
+     collect_outputs.sh to record the files the step produced.
+
+Usage:
+  observe.py --job-id 12345678 --fixture-dir fixtures/<run_id> [--interval 30]
+             [--log-path PATH] [--max-hours 48] [--no-collect]
+
+The interval can never be below 15 seconds (HPC3 login-node etiquette). Command failures
+become error fields in the snapshot instead of crashing the observer.
+"""
 import argparse
 from pathlib import Path
 import sys
 import time
 
+# Sibling modules live next to this script; it is run directly, not installed as a package.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import fixture_io as io  # noqa: E402
 import slurm_parse as sp  # noqa: E402
@@ -13,7 +34,11 @@ COLLECT = Path(__file__).resolve().parent / 'collect_outputs.sh'
 
 
 def poll(job_id, log_path):
-    """Return (record, sacct_state). sacct_state is None while squeue still lists the job."""
+    """Take one snapshot of the job.
+
+    Returns (record, sacct_state). sacct_state is None while squeue still lists the job,
+    and the sacct State string ('' if sacct does not know the job yet) afterwards.
+    """
     record = io.capture('squeue', sp.squeue_command(job_id=job_id), sp.parse_squeue)
     state = None
     if record['returncode'] == 0 and record.get('error'):
@@ -22,6 +47,7 @@ def poll(job_id, log_path):
     elif record['parsed']:
         record['state'] = record['parsed'][0]['state']
         if record['state'] == 'RUNNING':
+            # sstat only works for running steps; a failure is recorded inside the snapshot.
             record['sstat'] = io.capture('sstat', sp.sstat_command(job_id), sp.parse_sstat)
     else:
         # squeue forgets finished jobs (or errors on unknown ids); sacct is authoritative from here.
@@ -35,6 +61,7 @@ def poll(job_id, log_path):
 
 
 def finish(job_id, fixture, status, collect):
+    """Write the final accounting files and observer_status.json; optionally list outputs."""
     final = io.capture('sacct', sp.sacct_command(job_id=job_id), sp.parse_sacct)
     (fixture / 'sacct_final.txt').write_text(final['raw'])
     io.write_json(fixture / 'sacct_final.json', final['parsed'])
@@ -49,10 +76,15 @@ def finish(job_id, fixture, status, collect):
 
 def observe(job_id, fixture, interval=30, log_path=None, max_hours=48, collect=True,
             sleep=time.sleep, clock=time.monotonic):
+    """Poll until a stable terminal state or the max_hours deadline; return the status dict.
+
+    sleep and clock are injectable so tests can drive the loop without waiting.
+    """
     io.check_interval(interval)
     fixture = Path(fixture)
     log_path = log_path or fixture / 'stdout.log'
     status = {'job_id': str(job_id), 'started_at': io.now_iso(), 'interval': interval}
+    # A forgotten observer must not poll a login node forever.
     deadline = clock() + max_hours * 3600
     previous = None
     while True:
@@ -70,14 +102,17 @@ def observe(job_id, fixture, interval=30, log_path=None, max_hours=48, collect=T
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--job-id', required=True)
-    parser.add_argument('--fixture-dir', required=True)
-    parser.add_argument('--interval', type=int, default=30)
-    parser.add_argument('--log-path')
-    parser.add_argument('--max-hours', type=float, default=48)
-    parser.add_argument('--no-collect', action='store_true')
+    """Command-line entry point; validates the job ID and interval before polling."""
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('--job-id', required=True, help='Numeric Slurm job ID')
+    parser.add_argument('--fixture-dir', required=True, help='Existing fixture directory')
+    parser.add_argument('--interval', type=int, default=30, help='Seconds between polls (>= 15)')
+    parser.add_argument('--log-path', help='Log to tail (default: <fixture>/stdout.log)')
+    parser.add_argument('--max-hours', type=float, default=48, help='Give up after this long')
+    parser.add_argument('--no-collect', action='store_true', help='Skip collect_outputs.sh')
     args = parser.parse_args(argv)
+    # The ID is passed to Slurm commands; accept digits only.
     if not args.job_id.isdigit():
         parser.error('--job-id must be numeric')
     try:

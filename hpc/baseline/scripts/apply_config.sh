@@ -1,12 +1,27 @@
 #!/bin/bash
-# Reset SIGNET's config.ini to config/baseline.overrides through SIGNET's own `signet -s`.
-# Usage: apply_config.sh            (reads BASELINE_DIR / SIGNET_DIR from env.sh)
+# apply_config.sh - reset SIGNET's config.ini to config/baseline.overrides (Monitor Spec 01).
+#
+# Every template calls this before running SIGNET. SIGNET's step flags (e.g. `signet -t --g X`)
+# write themselves into config.ini permanently, so without a reset one experiment's
+# settings would leak into the next.
+#
+# Values are set through SIGNET's own `signet -s --KEY VALUE`, never by editing config.ini
+# directly, and each one is read back to confirm it took effect. @NAME@ placeholders are
+# filled from env.sh; an empty variable skips that key and prints SKIPPED, which marks the
+# step that needs it as blocked.
+#
+# Usage:   apply_config.sh               (BASELINE_DIR / SIGNET_DIR come from env.sh)
+# Env:     OVERRIDES=path                (optional; default config/baseline.overrides)
+# Output:  one "[apply_config] key = value" or "SKIPPED" line per key on stdout
+# Exit:    0 if every key was applied or skipped, 1 if any line was rejected or mismatched
+# Side effect: backs up the original config.ini once as config.ini.pre-baseline.
 set -u
 BASELINE_DIR=${BASELINE_DIR:-$(cd "$(dirname "$0")/.." && pwd)}
 # shellcheck source=/dev/null
 [[ -n "${SIGNET_DIR:-}" ]] || source "$BASELINE_DIR/env.sh"
 : "${SIGNET_DIR:?SIGNET_DIR is not set; copy env.sh.example to env.sh}"
 OVERRIDES=${OVERRIDES:-$BASELINE_DIR/config/baseline.overrides}
+# Only these env.sh variables may fill @NAME@ placeholders.
 ALLOWED_VARS=" SIGNET_REF_PREFIX SIGNET_GMAP_PREFIX SIGNET_GTF SIGNET_CLINICAL SIGNET_SIF "
 
 cd "$SIGNET_DIR" || { echo "[apply_config] cannot cd to $SIGNET_DIR" >&2; exit 1; }
@@ -14,8 +29,9 @@ cd "$SIGNET_DIR" || { echo "[apply_config] cannot cd to $SIGNET_DIR" >&2; exit 1
 [[ -e config.ini.pre-baseline ]] || cp config.ini config.ini.pre-baseline
 
 status=0
+# Read the overrides file line by line; "|| [[ -n $line ]]" keeps a last line without newline.
 while IFS= read -r line || [[ -n "$line" ]]; do
-    line=${line%%#*}
+    line=${line%%#*}                       # drop comments
     [[ "$line" =~ ^[[:space:]]*$ ]] && continue
     if [[ ! "$line" =~ ^[[:space:]]*([A-Za-z0-9_.]+)[[:space:]]*=[[:space:]]*([^[:space:]]+)[[:space:]]*$ ]]; then
         echo "[apply_config] malformed line: $line" >&2; status=1; continue
@@ -36,6 +52,7 @@ while IFS= read -r line || [[ -n "$line" ]]; do
     if [[ "$value" == *@* || "$value" =~ [[:space:]] ]]; then
         echo "[apply_config] $key: value must not contain '@' or spaces" >&2; status=1; continue
     fi
+    # Set, then read back: signet -s prints the stored value when given only the key.
     ./signet -s --"$key" "$value" > /dev/null
     actual=$(./signet -s --"$key" | sed -e '/^[[:space:]]*$/d' -e 's/[[:space:]]*$//')
     if [[ "$actual" != "$value" ]]; then

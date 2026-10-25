@@ -79,7 +79,7 @@ source env.sh
 python3 scripts/sanitize_fixture.py fixtures/<run_id> <repo>/tests/fixtures/slurm/<run_id>
 ```
 
-It replaces `SIGNET_DIR`, `BASELINE_DIR`, `HOME`, the user and the account with `<SIGNET_DIR>`, `<USER>` and so on, maps node names to `hpc3-node-NN`, and replaces the UID in `CANCELLED by <uid>`. It refuses to run if any of those values remain, and never overwrites an existing destination.
+It replaces `SIGNET_DIR`, `BASELINE_DIR`, `HOME`, the user and the account with `<SIGNET_DIR>`, `<USER>` and so on, maps node names to `hpc3-node-NN`, and replaces email addresses, IPv4 addresses and the UID in `CANCELLED by <uid>`. It refuses to run if any of those values remain, and never overwrites an existing destination. As a second safety net, `tests/test_baseline_monitor.py` fails CI if any committed fixture still contains a `/pub` or home path, a login or compute node name, a cancel UID, an email or an IP address.
 
 ## Where this differs from the spec text, and why
 

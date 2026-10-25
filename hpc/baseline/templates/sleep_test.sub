@@ -1,6 +1,10 @@
 #!/bin/bash
 #SBATCH --job-name=signet_sleep
-# Scheduler-only experiments (timeout, OOM, cancel, pending); does not touch SIGNET.
+# sleep_test.sub - scheduler-only job for experiments E1-E3, E5, E6, E9 (Spec 01, 8.2).
+#
+# Does not touch SIGNET. Sleeps SLEEP_SECONDS (default 60) after allocating ALLOC_MB
+# megabytes (default 0), so timeouts, out-of-memory kills, cancellations and pending
+# reasons can be observed without depending on SIGNET's runtime.
 # shellcheck source=common.sh
 source "$BASELINE_DIR/templates/common.sh"
 baseline_start sleep

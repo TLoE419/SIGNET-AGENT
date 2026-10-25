@@ -74,7 +74,7 @@ SIGNET-agent/
 │       ├── vis-network-LICENSE.txt  # Network graph library license
 │       └── markdown-it-LICENSE.txt  # Response markup parser license
 └── tests/
-    ├── fixtures/slurm/           # Sanitized HPC3 baseline fixtures (added after the HPC3 runs)
+    ├── fixtures/slurm/README.md  # Where sanitized HPC3 baseline fixtures go and how to add them
     ├── test_baseline_monitor.py  # Slurm parsing, observers, sanitizer, and baseline shell scripts
     ├── test_chat.py              # Conversation and tool flow
     ├── test_chat_progress.cjs     # Chat progress visibility, restoration, errors, and visualization isolation

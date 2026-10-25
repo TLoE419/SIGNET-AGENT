@@ -1,5 +1,27 @@
 #!/usr/bin/env python3
-"""Observe `signet -n` and every job the user submits after it starts; write children.json."""
+"""Observe `signet -n` and the child jobs it submits (Monitor Spec 01, 6.5 and experiment N1).
+
+`signet -n` runs on the login node (inside tmux) and submits its own Slurm jobs with
+`sbatch -W`, so there is no single job ID to follow. Instead, every poll records:
+  - squeue -u $USER and sacct -u $USER -S <start>, raw and parsed;
+  - for each stage, the line count of job<k>_command, the sub*.sh scripts present, and the
+    job IDs printed in submit<k>_log, all under $SIGNET_DIR/tmp/tmpn/stage<k>/;
+  - the log tail of the parent's output.
+
+Every job submitted after --start is treated as a candidate child. Each child is tagged
+with stage 1 or 2 from the submit logs, because both stages reuse the names sub<i>.sh.
+
+The observer stops after the parent has ended (process gone, or --parent-job-id terminal)
+and no child is active for two consecutive polls, or at the --max-hours deadline.
+
+Outputs in the fixture: snapshots.jsonl, children.json, sacct_final.txt, sacct_final.json,
+observer_status.json.
+
+Usage (normally started by start_network.sh):
+  observe_network.py --fixture-dir DIR --signet-dir DIR --start YYYY-MM-DDTHH:MM:SS
+                     (--parent-pid PID | --parent-job-id ID) [--interval 30]
+                     [--log-path PATH] [--max-hours 48]
+"""
 import argparse
 import datetime
 import getpass
@@ -9,16 +31,21 @@ import re
 import sys
 import time
 
+# Sibling modules live next to this script; it is run directly, not installed as a package.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import fixture_io as io  # noqa: E402
 import slurm_parse as sp  # noqa: E402
 
+# Columns copied from the allocation row of each child into children.json.
 CHILD_FIELDS = ('JobID', 'JobName', 'Partition', 'Account', 'State', 'ExitCode',
                 'Submit', 'Start', 'End', 'Elapsed', 'MaxRSS')
 
 
 def stage_files(signet_dir):
-    """SIGNET writes -n work under tmp/tmpn/stage<k>, not under the SIGNET root itself."""
+    """Describe SIGNET's -n bookkeeping files for stages 1 and 2.
+
+    SIGNET writes -n work under tmp/tmpn/stage<k>, not under the SIGNET root itself.
+    """
     info = {}
     for stage in (1, 2):
         folder = Path(signet_dir) / 'tmp/tmpn' / ('stage%d' % stage)
@@ -38,6 +65,7 @@ def stage_files(signet_dir):
 
 
 def submitted_after(row, start):
+    """True if the sacct Submit time is at or after start; unknown times are excluded."""
     try:
         return datetime.datetime.strptime(row['Submit'], '%Y-%m-%dT%H:%M:%S') >= start
     except ValueError:
@@ -45,6 +73,11 @@ def submitted_after(row, start):
 
 
 def children(rows, start, stages, parent_job_id=None):
+    """Build children.json entries from parsed sacct rows.
+
+    Only allocation rows (no '.batch' / '.extern' suffix) submitted after start count as
+    children; the parent job itself (N2) is excluded. Peak memory comes from the steps.
+    """
     stage_of = {job: int(stage) for stage, item in stages.items() for job in item['submitted_ids']}
     result = []
     for row in rows:
@@ -59,16 +92,19 @@ def children(rows, start, stages, parent_job_id=None):
 
 
 def alive(pid):
+    """True while the process exists (signal 0 only checks; it sends nothing)."""
     try:
         os.kill(pid, 0)
         return True
     except ProcessLookupError:
         return False
     except PermissionError:
+        # The process exists but belongs to someone else.
         return True
 
 
 def poll(user, start, signet_dir, parent_job_id):
+    """Take one snapshot; returns (record, children, sacct capture)."""
     started = start.strftime('%Y-%m-%dT%H:%M:%S')
     queue = io.capture('squeue', sp.squeue_command(user=user), sp.parse_squeue)
     account = io.capture('sacct', sp.sacct_command(user=user, start=started), sp.parse_sacct)
@@ -83,6 +119,10 @@ def poll(user, start, signet_dir, parent_job_id):
 def observe(fixture, signet_dir, start, parent_pid=None, parent_job_id=None, user=None,
             interval=30, log_path=None, max_hours=48, sleep=time.sleep, clock=time.monotonic,
             is_alive=alive):
+    """Poll until the parent and all children have finished; return the status dict.
+
+    sleep, clock and is_alive are injectable so tests can drive the loop without waiting.
+    """
     io.check_interval(interval)
     if not parent_pid and not parent_job_id:
         raise ValueError('Give --parent-pid or --parent-job-id so the observer knows when -n ends.')
@@ -93,13 +133,16 @@ def observe(fixture, signet_dir, start, parent_pid=None, parent_job_id=None, use
     while True:
         record, found, account = poll(user, start, signet_dir, parent_job_id)
         if parent_job_id:
+            # N2: the parent runs inside its own Slurm job.
             row = sp.primary_row(account['parsed'], parent_job_id)
             parent_done = bool(row) and sp.is_terminal(row['State'])
         else:
+            # N1: the parent is a process on this login node.
             parent_done = not is_alive(parent_pid)
         record['parent_done'] = parent_done
         record.update(io.log_state(log_path))
         io.append_jsonl(fixture / 'snapshots.jsonl', record)
+        # Rewritten every poll so a partial list survives if the observer is killed.
         io.write_json(fixture / 'children.json', found)
         # Two quiet polls in a row: sacct may still be catching up on the last child.
         quiet = quiet + 1 if parent_done and not record['active_children'] else 0
@@ -115,15 +158,17 @@ def observe(fixture, signet_dir, start, parent_pid=None, parent_job_id=None, use
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--fixture-dir', required=True)
-    parser.add_argument('--signet-dir', required=True)
+    """Command-line entry point; argument errors exit with a usage message."""
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('--fixture-dir', required=True, help='Existing fixture directory')
+    parser.add_argument('--signet-dir', required=True, help='SIGNET install directory')
     parser.add_argument('--start', required=True, help='Local time YYYY-MM-DDTHH:MM:SS when -n started')
-    parser.add_argument('--parent-pid', type=int)
-    parser.add_argument('--parent-job-id')
-    parser.add_argument('--interval', type=int, default=30)
-    parser.add_argument('--log-path')
-    parser.add_argument('--max-hours', type=float, default=48)
+    parser.add_argument('--parent-pid', type=int, help='PID of the process running signet -n (N1)')
+    parser.add_argument('--parent-job-id', help='Slurm job running signet -n (N2)')
+    parser.add_argument('--interval', type=int, default=30, help='Seconds between polls (>= 15)')
+    parser.add_argument('--log-path', help="Parent's output log to tail")
+    parser.add_argument('--max-hours', type=float, default=48, help='Give up after this long')
     args = parser.parse_args(argv)
     try:
         start = datetime.datetime.strptime(args.start, '%Y-%m-%dT%H:%M:%S')
