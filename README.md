@@ -14,7 +14,7 @@ This replaces the application entry point and file layout. It does not automatic
 
 The application has been checked on macOS with Python 3.11. Python 3.11 or later is required. Native Windows operation has not been verified; some process-management and scientific tools require a Unix-like environment.
 
-Download and extract this project, then run these commands from its root directory:
+On a new computer, first follow the [from-scratch installation guide](docs/INSTALL.md) to install Python, Git, Node.js, and your model provider. If those prerequisites are already available, download and extract this project, then run these commands from its root directory:
 
 ```sh
 python3.11 -m venv .venv
