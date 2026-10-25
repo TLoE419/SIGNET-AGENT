@@ -1,10 +1,10 @@
-# 安裝與第一次啟動
+# Installation and First Launch
 
-原桌面版的 `desktop/` 與 `tools/setup-dev.sh` 已退役；本版改從根目錄啟動 Python 聊天服務。不自動遷移桌面版工作資料，請保留自己的舊資料與環境資產。
+The former desktop application's `desktop/` and `tools/setup-dev.sh` have been retired. This version starts a Python chat service from the project root. Desktop work data is not migrated automatically; retain your old data and environment assets.
 
-## 1. 準備程式環境
+## 1. Prepare the Runtime
 
-先下載並解壓此專案，在專案根目錄開啟終端機。基本聊天介面不需要科學資料、R、容器或排程器。需要 Python 3.11 以上；目前驗證平台為 macOS／Python 3.11。Windows 原生環境未驗證，進階工具依賴類 Unix 程序管理。
+Download and extract the project, then open a terminal in its root directory. The basic chat interface needs no scientific data, R, containers, or scheduler. Python 3.11 or later is required; the checked platform is macOS with Python 3.11. Native Windows operation has not been verified, and advanced tools rely on Unix-like process management.
 
 ```sh
 python3.11 --version
@@ -13,13 +13,13 @@ python3.11 -m venv .venv
 .venv/bin/python -m pip check
 ```
 
-`requirements.txt` 固定直接依賴版本；間接依賴由套件安裝器解析，並非全套版本鎖定。前端套件已隨專案附帶，不需要安裝網頁建置套件。
+`requirements.txt` pins direct dependencies. Transitive dependencies are resolved by the package installer; this is not a complete dependency lock. Frontend packages are bundled, so no web build packages need to be installed.
 
-## 2. 設定自己的模型
+## 2. Configure Your Model
 
-預設使用 Codex 命令列。此專案核對的版本為 `0.162.1`，使用結構化回覆、暫時工作階段與只讀沙箱；不同版本可能不相容。官方安裝入口見 [Codex 命令列文件](https://learn.chatgpt.com/docs/codex/cli)。登入與命令行為依 [OpenAI 官方命令參考](https://learn.chatgpt.com/docs/developer-commands#codex-login)。
+Codex CLI is the default provider. The version checked for this project is `0.162.1`, using structured responses, ephemeral sessions, and a read-only sandbox; other versions may be incompatible. See the [Codex CLI documentation](https://learn.chatgpt.com/docs/codex/cli) for installation and the [official OpenAI command reference](https://learn.chatgpt.com/docs/developer-commands#codex-login) for sign-in and command behavior.
 
-安裝後確認：
+After installation, check:
 
 ```sh
 codex --version
@@ -27,59 +27,59 @@ codex login
 codex login status
 ```
 
-登入由使用者親自完成。本專案不提供或複製帳號憑證。模型預設沿用本機 Codex 設定；如需指定模型，可在 `.env` 的 `SIGNET_CODEX_MODEL` 設定。聊天會使用帳號額度。
+Sign in yourself. This project does not provide or copy account credentials. The model follows your local Codex configuration by default; to select a model explicitly, set `SIGNET_CODEX_MODEL` in `.env`. Chat consumes your account's usage allowance.
 
-也可使用 Groq 或 Gemini：
+Groq and Gemini are also supported:
 
 ```sh
 cp .env.example .env
 ```
 
-只有第一次、尚無 `.env` 時才複製。編輯檔案，填入自己的 `GROQ_API_KEY` 或 `GEMINI_API_KEY`。`.env` 不提交；不要把金鑰貼進聊天或原始碼。
+Copy this file only on first setup, when `.env` does not already exist. Edit it to supply your own `GROQ_API_KEY` or `GEMINI_API_KEY`. `.env` is excluded from version control; do not paste keys into chat or source code.
 
 ```sh
 .venv/bin/python chat_ui.py --provider groq
-# 或
+# or
 .venv/bin/python chat_ui.py --provider gemini
 ```
 
-## 3. 啟動
+## 3. Start the Service
 
 ```sh
 .venv/bin/python chat_ui.py
 ```
 
-開啟 [本機介面](http://127.0.0.1:8880)。沒有模型登入時仍能看到頁面，但無法取得真實聊天回答。若該埠已使用，改用：
+Open the [local interface](http://127.0.0.1:8880). The page can load without model sign-in, but real chat responses require it. If the port is already in use, run:
 
 ```sh
 .venv/bin/python chat_ui.py --port 8881
 ```
 
-打開對應的 `http://127.0.0.1:8881`。終端機 Ctrl+C 停止服務；已啟動的科學工具需依狀態紀錄確認，關頁不等於取消。
+Open `http://127.0.0.1:8881` instead. Press Ctrl+C in the terminal to stop the service. Check status records for scientific tools that have already started; closing the page does not cancel them.
 
-## 4. 驗證最小展示
+## 4. Verify a Minimal Demonstration
 
-依 [展示流程](demo-stage6-2026-10-22.zh-TW.md) 詢問工具能力與輸入需求。下載版本沒有 `data/`、`runs/` 或完成結果；尚無網路圖是預期狀態，不代表載入失敗。
+Follow the [demonstration guide](DEMO.md) to ask about tool capabilities and input requirements. The download includes no `data/`, `runs/`, or completed results. An absent network graph is expected and does not indicate a loading failure.
 
-若要使用終端機聊天：
+For terminal chat, run:
 
 ```sh
 .venv/bin/python main.py
 ```
 
-## 5. 常見缺少條件
+## 5. Common Missing Prerequisites
 
-| 現象 | 處理 |
+| Symptom | Action |
 |---|---|
-| 找不到 Codex／登入失敗 | 確認命令可執行且登入狀態有效，或改用已設定金鑰的模型 |
-| 官方來源尚未準備 | 依進階指南執行 `scripts/setup_source.py`；基本聊天不需此步驟 |
-| 找不到輸入資料 | 使用者自行建立 `data/` 並放入符合工具格式的資料 |
-| 科學環境不可用 | 閱讀進階指南；本專案不會自動建立虛擬機或安裝科學工具 |
-| 頻率限制等待 | Groq 會保留同一模型請求等待重試，不重跑已完成工具；Ctrl+C 可中止等待 |
+| Codex is unavailable or sign-in fails | Confirm that the command runs and sign-in is valid, or select a model with a configured key |
+| Official source is not prepared | Run `scripts/setup_source.py` as described in the advanced guide; basic chat does not require this step |
+| Input data cannot be found | Create `data/` yourself and provide inputs in the format required by the tool |
+| Scientific environment is unavailable | Read the advanced guide; this project does not automatically create a VM or install scientific tools |
+| Waiting after a rate limit | Groq retains the same model request for retry without repeating completed tools; Ctrl+C interrupts the wait |
 
-## 英文對照
+## Terminology
 
-- **Python** — 執行本專案所需的程式語言與環境。
-- **Unix** — 此處指支援相關程序管理的作業環境。
-- **Codex** — 預設模型命令列工具。
-- **API** — 此處指使用金鑰連線的模型服務介面。
+- **Python:** the language and runtime required by this project.
+- **Unix-like:** an operating environment supporting the relevant process-management operations.
+- **Codex CLI:** the default model command-line tool.
+- **API:** the model-service interface accessed with a key.

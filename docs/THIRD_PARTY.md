@@ -1,16 +1,16 @@
-# 第三方來源與授權狀態
+# Third-Party Sources and Licensing Status
 
-- `web/vendor/`：保留 markdown-it 與 vis-network 的授權檔；版本與修改見該目錄 README。
-- `assets/tokenizers/`：Qwen 斷詞資料，Apache 2.0；固定版本與雜湊見該目錄 README。不含模型權重。
-- 官方 SIGNET 科學來源：不隨此專案打包。`scripts/setup_source.py` 只從 `signet_inventory.json` 指定的提交安裝已盤點程式、設定模板與上游授權文件，不安裝範例或研究資料。各檔案須通過既有 SHA-256 檢查。
-- `scripts/advanced/verify_network.cjs`：從 [桌面版歷史提交](https://github.com/TLoE419/SIGNET-AGENT/blob/cfd64e0ceaeabc6d8aa285285bd991587b8272e0/desktop/core/results.cjs) 的 `desktop/core/results.cjs` 移植輸出驗證邏輯。保留矩陣、工作完成清單、排程紀錄與重抽樣平均值核對；移除桌面匯出功能，改為單一檔案並只使用 Node.js 標準函式庫。
-  原始驗證器 SHA-256：`ec6da24f2a94f09d89aa4cb147d28739bbd4ae26eff0633aa26a9a3b2acfb6e2`。
+- `web/vendor/`: retains the markdown-it and vis-network license files. See that directory's README for versions and modifications.
+- `assets/tokenizers/`: Qwen tokenizer data under Apache 2.0. See that directory's README for the pinned version and hash. No model weights are included.
+- Official SIGNET scientific source: not bundled with this project. `scripts/setup_source.py` installs only inventoried code, configuration templates, and upstream license documents from the commit specified by `signet_inventory.json`. It does not install example or study data. Each file must pass the existing SHA-256 check.
+- `scripts/advanced/verify_network.cjs`: ports output-verification logic from `desktop/core/results.cjs` in the [desktop history commit](https://github.com/TLoE419/SIGNET-AGENT/blob/cfd64e0ceaeabc6d8aa285285bd991587b8272e0/desktop/core/results.cjs). It retains checks of matrices, command-completion lists, scheduler records, and resampling averages. Desktop export features are removed, and the verifier is a single file using only the Node.js standard library.
+  Original verifier SHA-256: `ec6da24f2a94f09d89aa4cb147d28739bbd4ae26eff0633aa26a9a3b2acfb6e2`.
 
-本專案自身的開源授權種類尚未由擁有者決定，因此沒有新增根目錄 LICENSE，也不把第三方授權宣稱為整個專案的授權。正式公開前須完成此決策，並確認移植驗證器的散布權利。
+The owner has not yet selected an open-source license for this project itself, so no root LICENSE has been added. Third-party licenses are not presented as the license for the entire project. This decision and confirmation of distribution rights for the ported verifier are prerequisites for a formal public release.
 
-## 英文對照
+## Terminology
 
-- **README** — 來源與使用說明文件。
-- **SHA-256** — 檢查檔案內容是否符合固定來源的雜湊。
-- **Node.js** — 執行 JavaScript 驗證程式的環境。
-- **LICENSE** — 說明使用與散布權利的授權文件。
+- **README:** source and usage documentation.
+- **SHA-256:** the hash used to check that file contents match the pinned source.
+- **Node.js:** the runtime executing the JavaScript verifier.
+- **LICENSE:** the document specifying usage and distribution rights.
