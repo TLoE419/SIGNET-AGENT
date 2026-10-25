@@ -116,6 +116,6 @@ Press Ctrl+C in the terminal to stop the chat service. It listens only on `127.0
 
 ## Scientific analysis requires a separate setup
 
-The steps above install and run the chat interface; they do not prepare the scientific analysis environment. Analysis also requires user-supplied inputs and, depending on the operation, the pinned official source, scientific software, and an existing VM or scheduler. This repository does not include study or reference datasets, VM disks, or container images, and it does not provide a from-scratch scientific-environment installer. Read the [advanced environment requirements](ADVANCED.md) before preparing assets. The repository has not been verified to run all six scientific stages from a clean machine.
+The steps above install and run the chat interface; they do not prepare the scientific analysis environment. For the scientific software, VM, data, and stage-by-stage prerequisites, read the [scientific setup guide](SCIENTIFIC_SETUP.md). This repository does not include study or reference datasets, VM disks, or container images, and it does not provide a from-scratch scientific-environment installer. The repository has not been verified to run all six scientific stages from a clean machine.
 
 For terminal chat instead of the web page, run `.venv/bin/python main.py` from the project root.

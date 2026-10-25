@@ -1,6 +1,6 @@
 # Advanced Scientific Environment
 
-Basic chat does not depend on this environment. This document describes the existing code's environment requirements; it is not an automated scientific-environment installer. This project includes no study data, example datasets, reference datasets, precomputed results, container images, or VM disks.
+Basic chat does not depend on this environment. For the complete stage-by-stage scientific setup and readiness procedure, start with the [scientific setup guide](SCIENTIFIC_SETUP.md). This document records the existing runtime configuration and recovery environment; it is not an automated scientific-environment installer. This project includes no study data, example datasets, reference datasets, precomputed results, container images, or VM disks.
 
 ## Official Scientific Source
 
