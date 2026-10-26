@@ -11,11 +11,11 @@ import threading
 from urllib.parse import urlsplit, parse_qs
 
 from dotenv import load_dotenv
-from google import genai
 from google.genai import types
 
 from main import MODEL, run_conversation
 from model_timing import ModelRequestTiming
+from llm_providers import PROVIDERS, create_provider_adapter
 from stage6_workspace import Workspace, CHAT_CONTEXT
 
 ROOT = Path(__file__).resolve().parent
@@ -24,9 +24,10 @@ ROOT = Path(__file__).resolve().parent
 class ChatServer(ThreadingHTTPServer):
     daemon_threads = False
 
-    def __init__(self, address, client_factory, model_label=MODEL, state_file=None):
+    def __init__(self, address, client_factory, model_label=MODEL, state_file=None, *, stop_provider=None):
         self.client_factory = client_factory
         self.model_label = model_label
+        self.stop_provider = stop_provider or (lambda: None)
         self.token = secrets.token_urlsafe(32)
         self.histories = {}
         self.events = {}
@@ -274,46 +275,24 @@ class ChatHandler(BaseHTTPRequestHandler):
 
 def create_server(provider='codex', port=8880, state_file=ROOT / '.chat-state.json'):
     """Build the same local service for the browser CLI or the optional desktop host."""
-    if provider not in ('codex', 'gemini', 'groq'):
+    if provider not in PROVIDERS:
         raise ValueError('Unsupported model provider.')
     load_dotenv(ROOT / '.env')
-    api_key = None
-    if provider != 'codex':
-        key_name = 'GROQ_API_KEY' if provider == 'groq' else 'GEMINI_API_KEY'
-        api_key = os.environ.get(key_name)
-        if not api_key:
-            raise SystemExit(f'請先在 .env 或環境變數設定 {key_name}。')
-
-    def client_factory(timing):
-        if provider == 'codex':
-            from codex_provider import CodexClient
-            return CodexClient(timing=timing)
-        if provider == 'groq':
-            from groq_provider import GroqClient
-            return GroqClient(api_key, timing=timing)
-        return genai.Client(api_key=api_key, http_options=types.HttpOptions(client_args=timing.client_args()))
-
-    if provider == 'codex':
-        from codex_provider import configured_model
-        label = 'Codex CLI / ' + (configured_model() or '預設模型')
-    elif provider == 'groq':
-        from groq_provider import GROQ_MODEL
-        label = 'Groq / ' + os.environ.get('GROQ_MODEL', GROQ_MODEL)
-    else:
-        label = MODEL
+    configured = create_provider_adapter(provider, gemini_model=MODEL)
     from signet_tools import source_path
-    import shutil
-    if provider == 'codex' and not shutil.which('codex'):
-        print('尚未安裝 Codex 命令列；介面仍可開啟，聊天前請依 docs/INSTALL.md 安裝與登入。', flush=True)
+    for message in configured.startup_messages:
+        print(message, flush=True)
     if not source_path().is_dir():
         print('科學來源尚未準備；可聊天與查詢工具目錄。分析前請執行 python scripts/setup_source.py。', flush=True)
-    return ChatServer(('127.0.0.1', port), client_factory, model_label=label, state_file=state_file)
+    return ChatServer(('127.0.0.1', port), configured.create_client,
+                      model_label=configured.label, state_file=state_file,
+                      stop_provider=configured.stop)
 
 
 def main():
     parser = argparse.ArgumentParser(description='啟動 SIGNET 本機聊天介面。')
     parser.add_argument('--port', type=int, default=8880)
-    parser.add_argument('--provider', choices=('codex', 'gemini', 'groq'), default='codex')
+    parser.add_argument('--provider', choices=PROVIDERS, default='codex')
     parser.add_argument('--state-file', type=Path, default=ROOT / '.chat-state.json')
     args = parser.parse_args()
     with create_server(args.provider, args.port, args.state_file) as server:
@@ -322,12 +301,7 @@ def main():
         try:
             server.serve_forever()
         except KeyboardInterrupt:
-            if args.provider == 'codex':
-                from codex_provider import STOP
-                STOP.set()
-            if args.provider == 'groq':
-                from groq_provider import REQUEST_PACER
-                REQUEST_PACER.stopped.set()
+            server.stop_provider()
 
 
 if __name__ == '__main__':

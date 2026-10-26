@@ -12,6 +12,7 @@ SIGNET-agent/
 ├── README.md                     # Project overview, scope, and quick start
 ├── requirements.txt              # Pins four direct dependency versions
 ├── chat_ui.py                    # Local web service, conversation storage, and workspace API
+├── llm_providers/                # Factory dispatch and isolated Codex, Gemini and Groq adapters
 ├── main.py                       # Conversation flow, public progress, and controlled tool calls
 ├── codex_provider.py             # Uses the downloader's own signed-in model CLI
 ├── groq_provider.py              # Groq connection, tool format, and rate-limit waits
