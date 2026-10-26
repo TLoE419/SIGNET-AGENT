@@ -34,10 +34,12 @@ class ChatServer(ThreadingHTTPServer):
         self.events = {}
         self.state_file = Path(state_file) if state_file else None
         self.pending_history = []
+        self.active_session = None
         if self.state_file and self.state_file.exists():
             state = json.loads(self.state_file.read_text())
             self.token = state['token']
             self.events = state.get('events', {})
+            self.active_session = state.get('active_session')
             self.histories = {key: [types.Content.model_validate(item) for item in value]
                               for key, value in state.get('histories', {}).items()}
             self.pending_history = [types.Content.model_validate(item)
@@ -52,9 +54,20 @@ class ChatServer(ThreadingHTTPServer):
         TCPServer.server_bind(self)
         self.server_name, self.server_port = self.server_address[:2]
 
+    def visible_messages(self, session):
+        messages = []
+        for item in self.histories.get(session, []):
+            if any(part.function_call or part.function_response for part in item.parts or []):
+                continue
+            text = '\n'.join(part.text for part in item.parts or [] if part.text and not part.thought)
+            if text and not text.startswith('服務更新續接資料：'):
+                messages.append({'role': 'user' if item.role == 'user' else 'assistant', 'text': text})
+        return messages
+
     def save_state(self):
         if self.state_file:
             state = {'token': self.token,
+                     'active_session': self.active_session,
                      'events': self.events,
                      'histories': {key: [item.model_dump(mode='json', exclude_none=True) for item in value]
                                    for key, value in self.histories.items()},
@@ -107,21 +120,32 @@ class ChatHandler(BaseHTTPRequestHandler):
         filename, content_type = assets[url.path]
         body = (ROOT / 'web' / filename).read_text()
         if url.path == '/':
-            session = parse_qs(url.query).get('session', [None])[0]
-            initial = {}
-            if session:
-                if not re.fullmatch(r'[a-f0-9-]{36}', session) or session not in self.server.histories and session not in self.server.stage6.sessions:
-                    return self._error(404, '找不到這段對話。')
-                if self.server.turn_lock.locked():
-                    return self._error(409, '回合仍在執行，請保留原頁面等待完成。')
-                messages = []
-                for item in self.server.histories.get(session, []):
-                    if any(part.function_call or part.function_response for part in item.parts or []):
-                        continue
-                    text = '\n'.join(part.text for part in item.parts or [] if part.text and not part.thought)
-                    if text and not text.startswith('服務更新續接資料：'):
-                        messages.append({'role': 'user' if item.role == 'user' else 'assistant', 'text': text})
-                initial = {'session': session, 'messages': messages, 'events': self.server.events.get(session, [])}
+            if not self.server.turn_lock.acquire(blocking=False):
+                return self._error(409, '回合仍在執行，請保留原頁面等待完成。')
+            try:
+                query = parse_qs(url.query)
+                session = query.get('session', [None])[0]
+                saved = list(dict.fromkeys([*self.server.histories, *self.server.stage6.sessions]))
+                saved = [key for key in saved if re.fullmatch(r'[a-f0-9-]{36}', key)]
+                if session is None and query.get('new') != ['1']:
+                    active = self.server.active_session
+                    histories = [key for key in self.server.histories if key in saved]
+                    session = active if active in saved else next(reversed(histories or saved), None)
+                initial = {'sessions': []}
+                for key in reversed(saved):
+                    messages = self.server.visible_messages(key)
+                    title = next((item['text'] for item in messages if item['role'] == 'user'), key[:8])
+                    initial['sessions'].append({'session': key, 'title': ' '.join(title.split())[:80]})
+                if session is not None:
+                    if session not in saved:
+                        return self._error(404, '找不到這段對話。')
+                    initial.update(session=session, messages=self.server.visible_messages(session),
+                                   events=self.server.events.get(session, []))
+                    if self.server.active_session != session:
+                        self.server.active_session = session
+                        self.server.save_state()
+            finally:
+                self.server.turn_lock.release()
             body = body.replace('__TOKEN__', self.server.token).replace('__MODEL__', html.escape(self.server.model_label))
             body = body.replace('__INITIAL_CHAT__', json.dumps(initial, ensure_ascii=False).replace('<', '\\u003c'))
         self._headers(200, content_type)
@@ -155,8 +179,7 @@ class ChatHandler(BaseHTTPRequestHandler):
         if not self.server.turn_lock.acquire(blocking=False):
             return self._error(409, '另一個回合仍在執行，請等候結束；關閉頁面不會取消工具。')
         try:
-            if session not in self.server.histories and len(self.server.histories) >= 32:
-                return self._error(503, '本次程式的對話數已達上限，請重新啟動本機介面。')
+            self.server.active_session = session
             if session not in self.server.histories and self.server.pending_history:
                 self.server.histories[session] = self.server.pending_history
                 self.server.pending_history = []

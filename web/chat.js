@@ -52,6 +52,19 @@ const initialChat = JSON.parse($('initial-chat')?.textContent || '{}');
 const session = initialChat.session || crypto.randomUUID();
 if (initialChat.session) history.replaceState(null, '', '/?session=' + session);
 let busy = false, turns = 0;
+const savedChats = $('saved-chats');
+for (const saved of initialChat.sessions || []) {
+  const option = document.createElement('option');
+  option.value = saved.session;
+  option.textContent = saved.title;
+  savedChats.append(option);
+}
+if (savedChats) {
+  savedChats.value = initialChat.session || '';
+  savedChats.addEventListener('change', () => {
+    if (!busy) location.assign(savedChats.value ? '/?session=' + encodeURIComponent(savedChats.value) : '/?new=1');
+  });
+}
 const statusLabels = {ok:'查詢完成', created:'工作已建立', process_completed:'程序已結束，分析有效性仍須核對', completed:'已完成', prepared:'僅完成準備', unavailable:'目前無法執行', blocked:'條件不足', invalid:'參數無效', error:'發生錯誤', interrupted:'已中斷', skipped:'已跳過', unknown:'狀態未知', failed:'執行失敗', timed_out:'執行逾時', timeout:'執行逾時'};
 Object.assign(statusLabels, {submitted:'已送出，待確認啟動', starting:'正在啟動', running:'執行中', verified_completed:'已完成並通過輸出核對', verification_failed:'輸出核對未通過', cancelled:'已確認停止'});
 const bad = new Set(['error','failed','interrupted','timeout','timed_out']);
@@ -134,6 +147,7 @@ async function send(text) {
   window.dispatchEvent(new Event('chat-busy'));
   $('send').disabled = true;
   $('new-chat').disabled = true;
+  if (savedChats) savedChats.disabled = true;
   document.querySelectorAll('[data-prompt]').forEach(button => button.disabled = true);
   $('welcome')?.remove();
   $('activity-empty')?.remove();
@@ -197,6 +211,7 @@ async function send(text) {
     window.dispatchEvent(new Event('chat-idle'));
     $('send').disabled = false;
     $('new-chat').disabled = false;
+    if (savedChats) savedChats.disabled = false;
     $('prompt').focus();
     $('messages').scrollTop = $('messages').scrollHeight;
   }
@@ -206,7 +221,7 @@ $('prompt').addEventListener('keydown', event => {
   if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {event.preventDefault(); $('composer').requestSubmit();}
 });
 document.querySelectorAll('[data-prompt]').forEach(button => button.addEventListener('click', () => send(button.dataset.prompt)));
-$('new-chat').addEventListener('click', () => {if (!busy) location.assign('/');});
+$('new-chat').addEventListener('click', () => {if (!busy) location.assign('/?new=1');});
 if (initialChat.messages?.length) {
   $('welcome')?.remove();
   for (const saved of initialChat.messages) {

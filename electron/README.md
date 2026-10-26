@@ -63,6 +63,14 @@ are bundled.
 Desktop chat and Stage 6 session files live under `state/` within Electron's
 `SIGNET Research Assistant` userData directory (normally
 `~/Library/Application Support/SIGNET Research Assistant/state/` on macOS).
+The last viewed saved conversation is restored on startup. Use the Saved conversations
+selector to reopen older chats, or New chat to start a blank conversation. Older
+state files without an active-session preference resume the most recently created
+saved chat. Restoring a conversation displays its saved messages and work records;
+it never repeats a model request or scientific operation. The previous 32-chat hard
+limit is removed. Histories are retained without automatic eviction, so the local
+state file grows with usage.
+
 The browser CLI still uses its original project-local files. No existing history
 is moved, overwritten or automatically imported. Both interfaces share the same
 project `data/`, `runs/`, `.env`, and configured scientific runtime. Use only one
@@ -88,7 +96,9 @@ test loads the actual UI without a model call, checks sandboxing, workspace acce
 language switching, blocked external navigation and service shutdown. It writes a
 screenshot to the OS temporary directory. The startup regression test executes the
 package entry and verifies that it creates a visible window containing the chat UI;
-it uses disposable application state and closes the window afterward. This catches
+it uses disposable state with 32 legacy conversations, exercises history selection
+and explicit new-chat navigation, verifies retained messages/events, and closes the
+window afterward. This catches
 entry-point failures that a direct call to `launch()` in the smoke test bypasses.
 On Linux run both native checks with a display, or prefix each command with
 `xvfb-run -a`. GitHub Actions runs all three Electron checks on macOS.

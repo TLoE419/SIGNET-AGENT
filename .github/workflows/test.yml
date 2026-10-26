@@ -26,6 +26,12 @@ jobs:
         run: python scripts/setup_source.py
       - name: Test conversation, tools and runtimes without model credentials
         run: python -m unittest discover -s tests -v
+      - name: Test browser formatting, language and graph interactions
+        run: |
+          node tests/test_markdown.cjs
+          node tests/test_i18n.cjs
+          node tests/test_stage6_graph.cjs
+          node tests/test_chat_progress.cjs
   electron:
     runs-on: macos-15
     timeout-minutes: 10

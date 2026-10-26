@@ -24,6 +24,10 @@
     <div class="workspace chat-only">
       <section class="chat-pane" aria-label="Chat" data-i18n-aria="聊天">
         <div class="pane-title"><h2><span data-i18n="對話">Chat</span></h2><span><span data-i18n="你與 SIGNET 助手">You and SIGNET</span></span><button id="s6-open" type="button" aria-controls="stage6-pane" aria-expanded="false" hidden>Show visualization</button></div>
+        <div class="conversation-controls">
+          <label for="saved-chats" data-i18n="已存對話">Saved conversations</label>
+          <select id="saved-chats" aria-label="Saved conversations" data-i18n-aria="已存對話"><option value="" data-i18n="＋ 開始新對話">+ New chat</option></select>
+        </div>
         <div id="messages" class="messages" role="log" aria-label="Conversation" data-i18n-aria="對話紀錄" aria-live="polite">
           <div id="welcome" class="welcome"><span class="welcome-mark">✳</span><h2><span data-i18n="今天想探索什麼？">What would you like to explore?</span></h2><p><span data-i18n="從一個研究問題開始。<br>聊天下方可查看執行過程，右側可比較網路結果。">Start with a research question.<br>See chat activity below and compare networks on the right.</span></p><p><span data-i18n="此版本未附資料或分析結果。聊天需登入模型；科學分析另需來源、資料與執行環境。">No data or analysis results are bundled. Chat requires model sign-in; scientific analysis also requires source code, data and a configured runtime.</span></p><div class="suggestions"><button data-prompt="Introduce the available analyses and the data each requires. Do not run any analyses yet." data-i18n-prompt="先介紹目前可以做的分析，以及各自需要哪些資料，暫時不要執行分析。"><span data-i18n="了解分析能力">Explore analyses</span> <span>↗</span></button><button data-prompt="Review this project’s data files and existing run records. Do not run any analyses yet." data-i18n-prompt="幫我查看目前專案有哪些資料檔案，以及已有工作的記錄狀態，暫時不要執行分析。"><span data-i18n="檢查目前資料與工作">Review data and runs</span> <span>↗</span></button></div></div>
         </div>
