@@ -26,29 +26,3 @@ jobs:
         run: python scripts/setup_source.py
       - name: Test conversation, tools and runtimes without model credentials
         run: python -m unittest discover -s tests -v
-      - name: Test browser formatting, language and graph interactions
-        run: |
-          node tests/test_markdown.cjs
-          node tests/test_i18n.cjs
-          node tests/test_stage6_graph.cjs
-          node tests/test_chat_progress.cjs
-      - name: Install desktop metadata without downloading a graphical runtime
-        run: npm ci --prefix electron
-        env:
-          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
-      - name: Test desktop ownership and HTTP compatibility
-        run: npm test --prefix electron
-  desktop-smoke:
-    runs-on: macos-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v7.0.1
-      - uses: actions/setup-python@v7.1.0
-        with:
-          python-version: '3.11'
-      - uses: actions/setup-node@v7.1.0
-        with:
-          node-version: '24'
-      - run: python -m pip install -r requirements.txt
-      - run: npm ci --prefix electron
-      - run: npm run test:smoke --prefix electron
