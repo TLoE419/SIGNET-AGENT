@@ -15,6 +15,13 @@ from electron.server import serve
 
 
 class DesktopServerTest(unittest.TestCase):
+    def test_loopback_startup_does_not_resolve_hostnames(self):
+        with patch('socket.getfqdn', side_effect=AssertionError('Loopback startup must not query DNS')):
+            with chat_ui.ChatServer(('127.0.0.1', 0), lambda timing: None) as server:
+                self.assertEqual(server.server_name, '127.0.0.1')
+                self.assertEqual(server.server_port, server.server_address[1])
+                self.assertGreater(server.server_port, 0)
+
     def test_parent_eof_waits_for_stage6_worker_before_final_checkpoint(self):
         @contextmanager
         def factory(timing):

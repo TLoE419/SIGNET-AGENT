@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+from socketserver import TCPServer
 import threading
 from urllib.parse import urlsplit, parse_qs
 
@@ -45,6 +46,11 @@ class ChatServer(ThreadingHTTPServer):
         self.turn_lock = threading.Lock()
         self.stage6 = Workspace(self)
         super().__init__(address, ChatHandler)
+
+    def server_bind(self):
+        # The loopback service needs no reverse DNS, which can stall on offline hosts.
+        TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
 
     def save_state(self):
         if self.state_file:
