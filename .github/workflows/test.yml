@@ -41,6 +41,21 @@ jobs:
         run: python -m pip install -r requirements.txt
       - name: Install pinned Electron dependencies
         run: npm ci --prefix electron
+      - name: Diagnose runner service startup
+        run: |
+          python - <<'PYTHON'
+          import faulthandler, sys, tempfile
+          from pathlib import Path
+          faulthandler.dump_traceback_later(15, exit=True)
+          from chat_ui import create_server
+          print('Python interpreter:', sys.executable, flush=True)
+          with tempfile.TemporaryDirectory() as directory:
+              print('Creating local service', flush=True)
+              server = create_server(state_file=Path(directory) / 'state.json', port=0)
+              print('Local service ready:', server.server_port, flush=True)
+              server.server_close()
+          faulthandler.cancel_dump_traceback_later()
+          PYTHON
       - name: Test owned backend and navigation boundaries
         run: npm test --prefix electron
       - name: Test native interface and service shutdown
