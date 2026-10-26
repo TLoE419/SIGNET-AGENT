@@ -6,7 +6,7 @@ Use a local chat interface to explore SIGNET's analysis capabilities, inspect fi
 
 ## Replacing the Former Desktop Workbench
 
-This version replaces the desktop workbench with the local chat research assistant. The current tree no longer contains `desktop/`, the former `tools/` setup and execution entry points, desktop architecture documents, or historical validation records. Use the Python installation and startup steps below; `npm start` and `tools/setup-dev.sh` are no longer entry points for this version.
+This version replaces the desktop workbench with the local chat research assistant. The retired `desktop/` implementation, former `tools/` setup and execution entry points, desktop architecture documents, and historical validation records have been removed. Use the Python installation and startup steps below; the former desktop `npm start` and `tools/setup-dev.sh` are no longer entry points. An optional new Electron shell is described below.
 
 This replaces the application entry point and file layout. It does not automatically migrate desktop work data or run records, and scientific analysis still requires a separately prepared environment. The old application and environment tools remain available in the [desktop history](https://github.com/TLoE419/SIGNET-AGENT/tree/cfd64e0ceaeabc6d8aa285285bd991587b8272e0).
 
@@ -27,6 +27,22 @@ python3 -m venv .venv
 Open the [local interface](http://127.0.0.1:8880). A page loading successfully does not establish that your model is signed in or that the scientific environment is ready.
 
 Chat uses your own signed-in Codex CLI by default. See the [installation guide](docs/INSTALL.md) for installation, sign-in checks, and other model providers. The CLI version checked for this project is `0.162.1`; other versions need compatible command arguments and structured responses.
+
+## Optional Desktop Window
+
+After the Python setup above, you can open the same interface in Electron:
+
+```sh
+npm ci --prefix electron
+npm start --prefix electron
+```
+
+Requires Node.js 22.12+ on macOS or Linux. The shell starts its own loopback Python
+service and manages its shutdown; it preserves the existing UI, APIs and analysis
+implementation. Browser startup remains supported. Desktop conversation state is
+separate, while scientific inputs and runs are shared; run scientific work through
+only one interface at a time. See [desktop setup and lifecycle](electron/README.md)
+for model selection, shutdown behavior and tests. No installer is provided yet.
 
 ## Capabilities and Prerequisites
 

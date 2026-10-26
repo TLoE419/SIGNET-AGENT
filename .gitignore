@@ -31,3 +31,8 @@ node_modules/
 *.key
 id_ed25519*
 id_rsa*
+
+# Local artifacts retained when switching away from the retired desktop branches.
+/desktop/.runtime/
+/desktop/build/
+/desktop/evidence/

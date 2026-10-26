@@ -107,6 +107,71 @@ class ChatUITest(unittest.TestCase):
         self.assertEqual(initial['events'], [['工具查詢完成，未執行分析。']])
         self.assertEqual(self.request('/?session=bad')[0], 404)
 
+    def initial_chat(self, page):
+        return json.loads(page.split('id="initial-chat">')[1].split('</script>')[0])
+
+    def test_legacy_history_is_restored_and_new_chat_is_explicit(self):
+        older = self.session
+        latest = 'abcdefab-1234-1234-1234-123456789abc'
+        for session, text in [(older, 'Earlier question'), (latest, 'Latest question')]:
+            self.server.histories[session] = [types.Content(role='user', parts=[types.Part.from_text(text=text)])]
+        with patch.object(chat_ui, 'run_conversation') as run:
+            initial = self.initial_chat(self.request()[1])
+            self.assertEqual(initial['session'], latest)
+            self.assertEqual(initial['messages'][0]['text'], 'Latest question')
+            self.assertEqual({item['session'] for item in initial['sessions']}, {older, latest})
+            fresh = self.initial_chat(self.request('/?new=1')[1])
+            self.assertNotIn('session', fresh)
+            self.assertNotIn('messages', fresh)
+            self.assertEqual(len(fresh['sessions']), 2)
+            run.assert_not_called()
+        self.server.turn_lock.acquire()
+        try:
+            self.assertEqual(self.request('/?session=' + older)[0], 409)
+        finally:
+            self.server.turn_lock.release()
+
+    def test_last_viewed_conversation_survives_restart_without_replay(self):
+        with tempfile.TemporaryDirectory() as folder:
+            self.server.state_file = Path(folder) / 'state.json'
+            other = 'abcdefab-1234-1234-1234-123456789abc'
+            self.server.histories = {self.session: [types.Content(role='user', parts=[types.Part.from_text(text='Saved question')])], other: []}
+            self.server.events[self.session] = [['Saved work; do not replay']]
+            self.request('/?session=' + self.session)
+            with chat_ui.ChatServer(('127.0.0.1', 0), self.server.client_factory,
+                                    state_file=self.server.state_file) as restored:
+                runner = threading.Thread(target=restored.serve_forever, daemon=True)
+                runner.start()
+                try:
+                    conn = http.client.HTTPConnection('127.0.0.1', restored.server_port, timeout=3)
+                    conn.request('GET', '/')
+                    response = conn.getresponse()
+                    self.assertEqual(response.status, 200)
+                    initial = self.initial_chat(response.read().decode())
+                    conn.close()
+                    self.assertEqual(initial['session'], self.session)
+                    self.assertEqual(initial['messages'][0]['text'], 'Saved question')
+                    self.assertEqual(initial['events'], [['Saved work; do not replay']])
+                    self.assertEqual(self.requests, [])
+                finally:
+                    restored.shutdown()
+                    runner.join(3)
+
+    def test_new_chat_beyond_32_preserves_existing_history_and_events(self):
+        for index in range(32):
+            session = f'{index:08x}-0000-0000-0000-000000000000'
+            self.server.histories[session] = [types.Content(role='user', parts=[types.Part.from_text(text=f'Saved {index}')])]
+            self.server.events[session] = [[f'Existing event {index}']]
+        existing = dict(self.server.histories)
+        status, body = self.post('New conversation after 32 saved chats')
+        self.assertEqual(status, 200, body)
+        self.assertEqual(len(self.server.histories), 33)
+        for session, history in existing.items():
+            self.assertEqual(self.server.histories[session], history)
+            self.assertTrue(self.server.events[session][0][0].startswith('Existing event'))
+        self.assertEqual(self.server.active_session, self.session)
+        self.assertEqual(len(self.requests), 1)
+
     def test_checkpoint_retains_token_full_tool_results_and_session_isolation(self):
         with tempfile.TemporaryDirectory() as folder:
             self.server.state_file = Path(folder) / 'state.json'

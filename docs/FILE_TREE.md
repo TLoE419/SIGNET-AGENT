@@ -1,6 +1,6 @@
 # Project Files and Responsibilities
 
-This tree lists the project files after the desktop replacement; the pull request records the actual merge status. All data and local work products are excluded. Tests generate only the necessary synthetic content in temporary directories.
+This tree lists the project files with the optional Electron shell; the pull request records the actual merge status. All data and local work products are excluded. Tests generate only the necessary synthetic content in temporary directories.
 
 ```text
 SIGNET-agent/
@@ -12,6 +12,7 @@ SIGNET-agent/
 ├── README.md                     # Project overview, scope, and quick start
 ├── requirements.txt              # Pins four direct dependency versions
 ├── chat_ui.py                    # Local web service, conversation storage, and workspace API
+├── llm_providers/                # Factory dispatch and isolated Codex, Gemini and Groq adapters
 ├── main.py                       # Conversation flow, public progress, and controlled tool calls
 ├── codex_provider.py             # Uses the downloader's own signed-in model CLI
 ├── groq_provider.py              # Groq connection, tool format, and rate-limit waits
@@ -44,6 +45,15 @@ SIGNET-agent/
 │   └── advanced/
 │       ├── start_scientific_vm.sh # Advanced startup script for the existing recovery environment
 │       └── verify_network.cjs     # Verifies scheduler, matrices, commands, and resampling results
+├── electron/
+│   ├── main.cjs                  # Optional desktop window, security policy and application lifecycle
+│   ├── backend.cjs               # Owned Python process, readiness and shutdown
+│   ├── server.py                 # Launcher around the existing ChatServer; parent-pipe supervision
+│   ├── policy.cjs                # Owned-origin request and navigation rules
+│   ├── package.json              # Electron startup and lifecycle/smoke tests
+│   ├── package-lock.json         # Pinned desktop dependencies
+│   ├── README.md                 # Desktop setup, state and lifecycle limitations
+│   └── tests/                    # Real-service lifecycle and native Electron smoke tests
 ├── web/
 │   ├── index.html                # Chat and Stage 6 page structure
 │   ├── chat.js                   # Chat, progress, and response formatting, including the markup parser

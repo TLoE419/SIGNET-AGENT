@@ -1,5 +1,6 @@
 'use strict';
 const uiEnglish = {
+  "已存對話": "Saved conversations",
   "此版本未附資料或分析結果。聊天需登入模型；科學分析另需來源、資料與執行環境。": "No data or analysis results are bundled. Chat requires model sign-in; scientific analysis also requires source code, data and a configured runtime.",
   "網路視覺化": "Network visualization",
   "SIGNET · 研究助手": "SIGNET · Research Assistant",

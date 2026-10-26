@@ -42,12 +42,12 @@ function setup(initial={}) {
   let finish, calls=0;
   const gate=new Promise(resolve=>finish=resolve);
   const workspace={active:false,runs:[],baseline:null,comparison:null,proposals:[],graphs:{}};
-  const events={};const storage=new Map();
+  const events={};const storage=new Map();const navigation=[];
   const context=vm.createContext({document:{getElementById:id=>ids.get(id),createElement:tag=>new Element(tag),
     querySelector:selector=>selector.startsWith('meta')?{content:'token'}:find(selector),
     querySelectorAll:selector=>selector==='[data-tab]'?all.filter(e=>e.dataset.tab):[],addEventListener(){}},
     uiLanguage:'en',uiText(el,text){el.dataset.i18n=text;el.textContent=text;},
-    crypto:{randomUUID:()=> 'test-session'},history:{replaceState(){}},location:{assign(){}},performance:{now:()=>1000},TextDecoder,
+    crypto:{randomUUID:()=> 'test-session'},history:{replaceState(){}},location:{assign:path=>navigation.push(path)},performance:{now:()=>1000},TextDecoder,
     Event:class {constructor(type){this.type=type;}},CustomEvent:class {constructor(type,options){this.type=type;this.detail=options.detail;}},
     addEventListener(name,fn){events[name]=fn;},dispatchEvent(event){events[event.type]?.(event);},
     sessionStorage:{getItem:k=>storage.get(k),setItem:(k,v)=>storage.set(k,v)},
@@ -79,13 +79,17 @@ function setup(initial={}) {
     }
     return true;
   }
-  return {context,ids,events,visible,finish,workspace,calls:()=>calls};
+  return {context,ids,events,visible,finish,workspace,navigation,calls:()=>calls};
 }
 
 (async()=>{
   const app=setup();await new Promise(setImmediate);
   const pending=vm.runInContext('send("Describe the tools without running analysis.")',app.context);
   await new Promise(setImmediate);
+  assert.equal(app.ids.get('saved-chats').disabled,true);
+  app.ids.get('saved-chats').value='saved';
+  app.ids.get('saved-chats').events.change();
+  assert.equal(app.navigation.length,0,'history must not navigate away during an active turn');
   assert.equal(app.visible(app.ids.get('activity')),true,'ordinary chat progress must be visible without a Stage 6 baseline');
   assert.equal(app.visible(app.ids.get('state')),true,'live status must have no hidden ancestor');
   assert.match(app.ids.get('activity').textContent,/signet_catalog/);
@@ -98,6 +102,7 @@ function setup(initial={}) {
     assert.equal(app.visible(app.ids.get('activity')),true,'visualization tabs must not hide chat activity');
   }
   app.finish();await pending;
+  assert.equal(app.ids.get('saved-chats').disabled,false);
   assert.equal(app.visible(app.ids.get('activity')),true,'finished tool records remain accessible');
   assert.equal(app.ids.get('state').textContent,'回合結束');
   app.ids.get('chat-progress').open=false;
@@ -107,12 +112,21 @@ function setup(initial={}) {
   assert.match(app.ids.get('activity').textContent,/signet_catalog/);
   assert.equal(app.calls(),1,'view changes must not repeat the request');
 
-  const restored=setup({session:'saved-session',messages:[{role:'assistant',text:'Saved answer'}],events:[['Saved tool result']]});
+  const restored=setup({session:'saved-session',sessions:[{session:'saved-session',title:'Saved question'},{session:'other-session',title:'<script>literal title</script>'}],messages:[{role:'assistant',text:'Saved answer'}],events:[['Saved tool result']]});
   await new Promise(setImmediate);
   assert.equal(restored.visible(restored.ids.get('chat-progress')),true,'restored history has an accessible progress control');
   restored.ids.get('chat-progress').open=true;
   assert.equal(restored.visible(restored.ids.get('activity')),true);
   assert.match(restored.ids.get('activity').textContent,/Saved tool result/);
+  const selector=restored.ids.get('saved-chats');
+  assert.equal(selector.value,'saved-session');
+  assert.equal(selector.children.at(-1).textContent,'<script>literal title</script>');
+  selector.value='other-session';selector.events.change();
+  assert.equal(restored.navigation.at(-1),'/?session=other-session');
+  selector.value='';selector.events.change();
+  assert.equal(restored.navigation.at(-1),'/?new=1');
+  restored.ids.get('new-chat').events.click();
+  assert.equal(restored.navigation.at(-1),'/?new=1');
   const failed=setup();await new Promise(setImmediate);failed.context.failRequest=true;
   await vm.runInContext('send("Controlled error")',failed.context);
   assert.equal(failed.visible(failed.ids.get('activity')),true,'failure details remain visible');

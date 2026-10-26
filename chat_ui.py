@@ -7,15 +7,16 @@ import os
 from pathlib import Path
 import re
 import secrets
+from socketserver import TCPServer
 import threading
 from urllib.parse import urlsplit, parse_qs
 
 from dotenv import load_dotenv
-from google import genai
 from google.genai import types
 
 from main import MODEL, run_conversation
 from model_timing import ModelRequestTiming
+from llm_providers import PROVIDERS, create_provider_adapter
 from stage6_workspace import Workspace, CHAT_CONTEXT
 
 ROOT = Path(__file__).resolve().parent
@@ -24,18 +25,21 @@ ROOT = Path(__file__).resolve().parent
 class ChatServer(ThreadingHTTPServer):
     daemon_threads = False
 
-    def __init__(self, address, client_factory, model_label=MODEL, state_file=None):
+    def __init__(self, address, client_factory, model_label=MODEL, state_file=None, *, stop_provider=None):
         self.client_factory = client_factory
         self.model_label = model_label
+        self.stop_provider = stop_provider or (lambda: None)
         self.token = secrets.token_urlsafe(32)
         self.histories = {}
         self.events = {}
         self.state_file = Path(state_file) if state_file else None
         self.pending_history = []
+        self.active_session = None
         if self.state_file and self.state_file.exists():
             state = json.loads(self.state_file.read_text())
             self.token = state['token']
             self.events = state.get('events', {})
+            self.active_session = state.get('active_session')
             self.histories = {key: [types.Content.model_validate(item) for item in value]
                               for key, value in state.get('histories', {}).items()}
             self.pending_history = [types.Content.model_validate(item)
@@ -45,9 +49,25 @@ class ChatServer(ThreadingHTTPServer):
         self.stage6 = Workspace(self)
         super().__init__(address, ChatHandler)
 
+    def server_bind(self):
+        # The loopback service needs no reverse DNS, which can stall on offline hosts.
+        TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
+
+    def visible_messages(self, session):
+        messages = []
+        for item in self.histories.get(session, []):
+            if any(part.function_call or part.function_response for part in item.parts or []):
+                continue
+            text = '\n'.join(part.text for part in item.parts or [] if part.text and not part.thought)
+            if text and not text.startswith('服務更新續接資料：'):
+                messages.append({'role': 'user' if item.role == 'user' else 'assistant', 'text': text})
+        return messages
+
     def save_state(self):
         if self.state_file:
             state = {'token': self.token,
+                     'active_session': self.active_session,
                      'events': self.events,
                      'histories': {key: [item.model_dump(mode='json', exclude_none=True) for item in value]
                                    for key, value in self.histories.items()},
@@ -100,21 +120,32 @@ class ChatHandler(BaseHTTPRequestHandler):
         filename, content_type = assets[url.path]
         body = (ROOT / 'web' / filename).read_text()
         if url.path == '/':
-            session = parse_qs(url.query).get('session', [None])[0]
-            initial = {}
-            if session:
-                if not re.fullmatch(r'[a-f0-9-]{36}', session) or session not in self.server.histories and session not in self.server.stage6.sessions:
-                    return self._error(404, '找不到這段對話。')
-                if self.server.turn_lock.locked():
-                    return self._error(409, '回合仍在執行，請保留原頁面等待完成。')
-                messages = []
-                for item in self.server.histories.get(session, []):
-                    if any(part.function_call or part.function_response for part in item.parts or []):
-                        continue
-                    text = '\n'.join(part.text for part in item.parts or [] if part.text and not part.thought)
-                    if text and not text.startswith('服務更新續接資料：'):
-                        messages.append({'role': 'user' if item.role == 'user' else 'assistant', 'text': text})
-                initial = {'session': session, 'messages': messages, 'events': self.server.events.get(session, [])}
+            if not self.server.turn_lock.acquire(blocking=False):
+                return self._error(409, '回合仍在執行，請保留原頁面等待完成。')
+            try:
+                query = parse_qs(url.query)
+                session = query.get('session', [None])[0]
+                saved = list(dict.fromkeys([*self.server.histories, *self.server.stage6.sessions]))
+                saved = [key for key in saved if re.fullmatch(r'[a-f0-9-]{36}', key)]
+                if session is None and query.get('new') != ['1']:
+                    active = self.server.active_session
+                    histories = [key for key in self.server.histories if key in saved]
+                    session = active if active in saved else next(reversed(histories or saved), None)
+                initial = {'sessions': []}
+                for key in reversed(saved):
+                    messages = self.server.visible_messages(key)
+                    title = next((item['text'] for item in messages if item['role'] == 'user'), key[:8])
+                    initial['sessions'].append({'session': key, 'title': ' '.join(title.split())[:80]})
+                if session is not None:
+                    if session not in saved:
+                        return self._error(404, '找不到這段對話。')
+                    initial.update(session=session, messages=self.server.visible_messages(session),
+                                   events=self.server.events.get(session, []))
+                    if self.server.active_session != session:
+                        self.server.active_session = session
+                        self.server.save_state()
+            finally:
+                self.server.turn_lock.release()
             body = body.replace('__TOKEN__', self.server.token).replace('__MODEL__', html.escape(self.server.model_label))
             body = body.replace('__INITIAL_CHAT__', json.dumps(initial, ensure_ascii=False).replace('<', '\\u003c'))
         self._headers(200, content_type)
@@ -148,8 +179,7 @@ class ChatHandler(BaseHTTPRequestHandler):
         if not self.server.turn_lock.acquire(blocking=False):
             return self._error(409, '另一個回合仍在執行，請等候結束；關閉頁面不會取消工具。')
         try:
-            if session not in self.server.histories and len(self.server.histories) >= 32:
-                return self._error(503, '本次程式的對話數已達上限，請重新啟動本機介面。')
+            self.server.active_session = session
             if session not in self.server.histories and self.server.pending_history:
                 self.server.histories[session] = self.server.pending_history
                 self.server.pending_history = []
@@ -272,55 +302,35 @@ class ChatHandler(BaseHTTPRequestHandler):
                 self.server.turn_lock.release()
 
 
+def create_server(provider='codex', port=8880, state_file=ROOT / '.chat-state.json'):
+    """Build the same local service for the browser CLI or the optional desktop host."""
+    if provider not in PROVIDERS:
+        raise ValueError('Unsupported model provider.')
+    load_dotenv(ROOT / '.env')
+    configured = create_provider_adapter(provider, gemini_model=MODEL)
+    from signet_tools import source_path
+    for message in configured.startup_messages:
+        print(message, flush=True)
+    if not source_path().is_dir():
+        print('科學來源尚未準備；可聊天與查詢工具目錄。分析前請執行 python scripts/setup_source.py。', flush=True)
+    return ChatServer(('127.0.0.1', port), configured.create_client,
+                      model_label=configured.label, state_file=state_file,
+                      stop_provider=configured.stop)
+
+
 def main():
     parser = argparse.ArgumentParser(description='啟動 SIGNET 本機聊天介面。')
     parser.add_argument('--port', type=int, default=8880)
-    parser.add_argument('--provider', choices=('codex', 'gemini', 'groq'), default='codex')
+    parser.add_argument('--provider', choices=PROVIDERS, default='codex')
     parser.add_argument('--state-file', type=Path, default=ROOT / '.chat-state.json')
     args = parser.parse_args()
-    load_dotenv(ROOT / '.env')
-    api_key = None
-    if args.provider != 'codex':
-        key_name = 'GROQ_API_KEY' if args.provider == 'groq' else 'GEMINI_API_KEY'
-        api_key = os.environ.get(key_name)
-        if not api_key:
-            raise SystemExit(f'請先在 .env 或環境變數設定 {key_name}。')
-
-    def client_factory(timing):
-        if args.provider == 'codex':
-            from codex_provider import CodexClient
-            return CodexClient(timing=timing)
-        if args.provider == 'groq':
-            from groq_provider import GroqClient
-            return GroqClient(api_key, timing=timing)
-        return genai.Client(api_key=api_key, http_options=types.HttpOptions(client_args=timing.client_args()))
-
-    if args.provider == 'codex':
-        from codex_provider import configured_model
-        label = 'Codex CLI / ' + (configured_model() or '預設模型')
-    elif args.provider == 'groq':
-        from groq_provider import GROQ_MODEL
-        label = 'Groq / ' + os.environ.get('GROQ_MODEL', GROQ_MODEL)
-    else:
-        label = MODEL
-    from signet_tools import source_path
-    import shutil
-    if args.provider == 'codex' and not shutil.which('codex'):
-        print('尚未安裝 Codex 命令列；介面仍可開啟，聊天前請依 docs/INSTALL.md 安裝與登入。', flush=True)
-    if not source_path().is_dir():
-        print('科學來源尚未準備；可聊天與查詢工具目錄。分析前請執行 python scripts/setup_source.py。', flush=True)
-    with ChatServer(('127.0.0.1', args.port), client_factory, model_label=label, state_file=args.state_file) as server:
+    with create_server(args.provider, args.port, args.state_file) as server:
         print(f'SIGNET 聊天介面：http://127.0.0.1:{server.server_port}', flush=True)
         print('僅供本機使用；送出訊息會呼叫模型服務。Ctrl+C 結束；進行中的工具會等待完成。', flush=True)
         try:
             server.serve_forever()
         except KeyboardInterrupt:
-            if args.provider == 'codex':
-                from codex_provider import STOP
-                STOP.set()
-            if args.provider == 'groq':
-                from groq_provider import REQUEST_PACER
-                REQUEST_PACER.stopped.set()
+            server.stop_provider()
 
 
 if __name__ == '__main__':
