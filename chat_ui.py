@@ -272,44 +272,51 @@ class ChatHandler(BaseHTTPRequestHandler):
                 self.server.turn_lock.release()
 
 
-def main():
-    parser = argparse.ArgumentParser(description='啟動 SIGNET 本機聊天介面。')
-    parser.add_argument('--port', type=int, default=8880)
-    parser.add_argument('--provider', choices=('codex', 'gemini', 'groq'), default='codex')
-    parser.add_argument('--state-file', type=Path, default=ROOT / '.chat-state.json')
-    args = parser.parse_args()
+def create_server(provider='codex', port=8880, state_file=ROOT / '.chat-state.json'):
+    """Build the same local service for the browser CLI or the optional desktop host."""
+    if provider not in ('codex', 'gemini', 'groq'):
+        raise ValueError('Unsupported model provider.')
     load_dotenv(ROOT / '.env')
     api_key = None
-    if args.provider != 'codex':
-        key_name = 'GROQ_API_KEY' if args.provider == 'groq' else 'GEMINI_API_KEY'
+    if provider != 'codex':
+        key_name = 'GROQ_API_KEY' if provider == 'groq' else 'GEMINI_API_KEY'
         api_key = os.environ.get(key_name)
         if not api_key:
             raise SystemExit(f'請先在 .env 或環境變數設定 {key_name}。')
 
     def client_factory(timing):
-        if args.provider == 'codex':
+        if provider == 'codex':
             from codex_provider import CodexClient
             return CodexClient(timing=timing)
-        if args.provider == 'groq':
+        if provider == 'groq':
             from groq_provider import GroqClient
             return GroqClient(api_key, timing=timing)
         return genai.Client(api_key=api_key, http_options=types.HttpOptions(client_args=timing.client_args()))
 
-    if args.provider == 'codex':
+    if provider == 'codex':
         from codex_provider import configured_model
         label = 'Codex CLI / ' + (configured_model() or '預設模型')
-    elif args.provider == 'groq':
+    elif provider == 'groq':
         from groq_provider import GROQ_MODEL
         label = 'Groq / ' + os.environ.get('GROQ_MODEL', GROQ_MODEL)
     else:
         label = MODEL
     from signet_tools import source_path
     import shutil
-    if args.provider == 'codex' and not shutil.which('codex'):
+    if provider == 'codex' and not shutil.which('codex'):
         print('尚未安裝 Codex 命令列；介面仍可開啟，聊天前請依 docs/INSTALL.md 安裝與登入。', flush=True)
     if not source_path().is_dir():
         print('科學來源尚未準備；可聊天與查詢工具目錄。分析前請執行 python scripts/setup_source.py。', flush=True)
-    with ChatServer(('127.0.0.1', args.port), client_factory, model_label=label, state_file=args.state_file) as server:
+    return ChatServer(('127.0.0.1', port), client_factory, model_label=label, state_file=state_file)
+
+
+def main():
+    parser = argparse.ArgumentParser(description='啟動 SIGNET 本機聊天介面。')
+    parser.add_argument('--port', type=int, default=8880)
+    parser.add_argument('--provider', choices=('codex', 'gemini', 'groq'), default='codex')
+    parser.add_argument('--state-file', type=Path, default=ROOT / '.chat-state.json')
+    args = parser.parse_args()
+    with create_server(args.provider, args.port, args.state_file) as server:
         print(f'SIGNET 聊天介面：http://127.0.0.1:{server.server_port}', flush=True)
         print('僅供本機使用；送出訊息會呼叫模型服務。Ctrl+C 結束；進行中的工具會等待完成。', flush=True)
         try:
