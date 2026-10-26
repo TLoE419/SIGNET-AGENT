@@ -100,11 +100,4 @@ function providerFromArgs(argv) {
   if (!['codex', 'gemini', 'groq'].includes(provider)) throw Error('Use --provider codex, gemini or groq.');
   return provider;
 }
-if (require.main === module) {
-  Promise.resolve().then(() => launch({provider: providerFromArgs(process.argv)})).catch(async error => {
-    await app.whenReady();
-    dialog.showErrorBox('SIGNET could not start', error.message);
-    app.exit(1);
-  });
-}
-module.exports = {launch};
+module.exports = {launch, providerFromArgs};

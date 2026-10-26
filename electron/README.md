@@ -78,6 +78,7 @@ the next desktop launch.
 ```sh
 npm test --prefix electron
 npm run test:smoke --prefix electron
+npm run test:startup --prefix electron
 .venv/bin/python -m unittest discover -s tests -p 'test_desktop_server.py' -v
 ```
 
@@ -85,5 +86,9 @@ The Node suite starts the real Python service in disposable state directories,
 checks HTTP boundaries, startup failures and owner-crash cleanup. The native smoke
 test loads the actual UI without a model call, checks sandboxing, workspace access,
 language switching, blocked external navigation and service shutdown. It writes a
-screenshot to the OS temporary directory. On Linux run the smoke test with a display
-or `xvfb-run -a npm run test:smoke --prefix electron`.
+screenshot to the OS temporary directory. The startup regression test executes the
+package entry and verifies that it creates a visible window containing the chat UI;
+it uses disposable application state and closes the window afterward. This catches
+entry-point failures that a direct call to `launch()` in the smoke test bypasses.
+On Linux run both native checks with a display, or prefix each command with
+`xvfb-run -a`. GitHub Actions runs all three Electron checks on macOS.

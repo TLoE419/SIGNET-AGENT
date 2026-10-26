@@ -3,11 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "description": "Optional desktop host for the existing SIGNET Python web application",
-  "main": "main.cjs",
+  "main": "entry.cjs",
   "scripts": {
     "start": "electron .",
     "test": "node --test tests/*.test.cjs",
-    "test:smoke": "electron tests/smoke.cjs"
+    "test:smoke": "electron tests/smoke.cjs",
+    "test:startup": "electron tests/startup.cjs"
   },
   "engines": {
     "node": ">=22.12.0"
