@@ -146,7 +146,8 @@
   });
 
   async function startLogin() {
-    const result = await api('/hpc3/login', {});
+    // Only the page language is sent, so the login dialogs speak the same language.
+    const result = await api('/hpc3/login', {language: typeof uiLanguage === 'string' ? uiLanguage : 'en'});
     if (result.code === 202) { login = result.body; poll(); return; }
     if (result.code === 200) { login = result.body; await refresh(true); return; }
     error = {409: '登入正在進行中。', 501: '登入視窗需要 macOS，請在終端機執行 python3 hpc3_ssh.py login。',

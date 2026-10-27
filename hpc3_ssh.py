@@ -46,6 +46,8 @@ USER_PATTERN = r'[a-z][a-z0-9_-]{0,31}'
 # Dialog helper ssh calls for each login question when logging in without a terminal.
 ASKPASS = Path(__file__).resolve().with_name('hpc3_askpass.py')
 PORT = 22
+# Languages the login dialogs speak (hpc3_askpass.py).
+LANGUAGES = ('en', 'zh-Hant')
 # Exit code of an ssh stopped by hpc3_askpass.py when the user presses Cancel (killed by SIGTERM).
 CANCELLED = -signal.SIGTERM
 # How long the shared connection stays open after the last use.
@@ -172,13 +174,14 @@ def has_shared_connection(user, host):
     return code == 0
 
 
-def askpass_environment():
+def askpass_environment(language='en'):
     """Environment that makes ssh ask every login question through hpc3_askpass.py.
 
     SSH_ASKPASS_REQUIRE=force uses the dialog even when a terminal exists, which is what the
     app's backend needs (it has no terminal) and lets the dialog be tried from a terminal.
     """
-    return dict(os.environ, SSH_ASKPASS=str(ASKPASS), SSH_ASKPASS_REQUIRE='force')
+    return dict(os.environ, SSH_ASKPASS=str(ASKPASS), SSH_ASKPASS_REQUIRE='force',
+                SIGNET_LANGUAGE=language if language in LANGUAGES else 'en')
 
 
 def probe_command(user, host):
@@ -203,14 +206,15 @@ def shared_connection_alive(user, host):
     return False
 
 
-def login(user, host, popup=False):
+def login(user, host, popup=False, language='en'):
     """Open the shared connection unless one is already open; returns (exit code, message).
 
     Without the pre-check, a second login would find the control socket taken, fall back to a
     separate unshared connection and ask for the password and Duo again for nothing.
 
     popup=False: ssh asks in this terminal. popup=True: ssh asks through native dialogs
-    (hpc3_askpass.py), with stdin closed so it can never fall back to a terminal prompt.
+    (hpc3_askpass.py), with stdin closed so it can never fall back to a terminal prompt;
+    language picks the dialogs' wording.
     """
     if shared_connection_alive(user, host):
         return 0, 'Already logged in to %s@%s; the shared connection is open.' % (user, host)
@@ -220,7 +224,7 @@ def login(user, host, popup=False):
     # ssh itself asks for the password and Duo (in this terminal, or in dialogs when popup is
     # set); the answers go straight to ssh and this program never reads them.
     if popup:
-        code = subprocess.call(login_command(user, host), env=askpass_environment(),
+        code = subprocess.call(login_command(user, host), env=askpass_environment(language),
                                stdin=subprocess.DEVNULL)
     else:
         code = subprocess.call(login_command(user, host))

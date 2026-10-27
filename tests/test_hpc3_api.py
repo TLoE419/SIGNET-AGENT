@@ -51,8 +51,9 @@ class FakeSsh:
         self.calls.append('check')
         return {'status': 'connected' if self.connected else 'auth_required', 'connected': self.connected}
 
-    def login(self, user, host, popup=False):
+    def login(self, user, host, popup=False, language='en'):
         self.calls.append(('login', user, popup))
+        self.language = language
         self.release.wait(5)
         self.connected = self.login_result[0] == 0
         return self.login_result
@@ -148,6 +149,12 @@ class Hpc3ApiTest(unittest.TestCase):
         self.ssh.release.set()
         self.assertEqual(self.wait_for_login_end(), {'state': 'succeeded', 'message': 'Logged in.', 'cancelled': False})
         self.assertIn(('login', 'jdoe', True), self.ssh.calls)
+
+    def test_page_language_reaches_the_login_dialogs(self):
+        self.request('POST', '/hpc3/login', {'language': 'zh-Hant'})
+        self.ssh.release.set()
+        self.wait_for_login_end()
+        self.assertEqual(self.ssh.language, 'zh-Hant')
 
     def test_failed_login_keeps_the_reason(self):
         self.ssh.login_result = (255, 'Login failed (ssh exit 255).')

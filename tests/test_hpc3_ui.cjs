@@ -86,7 +86,7 @@ function page(routes, language = 'en') {
     p.el['hpc3-user'].value = 'asmith';
     await p.submit();
     assert.deepEqual(p.requests.slice(-2).map(r => [r.method, r.path, r.body]),
-      [['POST', '/hpc3/user', '{"user":"asmith"}'], ['POST', '/hpc3/login', '{}']]);
+      [['POST', '/hpc3/user', '{"user":"asmith"}'], ['POST', '/hpc3/login', '{"language":"en"}']]);
   }
 
   // 2. Login: 202, poll while waiting, then connected; logout returns to "not connected".

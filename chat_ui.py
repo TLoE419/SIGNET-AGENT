@@ -295,7 +295,8 @@ class ChatHandler(BaseHTTPRequestHandler):
                 return self.json_response(self.server.hpc3.set_user(payload.get('user')))
             if self.path == '/hpc3/login':
                 # 202: the login continues in the background; poll GET /hpc3/login.
-                state = self.server.hpc3.start_login()
+                # The page's language only picks the dialogs' wording; hpc3_ssh validates it.
+                state = self.server.hpc3.start_login(language=payload.get('language'))
                 return self.json_response(state, 202 if state['state'] == 'waiting_for_user' else 200)
             if self.path == '/hpc3/logout':
                 return self.json_response(self.server.hpc3.logout())

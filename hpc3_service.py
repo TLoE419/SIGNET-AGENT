@@ -87,7 +87,7 @@ class Hpc3Service:
             self.login = {'state': 'idle', 'message': None}
         return {'user': user}
 
-    def start_login(self):
+    def start_login(self, language='en'):
         """Start a popup login unless one is running or the connection is already open."""
         if self.platform != 'darwin':
             raise Hpc3Error(501, 'Login dialogs need macOS. Run `python3 hpc3_ssh.py login` in a terminal.')
@@ -100,7 +100,7 @@ class Hpc3Service:
         # A connection that exists but no longer answers is closed and replaced, not trusted.
         if self.ssh.shared_connection_alive(user, host):
             return self._finish(0, 'Already logged in to %s@%s.' % (user, host))
-        self.thread = threading.Thread(target=self._run_login, args=(user, host), daemon=True)
+        self.thread = threading.Thread(target=self._run_login, args=(user, host, language), daemon=True)
         self.thread.start()
         return self.login_state()
 
@@ -118,10 +118,10 @@ class Hpc3Service:
             raise Hpc3Error(502, message)
         return {'message': message}
 
-    def _run_login(self, user, host):
+    def _run_login(self, user, host, language):
         """Background thread: ssh shows the dialogs; record how it ended."""
         try:
-            code, message = self.ssh.login(user, host, popup=True)
+            code, message = self.ssh.login(user, host, popup=True, language=language)
         except Exception:  # Any crash must still leave a final state for the page to read.
             code, message = 1, 'Login failed unexpectedly. Run `python3 hpc3_ssh.py check` to see why.'
         self._finish(code, message)
