@@ -111,7 +111,7 @@
 .hpc3-card[data-state=connected] .hpc3-dot{background:#3f9a68}.hpc3-card[data-state=disconnected] .hpc3-dot{background:#c98a3a}
 .hpc3-card[data-state=busy] .hpc3-dot{background:#4f86b8;animation:hpc3-pulse 1s ease-in-out infinite alternate}
 @keyframes hpc3-pulse{to{opacity:.3}}
-.hpc3-detail,.hpc3-error{margin:8px 0 0;line-height:1.5;overflow-wrap:anywhere}.hpc3-error{color:#a2412f}
+.hpc3-detail,.hpc3-error,.hpc3-notice{margin:8px 0 0;line-height:1.5;overflow-wrap:anywhere}.hpc3-notice{color:var(--accent)}.hpc3-error{color:#a2412f}
 .hpc3-user{margin-top:8px}.hpc3-user label{display:block;margin-bottom:4px;color:var(--muted)}
 .hpc3-user input{display:block;width:100%;margin-bottom:6px;padding:6px 8px;border:1px solid #cfd9cc;border-radius:6px;font:inherit}
 .hpc3-actions{display:flex;flex-wrap:wrap;gap:6px}.hpc3-actions:has(button:not([hidden])){margin-top:8px}

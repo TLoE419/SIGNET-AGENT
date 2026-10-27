@@ -7,7 +7,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 
 const IDS = ['hpc3-card', 'hpc3-state', 'hpc3-detail', 'hpc3-login-form', 'hpc3-user', 'hpc3-login',
-  'hpc3-logout', 'hpc3-refresh', 'hpc3-error', 'language-toggle'];
+  'hpc3-logout', 'hpc3-refresh', 'hpc3-notice', 'hpc3-error', 'language-toggle'];
 const CONNECTED = {status: 'connected', connected: true, user: 'jdoe', host: 'hpc3.example',
   remote: {hostname: 'login-i15', user: 'jdoe', slurm: true}};
 const NOT_LOGGED_IN = {status: 'auth_required', connected: false, user: 'jdoe', host: 'hpc3.example'};
@@ -20,7 +20,7 @@ function element(id) {
 // Build a page whose /hpc3 API answers from `routes` ("METHOD /path" -> list of [code, body]).
 function page(routes, language = 'en') {
   const elements = Object.fromEntries(IDS.map(id => [id, element(id)]));
-  elements['hpc3-detail'].hidden = elements['hpc3-login-form'].hidden = elements['hpc3-error'].hidden = true;
+  elements['hpc3-detail'].hidden = elements['hpc3-login-form'].hidden = elements['hpc3-error'].hidden = elements['hpc3-notice'].hidden = true;
   const requests = [], timers = [], windowEvents = {}, saved = new Map([['signet-language', language]]);
   async function fetch(path, options = {}) {
     const method = options.method || 'GET';
@@ -43,6 +43,7 @@ function page(routes, language = 'en') {
     el: elements, requests, context,
     async settle() { for (let i = 0; i < 10; i++) await settle(); },
     async click(id) { elements[id].events.click(); await this.settle(); },
+    async type(value) { elements['hpc3-user'].value = value; elements['hpc3-user'].events.input(); await this.settle(); },
     async submit() { elements['hpc3-login-form'].events.submit({preventDefault() {}}); await this.settle(); },
     async tick() { timers.shift()(); await this.settle(); },
     visible: () => IDS.filter(id => id.startsWith('hpc3-') && !['hpc3-card', 'hpc3-state', 'hpc3-user', 'hpc3-login'].includes(id) && !elements[id].hidden),
@@ -135,15 +136,25 @@ function page(routes, language = 'en') {
   // 4. Off the VPN, logging in cannot help: the button only saves the account; "Check again".
   {
     const p = page({'GET /hpc3/login': [[200, {state: 'idle'}]],
-      'GET /hpc3/status': [[200, {status: 'network_unreachable', connected: false, user: 'jdoe'}]]});
+      'GET /hpc3/status': [[200, {status: 'network_unreachable', connected: false, user: 'jdoe'}]],
+      'POST /hpc3/user': [[200, {user: 'asmith'}]]});
     await p.settle();
     assert.equal(p.el['hpc3-detail'].textContent, 'Cannot reach HPC3. Connect to the UCI VPN or campus network.');
     assert.deepEqual(p.visible(), ['hpc3-detail', 'hpc3-login-form', 'hpc3-refresh']);
     assert.equal(p.el['hpc3-login'].textContent, 'Save account');
-    await p.submit();  // same account, nothing to save: just re-checks, never starts a login
+    assert.equal(p.el['hpc3-login'].disabled, true);  // same account: nothing to save
+    await p.type('asmith');
+    assert.equal(p.el['hpc3-login'].disabled, false);
+    await p.submit();  // saves, re-checks, never starts a login, and says what happened
     assert.ok(!p.requests.some(r => r.path === '/hpc3/login' && r.method === 'POST'));
+    assert.deepEqual(JSON.parse(p.requests.find(r => r.path === '/hpc3/user').body), {user: 'asmith'});
+    assert.equal(p.el['hpc3-notice'].textContent, 'Account saved. Once the problem is fixed, press Check again to log in.');
+    assert.equal(p.el['hpc3-notice'].hidden, false);
     await p.click('hpc3-refresh');
     assert.equal(p.requests.at(-1).path, '/hpc3/status?refresh=1');
+    assert.equal(p.el['hpc3-notice'].textContent, 'Checked again; nothing has changed.');
+    assert.equal(p.el['hpc3-state'].textContent, 'Not connected');  // back from "Checking connection…"
+    assert.equal(p.el['hpc3-card'].dataset.state, 'disconnected');
   }
 
   // 5. A reload during a login resumes polling instead of offering a second login.

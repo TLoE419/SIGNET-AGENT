@@ -5,6 +5,8 @@ const uiEnglish = {
   "正在檢查連線…": "Checking connection…",
     "登入 HPC3": "Log in to HPC3",
   "儲存帳號": "Save account",
+  "帳號已儲存。問題排除後按「重新檢查」，就能登入。": "Account saved. Once the problem is fixed, press Check again to log in.",
+  "已重新檢查，狀態沒有改變。": "Checked again; nothing has changed.",
   "登出": "Log out",
   "重新檢查": "Check again",
    "登入中…": "Logging in…",

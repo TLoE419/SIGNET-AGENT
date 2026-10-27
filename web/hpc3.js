@@ -35,7 +35,9 @@
   let status = null;               // last GET /hpc3/status body, null while unknown
   let login = {state: 'idle'};     // last login progress from the server
   let error = '';                  // Chinese source text of the last error, translated on render
+  let notice = '';                 // what the last click did, when the status itself did not change
   let busy = false;                // a request from this card is in flight
+  let checking = false;            // a status check is running (may take a few seconds off the VPN)
   let timer = null;                // pending login-progress poll
 
   async function api(path, payload) {
@@ -68,10 +70,10 @@
     const connected = !!(status && status.connected);
     const formOpen = !!status && !waiting && !connected;
     const canLogin = formOpen && !NO_LOGIN.has(status.status);
-    card.dataset.state = waiting ? 'busy' : connected ? 'connected' : status ? 'disconnected' : 'checking';
+    card.dataset.state = waiting ? 'busy' : checking || !status ? 'checking' : connected ? 'connected' : 'disconnected';
 
     if (waiting) text('hpc3-state', '登入中…');
-    else if (!status) text('hpc3-state', '正在檢查連線…');
+    else if (!status || checking) text('hpc3-state', '正在檢查連線…');
     else if (connected) text('hpc3-state', '已連線');
     else if (!configured) text('hpc3-state', '尚未設定帳號');
     else text('hpc3-state', '未連線');
@@ -92,16 +94,24 @@
     // Pre-fill the last account once; never overwrite what the user is typing.
     if (formOpen && !el('hpc3-user').value) el('hpc3-user').value = status.user || '';
     text('hpc3-login', canLogin || !formOpen ? '登入 HPC3' : '儲存帳號');
+    // When login cannot help, the button only saves: nothing to do until the name changes.
+    const unchanged = el('hpc3-user').value.trim() === (status && status.user || '');
     show('hpc3-refresh', !!status && !connected && !waiting && !(status && !configured));
     show('hpc3-logout', connected && !waiting);
     for (const id of ['hpc3-login', 'hpc3-refresh', 'hpc3-logout', 'hpc3-user']) el(id).disabled = busy;
+    if (formOpen && !canLogin && unchanged) el('hpc3-login').disabled = true;
 
+    if (notice) text('hpc3-notice', notice);
+    show('hpc3-notice', !!notice && !error);
     if (error) text('hpc3-error', error);
     show('hpc3-error', !!error);
   }
 
   async function refresh(force) {
+    checking = true;
+    render();
     const result = await api('/hpc3/status' + (force ? '?refresh=1' : ''));
+    checking = false;
     if (result.code === 200) status = result.body;
     else if (!status) error = '無法取得 HPC3 狀態，請重新整理頁面。';
     render();
@@ -121,7 +131,7 @@
   }
 
   async function act(work) {
-    busy = true; error = ''; render();
+    busy = true; error = ''; notice = ''; render();
     try { await work(); } finally { busy = false; render(); }
   }
 
@@ -140,7 +150,11 @@
       const user = el('hpc3-user').value.trim();
       if (!user) { error = '請先輸入你的 UCInetID。'; return; }
       if (user !== (status.user || '') && !(await saveUser(user))) return;
-      if (NO_LOGIN.has(status.status)) { await refresh(true); return; }  // Saved; login cannot help yet.
+      if (NO_LOGIN.has(status.status)) {  // Saved; login cannot help until the problem is fixed.
+        await refresh(true);
+        if (!error && !status.connected) notice = '帳號已儲存。問題排除後按「重新檢查」，就能登入。';
+        return;
+      }
       await startLogin();
     });
   });
@@ -161,7 +175,15 @@
     await refresh(true);
   }));
 
-  el('hpc3-refresh').addEventListener('click', () => act(() => refresh(true)));
+  el('hpc3-refresh').addEventListener('click', () => act(async () => {
+    const before = status && status.status;
+    await refresh(true);
+    // Say so when nothing changed, so the click does not look ignored.
+    if (status && status.status === before) notice = '已重新檢查，狀態沒有改變。';
+  }));
+
+  // Typing a different account re-enables "Save account".
+  el('hpc3-user').addEventListener('input', render);
 
   // Coming back to the window may mean the VPN or the connection changed meanwhile.
   window.addEventListener('focus', () => { if (!busy && login.state !== 'waiting_for_user') refresh(false); });
