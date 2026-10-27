@@ -217,6 +217,10 @@ class LoginLogoutTest(unittest.TestCase):
         self.assertEqual((code, interactive), (0, [h.login_command('jdoe', h.DEFAULT_HOST)]))
         self.assertEqual([argv[2] for argv in ssh.calls if argv[1] == '-O'], ['check', 'exit'])
 
+    def test_cancelled_login_is_reported_as_cancelled(self):
+        code, message, _, _ = self.run_with(h.login, self.CLOSED, login_code=h.CANCELLED)
+        self.assertEqual((code, message), (h.CANCELLED, 'Login cancelled.'))
+
     def test_logout_without_a_connection_says_so_plainly(self):
         code, message, calls, _ = self.run_with(h.logout, self.CLOSED)
         self.assertEqual(code, 0)

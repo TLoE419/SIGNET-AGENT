@@ -13,7 +13,8 @@ Login states:
   idle              no login has been started since the service began or the last logout
   waiting_for_user  ssh is showing the password / Duo dialogs
   succeeded         the shared connection is open
-  failed            cancelled, wrong password, Duo denied, or ssh failed (message says why)
+  failed            cancelled, wrong password, Duo denied, or ssh failed (message says why;
+                    `cancelled` is true when the user pressed Cancel)
 
 No password ever reaches this module: ssh asks through native dialogs (hpc3_askpass.py)
 and gets the answers straight back. Nothing here is logged, stored in chat history, or
@@ -128,7 +129,8 @@ class Hpc3Service:
     def _finish(self, code, message):
         with self.lock:
             self.cache = None
-            self.login = {'state': 'succeeded' if code == 0 else 'failed', 'message': message}
+            self.login = {'state': 'succeeded' if code == 0 else 'failed', 'message': message,
+                          'cancelled': code == self.ssh.CANCELLED}
             return dict(self.login)
 
     def _current_settings(self, required):

@@ -80,6 +80,38 @@ class MainTest(unittest.TestCase):
         self.assertIn('{"No", "Yes"}', ' '.join(calls[0]))
 
 
+class CancelTest(unittest.TestCase):
+    """Cancel ends the login: the ssh that asked is stopped, so the question does not repeat."""
+
+    def run_cancel(self, mode='', parent_is_ssh=True, returncode=1):
+        killed = []
+        fake = lambda argv, **kwargs: subprocess.CompletedProcess(argv, returncode, '', '')
+        env = {'SSH_ASKPASS_PROMPT': mode} if mode else {}
+        with patch.object(ap.sys, 'platform', 'darwin'), patch.object(ap.shutil, 'which', lambda _: 'osascript'), \
+                patch.object(ap.subprocess, 'run', fake), patch.dict(os.environ, env), \
+                patch.object(ap, 'parent_is_ssh', lambda pid: parent_is_ssh), \
+                patch.object(ap.os, 'getppid', lambda: 4242), \
+                patch.object(ap.os, 'kill', lambda pid, sig: killed.append((pid, sig))), \
+                patch.object(ap.sys, 'stdout', io.StringIO()):
+            code = ap.main(['Password: '])
+        return code, killed
+
+    def test_cancel_stops_the_calling_ssh(self):
+        self.assertEqual(self.run_cancel(), (1, [(4242, ap.signal.SIGTERM)]))
+        self.assertEqual(self.run_cancel(mode='confirm'), (1, [(4242, ap.signal.SIGTERM)]))
+
+    def test_nothing_is_signalled_unless_the_parent_is_ssh(self):
+        self.assertEqual(self.run_cancel(parent_is_ssh=False), (1, []))
+
+    def test_a_notice_or_an_answer_never_stops_ssh(self):
+        self.assertEqual(self.run_cancel(mode='none'), (1, []))
+        self.assertEqual(self.run_cancel(returncode=0), (0, []))
+
+    def test_parent_check_looks_at_the_real_process_name(self):
+        # This test runs under python, not ssh, so its own process must not qualify.
+        self.assertFalse(ap.parent_is_ssh(os.getpid()))
+
+
 class PopupLoginTest(unittest.TestCase):
     """hpc3_ssh.login(popup=True) routes every question to the helper and never to a terminal."""
 

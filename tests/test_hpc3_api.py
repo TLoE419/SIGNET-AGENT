@@ -27,6 +27,7 @@ class FakeSsh:
     """Stands in for hpc3_ssh. login() blocks until the test releases it, like a user typing."""
 
     valid_user = staticmethod(hpc3_ssh.valid_user)
+    CANCELLED = hpc3_ssh.CANCELLED
 
     def __init__(self):
         self.connected = False
@@ -145,14 +146,21 @@ class Hpc3ApiTest(unittest.TestCase):
         self.assertEqual((status, body['state']), (202, 'waiting_for_user'))
         self.assertEqual(self.request('GET', '/hpc3/login')[1]['state'], 'waiting_for_user')
         self.ssh.release.set()
-        self.assertEqual(self.wait_for_login_end(), {'state': 'succeeded', 'message': 'Logged in.'})
+        self.assertEqual(self.wait_for_login_end(), {'state': 'succeeded', 'message': 'Logged in.', 'cancelled': False})
         self.assertIn(('login', 'jdoe', True), self.ssh.calls)
 
     def test_failed_login_keeps_the_reason(self):
         self.ssh.login_result = (255, 'Login failed (ssh exit 255).')
         self.request('POST', '/hpc3/login', {})
         self.ssh.release.set()
-        self.assertEqual(self.wait_for_login_end(), {'state': 'failed', 'message': 'Login failed (ssh exit 255).'})
+        self.assertEqual(self.wait_for_login_end(), {'state': 'failed', 'message': 'Login failed (ssh exit 255).',
+                                                     'cancelled': False})
+
+    def test_cancelled_login_is_marked_so_the_page_can_say_so(self):
+        self.ssh.login_result = (hpc3_ssh.CANCELLED, 'Login cancelled.')
+        self.request('POST', '/hpc3/login', {})
+        self.ssh.release.set()
+        self.assertEqual(self.wait_for_login_end(), {'state': 'failed', 'message': 'Login cancelled.', 'cancelled': True})
 
     def test_only_one_login_at_a_time_and_no_logout_or_user_change_meanwhile(self):
         self.request('POST', '/hpc3/login', {})

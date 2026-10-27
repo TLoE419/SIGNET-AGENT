@@ -14,6 +14,11 @@ Exit status (what ssh expects):
   0  the answer was printed to stdout
   1  the user cancelled, the dialog timed out, or no dialog is available here
 
+Cancel ends the whole login. ssh would otherwise treat a cancelled answer as a wrong
+password and ask again, once per allowed attempt and login method, so the dialog would keep
+coming back. On Cancel or timeout this program therefore stops the ssh process that called
+it (its parent), after checking that the parent really is ssh.
+
 ssh also sets SSH_ASKPASS_PROMPT:
   (unset)   a question needing a typed answer (password, Duo option, host key yes/no)
   confirm   a yes/no confirmation; printing "yes" approves
@@ -25,6 +30,7 @@ user can log in from a terminal with `python3 hpc3_ssh.py login` instead.
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 
@@ -72,6 +78,20 @@ def osascript_command(prompt, mode):
     return argv + ['--', prompt]
 
 
+def parent_is_ssh(pid):
+    """True if pid is an ssh client; nothing else is ever signalled."""
+    result = subprocess.run(['ps', '-o', 'comm=', '-p', str(pid)], stdout=subprocess.PIPE,
+                            stderr=subprocess.DEVNULL, universal_newlines=True)
+    return os.path.basename(result.stdout.strip()) == 'ssh'
+
+
+def abort_login():
+    """Stop the ssh that asked, so a cancelled question ends the login instead of repeating."""
+    parent = os.getppid()
+    if parent > 1 and parent_is_ssh(parent):
+        os.kill(parent, signal.SIGTERM)
+
+
 def main(argv=None):
     """Ask one question; print the answer for ssh. Never prints the answer anywhere else."""
     argv = sys.argv[1:] if argv is None else argv
@@ -85,7 +105,10 @@ def main(argv=None):
     result = subprocess.run(osascript_command(prompt, mode), stdout=subprocess.PIPE,
                             stdin=subprocess.DEVNULL, universal_newlines=True)
     if result.returncode != 0:
-        return 1  # Cancel, No, or timeout: ssh treats this as a refused answer.
+        # Cancel, No, or timeout. A notice (mode none) has nothing to refuse, so it never aborts.
+        if mode != 'none':
+            abort_login()
+        return 1
     sys.stdout.write(result.stdout)
     return 0
 

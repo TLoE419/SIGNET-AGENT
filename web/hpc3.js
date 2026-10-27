@@ -111,7 +111,9 @@
       const result = await api('/hpc3/login');
       if (result.code === 200) login = result.body;
       if (login.state === 'waiting_for_user') { render(); poll(); return; }
-      if (login.state === 'failed') error = '登入沒有完成：視窗被取消、逾時、密碼錯誤或 Duo 被拒絕。';
+      if (login.state === 'failed') {
+        error = login.cancelled ? '已取消登入。' : '登入沒有完成：視窗逾時、密碼錯誤或 Duo 被拒絕。';
+      }
       await refresh(true);
     }, POLL_MS);
   }

@@ -35,6 +35,7 @@ import json
 import os
 from pathlib import Path
 import re
+import signal
 import socket
 import subprocess
 import sys
@@ -45,6 +46,8 @@ USER_PATTERN = r'[a-z][a-z0-9_-]{0,31}'
 # Dialog helper ssh calls for each login question when logging in without a terminal.
 ASKPASS = Path(__file__).resolve().with_name('hpc3_askpass.py')
 PORT = 22
+# Exit code of an ssh stopped by hpc3_askpass.py when the user presses Cancel (killed by SIGTERM).
+CANCELLED = -signal.SIGTERM
 # How long the shared connection stays open after the last use.
 CONTROL_PERSIST = '8h'
 # Seconds allowed for each layer; a dropped VPN should fail fast, not hang.
@@ -221,6 +224,8 @@ def login(user, host, popup=False):
                                stdin=subprocess.DEVNULL)
     else:
         code = subprocess.call(login_command(user, host))
+    if code == CANCELLED:
+        return code, 'Login cancelled.'
     if code != 0:
         return code, 'Login failed (ssh exit %d). Run `python3 hpc3_ssh.py check` to see why.' % code
     return 0, 'Logged in. Run `python3 hpc3_ssh.py check` to confirm.'

@@ -97,12 +97,17 @@ function page(routes, language = 'en') {
 
   // 3. Failed or impossible logins explain themselves.
   {
-    const p = page({'GET /hpc3/login': [[200, {state: 'idle'}], [200, {state: 'failed', message: 'Login failed (ssh exit 255).'}]],
-      'GET /hpc3/status': [[200, NOT_LOGGED_IN]], 'POST /hpc3/login': [[202, {state: 'waiting_for_user'}], [501, {error: 'x'}]]});
+    const p = page({'GET /hpc3/login': [[200, {state: 'idle'}], [200, {state: 'failed', message: 'Login failed (ssh exit 255).'}],
+      [200, {state: 'failed', message: 'Login cancelled.', cancelled: true}]],
+      'GET /hpc3/status': [[200, NOT_LOGGED_IN]],
+      'POST /hpc3/login': [[202, {state: 'waiting_for_user'}], [202, {state: 'waiting_for_user'}], [501, {error: 'x'}]]});
     await p.settle();
     await p.click('hpc3-login');
     await p.tick();
     assert.match(p.el['hpc3-error'].textContent, /^Login did not finish/);
+    await p.click('hpc3-login');
+    await p.tick();
+    assert.equal(p.el['hpc3-error'].textContent, 'Login cancelled.');
     await p.click('hpc3-login');
     assert.equal(p.el['hpc3-error'].textContent, 'Login windows need macOS. Run python3 hpc3_ssh.py login in a terminal.');
   }
