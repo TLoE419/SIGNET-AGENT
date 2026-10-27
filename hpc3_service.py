@@ -96,7 +96,8 @@ class Hpc3Service:
                 raise Hpc3Error(409, 'A login is already in progress.')
             # Claim the slot before the slower connection check, so two clicks cannot both start.
             self.login = {'state': 'waiting_for_user', 'message': 'Check the login window and your Duo device.'}
-        if self.ssh.has_shared_connection(user, host):
+        # A connection that exists but no longer answers is closed and replaced, not trusted.
+        if self.ssh.shared_connection_alive(user, host):
             return self._finish(0, 'Already logged in to %s@%s.' % (user, host))
         self.thread = threading.Thread(target=self._run_login, args=(user, host), daemon=True)
         self.thread.start()

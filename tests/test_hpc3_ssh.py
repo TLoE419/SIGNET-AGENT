@@ -67,6 +67,15 @@ class CheckTest(unittest.TestCase):
         result = self.run_check(ssh=FakeSsh(master=(0, '', 'Master running (pid=4242)')))
         self.assertEqual((result['status'], result['auth']), ('connected', SHARED))
 
+    def test_dead_shared_connection_is_closed_and_reported_stale(self):
+        ssh = FakeSsh(login=(None, '', ''), master=(0, '', 'Master running (pid=4242)'))
+        result = self.run_check(ssh=ssh)
+        self.assert_status(result, 'stale_connection', 'master')
+        self.assertIn('Log in again', result['hint'])
+        self.assertIn('exit', [argv[2] for argv in ssh.calls if argv[1] == '-O'])
+        # The probe ran `true`, not the identity command, and nothing else followed it.
+        self.assertEqual(ssh.calls[-2][-1], 'true')
+
     def test_missing_or_unsafe_user_is_not_configured_and_nothing_is_contacted(self):
         for user in ('', 'JDoe', '-oProxyCommand=x', 'a b', 'x' * 40):
             with self.subTest(user=user):
@@ -137,6 +146,7 @@ class CommandTest(unittest.TestCase):
         self.assertNotIn('StrictHostKeyChecking=yes', argv)
         self.assertNotIn('BatchMode=yes', argv)
         self.assertIn('ControlPersist=' + h.CONTROL_PERSIST, argv)
+        self.assertIn('ServerAliveInterval=15', argv)
         self.assertEqual(argv[-2:], ['--', h.DEFAULT_HOST])
 
     def test_all_commands_share_one_control_socket(self):
@@ -195,6 +205,17 @@ class LoginLogoutTest(unittest.TestCase):
         code, message, _, _ = self.run_with(h.login, self.CLOSED, login_code=255)
         self.assertEqual(code, 255)
         self.assertIn('hpc3_ssh.py check', message)
+
+    def test_login_replaces_a_dead_shared_connection(self):
+        ssh, interactive = FakeSsh(login=(None, '', ''), master=self.OPEN), []
+
+        def call(argv):
+            interactive.append(argv)
+            return 0
+        with patch.object(h.subprocess, 'run', ssh), patch.object(h.subprocess, 'call', call), patch('sys.stdout'):
+            code, message = h.login('jdoe', h.DEFAULT_HOST)
+        self.assertEqual((code, interactive), (0, [h.login_command('jdoe', h.DEFAULT_HOST)]))
+        self.assertEqual([argv[2] for argv in ssh.calls if argv[1] == '-O'], ['check', 'exit'])
 
     def test_logout_without_a_connection_says_so_plainly(self):
         code, message, calls, _ = self.run_with(h.logout, self.CLOSED)

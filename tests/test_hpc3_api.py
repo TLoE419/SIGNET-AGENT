@@ -43,6 +43,9 @@ class FakeSsh:
     def has_shared_connection(self, user, host):
         return self.connected
 
+    def shared_connection_alive(self, user, host):
+        return self.connected
+
     def check(self):
         self.calls.append('check')
         return {'status': 'connected' if self.connected else 'auth_required', 'connected': self.connected}

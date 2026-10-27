@@ -15,7 +15,8 @@ result says *where* it broke and what to do about it:
   1. config    HPC3_USER / HPC3_HOST are set and well formed
   2. dns       the host name resolves
   3. network   TCP port 22 answers (fails off campus without the VPN)
-  4. master    whether a control-master connection is already open (informational)
+  4. master    whether a control-master connection is open and still answering; a dead
+               one (after a network change or sleep) is closed and reported as stale
   5. ssh       a non-interactive login works (BatchMode: it never prompts)
   6. identity  the remote side is the expected user on a host with Slurm
 
@@ -48,7 +49,12 @@ PORT = 22
 CONTROL_PERSIST = '8h'
 # Seconds allowed for each layer; a dropped VPN should fail fast, not hang.
 TCP_TIMEOUT = 5
-SSH_TIMEOUT = 30
+SSH_TIMEOUT = 20
+# A live shared connection answers in about a second; one that has not answered by now is dead.
+PROBE_TIMEOUT = 8
+# The shared connection pings HPC3 every 15 s and closes itself after 3 missed replies, so a
+# network change or sleep cannot leave a dead connection that still looks open.
+KEEPALIVE = ['-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=3']
 # The only command ever sent by check(): who and where we are, and whether Slurm exists.
 # It is a constant, never built from user input.
 REMOTE_COMMAND = ('printf "host=%s\\nuser=%s\\n" "$(hostname)" "$(id -un)"; '
@@ -117,7 +123,7 @@ def login_command(user, host):
 
     -f -N: after the password and Duo prompts, go to the background without opening a shell.
     """
-    return (['ssh', '-f', '-N', '-o', 'ControlMaster=yes', '-o', 'ControlPersist=' + CONTROL_PERSIST]
+    return (['ssh', '-f', '-N', '-o', 'ControlMaster=yes', '-o', 'ControlPersist=' + CONTROL_PERSIST] + KEEPALIVE
             + ssh_options('ask') + ['-l', user, '--', host])
 
 
@@ -172,6 +178,28 @@ def askpass_environment():
     return dict(os.environ, SSH_ASKPASS=str(ASKPASS), SSH_ASKPASS_REQUIRE='force')
 
 
+def probe_command(user, host):
+    """Cheapest non-interactive command through the shared connection: just `true`."""
+    return (['ssh', '-o', 'BatchMode=yes', '-o', 'ControlMaster=no'] + ssh_options()
+            + ['-l', user, '--', host, 'true'])
+
+
+def shared_connection_alive(user, host):
+    """True only if a shared connection exists *and* still answers.
+
+    After a network change or sleep the local half of the connection can survive while the
+    link to HPC3 is dead: `ssh -O check` still says "running", but every command hangs. Such
+    a connection is closed here, so the next login starts fresh instead of being refused.
+    """
+    if not has_shared_connection(user, host):
+        return False
+    code, _, _ = run(probe_command(user, host), timeout=PROBE_TIMEOUT)
+    if code == 0:
+        return True
+    run(master_command(user, host, 'exit'), timeout=10)
+    return False
+
+
 def login(user, host, popup=False):
     """Open the shared connection unless one is already open; returns (exit code, message).
 
@@ -181,7 +209,7 @@ def login(user, host, popup=False):
     popup=False: ssh asks in this terminal. popup=True: ssh asks through native dialogs
     (hpc3_askpass.py), with stdin closed so it can never fall back to a terminal prompt.
     """
-    if has_shared_connection(user, host):
+    if shared_connection_alive(user, host):
         return 0, 'Already logged in to %s@%s; the shared connection is open.' % (user, host)
     # ssh needs ~/.ssh to exist for the control socket and known_hosts.
     (Path.home() / '.ssh').mkdir(mode=0o700, exist_ok=True)
@@ -252,6 +280,12 @@ def check():
 
     has_master = has_shared_connection(user, host)
     step('master', True, 'shared connection open' if has_master else 'no shared connection')
+    if has_master and run(probe_command(user, host), timeout=PROBE_TIMEOUT)[0] != 0:
+        # The shared connection exists locally but HPC3 no longer answers through it.
+        run(master_command(user, host, 'exit'), timeout=10)
+        step('master', False, 'shared connection stopped answering; closed it')
+        return fail('stale_connection', 'The saved HPC3 connection stopped answering (network '
+                                        'change or sleep). Log in again.')
 
     code, out, err = run(check_command(user, host), timeout=SSH_TIMEOUT)
     if code is None and 'not installed' in err:
