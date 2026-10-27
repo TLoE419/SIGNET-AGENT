@@ -21,15 +21,18 @@ export class SshConnectionService extends EventEmitter {
  private pendingChallenge?:{sessionId:string;challengeId:string;finish:(answers:string[])=>void;timer:NodeJS.Timeout};private onboarding=false;
  constructor(readonly profiles:SshProfileRepository,readonly trust:HostKeyTrustStore,private keys:{inspect:(path:string)=>Promise<Inspection>;unlock:(path:string,passphrase:string)=>Promise<string>}=keyOperations,private clientFactory=()=>new Client(),private managedKeys?:AppManagedKeyStore){super()}
  private trace(id:string,stage:string,message:string){if(this.listenerCount('diagnostic'))this.emit('diagnostic',{id,stage,message,time:new Date().toISOString()})}
+ private raw(id:string,source:string,text:string){if(this.listenerCount('raw-ssh'))this.emit('raw-ssh',{id,source,text:String(text).slice(0,65536),time:new Date().toISOString()})}
  private observeClient(client:Client,id:string){
   this.trace(id,'transport','Opening SSH transport.');
+  this.raw(id,'lifecycle','Opening SSH transport.');
+  client.on('banner',message=>this.raw(id,'server-banner',message));
   client.on('ready',()=>this.trace(id,'ready','SSH authentication succeeded.'));
   client.on('error',error=>this.trace(id,'error',safeError(error).code));
   client.on('close',()=>this.trace(id,'closed','SSH transport closed.'));
  }
  private protocolTrace(id:string){
-  if(!this.listenerCount('diagnostic'))return undefined;
-  // Exact allowlist: never forward raw ssh2 debug strings, banners or prompts.
+  if(!this.listenerCount('diagnostic')&&!this.listenerCount('raw-ssh'))return undefined;
+  // Diagnostics use an exact allowlist; dev-only raw listeners receive the original ssh2 text.
   const messages:Record<string,[string,string]>={
    'Socket connected':['tcp','TCP connection established.'],
    'Handshake completed':['handshake','SSH handshake completed.'],
@@ -41,7 +44,7 @@ export class SshConnectionService extends EventEmitter {
    'Client: publickey auth failed':['authentication','Public-key authentication not accepted.'],
    'Client: keyboard-interactive auth failed':['authentication','Keyboard-interactive authentication not accepted.'],
   };
-  return (message:string)=>{const item=Object.hasOwn(messages,message)?messages[message]:undefined;if(item)this.trace(id,...item)};
+  return (message:string)=>{this.raw(id,'ssh2-debug',message);const item=Object.hasOwn(messages,message)?messages[message]:undefined;if(item)this.trace(id,...item)};
  }
  private publish(){this.emit('snapshot',this.getSnapshot())}
  getSnapshot():Snapshot{return structuredClone(this.snapshot)}
@@ -61,6 +64,7 @@ export class SshConnectionService extends EventEmitter {
   client.on('keyboard-interactive',(name,instructions,_language,prompts,finishChallenge)=>{
    if(!active()||prompts.length>16){finishChallenge([]);return}
    this.clearChallenge();
+   this.raw(sessionId,'keyboard-interactive',[`name: ${String(name||'')}`,`instructions:\n${String(instructions||'')}`,...prompts.map((item,index)=>`prompt ${index+1} (echo=${!!item.echo}):\n${String(item.prompt||'')}`)].join('\n'));
    this.trace(sessionId,'challenge','Server requested keyboard-interactive authentication. Complete the sign-in dialog.');
    const challengeId=randomUUID(),timer=setTimeout(()=>{this.trace(sessionId,'timeout','Authentication challenge expired.');this.clearChallenge(sessionId)},120000);
    this.pendingChallenge={sessionId,challengeId,finish:finishChallenge,timer};

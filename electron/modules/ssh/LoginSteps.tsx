@@ -11,7 +11,8 @@ export function DuoChallenge({challenge,onAnswer}:{challenge?:AuthChallenge|null
  const options=useMemo(()=>{
   if(!challenge||challenge.prompts.length!==1)return [];
   const values:{value:string;label:string}[]=[];
-  for(const line of challenge.instructions.split(/\r?\n/)){
+  const serverText=[challenge.name,challenge.instructions,...challenge.prompts.map(prompt=>prompt.prompt)].join('\n');
+  for(const line of serverText.split(/\r?\n/)){
    const match=line.match(/^\s*(\d+)\.\s+(.+?)\s*$/);
    if(match&&!values.some(option=>option.value===match[1]))values.push({value:match[1],label:match[2]});
   }

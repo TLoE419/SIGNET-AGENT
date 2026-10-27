@@ -76,6 +76,13 @@ test('Duo challenge forwards the server instructions and selected push option',a
  assert.ok(screen.getByText('Waiting for Duo authentication…'));
 });
 
+test('Duo challenge discovers numbered options embedded in the server prompt',async()=>{
+ let answers:string[]=[];
+ render(<DuoChallenge challenge={{sessionId:'connection-5',challengeId:'challenge-3',name:'Duo',instructions:'',prompts:[{prompt:'Choose an authentication method:\n 1. Send a Push to XXX-XXX-1234\nPasscode or option:',echo:false}]}} onAnswer={async(_session,_challenge,value)=>{answers=value}}/>);
+ fireEvent.click(screen.getByRole('button',{name:'1 Send a Push to XXX-XXX-1234'}));
+ await waitFor(()=>assert.deepEqual(answers,['1']));
+});
+
 test('Duo challenge keeps manual passcodes available when no numbered option is returned',async()=>{
  let answers:string[]=[];
  render(<DuoChallenge challenge={{sessionId:'connection-4',challengeId:'challenge-2',name:'Duo',instructions:'Enter your generated passcode.',prompts:[{prompt:'Passcode:',echo:false}]}} onAnswer={async(_session,_challenge,value)=>{answers=value}}/>);

@@ -56,10 +56,20 @@ normal SSH controls to Connect; dev login/unlock dialogs also show the live log.
   until app exit. Only fixed allowlisted protocol messages and sanitized error
   codes are recorded; raw ssh2 debug output, banners, challenge text/responses,
   passwords, passphrases and private keys are never forwarded to this log.
+- **Raw SSH log** shows the original ssh2 debug messages, server banners, and
+  keyboard-interactive name, instructions, and prompts received from the SSH
+  server. This is the place to inspect the exact Duo menu returned by HPC3.
+  Server-provided text can contain account or device details, so the view is
+  available only in dev mode and is rendered as inert escaped text rather than
+  being executed by the interactive terminal. Passwords, passphrases, private
+  keys, and authentication answers submitted by the app are not logged. The
+  latest 2 MiB / 2,000 entries stay only in Electron Main memory until app exit;
+  attempts made before this feature was running cannot be recovered afterward.
 - When HPC3 returns a keyboard-interactive challenge, the complete server name,
   instructions and prompts are forwarded to the active login dialog. Numbered
   choices such as `1. Duo Push ...` are rendered as buttons; selecting one sends
-  that exact option back to the pending SSH challenge. Manual Duo passcodes remain
+  that exact option back to the pending SSH challenge, whether the server placed
+  the option in its instructions or in a prompt. Manual Duo passcodes remain
   available through the prompt field. Prompt contents are displayed transiently
   and are never added to diagnostics or persisted.
 - **Execution activity** previews Python SSH broker commands, stdout/stderr,
