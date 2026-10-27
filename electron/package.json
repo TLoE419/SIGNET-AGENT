@@ -15,5 +15,8 @@
   },
   "devDependencies": {
     "electron": "44.9.3"
+  },
+  "dependencies": {
+    "ssh2": "1.17.0"
   }
 }

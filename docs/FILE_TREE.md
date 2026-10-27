@@ -22,6 +22,7 @@ SIGNET-agent/
 ├── signet_tools.py               # Scientific tools, parameter validation, and isolated job preparation
 ├── signet_inventory.json         # Official code version, classification, and file hashes
 ├── signet_runtime.py             # Local VM connection, packaging, and output collection
+├── ssh_transport.py              # Private Electron broker client for SSH command transport
 ├── network_runtime.py            # Network inference submission, queries, cancellation, and result checks
 ├── network_worker.py             # Background control and supervision of owned jobs inside the VM
 ├── visualization_runtime.py      # Stage 6 plotting and input/output checks
@@ -47,17 +48,21 @@ SIGNET-agent/
 │       └── verify_network.cjs     # Verifies scheduler, matrices, commands, and resampling results
 ├── electron/
 │   ├── main.cjs                  # Optional desktop window, security policy and application lifecycle
+│   ├── preload.cjs               # Narrow renderer bridge for SSH profiles, keys, trust and connection
 │   ├── backend.cjs               # Owned Python process, readiness and shutdown
 │   ├── server.py                 # Launcher around the existing ChatServer; parent-pipe supervision
 │   ├── policy.cjs                # Owned-origin request and navigation rules
 │   ├── package.json              # Electron startup and lifecycle/smoke tests
 │   ├── package-lock.json         # Pinned desktop dependencies
 │   ├── README.md                 # Desktop setup, state and lifecycle limitations
-│   └── tests/                    # Real-service lifecycle and native Electron smoke tests
+│   ├── ssh/                      # Main-owned SSH client, secure storage, broker and IPC handlers
+│   └── tests/                    # Lifecycle, SSH integration and native Electron smoke tests
 ├── web/
 │   ├── index.html                # Chat and Stage 6 page structure
 │   ├── chat.js                   # Chat, progress, and response formatting, including the markup parser
 │   ├── chat.css                  # Interface and narrow-window styles
+│   ├── ssh.js                    # Desktop SSH profile, key, host-trust and connection UI
+│   ├── ssh.css                   # SSH dialog, status and responsive layout styles
 │   ├── i18n.js                   # Traditional Chinese / English switching
 │   ├── stage6.js                 # Parameter, network graph, and result-comparison interactions
 │   └── vendor/
@@ -83,6 +88,7 @@ SIGNET-agent/
     ├── test_portability.py     # Portable paths, source installation, and configuration protection
     ├── test_read_file.py       # Text-reading boundaries and pagination
     ├── test_signet_runtime.py  # VM packaging, collection, and unknown status
+    ├── test_ssh_transport.py   # Electron broker protocol and runtime transport selection
     ├── test_signet_tools.py    # Source, tools, and execution restrictions
     ├── test_stage6_graph.cjs   # Network graph dragging, viewport, and comparison
     ├── test_stage6_workspace.py # Proposals, human confirmation, and workspace isolation

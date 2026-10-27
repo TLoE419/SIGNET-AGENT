@@ -2,8 +2,9 @@
 
 This source-run desktop host displays the existing `web/` UI from an owned
 `chat_ui.ChatServer`. Browser startup, HTTP routes, model providers, scientific
-tools, VM transport and the Web UI remain available unchanged. SSH authentication
-from the separate SSH branch is not included.
+tools, VM transport and the Web UI remain available. Electron Main owns the
+optional SSH connection used by the Python scientific runtime; the renderer never
+receives a socket, private-key contents, or a general command API.
 
 ## Run
 
@@ -30,6 +31,29 @@ Python, its dependencies, Codex CLI when selected, and scientific prerequisites
 must still be installed. No scientific data, Python runtime or model credentials
 are bundled.
 
+## SSH connection
+
+Use the **SSH** control in the left rail to create a profile. Existing keys must
+be passphrase-protected OpenSSH private keys, owned by the current user and set
+to mode `0600`. The native file picker returns only the selected path to the
+isolated renderer. Alternatively, generate an encrypted 4096-bit RSA key in the
+dialog, then add the displayed public key to the remote account before connecting.
+Automatic password or Duo enrollment is not part of this integration.
+
+The first connection to a host is blocked and shows its SHA-256 host-key
+fingerprint. Verify that value through an independent administrator-provided
+channel before trusting it. A changed saved identity is always blocked and cannot
+be replaced in the UI. Profiles, encrypted app-managed keys and host trust are
+stored below Electron's `userData/ssh` directory with owner-only permissions.
+Passwords and passphrases are not persisted.
+
+Once connected, Python scientific commands use a per-launch private Unix socket
+to ask Electron Main to run commands over the owned `ssh2.Client`. The socket is
+placed in a random owner-private short directory, requires a random token passed
+only to the owned Python child, and transfers command input/output as binary data.
+The browser launcher has no broker variables and continues to use its configured
+system OpenSSH transport.
+
 ## Architecture and ownership
 
 - Electron Main spawns `server.py` with an anonymous control pipe. The wrapper
@@ -38,8 +62,9 @@ are bundled.
   sends existing application diagnostics to stderr. Main never adopts another
   server or assumes that an occupied fixed port belongs to SIGNET.
 - Renderer loads the same HTML, scripts and HTTP APIs. Node integration is off,
-  context isolation and sandboxing are on, and no preload/privileged renderer API
-  is exposed. Requests are restricted to the owned origin, permissions are denied,
+  context isolation and sandboxing are on. A narrow preload exposes only named SSH
+  profile, key-picker, trust and connection methods; it exposes no generic IPC,
+  filesystem, shell or remote-exec method. Requests are restricted to the owned origin, permissions are denied,
   subframe navigation and popup windows are blocked. Existing Host, Origin, token
   and CSP protections remain in effect. External links are blocked in this phase.
 - Result downloads from `/stage6/file` retain the native save dialog. No generic
@@ -54,6 +79,9 @@ are bundled.
   owned local process group. Tools which create separate sessions and remote jobs
   may outlive that group; inspect run records before retrying. This does not cancel
   VM/SLURM jobs and does not establish future HPC3 connection ownership.
+- Main owns the SSH socket. Normal quit first drains and checkpoints Python work,
+  then disconnects SSH and removes the private broker socket. A Main crash releases
+  the SSH TCP connection; already-submitted remote jobs may continue independently.
 - A backend crash closes the desktop session with an error instead of restarting
   it and risking replay. A single-instance lock prevents a second desktop host
   using the same state directory.

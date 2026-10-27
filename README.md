@@ -44,6 +44,11 @@ separate, while scientific inputs and runs are shared; run scientific work throu
 only one interface at a time. See [desktop setup and lifecycle](electron/README.md)
 for model selection, shutdown behavior and tests. No installer is provided yet.
 
+The Electron window also provides optional SSH profile, encrypted-key and strict
+host-trust management. Electron owns the live SSH connection and gives its Python
+child a private transport channel for scientific commands. Browser mode retains
+the existing system-SSH configuration and does not display the desktop SSH UI.
+
 ## Capabilities and Prerequisites
 
 | Level | Prerequisites | Behavior |

@@ -6,10 +6,12 @@
   <meta name="chat-token" content="__TOKEN__">
   <title data-i18n="SIGNET · 研究助手">SIGNET · Research Assistant</title>
   <link rel="stylesheet" href="/chat.css">
+  <link rel="stylesheet" href="/ssh.css">
   <script defer src="/i18n.js"></script>
   <script defer src="/chat.js"></script>
   <script defer src="/vendor/vis-network.min.js"></script>
   <script defer src="/stage6.js"></script>
+  <script defer src="/ssh.js"></script>
 </head>
 <body>
   <aside class="rail">
@@ -17,6 +19,7 @@
     <button id="new-chat" class="new-chat"><span data-i18n="＋ 開始新對話">+ New chat</span></button>
     <div class="nav-label"><span data-i18n="工作空間">WORKSPACE</span></div>
     <div class="nav-item active"><span>◉</span> <span data-i18n="研究助手">Research assistant</span> <span class="nav-dot"></span></div>
+    <button id="ssh-open" class="ssh-open" type="button" hidden><span class="ssh-led"></span><span id="ssh-open-label">SSH · Disconnected</span></button>
     <div class="environment"><span class="local-dot"></span> <span data-i18n="本機工作階段">Local session</span><small>__MODEL__</small></div>
     <button id="language-toggle" type="button" aria-label="Switch to Traditional Chinese">繁體中文</button>
   </aside>
@@ -49,6 +52,41 @@
       </section>
     </div>
   </main>
+  <dialog id="ssh-dialog" class="ssh-dialog">
+    <form method="dialog" class="ssh-dialog-shell">
+      <header><div><p class="eyebrow" data-i18n="安全連線">SECURE CONNECTION</p><h2>SSH</h2></div><button class="ssh-close" value="cancel" aria-label="Close">×</button></header>
+      <div id="ssh-error" class="ssh-error" role="alert" hidden></div>
+      <label><span data-i18n="已儲存的 SSH 設定">Saved SSH profile</span><select id="ssh-profile"><option value="">New profile</option></select></label>
+      <div class="ssh-grid">
+        <label><span data-i18n="設定名稱">Profile name</span><input id="ssh-name" maxlength="120" autocomplete="off" placeholder="UCI HPC3"></label>
+        <label><span data-i18n="使用者名稱">Username</span><input id="ssh-username" maxlength="128" autocomplete="username"></label>
+        <label><span data-i18n="主機">Host</span><input id="ssh-host" maxlength="253" autocomplete="off" placeholder="hpc3.rcic.uci.edu"></label>
+        <label><span data-i18n="連接埠">Port</span><input id="ssh-port" type="number" min="1" max="65535" value="22"></label>
+      </div>
+      <label><span data-i18n="加密的 OpenSSH 私鑰">Encrypted OpenSSH private key</span><div class="ssh-key-row"><input id="ssh-key-path" readonly placeholder="Choose a private key"><button id="ssh-pick-key" type="button"><span data-i18n="選擇…">Choose…</span></button></div></label>
+      <details class="ssh-generate">
+        <summary data-i18n="建立由 App 管理的金鑰">Create an app-managed key</summary>
+        <p data-i18n="加密私鑰會留在 SIGNET 應用程式儲存區。連線前請先將公鑰加入遠端帳號。">The encrypted private key stays in SIGNET application storage. Add the public key to the remote account before connecting.</p>
+        <label><span data-i18n="金鑰名稱">Key name</span><input id="ssh-key-label" maxlength="120" autocomplete="off"></label>
+        <div class="ssh-grid">
+          <label><span data-i18n="新金鑰密碼">New key passphrase</span><input id="ssh-new-passphrase" type="password" maxlength="4096" autocomplete="new-password"></label>
+          <label><span data-i18n="確認金鑰密碼">Confirm passphrase</span><input id="ssh-confirm-passphrase" type="password" maxlength="4096" autocomplete="new-password"></label>
+        </div>
+        <button id="ssh-generate-key" type="button" class="ssh-secondary"><span data-i18n="產生加密金鑰">Generate encrypted key</span></button>
+        <label id="ssh-public-key-label" hidden><span data-i18n="公鑰">Public key</span><textarea id="ssh-public-key" readonly rows="4"></textarea></label>
+      </details>
+      <div class="ssh-actions"><button id="ssh-save" type="button" class="ssh-secondary"><span data-i18n="儲存設定">Save profile</span></button></div>
+      <label><span data-i18n="私鑰密碼">Private-key passphrase</span><input id="ssh-passphrase" type="password" maxlength="4096" autocomplete="off"></label>
+      <section id="ssh-host-trust" class="ssh-host-trust" hidden>
+        <strong data-i18n="未知的主機身分">Unknown host identity</strong>
+        <p data-i18n="信任主機前，請透過獨立管道確認這組指紋。">Confirm this fingerprint independently before trusting the host.</p>
+        <code id="ssh-fingerprint"></code>
+        <label class="ssh-confirm"><input id="ssh-confirm-host" type="checkbox"> <span data-i18n="我已透過獨立管道確認這組指紋。">I independently verified this fingerprint.</span></label>
+        <button id="ssh-trust" type="button" class="ssh-secondary"><span data-i18n="信任已確認的主機">Trust verified host</span></button>
+      </section>
+      <footer><span id="ssh-state">Disconnected</span><button id="ssh-connect" type="button" class="ssh-primary">Connect</button></footer>
+    </form>
+  </dialog>
 <script type="application/json" id="initial-chat">__INITIAL_CHAT__</script>
 </body>
 </html>

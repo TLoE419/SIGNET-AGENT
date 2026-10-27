@@ -28,10 +28,15 @@ app.on('will-quit', () => { clearTimeout(deadline); rmSync(temporary, {recursive
     chatStatus:(await fetch('/chat',{method:'POST',body:'{}'})).status,
     workspace:(await fetch('/stage6?session=12345678-1234-1234-1234-123456789abc',
       {headers:{'X-Chat-Token':document.querySelector('meta[name="chat-token"]').content}})).status,
+    sshButton:!document.querySelector('#ssh-open').hidden,
+    sshBridge:Object.keys(window.signetDesktop?.ssh||{}).sort(),
     resources:performance.getEntriesByType('resource').filter(x=>x.name.startsWith(location.origin)).length
   }))()`);
   assert.equal(value.composer, true); assert.equal(value.stage6, true); assert.equal(value.language, true);
   assert.equal(value.node, 'undefined'); assert.equal(value.chatStatus, 403); assert.equal(value.workspace, 200);
+  assert.equal(value.sshButton, true);
+  assert.deepEqual(value.sshBridge, ['connect','disconnect','generateKey','inspectPrivateKey','listKeys','pickPrivateKey','saveProfile','selectProfile','snapshot','subscribe','trustHost']);
+  assert.equal(value.sshBridge.some(name => /exec|shell|readFile|writeFile/.test(name)), false);
   assert.ok(value.resources >= 5);
   await window.webContents.executeJavaScript(`document.querySelector('#language-toggle').click()`);
   assert.equal(await window.webContents.executeJavaScript('document.documentElement.lang'), 'zh-Hant');

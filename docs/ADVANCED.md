@@ -33,10 +33,10 @@ Stage 4 uses this VM on macOS. The Stage 5 and Stage 6 execution entry points al
 | Setting | Default or requirement |
 |---|---|
 | `SIGNET_RUNTIME_PROJECT` | Host directory `.dependencies/scientific-runtime`; prepare the assets yourself |
-| `SIGNET_SSH_PORT` | Local port `2226`; connects only to `127.0.0.1` |
-| SSH user | `root` in the existing VM, for local use only |
-| SSH key | `vm/id_ed25519` under the runtime directory, managed by the user |
-| Host verification | `vm/known_hosts`; strict host-key verification is retained and cannot be bypassed |
+| `SIGNET_SSH_PORT` | Browser launcher only: local port `2226`, connecting to `127.0.0.1` |
+| SSH user | Browser launcher: `root`; Electron: selected desktop SSH profile |
+| SSH key | Browser launcher: `vm/id_ed25519`; Electron: selected encrypted key or app-managed encrypted key |
+| Host verification | Browser launcher: strict `vm/known_hosts`; Electron: explicit fingerprint trust in its private host-trust store |
 | `SIGNET_CONTAINER_IMAGE` | `/work/evidence/signet-0.0.6.sif` inside the VM; an existing usable image is required |
 | Stage 5 | SLURM's `local` partition, 4 cores and 4 GB, required R packages, and ParaFly |
 | Stage 6 | Required R visualization packages and any online annotation services used |

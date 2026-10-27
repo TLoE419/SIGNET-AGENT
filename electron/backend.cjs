@@ -13,20 +13,21 @@ function pythonExecutable() {
 }
 
 class Backend extends EventEmitter {
-  constructor({stateFile, provider = 'codex', python = pythonExecutable(), startupMs = 30000} = {}) {
+  constructor({stateFile, provider = 'codex', python = pythonExecutable(), startupMs = 30000, sshBroker} = {}) {
     super();
     if (!['codex', 'gemini', 'groq'].includes(provider)) throw Error('Unsupported model provider.');
     if (!stateFile || !path.isAbsolute(stateFile)) throw Error('An absolute state path is required.');
-    this.options = {stateFile, provider, python, startupMs};
+    this.options = {stateFile, provider, python, startupMs, sshBroker};
     this.stopping = false;
   }
 
   start() {
     if (this.child) throw Error('Backend already started.');
-    const {python, provider, stateFile, startupMs} = this.options;
+    const {python, provider, stateFile, startupMs, sshBroker} = this.options;
     this.child = spawn(python, ['-u', path.join(__dirname, 'server.py'), '--provider', provider, '--state-file', stateFile], {
       cwd: ROOT, stdio: ['pipe', 'pipe', 'inherit'], detached: true,
-      env: {...process.env, PYTHONUNBUFFERED: '1'},
+      env: {...process.env, PYTHONUNBUFFERED: '1',
+        ...(sshBroker ? {SIGNET_SSH_BROKER: sshBroker.path, SIGNET_SSH_BROKER_TOKEN: sshBroker.token} : {})},
     });
     const child = this.child;
     child.stdin.on('error', () => {}); // EPIPE during child shutdown is expected.

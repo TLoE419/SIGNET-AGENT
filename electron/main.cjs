@@ -1,16 +1,30 @@
 'use strict';
-const {app, BrowserWindow, dialog, session, Menu} = require('electron');
+const {app, BrowserWindow, dialog, session, Menu, ipcMain} = require('electron');
 const path = require('node:path');
+const os = require('node:os');
+const {randomBytes} = require('node:crypto');
 const {Backend} = require('./backend.cjs');
 const {localURL, navigationAllowed} = require('./policy.cjs');
+const {SshStore} = require('./ssh/store.cjs');
+const {SshService} = require('./ssh/service.cjs');
+const {SshBroker} = require('./ssh/broker.cjs');
+const {installSshHandlers} = require('./ssh/ipc.cjs');
 
 async function launch({provider = 'codex', visible = true, userData, stateFile, startupMs} = {}) {
   if (process.platform === 'win32') throw Error('This desktop launcher currently supports macOS and Linux. Use the browser launcher on other platforms.');
   app.setName('SIGNET Research Assistant');
   app.setPath('userData', userData || path.join(app.getPath('appData'), 'SIGNET Research Assistant'));
   if (!app.requestSingleInstanceLock()) { app.quit(); return; }
-  let window, quitting = false, finished = false;
-  const backend = new Backend({provider, startupMs, stateFile: stateFile || path.join(app.getPath('userData'), 'state', '.chat-state.json')});
+  let window, origin, quitting = false, finished = false, disposeSsh;
+  const sshToken = randomBytes(32).toString('base64url');
+  // macOS limits Unix socket paths to roughly 100 bytes. /tmp is the stable,
+  // short alias for its much longer per-user temporary directory.
+  const socketBase = process.platform === 'darwin' ? '/tmp' : os.tmpdir();
+  const sshSocket = path.join(socketBase, `signet-ssh-${randomBytes(12).toString('hex')}`, 'broker.sock');
+  const sshService = new SshService(new SshStore(path.join(app.getPath('userData'), 'ssh')));
+  const sshBroker = new SshBroker({socketPath: sshSocket, token: sshToken, service: sshService});
+  const backend = new Backend({provider, startupMs, stateFile: stateFile || path.join(app.getPath('userData'), 'state', '.chat-state.json'),
+    sshBroker: {path: sshSocket, token: sshToken}});
   app.on('second-instance', () => { if (window) { if (window.isMinimized()) window.restore(); window.show(); window.focus(); } });
   app.on('before-quit', event => {
     if (finished) return;
@@ -36,6 +50,9 @@ async function launch({provider = 'codex', visible = true, userData, stateFile, 
         buttons: ['Keep waiting', 'Force quit'], defaultId: 0, cancelId: 0, noLink: true});
       if (response === 1) { await backend.forceStop(); break; }
     }
+    await sshService.shutdown().catch(() => {});
+    await sshBroker.close().catch(() => {});
+    disposeSsh?.();
     finished = true;
     app.quit();
   }
@@ -47,8 +64,12 @@ async function launch({provider = 'codex', visible = true, userData, stateFile, 
     {label: 'View', submenu: [{role: 'reload'}, {role: 'resetZoom'}, {role: 'zoomIn'}, {role: 'zoomOut'}, {role: 'togglefullscreen'}]},
     {role: 'windowMenu'},
   ]));
-  let origin;
-  try { origin = await backend.start(); }
+  try {
+    await sshService.initialize();
+    await sshBroker.start();
+    disposeSsh = installSshHandlers({ipcMain, dialog, service: sshService, getWindow: () => window, getOrigin: () => origin});
+    origin = await backend.start();
+  }
   catch (error) {
     if (!quitting) await dialog.showMessageBox({type: 'error', title: 'SIGNET could not start', message: error.message});
     await quit();
@@ -73,7 +94,8 @@ async function launch({provider = 'codex', visible = true, userData, stateFile, 
   });
   window = new BrowserWindow({width: 1320, height: 900, minWidth: 760, minHeight: 540, show: false,
     title: 'SIGNET Research Assistant', webPreferences: {session: isolated, nodeIntegration: false,
-      contextIsolation: true, sandbox: true, webSecurity: true, webviewTag: false}});
+      contextIsolation: true, sandbox: true, webSecurity: true, webviewTag: false,
+      preload: path.join(__dirname, 'preload.cjs')}});
   window.on('close', event => { if (!finished) { event.preventDefault(); void quit(); } });
   window.webContents.setWindowOpenHandler(() => ({action: 'deny'}));
   window.webContents.on('will-attach-webview', event => event.preventDefault());

@@ -110,6 +110,8 @@ class ChatHandler(BaseHTTPRequestHandler):
                   '/chat.js': ('chat.js', 'text/javascript; charset=utf-8'),
                   '/i18n.js': ('i18n.js', 'text/javascript; charset=utf-8'),
                   '/chat.css': ('chat.css', 'text/css; charset=utf-8'),
+                  '/ssh.js': ('ssh.js', 'text/javascript; charset=utf-8'),
+                  '/ssh.css': ('ssh.css', 'text/css; charset=utf-8'),
                   '/stage6.js': ('stage6.js', 'text/javascript; charset=utf-8'),
                   '/vendor/vis-network.min.js': ('vendor/vis-network.min.js', 'text/javascript; charset=utf-8')}
         url = urlsplit(self.path)

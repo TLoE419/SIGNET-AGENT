@@ -40,6 +40,9 @@ def ssh_args():
 
 
 def remote(command, **kwargs):
+    from ssh_transport import available, remote as electron_remote
+    if available():
+        return electron_remote(command, **kwargs)
     return subprocess.run(ssh_args() + [command], env={
         'PATH': os.environ.get('PATH', '/usr/bin:/bin'), 'HOME': str(Path.home()),
         'LANG': 'C'}, **kwargs)
