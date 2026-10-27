@@ -1,16 +1,17 @@
 import {useEffect,useRef,useState} from 'react';
+import {ConnectionDiagnostics,type Diagnostic,type DiagnosticBridge} from './ConnectionDiagnostics';
 import {Terminal} from '@xterm/xterm';
 import {FitAddon} from '@xterm/addon-fit';
 import xtermStyles from '@xterm/xterm/css/xterm.css';
 type Reply={ok:boolean;error?:string};
 type TerminalEvent={id:string;type:'data'|'closed';data?:string};
 type Activity={id:string;type:'start'|'output'|'end';time:string;command?:string;channel?:string;data?:string;code?:number;error?:string};
-export interface DevTerminalBridge {
+export interface DevTerminalBridge extends DiagnosticBridge {
  open:(id:string,cols:number,rows:number)=>Promise<Reply>;input:(id:string,data:string)=>Promise<Reply>;resize:(id:string,cols:number,rows:number)=>Promise<Reply>;ack:(id:string,bytes:number)=>Promise<Reply>;close:(id:string)=>Promise<Reply>;
  subscribe:(fn:(event:TerminalEvent)=>void)=>()=>void;activity:(fn:(event:Activity)=>void)=>()=>void;
 }
-export function DevTerminalPanel({bridge,connected,status}:{bridge:DevTerminalBridge;connected:boolean;status:string}){
- const [open,setOpen]=useState(false),[tab,setTab]=useState<'activity'|'shell'>('activity'),[state,setState]=useState('Closed'),[error,setError]=useState(''),[log,setLog]=useState(''),[running,setRunning]=useState(0);
+export function DevTerminalPanel({bridge,connected,status,diagnostics}:{bridge:DevTerminalBridge;connected:boolean;status:string;diagnostics:Diagnostic[]}){
+ const [open,setOpen]=useState(false),[tab,setTab]=useState<'connection'|'activity'|'shell'>('connection'),[state,setState]=useState('Closed'),[error,setError]=useState(''),[log,setLog]=useState(''),[running,setRunning]=useState(0);
  const logView=useRef<HTMLPreElement>(null),follow=useRef(true),mount=useRef<HTMLDivElement>(null),terminal=useRef<Terminal|null>(null),fit=useRef<FitAddon|null>(null),session=useRef<string|null>(null),active=useRef(new Set<string>());
  useEffect(()=>{if(follow.current&&logView.current)logView.current.scrollTop=logView.current.scrollHeight},[log,open,tab]);
  useEffect(()=>bridge.activity(event=>{if(event.type==='start')active.current.add(event.id);if(event.type==='end')active.current.delete(event.id);setRunning(active.current.size);
@@ -36,7 +37,8 @@ export function DevTerminalPanel({bridge,connected,status}:{bridge:DevTerminalBr
  async function start(){if(session.current||!terminal.current)return;const id=crypto.randomUUID();session.current=id;setState('Opening');setError('');terminal.current.clear();fit.current?.fit();try{const result=await bridge.open(id,Math.min(500,terminal.current.cols),Math.min(200,terminal.current.rows));if(session.current!==id)return;if(!result.ok)throw Error(result.error);setState('Open');terminal.current?.focus()}catch(e){if(session.current===id){session.current=null;setState('Closed');setError((e as Error).message)}}}
  return <><button className="ssh-dev-launch" onClick={()=>setOpen(true)}>Dev terminal{running?` · ${running} running`:''}</button>{open&&<section className="ssh-dev-panel" aria-label="SSH developer terminal" onKeyDown={event=>event.stopPropagation()}>
  <style>{xtermStyles}</style><header><strong>SSH developer terminal</strong><span>{status} · {running} commands running</span><button onClick={()=>{setOpen(false);setState('Closed')}}>Close panel</button></header>
- <nav aria-label="Terminal views"><button aria-pressed={tab==='activity'} onClick={()=>setTab('activity')}>Execution activity</button><button aria-pressed={tab==='shell'} onClick={()=>setTab('shell')}>Interactive shell</button></nav>
+ <nav aria-label="Terminal views"><button aria-pressed={tab==='connection'} onClick={()=>setTab('connection')}>Connection diagnostics</button><button aria-pressed={tab==='activity'} onClick={()=>setTab('activity')}>Execution activity</button><button aria-pressed={tab==='shell'} onClick={()=>setTab('shell')}>Interactive shell</button></nav>
+ <div hidden={tab!=='connection'}><ConnectionDiagnostics entries={diagnostics}/><p>Last 300 events retained in Electron memory until app exit, including failed attempts and page reloads. Credentials and server prompt contents are omitted.</p></div>
  <div hidden={tab!=='activity'}><p>Live Python SSH command output from this app session. Recent preview only; shell input is separate.</p><button onClick={()=>setLog('')}>Clear preview</button><pre ref={logView} onScroll={event=>{const el=event.currentTarget;follow.current=el.scrollHeight-el.scrollTop-el.clientHeight<32}} aria-label="SSH execution activity">{log||'No remote commands observed yet.'}</pre></div>
  <div hidden={tab!=='shell'}><div className="ssh-dev-actions"><span>{state} · same SSH connection, separate shell channel</span><button disabled={!connected||state!=='Closed'} onClick={()=>void start()}>Open shell</button><button disabled={state==='Closed'} onClick={()=>{const id=session.current;if(id)void bridge.close(id)}}>Close shell</button></div><div className="ssh-dev-terminal" ref={mount}/></div>
  {error&&<p role="alert">{error}</p>}</section>}</>;

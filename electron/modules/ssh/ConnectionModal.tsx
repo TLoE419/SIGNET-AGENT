@@ -1,10 +1,10 @@
-import {useEffect,useId,useRef,useState} from 'react';
+import {useEffect,useId,useRef,useState,type ReactNode} from 'react';
 import type {FormInput,HostIdentity,Inspection,KeyMetadata,SshError,Status} from './types';
 import {uciHpc3Preset} from './types';
 import {profileInput} from './validation';
 import {HostTrust} from './LoginSteps';
 export interface ConnectionModalProps {
- open:boolean;profile:FormInput|null;keys:KeyMetadata[];status:Status|'unconfigured';busy?:boolean;error?:SshError|null;
+ diagnostics?:ReactNode;open:boolean;profile:FormInput|null;keys:KeyMetadata[];status:Status|'unconfigured';busy?:boolean;error?:SshError|null;
  onInspectKey:(path:string)=>Promise<Inspection>;onSave:(input:FormInput)=>Promise<void>;onConnect:(input:FormInput)=>Promise<void>;
  onDisconnect:()=>Promise<void>;onClose:()=>void;onOpenKeyRegistration:()=>void;pendingHost?:HostIdentity;onTrustHost?:()=>Promise<void>;
 }
@@ -31,6 +31,6 @@ export function ConnectionModal(p:ConnectionModalProps){
    <div className="ssh-key-actions"><button type="button" onClick={p.onOpenKeyRegistration}>Add SSH key…</button></div>
    <details className="ssh-advanced"><summary>Advanced connection settings</summary><label>Host<input required value={form.host} onChange={e=>setForm({...form,host:e.target.value})}/></label><label>Port<input required type="number" min="1" max="65535" value={form.port} onChange={e=>setForm({...form,port:Number(e.target.value)})}/></label></details>
   </fieldset>{(error||p.error)&&<p role="alert">{error||p.error?.message}</p>}<HostTrust identity={p.pendingHost} onTrust={p.onTrustHost}/>
-  <footer>{active?<button type="button" disabled={p.status==='disconnecting'} onClick={()=>void p.onDisconnect().catch(e=>setError(e.message))}>{p.status==='connecting'?'Cancel connection':'Disconnect'}</button>:<><button type="submit" className="ssh-primary" disabled={!!disabled||(form.auth.method==='private-key'&&inspection?.status!=='encrypted')}>Connect</button><button type="button" disabled={!!disabled||(form.auth.method==='private-key'&&inspection?.status!=='encrypted')} onClick={()=>void submit(false)}>Save</button></>}<button type="button" onClick={close}>Close</button></footer>
+  {p.diagnostics}<footer>{active?<button type="button" disabled={p.status==='disconnecting'} onClick={()=>void p.onDisconnect().catch(e=>setError(e.message))}>{p.status==='connecting'?'Cancel connection':'Disconnect'}</button>:<><button type="submit" className="ssh-primary" disabled={!!disabled||(form.auth.method==='private-key'&&inspection?.status!=='encrypted')}>Connect</button><button type="button" disabled={!!disabled||(form.auth.method==='private-key'&&inspection?.status!=='encrypted')} onClick={()=>void submit(false)}>Save</button></>}<button type="button" onClick={close}>Close</button></footer>
  </form></dialog>;
 }

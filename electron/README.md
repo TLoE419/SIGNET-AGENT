@@ -43,9 +43,17 @@ npm run dev --prefix electron -- --provider groq
 ```
 
 Quit an already-running SIGNET instance first; a second launch focuses the
-existing instance and does not change its mode. After signing in through the
-normal SSH controls, click **Dev terminal** at the bottom right.
+existing instance and does not change its mode. Before signing in, click
+**Dev terminal → Connection diagnostics** at the bottom right. Then use the
+normal SSH controls to Connect; dev login/unlock dialogs also show the live log.
 
+- **Connection diagnostics** monitors local key unlock, TCP connection, SSH
+  handshake, host-key checks, authentication attempts, Duo challenge waiting,
+  success/failure and disconnect. It works before authentication. The last 300
+  events stay in Electron Main memory across panel close, failure and page reload,
+  until app exit. Only fixed allowlisted protocol messages and sanitized error
+  codes are recorded; raw ssh2 debug output, banners, challenge text/responses,
+  passwords, passphrases and private keys are never forwarded to this log.
 - **Execution activity** previews Python SSH broker commands, stdout/stderr,
   start/end times, exit status and the current running count. It follows output
   while scrolled to the bottom. It is a bounded, in-memory preview: 128 KiB per

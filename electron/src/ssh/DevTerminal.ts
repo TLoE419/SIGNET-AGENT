@@ -26,15 +26,17 @@ export class DevTerminal extends EventEmitter {
  dispose(){this.close();this.service.off('snapshot',this.snapshot);this.removeAllListeners()}
 }
 export function installDevTerminal(ipc:IpcMain,getWindow:()=>BrowserWindow|null,service:SshConnectionService,getOrigin:()=>string){
- const terminal=new DevTerminal(service);
+ const terminal=new DevTerminal(service);let sequence=0;const history:unknown[]=[];
  const send=(channel:string,value:unknown)=>{const win=getWindow();if(win&&!win.isDestroyed()&&win.webContents.mainFrame.url.startsWith(getOrigin()+'/'))win.webContents.send(channel,value)};
  const output=(value:unknown)=>send('ssh-dev:event',value),activity=(value:unknown)=>send('ssh-dev:activity',value);
- terminal.on('event',output);service.on('activity',activity);
- const operations:Record<string,(...args:any[])=>unknown>={open:(id,cols,rows)=>terminal.open(id,cols,rows),input:(id,data)=>terminal.input(id,data),resize:(id,cols,rows)=>terminal.resize(id,cols,rows),ack:(id,bytes)=>terminal.ack(id,bytes),close:id=>terminal.close(id)};
- const counts:Record<string,number>={open:3,input:2,resize:3,ack:2,close:1};
+ const diagnostic=(value:object)=>{const entry={...value,seq:++sequence};history.push(entry);if(history.length>300)history.shift();send('ssh-dev:diagnostic',entry)};
+ terminal.on('event',output);service.on('activity',activity);service.on('diagnostic',diagnostic);
+ const operations:Record<string,(...args:any[])=>unknown>={history:()=>history.slice(),open:(id,cols,rows)=>terminal.open(id,cols,rows),input:(id,data)=>terminal.input(id,data),resize:(id,cols,rows)=>terminal.resize(id,cols,rows),ack:(id,bytes)=>terminal.ack(id,bytes),close:id=>terminal.close(id)};
+ const counts:Record<string,number>={history:0,open:3,input:2,resize:3,ack:2,close:1};
  for(const [name,fn] of Object.entries(operations))ipc.handle('ssh-dev:'+name,async(event,...args)=>{
   if(!authorized(event,getWindow(),getOrigin()))return {ok:false,error:'Unauthorized terminal request.'};
   try{
+   if(name==='history'){if(args.length)throw Error();return {ok:true,value:history.slice()}}
    if(args.length!==counts[name]||typeof args[0]!=='string'||!/^[a-zA-Z0-9-]{1,80}$/.test(args[0]))throw Error();
    if(['open','resize'].includes(name)&&(!Number.isInteger(args[1])||args[1]<2||args[1]>500||!Number.isInteger(args[2])||args[2]<2||args[2]>200))throw Error();
    if(name==='input'&&(typeof args[1]!=='string'||Buffer.byteLength(args[1])>16384))throw Error();
@@ -42,5 +44,5 @@ export function installDevTerminal(ipc:IpcMain,getWindow:()=>BrowserWindow|null,
    return {ok:true,value:await fn(...args)};
   }catch{return {ok:false,error:'Terminal operation failed. Check the SSH connection and reopen the terminal.'}}
  });
- return {close:()=>terminal.close(),dispose:()=>{terminal.dispose();service.off('activity',activity);for(const name of Object.keys(operations))ipc.removeHandler('ssh-dev:'+name)}};
+ return {close:()=>terminal.close(),dispose:()=>{terminal.dispose();service.off('activity',activity);service.off('diagnostic',diagnostic);history.length=0;for(const name of Object.keys(operations))ipc.removeHandler('ssh-dev:'+name)}};
 }

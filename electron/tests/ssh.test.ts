@@ -166,3 +166,20 @@ test('dev terminal cancels a pending open and bounds unacknowledged output',asyn
  const {PassThrough}=await import('node:stream');let resolve!:(stream:any)=>void;const service=Object.assign(new EventEmitter(),{openShell:()=>new Promise<any>(done=>resolve=done),getSnapshot:()=>({connection:{status:'connected'}})});const terminal=new compiled.DevTerminal(service as any);const opening=terminal.open('pending',80,24);terminal.close('pending');const late=Object.assign(new PassThrough(),{stderr:new PassThrough()});resolve(late);await assert.rejects(opening,{code:'SESSION_CLOSED'});assert.equal(late.destroyed,true);
  const stream=Object.assign(new PassThrough(),{stderr:new PassThrough()});const next=terminal.open('current',80,24);resolve(stream);await next;stream.emit('data',Buffer.alloc(70000));assert.equal(stream.isPaused(),true);terminal.ack('stale',70000);assert.equal(stream.isPaused(),true);terminal.ack('current',70000);assert.equal(stream.isPaused(),false);stream.emit('data',Buffer.alloc(300000));assert.equal(stream.destroyed,true);terminal.dispose();
 });
+
+test('pre-authentication diagnostics retain progress and never forward debug or challenge secrets',async t=>{
+ const s=await setup(t),events:any[]=[];s.service.on('diagnostic',event=>events.push(event));const p=await s.service.saveProfile({...s.input,auth:{method:'duo'}});
+ await assert.rejects(s.service.connect(p.id,''),{code:'PASSWORD_REQUIRED'});assert.ok(events.some(event=>event.stage==='credentials'));assert.equal(s.clients(),0);
+ const run=s.service.connect(p.id,'account-super-secret'),failure=assert.rejects(run,{code:'AUTH_FAILED'});await until(()=>s.client.calls===1);const debug=s.client.config.debug;
+ for(const raw of ['Socket connected','Handshake completed','Outbound: Sending USERAUTH_REQUEST (password)','Socket error: account-super-secret','Debug output from server: token-secret','toString','__proto__'])debug(raw);
+ s.client.emit('keyboard-interactive','token-secret','account-super-secret','',[{prompt:'secret-prompt',echo:false}],()=>{});s.client.emit('error',Object.assign(Error('account-super-secret'),{level:'client-authentication'}));await failure;
+ assert.ok(events.some(event=>event.stage==='tcp'));assert.ok(events.some(event=>event.stage==='handshake'));assert.ok(events.some(event=>event.stage==='challenge'));assert.ok(events.some(event=>event.message==='AUTH_FAILED'));assert.doesNotMatch(JSON.stringify(events),/account-super-secret|token-secret|secret-prompt/);
+});
+
+test('dev diagnostic history is bounded, readable before authentication, and cleared on disposal',async t=>{
+ const s=await setup(t),handlers=new Map<string,Function>(),frame={url:'http://127.0.0.1:1234/'},wc={mainFrame:frame,send:()=>{}},win={isDestroyed:()=>false,webContents:wc},ipc={handle:(name:string,fn:Function)=>handlers.set(name,fn),removeHandler:(name:string)=>handlers.delete(name)};
+ const dev=compiled.installDevTerminal(ipc as any,()=>win as any,s.service,()=> 'http://127.0.0.1:1234'),event={sender:wc,senderFrame:frame};const read=handlers.get('ssh-dev:history')!;
+ assert.equal((await read({...event,sender:{}})).ok,false);assert.equal((await read(event,'unexpected')).ok,false);assert.deepEqual((await read(event)).value,[]);
+ for(let index=0;index<350;index++)s.service.emit('diagnostic',{id:'attempt',stage:'connect',message:'Starting',time:'test'});
+ const history=(await read(event)).value;assert.equal(history.length,300);assert.equal(history[0].seq,51);assert.equal(history.at(-1).seq,350);dev.dispose();assert.equal(s.service.listenerCount('diagnostic'),0);assert.equal(handlers.size,0);
+});

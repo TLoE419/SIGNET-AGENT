@@ -15,6 +15,8 @@ const devTerminal=process.argv.includes('--signet-dev-terminal')?Object.freeze({
   close:id=>ipcRenderer.invoke('ssh-dev:close',id),
   subscribe:listener=>subscribe('ssh-dev:event',listener),
   activity:listener=>subscribe('ssh-dev:activity',listener),
+  diagnostics:listener=>subscribe('ssh-dev:diagnostic',listener),
+  history:()=>ipcRenderer.invoke('ssh-dev:history'),
 }):undefined;
 contextBridge.exposeInMainWorld('signetDesktop', Object.freeze({isDesktop:true,...(devTerminal?{devTerminal}:{}), ssh:Object.freeze({
   cancelRegistration: () => call('cancelRegistration'),
