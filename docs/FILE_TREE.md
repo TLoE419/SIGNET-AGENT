@@ -55,7 +55,10 @@ SIGNET-agent/
 │   ├── package.json              # Electron startup and lifecycle/smoke tests
 │   ├── package-lock.json         # Pinned desktop dependencies
 │   ├── README.md                 # Desktop setup, state and lifecycle limitations
-│   ├── ssh/                      # Main-owned SSH client, secure storage, broker and IPC handlers
+│   ├── ssh/                      # Private Python-to-Main SSH broker
+│   ├── src/ssh/                  # Original SSH service, secure storage, IPC and host UI components
+│   ├── modules/ssh/              # Original connection/key dialogs, contracts and React hook
+│   ├── build-ssh.mjs             # Builds isolated SSH Main/worker and renderer bundles
 │   └── tests/                    # Lifecycle, SSH integration and native Electron smoke tests
 ├── web/
 │   ├── index.html                # Chat and Stage 6 page structure

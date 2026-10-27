@@ -1,14 +1,12 @@
 'use strict';
-const {app, BrowserWindow, dialog, session, Menu, ipcMain} = require('electron');
+const {app, BrowserWindow, dialog, session, Menu, ipcMain, shell} = require('electron');
 const path = require('node:path');
 const os = require('node:os');
 const {randomBytes} = require('node:crypto');
 const {Backend} = require('./backend.cjs');
 const {localURL, navigationAllowed} = require('./policy.cjs');
-const {SshStore} = require('./ssh/store.cjs');
-const {SshService} = require('./ssh/service.cjs');
+const {SshConnectionService, SshProfileRepository, HostKeyTrustStore, AppManagedKeyStore, installSshHandlers} = require('./build/ssh/index.cjs');
 const {SshBroker} = require('./ssh/broker.cjs');
-const {installSshHandlers} = require('./ssh/ipc.cjs');
 
 async function launch({provider = 'codex', visible = true, userData, stateFile, startupMs} = {}) {
   if (process.platform === 'win32') throw Error('This desktop launcher currently supports macOS and Linux. Use the browser launcher on other platforms.');
@@ -21,7 +19,8 @@ async function launch({provider = 'codex', visible = true, userData, stateFile, 
   // short alias for its much longer per-user temporary directory.
   const socketBase = process.platform === 'darwin' ? '/tmp' : os.tmpdir();
   const sshSocket = path.join(socketBase, `signet-ssh-${randomBytes(12).toString('hex')}`, 'broker.sock');
-  const sshService = new SshService(new SshStore(path.join(app.getPath('userData'), 'ssh')));
+  const sshDirectory = path.join(app.getPath('userData'), 'ssh');
+  const sshService = new SshConnectionService(new SshProfileRepository(sshDirectory), new HostKeyTrustStore(sshDirectory), undefined, undefined, new AppManagedKeyStore(sshDirectory));
   const sshBroker = new SshBroker({socketPath: sshSocket, token: sshToken, service: sshService});
   const backend = new Backend({provider, startupMs, stateFile: stateFile || path.join(app.getPath('userData'), 'state', '.chat-state.json'),
     sshBroker: {path: sshSocket, token: sshToken}});
@@ -65,9 +64,13 @@ async function launch({provider = 'codex', visible = true, userData, stateFile, 
     {role: 'windowMenu'},
   ]));
   try {
-    await sshService.initialize();
+    // A damaged SSH configuration should be recoverable without disabling chat.
+    await sshService.initialize().catch(() => {});
     await sshBroker.start();
-    disposeSsh = installSshHandlers({ipcMain, dialog, service: sshService, getWindow: () => window, getOrigin: () => origin});
+    disposeSsh = installSshHandlers(ipcMain, () => window, sshService, async () => {
+      const choice = await dialog.showOpenDialog(window, {title:'Select an encrypted OpenSSH private key', properties:['openFile']});
+      return choice.canceled || !choice.filePaths[0] ? {canceled:true} : {canceled:false,path:choice.filePaths[0],name:path.basename(choice.filePaths[0])};
+    }, () => origin);
     origin = await backend.start();
   }
   catch (error) {
@@ -97,7 +100,13 @@ async function launch({provider = 'codex', visible = true, userData, stateFile, 
       contextIsolation: true, sandbox: true, webSecurity: true, webviewTag: false,
       preload: path.join(__dirname, 'preload.cjs')}});
   window.on('close', event => { if (!finished) { event.preventDefault(); void quit(); } });
-  window.webContents.setWindowOpenHandler(() => ({action: 'deny'}));
+  window.webContents.setWindowOpenHandler(({url}) => {
+    if (localURL(window.webContents.mainFrame.url, origin) &&
+        ['https://rcic.uci.edu/account/login.html', 'https://rcic.uci.edu/account/generate-ssh-keys.html'].includes(url)) {
+      void shell.openExternal(url);
+    }
+    return {action:'deny'};
+  });
   window.webContents.on('will-attach-webview', event => event.preventDefault());
   window.webContents.on('will-navigate', (event, url) => { if (!navigationAllowed(url, origin)) event.preventDefault(); });
   window.webContents.on('will-redirect', (event, url) => { if (!navigationAllowed(url, origin)) event.preventDefault(); });

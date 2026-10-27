@@ -112,6 +112,7 @@ class ChatHandler(BaseHTTPRequestHandler):
                   '/chat.css': ('chat.css', 'text/css; charset=utf-8'),
                   '/ssh.js': ('ssh.js', 'text/javascript; charset=utf-8'),
                   '/ssh.css': ('ssh.css', 'text/css; charset=utf-8'),
+                  '/ssh-ui.js': ('../electron/build/ssh-ui.js', 'text/javascript; charset=utf-8'),
                   '/stage6.js': ('stage6.js', 'text/javascript; charset=utf-8'),
                   '/vendor/vis-network.min.js': ('vendor/vis-network.min.js', 'text/javascript; charset=utf-8')}
         url = urlsplit(self.path)
@@ -120,7 +121,10 @@ class ChatHandler(BaseHTTPRequestHandler):
         if url.path not in assets:
             return self._error(404, '找不到頁面。')
         filename, content_type = assets[url.path]
-        body = (ROOT / 'web' / filename).read_text()
+        try:
+            body = (ROOT / 'web' / filename).read_text()
+        except FileNotFoundError:
+            return self._error(404, '找不到頁面。')
         if url.path == '/':
             if not self.server.turn_lock.acquire(blocking=False):
                 return self._error(409, '回合仍在執行，請保留原頁面等待完成。')

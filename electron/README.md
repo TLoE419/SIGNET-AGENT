@@ -33,12 +33,29 @@ are bundled.
 
 ## SSH connection
 
-Use the **SSH** control in the left rail to create a profile. Existing keys must
-be passphrase-protected OpenSSH private keys, owned by the current user and set
-to mode `0600`. The native file picker returns only the selected path to the
-isolated renderer. Alternatively, generate an encrypted 4096-bit RSA key in the
-dialog, then add the displayed public key to the remote account before connecting.
-Automatic password or Duo enrollment is not part of this integration.
+The top bar reuses the original `ssh-auth-key-management` status control: click
+its identity or LED to edit the connection; use the switch to connect, disconnect,
+or cancel. The switch opens a separate transient private-key unlock prompt.
+
+The connection dialog selects a saved key by name and UCInetID. Host and port
+are preset to UCI HPC3 and collapsed under **Advanced connection settings**.
+**Save** only saves the profile; **Connect** saves and connects.
+
+**Add SSH key…** opens a separate dialog with **Create New SSH Key** and
+**Use Existing SSH Key**. Existing keys use the native picker and offline
+inspection. New keys are encrypted RSA 4096 keys; **Register and verify** uses a
+temporary password/keyboard-interactive session, displays server-provided Duo
+prompts, installs the public key without duplicating the exact key, then verifies
+a fresh key-authenticated connection before replacing the saved profile.
+The public key remains available for manual setup if registration is unavailable.
+Account passwords appear only in registration and are never persisted.
+Closing registration cancels its temporary connections; old keys are retained.
+Existing private keys must be passphrase-protected OpenSSH keys owned by the
+current user with owner-only permissions (normally `0600`).
+As in the original design, inspection accepts one RSA, Ed25519 or NIST ECDSA
+key in an OpenSSH container using `aes256-ctr` with bcrypt (16-byte salt,
+1–100 rounds). Other formats, ciphers and excessive KDF costs are rejected
+before local unlock; inspection and decryption run in bounded worker threads.
 
 The first connection to a host is blocked and shows its SHA-256 host-key
 fingerprint. Verify that value through an independent administrator-provided
@@ -54,6 +71,14 @@ only to the owned Python child, and transfers command input/output as binary dat
 The browser launcher has no broker variables and continues to use its configured
 system OpenSSH transport.
 
+The original React/TypeScript SSH components are isolated in `modules/ssh` and
+`src/ssh`; the chat and Stage 6 UI retain their existing JavaScript implementation.
+`npm start` builds the SSH bundles automatically. A missing or corrupt SSH
+configuration is reported by the SSH controls without preventing chat startup.
+The earlier integration's flat version-1 profiles and host pins are read without
+rewriting them. Profile edits retain that format; original version-3 profiles
+are also supported and retain their format. Private keys are never migrated.
+
 ## Architecture and ownership
 
 - Electron Main spawns `server.py` with an anonymous control pipe. The wrapper
@@ -63,10 +88,10 @@ system OpenSSH transport.
   server or assumes that an occupied fixed port belongs to SIGNET.
 - Renderer loads the same HTML, scripts and HTTP APIs. Node integration is off,
   context isolation and sandboxing are on. A narrow preload exposes only named SSH
-  profile, key-picker, trust and connection methods; it exposes no generic IPC,
+  profile, key-picker, trust, registration and connection methods; it exposes no generic IPC,
   filesystem, shell or remote-exec method. Requests are restricted to the owned origin, permissions are denied,
   subframe navigation and popup windows are blocked. Existing Host, Origin, token
-  and CSP protections remain in effect. External links are blocked in this phase.
+  and CSP protections remain in effect. Only the two official RCIC login/key guidance links open in the system browser.
 - Result downloads from `/stage6/file` retain the native save dialog. No generic
   filesystem or shell API is exposed to the page.
 - Closing the window, quitting, or losing the renderer requests backend shutdown.
@@ -78,7 +103,7 @@ system OpenSSH transport.
   deliberately no promise of immediate termination. Explicit force quit kills the
   owned local process group. Tools which create separate sessions and remote jobs
   may outlive that group; inspect run records before retrying. This does not cancel
-  VM/SLURM jobs and does not establish future HPC3 connection ownership.
+  VM/SLURM jobs and does not automatically cancel remote scheduler jobs.
 - Main owns the SSH socket. Normal quit first drains and checkpoints Python work,
   then disconnects SSH and removes the private broker socket. A Main crash releases
   the SSH TCP connection; already-submitted remote jobs may continue independently.
@@ -119,7 +144,9 @@ npm run test:startup --prefix electron
 ```
 
 The Node suite starts the real Python service in disposable state directories,
-checks HTTP boundaries, startup failures and owner-crash cleanup. The native smoke
+checks HTTP boundaries, startup failures, owner-crash cleanup, key inspection,
+registration/Duo challenges, live SSH execution and saved-file compatibility.
+The restored UI tests check the original separate-dialog interaction flow. The native smoke
 test loads the actual UI without a model call, checks sandboxing, workspace access,
 language switching, blocked external navigation and service shutdown. It writes a
 screenshot to the OS temporary directory. The startup regression test executes the
