@@ -39,6 +39,8 @@ import subprocess
 import sys
 
 DEFAULT_HOST = 'hpc3.rcic.uci.edu'
+# Lowercase letter first, then letters, digits, _ or -; at most 32 characters.
+USER_PATTERN = r'[a-z][a-z0-9_-]{0,31}'
 # Dialog helper ssh calls for each login question when logging in without a terminal.
 ASKPASS = Path(__file__).resolve().with_name('hpc3_askpass.py')
 PORT = 22
@@ -70,12 +72,17 @@ SSH_ERRORS = (
 )
 
 
+def valid_user(user):
+    """True for a plain UCInetID-style name: it ends up in an ssh argv, so nothing else is allowed."""
+    return bool(re.fullmatch(USER_PATTERN, user or ''))
+
+
 def settings():
     """Return (user, host) from the environment; raise ValueError if missing or malformed."""
     user = os.environ.get('HPC3_USER', '').strip()
     host = os.environ.get('HPC3_HOST', '').strip() or DEFAULT_HOST
     # Both values end up in an ssh argv; allow only plain user and host name characters.
-    if not re.fullmatch(r'[a-z][a-z0-9_-]{0,31}', user):
+    if not valid_user(user):
         raise ValueError('Set HPC3_USER to your UCInetID (lowercase letters, digits, _ or -).')
     if not re.fullmatch(r'[A-Za-z0-9.-]{1,253}', host) or host.startswith('-'):
         raise ValueError('HPC3_HOST must be a plain host name, e.g. ' + DEFAULT_HOST)
