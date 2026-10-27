@@ -1,5 +1,7 @@
-// HPC3 connection card in the sidebar: shows /hpc3/status and drives the UCInetID, login
-// and logout through the local /hpc3 API. Works the same in the browser and in Electron.
+// HPC3 connection card in the sidebar: shows /hpc3/status and drives login and logout
+// through the local /hpc3 API. Works the same in the browser and in Electron.
+// Whenever HPC3 is not connected the card shows a UCInetID field (pre-filled with the last
+// account, editable) and the login button, so each user logs in with their own account.
 // No password ever passes through this page: login opens system dialogs owned by ssh.
 'use strict';
 (() => {
@@ -26,13 +28,12 @@
     ssh_failed: 'SSH 連線失敗，請稍後再試。',
     stale_connection: '之前的登入已失效（可能換了網路或電腦休眠），請重新登入。',
   };
-  // Logging in cannot fix these; offer "Check again" only.
-  const NO_LOGIN = new Set(['not_configured', 'dns_failed', 'network_unreachable', 'host_key_changed',
-    'ssh_missing', 'connection_refused']);
+  // Logging in cannot fix these; the button only saves the account, and "Check again" is offered.
+  const NO_LOGIN = new Set(['dns_failed', 'network_unreachable', 'host_key_changed', 'ssh_missing',
+    'connection_refused']);
 
   let status = null;               // last GET /hpc3/status body, null while unknown
   let login = {state: 'idle'};     // last login progress from the server
-  let editing = false;             // UCInetID form opened with "Change account"
   let error = '';                  // Chinese source text of the last error, translated on render
   let busy = false;                // a request from this card is in flight
   let timer = null;                // pending login-progress poll
@@ -65,7 +66,8 @@
     const waiting = login.state === 'waiting_for_user';
     const configured = status && status.status !== 'not_configured';
     const connected = !!(status && status.connected);
-    const formOpen = !waiting && !connected && (editing || (status && !configured));
+    const formOpen = !!status && !waiting && !connected;
+    const canLogin = formOpen && !NO_LOGIN.has(status.status);
     card.dataset.state = waiting ? 'busy' : connected ? 'connected' : status ? 'disconnected' : 'checking';
 
     if (waiting) text('hpc3-state', '登入中…');
@@ -86,13 +88,13 @@
     }
     show('hpc3-detail', waiting || connected || !!(status && configured));
 
-    show('hpc3-user-form', formOpen);
-    if (formOpen && !el('hpc3-user').value) el('hpc3-user').value = (status && status.user) || '';
-    show('hpc3-login', !!configured && !connected && !waiting && !formOpen && !NO_LOGIN.has(status.status));
-    show('hpc3-refresh', !!status && !connected && !waiting && !formOpen);
+    show('hpc3-login-form', formOpen);
+    // Pre-fill the last account once; never overwrite what the user is typing.
+    if (formOpen && !el('hpc3-user').value) el('hpc3-user').value = status.user || '';
+    text('hpc3-login', canLogin || !formOpen ? '登入 HPC3' : '儲存帳號');
+    show('hpc3-refresh', !!status && !connected && !waiting && !(status && !configured));
     show('hpc3-logout', connected && !waiting);
-    show('hpc3-change-user', !!configured && !connected && !waiting && !formOpen);
-    for (const id of ['hpc3-login', 'hpc3-refresh', 'hpc3-logout', 'hpc3-change-user', 'hpc3-save']) el(id).disabled = busy;
+    for (const id of ['hpc3-login', 'hpc3-refresh', 'hpc3-logout', 'hpc3-user']) el(id).disabled = busy;
 
     if (error) text('hpc3-error', error);
     show('hpc3-error', !!error);
@@ -123,13 +125,33 @@
     try { await work(); } finally { busy = false; render(); }
   }
 
-  el('hpc3-login').addEventListener('click', () => act(async () => {
+  async function saveUser(user) {
+    // Only the account name is sent; the password is asked later by ssh itself.
+    const result = await api('/hpc3/user', {user});
+    if (result.code === 200) return true;
+    error = {400: 'UCInetID 格式不正確：只能用小寫英文字母、數字、_ 或 -。',
+      409: '請先登出 HPC3 再更換帳號。'}[result.code] || '無法儲存 UCInetID，請稍後再試。';
+    return false;
+  }
+
+  el('hpc3-login-form').addEventListener('submit', event => {
+    event.preventDefault();
+    act(async () => {
+      const user = el('hpc3-user').value.trim();
+      if (!user) { error = '請先輸入你的 UCInetID。'; return; }
+      if (user !== (status.user || '') && !(await saveUser(user))) return;
+      if (NO_LOGIN.has(status.status)) { await refresh(true); return; }  // Saved; login cannot help yet.
+      await startLogin();
+    });
+  });
+
+  async function startLogin() {
     const result = await api('/hpc3/login', {});
     if (result.code === 202) { login = result.body; poll(); return; }
     if (result.code === 200) { login = result.body; await refresh(true); return; }
     error = {409: '登入正在進行中。', 501: '登入視窗需要 macOS，請在終端機執行 python3 hpc3_ssh.py login。',
       400: '請先輸入你的 UCInetID。'}[result.code] || '無法開始登入，請稍後再試。';
-  }));
+  }
 
   el('hpc3-logout').addEventListener('click', () => act(async () => {
     const result = await api('/hpc3/logout', {});
@@ -139,18 +161,6 @@
   }));
 
   el('hpc3-refresh').addEventListener('click', () => act(() => refresh(true)));
-
-  el('hpc3-change-user').addEventListener('click', () => { editing = true; error = ''; render(); el('hpc3-user').focus(); });
-
-  el('hpc3-user-form').addEventListener('submit', event => {
-    event.preventDefault();
-    act(async () => {
-      const result = await api('/hpc3/user', {user: el('hpc3-user').value});
-      if (result.code === 200) { editing = false; await refresh(true); return; }
-      error = {400: 'UCInetID 格式不正確：只能用小寫英文字母、數字、_ 或 -。',
-        409: '請先登出 HPC3 再更換帳號。'}[result.code] || '無法儲存 UCInetID，請稍後再試。';
-    });
-  });
 
   // Coming back to the window may mean the VPN or the connection changed meanwhile.
   window.addEventListener('focus', () => { if (!busy && login.state !== 'waiting_for_user') refresh(false); });
