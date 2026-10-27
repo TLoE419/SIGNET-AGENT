@@ -5,8 +5,10 @@ import {ElectronSshConnectionPort,ElectronSshKeyOnboardingPort,type SshBridge} f
 import {uciHpc3Preset,type AuthChallenge,type KeyMetadata,type FormInput} from '../../modules/ssh/types';
 import {UnlockPrompt} from './UnlockPrompt';
 import {AccountLoginPrompt} from './AccountLoginPrompt';
+import {DevTerminalPanel,type DevTerminalBridge} from './DevTerminalPanel';
 import {SshStatusBlock} from './SshStatusBlock';
 const bridge=(window as unknown as {signetDesktop:{ssh:SshBridge}}).signetDesktop.ssh,port=new ElectronSshConnectionPort(bridge),onboarding=new ElectronSshKeyOnboardingPort(bridge);
+const devTerminal=(window as unknown as {signetDesktop:{devTerminal?:DevTerminalBridge}}).signetDesktop.devTerminal;
 function SshControls(){
  const ssh=useSshConnection(port),[open,setOpen]=useState(false),[keyOpen,setKeyOpen]=useState(false),[unlock,setUnlock]=useState(false),[account,setAccount]=useState(false),[draft,setDraft]=useState<FormInput|null>(null),[registration,setRegistration]=useState<{key:KeyMetadata;passphrase:string}|null>(null),[challenge,setChallenge]=useState<AuthChallenge|null>(null),[keys,setKeys]=useState<KeyMetadata[]>([]),p=ssh.snapshot.selectedProfile,liveStatus=ssh.snapshot.connection?.status||'unconfigured',status=ssh.error&&!['connected','connecting','disconnecting'].includes(liveStatus)?'error':liveStatus;
  useEffect(()=>{void onboarding.listKeys().then(setKeys);return onboarding.subscribeAuthChallenge(setChallenge)},[]);
@@ -14,7 +16,7 @@ function SshControls(){
  function credentialRequest(e:unknown){const code=(e as {code?:string}).code;if(code==='PASSPHRASE_REQUIRED'){setUnlock(true);return}if(code==='PASSWORD_REQUIRED'){setAccount(true);return}throw e}
  async function connect(input:FormInput){setDraft(null);try{await ssh.connect(input)}catch(e){credentialRequest(e)}}
  async function toggle(){if(liveStatus==='connected'||liveStatus==='connecting'){await ssh.disconnect();return}if(!p){setOpen(true);return}try{await ssh.connectSaved()}catch(e){credentialRequest(e)}}
- return <><SshStatusBlock name={p?.name||'UCI HPC3'} host={p?`${p.host}:${p.port}`:'hpc3.rcic.uci.edu:22'} status={status} error={ssh.error||ssh.snapshot.connection?.error} busy={ssh.busy} onEdit={()=>setOpen(true)} onToggle={()=>void toggle().catch(()=>{})}/>
+ return <>{devTerminal&&<DevTerminalPanel bridge={devTerminal} connected={liveStatus==='connected'} status={liveStatus}/>}<SshStatusBlock name={p?.name||'UCI HPC3'} host={p?`${p.host}:${p.port}`:'hpc3.rcic.uci.edu:22'} status={status} error={ssh.error||ssh.snapshot.connection?.error} busy={ssh.busy} onEdit={()=>setOpen(true)} onToggle={()=>void toggle().catch(()=>{})}/>
  <UnlockPrompt open={unlock} name={p?.name||'SSH'} onClose={()=>{setUnlock(false);if(liveStatus==='connecting')void ssh.disconnect()}} onConnect={ssh.connectSaved} pendingHost={ssh.snapshot.pendingHost} onTrust={ssh.trustHost}/>
  <ConnectionModal open={open} onClose={()=>setOpen(false)} profile={draft||p} keys={keys} status={status} busy={ssh.busy} error={ssh.error||ssh.snapshot.connection?.error} onOpenKeyRegistration={()=>{setOpen(false);setKeyOpen(true)}} onInspectKey={ssh.inspect} onSave={async input=>{await ssh.save(input);setDraft(null)}} onConnect={connect} onDisconnect={ssh.disconnect} pendingHost={ssh.snapshot.pendingHost} onTrustHost={ssh.trustHost}/>
  <KeyRegistrationModal open={keyOpen} onClose={()=>setKeyOpen(false)} onPickKey={ssh.pickKey} onInspectKey={ssh.inspect} onGenerateKey={onboarding.generateKey} onAddExternalKey={onboarding.addExternalKey} onGenerated={(key,passphrase)=>{setRegistration({key,passphrase});setKeyOpen(false);setAccount(true);void refreshKeys()}} onImported={async key=>{await refreshKeys();setDraft({...p,...(!p?uciHpc3Preset:{}),username:p?.username||'',auth:{method:'private-key',privateKeyPath:key.privateKeyPath,keyId:key.keyId,managed:false}} as FormInput);setKeyOpen(false);setOpen(true)}}/>

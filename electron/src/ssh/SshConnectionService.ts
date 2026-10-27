@@ -1,4 +1,4 @@
-import {Client} from 'ssh2';
+import {Client,type ClientChannel} from 'ssh2';
 import {randomUUID} from 'node:crypto';
 import {EventEmitter} from 'node:events';
 import {SshProfileRepository,HostKeyTrustStore,hostIdentity,validIdentity} from './stores';
@@ -130,19 +130,28 @@ export class SshConnectionService extends EventEmitter {
   await pending?.catch(()=>{});
   this.snapshot.connection={profileId:id,status:'disconnected'};delete this.snapshot.pendingHost;this.publish();
  }
+  async openShell(cols:number,rows:number):Promise<ClientChannel>{
+    const client=this.client;if(!client||this.snapshot.connection?.status!=='connected')fail('SESSION_CLOSED','Connect SSH first.');
+    return new Promise((resolve,reject)=>{let settled=false;const timer=setTimeout(()=>{settled=true;reject(new SshFailure('CONNECTION_TIMEOUT','Terminal opening timed out.'))},10000);
+      client.shell({term:'xterm-256color',cols,rows},(error,stream)=>{clearTimeout(timer);if(settled||this.client!==client||this.snapshot.connection?.status!=='connected'){stream?.destroy();if(!settled)reject(new SshFailure('SESSION_CLOSED','SSH connection closed.'));return}settled=true;if(error)reject(safeError(error));else resolve(stream)});
+    });
+  }
   async exec(command:string, input:Buffer, timeoutMs = 30000) {
     if (!this.client || this.snapshot.connection?.status !== 'connected') fail('SESSION_CLOSED', 'Connect SSH before running remote work.');
     if (typeof command !== 'string' || !command || command.length > 131072 || !Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 24 * 60 * 60 * 1000) {
       fail('UNKNOWN', 'Invalid SSH execution request.');
     }
-    const client = this.client;
+    const client = this.client,activityId=randomUUID();
+    const activity=(type:string,extra:Record<string,unknown>={})=>{if(this.listenerCount('activity'))this.emit('activity',{id:activityId,type,time:new Date().toISOString(),...extra})};
+    activity('start',{command:command.slice(0,4096)});let observed=0,truncated=false;
     return new Promise<{returncode:number;signal:string|null;stdout:Buffer;stderr:Buffer}>((resolve, reject) => {
       client.exec(command, (error, stream) => {
-        if (error) { reject(safeError(error)); return; }
+        if (error) { activity('end',{error:'Could not start remote command.'});reject(safeError(error)); return; }
         const stdout:Buffer[] = [], stderr:Buffer[] = [];
         let size = 0, finished = false;
         const timer = setTimeout(() => { stream.close(); done(new SshFailure('CONNECTION_TIMEOUT', 'The remote command timed out.')); }, timeoutMs);
-        const collect = (target:Buffer[]) => (chunk:Buffer) => {
+        const collect = (target:Buffer[],channel:string) => (chunk:Buffer) => {
+          if(this.listenerCount('activity')){const remaining=Math.max(0,131072-observed);if(remaining){activity('output',{channel,data:chunk.subarray(0,remaining).toString('utf8')});observed+=Math.min(chunk.length,remaining)}if(chunk.length>remaining&&!truncated){truncated=true;activity('output',{channel:'notice',data:'Output preview truncated at 128 KiB; command continues.'})}}
           size += chunk.length;
           if (size > 1024 * 1024 * 1024) { stream.close(); done(new SshFailure('UNKNOWN', 'Remote output exceeded 1 GiB.')); }
           else target.push(Buffer.from(chunk));
@@ -151,11 +160,12 @@ export class SshConnectionService extends EventEmitter {
           if (finished) return;
           finished = true;
           clearTimeout(timer);
+          activity('end',{code,signal,error:failure?.message});
           failure ? reject(failure) : resolve({returncode: Number.isInteger(code) ? code : 255, signal,
             stdout: Buffer.concat(stdout), stderr: Buffer.concat(stderr)});
         };
-        stream.on('data', collect(stdout));
-        stream.stderr.on('data', collect(stderr));
+        stream.on('data', collect(stdout,'stdout'));
+        stream.stderr.on('data', collect(stderr,'stderr'));
         stream.once('error', (error:Error) => done(safeError(error)));
         stream.once('close', (code:number, signal:string|null) => done(null, code, signal));
         if (input?.length) stream.end(input); else stream.end();

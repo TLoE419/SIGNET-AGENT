@@ -4,7 +4,8 @@ This source-run desktop host displays the existing `web/` UI from an owned
 `chat_ui.ChatServer`. Browser startup, HTTP routes, model providers, scientific
 tools, VM transport and the Web UI remain available. Electron Main owns the
 optional SSH connection used by the Python scientific runtime; the renderer never
-receives a socket, private-key contents, or a general command API.
+receives a socket or private-key contents. Normal mode exposes no command API;
+explicit development mode adds a restricted interactive SSH terminal.
 
 ## Run
 
@@ -30,6 +31,47 @@ packaged installers are not implemented. This is a source checkout launcher:
 Python, its dependencies, Codex CLI when selected, and scientific prerequisites
 must still be installed. No scientific data, Python runtime or model credentials
 are bundled.
+
+## Development terminal
+
+Start explicitly in development mode from the repository root:
+
+```sh
+npm run dev --prefix electron
+# Or choose a provider:
+npm run dev --prefix electron -- --provider groq
+```
+
+Quit an already-running SIGNET instance first; a second launch focuses the
+existing instance and does not change its mode. After signing in through the
+normal SSH controls, click **Dev terminal** at the bottom right.
+
+- **Execution activity** previews Python SSH broker commands, stdout/stderr,
+  start/end times, exit status and the current running count. It follows output
+  while scrolled to the bottom. It is a bounded, in-memory preview: 128 KiB per
+  command and the last 200,000 characters in the panel; it is not a durable log.
+  Local Python processes, LLM output and previously submitted scheduler jobs
+  are not automatically attached to this view.
+- **Interactive shell → Open shell** requests an xterm-256color PTY on the
+  existing authenticated SSH transport. Input, Ctrl-C, ANSI output and resizing
+  work through that channel. Use normal remote commands to inspect jobs or logs.
+  This is a separate shell channel: its working directory/environment and stdin
+  do not replace those of scientific commands already executing through Python.
+- **Close shell**, **Close panel** or page reload closes the shell channel while
+  preserving the shared connection. SSH disconnect/app shutdown closes both.
+  Reconnecting never automatically opens a new shell or replays input.
+
+`npm start` and browser mode have no terminal UI or terminal bridge. Main only
+registers the dev IPC handlers for an explicit `--dev` in an unpackaged app;
+packaged apps ignore the flag. Dev IPC checks the owning window/main-frame
+origin, caps input and dimensions, and bounds unacknowledged terminal output.
+Terminal history and activity are not saved. xterm generates layout/theme CSS,
+so only the dev window permits inline styles; script and network restrictions
+remain in force, and production CSP remains unchanged.
+
+Validate the real terminal against an isolated localhost SSH test server with
+`npm run test:dev --prefix electron`. This test covers real renderer input,
+Ctrl-C, broker activity, a single shared transport, and panel/reload cleanup.
 
 ## SSH connection
 
@@ -98,12 +140,13 @@ Private key files and host pins are not migrated.
   server or assumes that an occupied fixed port belongs to SIGNET.
 - Renderer loads the same HTML, scripts and HTTP APIs. Node integration is off,
   context isolation and sandboxing are on. A narrow preload exposes only named SSH
-  profile, key-picker, trust, registration and connection methods; it exposes no generic IPC,
-  filesystem, shell or remote-exec method. Requests are restricted to the owned origin, permissions are denied,
+  profile, key-picker, trust, registration and connection methods. Normal mode
+  exposes no generic IPC, filesystem, shell or remote-exec method; explicit dev
+  mode adds the bounded PTY operations described above. Requests are restricted to the owned origin, permissions are denied,
   subframe navigation and popup windows are blocked. Existing Host, Origin, token
-  and CSP protections remain in effect. Only the two official RCIC login/key guidance links open in the system browser.
+  and CSP protections remain in effect (with dev-only inline styles for xterm). Only the two official RCIC login/key guidance links open in the system browser.
 - Result downloads from `/stage6/file` retain the native save dialog. No generic
-  filesystem or shell API is exposed to the page.
+  filesystem or local shell API is exposed to the page.
 - Closing the window, quitting, or losing the renderer requests backend shutdown.
   Python stops accepting requests, lets existing request/Stage 6 workers finish
   and save, then exits. After five seconds the native dialog offers waiting or

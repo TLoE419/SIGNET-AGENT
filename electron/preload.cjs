@@ -7,7 +7,16 @@ function subscribe(channel, listener) {
   ipcRenderer.on(channel, receive);
   return () => ipcRenderer.removeListener(channel, receive);
 }
-contextBridge.exposeInMainWorld('signetDesktop', Object.freeze({isDesktop:true, ssh:Object.freeze({
+const devTerminal=process.argv.includes('--signet-dev-terminal')?Object.freeze({
+  open:(id,cols,rows)=>ipcRenderer.invoke('ssh-dev:open',id,cols,rows),
+  input:(id,data)=>ipcRenderer.invoke('ssh-dev:input',id,data),
+  resize:(id,cols,rows)=>ipcRenderer.invoke('ssh-dev:resize',id,cols,rows),
+  ack:(id,bytes)=>ipcRenderer.invoke('ssh-dev:ack',id,bytes),
+  close:id=>ipcRenderer.invoke('ssh-dev:close',id),
+  subscribe:listener=>subscribe('ssh-dev:event',listener),
+  activity:listener=>subscribe('ssh-dev:activity',listener),
+}):undefined;
+contextBridge.exposeInMainWorld('signetDesktop', Object.freeze({isDesktop:true,...(devTerminal?{devTerminal}:{}), ssh:Object.freeze({
   cancelRegistration: () => call('cancelRegistration'),
   initialize: () => call('initialize'),
   getSnapshot: () => call('getSnapshot'),

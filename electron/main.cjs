@@ -5,14 +5,16 @@ const os = require('node:os');
 const {randomBytes} = require('node:crypto');
 const {Backend} = require('./backend.cjs');
 const {localURL, navigationAllowed} = require('./policy.cjs');
-const {SshConnectionService, SshProfileRepository, HostKeyTrustStore, AppManagedKeyStore, installSshHandlers} = require('./build/ssh/index.cjs');
+const {SshConnectionService, SshProfileRepository, HostKeyTrustStore, AppManagedKeyStore, installSshHandlers, installDevTerminal} = require('./build/ssh/index.cjs');
 const {SshBroker} = require('./ssh/broker.cjs');
 
-async function launch({provider = 'codex', visible = true, userData, stateFile, startupMs} = {}) {
+async function launch({provider = 'codex', visible = true, userData, stateFile, startupMs, devMode = false} = {}) {
   if (process.platform === 'win32') throw Error('This desktop launcher currently supports macOS and Linux. Use the browser launcher on other platforms.');
   app.setName('SIGNET Research Assistant');
   app.setPath('userData', userData || path.join(app.getPath('appData'), 'SIGNET Research Assistant'));
   if (!app.requestSingleInstanceLock()) { app.quit(); return; }
+  devMode = devMode === true && !app.isPackaged;
+  let devTerminal;
   let window, origin, quitting = false, finished = false, disposeSsh;
   const sshToken = randomBytes(32).toString('base64url');
   // macOS limits Unix socket paths to roughly 100 bytes. /tmp is the stable,
@@ -51,6 +53,7 @@ async function launch({provider = 'codex', visible = true, userData, stateFile, 
     }
     await sshService.shutdown().catch(() => {});
     await sshBroker.close().catch(() => {});
+    devTerminal?.dispose();
     disposeSsh?.();
     finished = true;
     app.quit();
@@ -72,6 +75,7 @@ async function launch({provider = 'codex', visible = true, userData, stateFile, 
       return choice.canceled || !choice.filePaths[0] ? {canceled:true} : {canceled:false,path:choice.filePaths[0],name:path.basename(choice.filePaths[0])};
     }, () => origin);
     origin = await backend.start();
+    if(devMode)devTerminal=installDevTerminal(ipcMain,()=>window,sshService,()=>origin);
   }
   catch (error) {
     if (!quitting) await dialog.showMessageBox({type: 'error', title: 'SIGNET could not start', message: error.message});
@@ -88,6 +92,15 @@ async function launch({provider = 'codex', visible = true, userData, stateFile, 
     await quit();
   });
   const isolated = session.fromPartition('signet-shell');
+  // xterm generates per-size/theme CSS. Only the explicit development window
+  // permits inline styles; scripts, network policy and production CSP stay strict.
+  if(devMode)isolated.webRequest.onHeadersReceived((details,callback)=>{
+    const headers={...details.responseHeaders};
+    if(details.resourceType==='mainFrame'&&localURL(details.url,origin)){
+      for(const key of Object.keys(headers))if(key.toLowerCase()==='content-security-policy')headers[key]=headers[key].map(value=>value.replace("style-src 'self'","style-src 'self' 'unsafe-inline'"));
+    }
+    callback({responseHeaders:headers});
+  });
   isolated.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
   isolated.setPermissionCheckHandler(() => false);
   isolated.webRequest.onBeforeRequest((details, callback) => callback({cancel: !localURL(details.url, origin)}));
@@ -98,6 +111,7 @@ async function launch({provider = 'codex', visible = true, userData, stateFile, 
   window = new BrowserWindow({width: 1320, height: 900, minWidth: 760, minHeight: 540, show: false,
     title: 'SIGNET Research Assistant', webPreferences: {session: isolated, nodeIntegration: false,
       contextIsolation: true, sandbox: true, webSecurity: true, webviewTag: false,
+      additionalArguments: devMode ? ['--signet-dev-terminal'] : [],
       preload: path.join(__dirname, 'preload.cjs')}});
   window.on('close', event => { if (!finished) { event.preventDefault(); void quit(); } });
   window.webContents.setWindowOpenHandler(({url}) => {
@@ -113,6 +127,7 @@ async function launch({provider = 'codex', visible = true, userData, stateFile, 
   window.webContents.on('will-frame-navigate', event => {
     if (!event.isMainFrame || !navigationAllowed(event.url, origin)) event.preventDefault();
   });
+  window.webContents.on('did-start-navigation',event=>{if(event.isMainFrame)devTerminal?.close()});
   window.webContents.on('render-process-gone', () => { void quit(); });
   try {
     await window.loadURL(origin + '/');

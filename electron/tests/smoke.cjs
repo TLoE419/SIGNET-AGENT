@@ -5,6 +5,7 @@ const {mkdtempSync, rmSync, writeFileSync} = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const {app} = require('electron');
+const devMode = process.argv.includes('--dev-test');
 const {launch} = require('../main.cjs');
 const temporary = mkdtempSync(path.join(os.tmpdir(), 'signet-electron-smoke-'));
 let running;
@@ -15,7 +16,7 @@ const deadline = setTimeout(async () => {
 }, 45000);
 app.on('will-quit', () => { clearTimeout(deadline); rmSync(temporary, {recursive: true, force: true}); });
 (async () => {
-  running = await launch({visible: false, userData: path.join(temporary, 'app'), stateFile: path.join(temporary, 'state', '.chat-state.json')});
+  running = await launch({devMode, visible: false, userData: path.join(temporary, 'app'), stateFile: path.join(temporary, 'state', '.chat-state.json')});
   assert.ok(running);
   const {window, backend, origin} = running;
   const prefs = window.webContents.getLastWebPreferences();
@@ -31,12 +32,18 @@ app.on('will-quit', () => { clearTimeout(deadline); rmSync(temporary, {recursive
     chatStatus:(await fetch('/chat',{method:'POST',body:'{}'})).status,
     workspace:(await fetch('/stage6?session=12345678-1234-1234-1234-123456789abc',
       {headers:{'X-Chat-Token':document.querySelector('meta[name="chat-token"]').content}})).status,
+    devBridge:!!window.signetDesktop?.devTerminal,devButton:!!document.querySelector('.ssh-dev-launch'),
     sshButton:!!document.querySelector('#ssh-root .ssh-status-block'),
     sshBridge:Object.keys(window.signetDesktop?.ssh||{}).sort(),
     resources:performance.getEntriesByType('resource').filter(x=>x.name.startsWith(location.origin)).length
   }))()`);
   assert.equal(value.composer, true); assert.equal(value.stage6, true); assert.equal(value.language, true);
   assert.equal(value.node, 'undefined'); assert.equal(value.chatStatus, 403); assert.equal(value.workspace, 200);
+  assert.equal(value.devBridge,devMode);assert.equal(value.devButton,devMode);
+  if(devMode){
+    const panel=await window.webContents.executeJavaScript(`(async()=>{document.querySelector('.ssh-dev-launch').click();await new Promise(r=>setTimeout(r,100));const root=document.querySelector('.ssh-dev-panel');[...root.querySelectorAll('button')].find(b=>b.textContent==='Interactive shell').click();await new Promise(r=>setTimeout(r,100));const disabled=[...root.querySelectorAll('button')].find(b=>b.textContent==='Open shell').disabled;const canvas=!!root.querySelector('.xterm');[...root.querySelectorAll('button')].find(b=>b.textContent==='Close panel').click();return {disabled,canvas}})()`);
+    assert.equal(panel.disabled,true);assert.equal(panel.canvas,true);
+  }
   assert.equal(value.sshButton, true);
   assert.deepEqual(value.sshBridge, ['addExternalKey', 'answerAuthChallenge', 'cancelRegistration', 'connect', 'disconnect', 'generateKey', 'getSnapshot', 'initialize', 'inspectPrivateKey', 'listKeys', 'listProfiles', 'pickPrivateKey', 'registerGenerated', 'saveProfile', 'selectProfile', 'subscribe', 'subscribeAuthChallenge', 'trustHost']);
   assert.equal(value.sshBridge.some(name => /exec|shell|readFile|writeFile/.test(name)), false);
