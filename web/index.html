@@ -10,6 +10,7 @@
   <script defer src="/chat.js"></script>
   <script defer src="/vendor/vis-network.min.js"></script>
   <script defer src="/stage6.js"></script>
+  <script defer src="/hpc3.js"></script>
 </head>
 <body>
   <aside class="rail">
@@ -18,6 +19,13 @@
     <div class="nav-label"><span data-i18n="工作空間">WORKSPACE</span></div>
     <div class="nav-item active"><span>◉</span> <span data-i18n="研究助手">Research assistant</span> <span class="nav-dot"></span></div>
     <div class="environment"><span class="local-dot"></span> <span data-i18n="本機工作階段">Local session</span><small>__MODEL__</small></div>
+    <section id="hpc3-card" class="hpc3-card" data-state="checking" aria-label="HPC3 connection" data-i18n-aria="HPC3 連線" aria-live="polite">
+      <div class="hpc3-head"><span class="hpc3-dot"></span><strong>HPC3</strong><span id="hpc3-state" data-i18n="正在檢查連線…">Checking connection…</span></div>
+      <p id="hpc3-detail" class="hpc3-detail" hidden></p>
+      <form id="hpc3-user-form" class="hpc3-user" hidden><label for="hpc3-user" data-i18n="你的 UCInetID">Your UCInetID</label><div><input id="hpc3-user" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="32"><button id="hpc3-save" type="submit" data-i18n="儲存">Save</button></div></form>
+      <div class="hpc3-actions"><button id="hpc3-login" type="button" hidden data-i18n="登入 HPC3">Log in to HPC3</button><button id="hpc3-logout" type="button" hidden data-i18n="登出">Log out</button><button id="hpc3-refresh" type="button" hidden data-i18n="重新檢查">Check again</button><button id="hpc3-change-user" type="button" hidden data-i18n="更換帳號">Change account</button></div>
+      <p id="hpc3-error" class="hpc3-error" role="alert" hidden></p>
+    </section>
     <button id="language-toggle" type="button" aria-label="Switch to Traditional Chinese">繁體中文</button>
   </aside>
   <main>

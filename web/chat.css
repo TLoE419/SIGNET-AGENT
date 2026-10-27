@@ -103,3 +103,20 @@
 .conversation-controls label{font-size:12px;color:var(--muted)}
 .conversation-controls select{font:inherit;min-width:0;flex:1;padding:7px;border:1px solid var(--line);border-radius:6px;background:var(--paper);color:var(--ink)}
 .conversation-controls select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+/* HPC3 connection card in the sidebar (web/hpc3.js). */
+.hpc3-card{margin-top:14px;padding:12px;border:1px solid #d2ddcf;border-radius:9px;background:#f7faf5;font-size:12px;color:#526953}
+.hpc3-head{display:flex;align-items:center;gap:6px}.hpc3-head span:last-child{margin-left:auto;color:var(--muted)}
+.hpc3-dot{width:7px;height:7px;border-radius:50%;background:#b9c3bd;flex-shrink:0}
+.hpc3-card[data-state=connected] .hpc3-dot{background:#3f9a68}.hpc3-card[data-state=disconnected] .hpc3-dot{background:#c98a3a}
+.hpc3-card[data-state=busy] .hpc3-dot{background:#4f86b8;animation:hpc3-pulse 1s ease-in-out infinite alternate}
+@keyframes hpc3-pulse{to{opacity:.3}}
+.hpc3-detail,.hpc3-error{margin:8px 0 0;line-height:1.5;overflow-wrap:anywhere}.hpc3-error{color:#a2412f}
+.hpc3-user{margin-top:8px}.hpc3-user label{display:block;margin-bottom:4px;color:var(--muted)}
+.hpc3-user div{display:flex;gap:6px}.hpc3-user input{flex:1;min-width:0;padding:6px 8px;border:1px solid #cfd9cc;border-radius:6px;font:inherit}
+.hpc3-actions{display:flex;flex-wrap:wrap;gap:6px}.hpc3-actions:has(button:not([hidden])){margin-top:8px}
+.hpc3-card button{padding:6px 10px;border:1px solid #7c9b8d;border-radius:6px;background:white;color:#35594a;font-size:12px}
+#hpc3-login{background:var(--accent);border-color:var(--accent);color:white}
+#hpc3-refresh,#hpc3-change-user{padding:2px 0;border:0;background:none;color:var(--muted);text-decoration:underline;text-underline-offset:2px}
+.hpc3-actions button{white-space:nowrap}
+.hpc3-card button[hidden]{display:none}

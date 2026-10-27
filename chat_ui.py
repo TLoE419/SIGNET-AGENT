@@ -114,6 +114,7 @@ class ChatHandler(BaseHTTPRequestHandler):
                   '/i18n.js': ('i18n.js', 'text/javascript; charset=utf-8'),
                   '/chat.css': ('chat.css', 'text/css; charset=utf-8'),
                   '/stage6.js': ('stage6.js', 'text/javascript; charset=utf-8'),
+                  '/hpc3.js': ('hpc3.js', 'text/javascript; charset=utf-8'),
                   '/vendor/vis-network.min.js': ('vendor/vis-network.min.js', 'text/javascript; charset=utf-8')}
         url = urlsplit(self.path)
         if url.path in ('/hpc3/status', '/hpc3/login'):

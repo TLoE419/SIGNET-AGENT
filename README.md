@@ -77,6 +77,7 @@ node tests/test_markdown.cjs
 node tests/test_i18n.cjs
 node tests/test_stage6_graph.cjs
 node tests/test_chat_progress.cjs
+node tests/test_hpc3_ui.cjs
 ```
 
 Pull-request and main-branch CI runs this process on Ubuntu 24.04 with Python 3.11 and Node.js 24, without model keys or real study data. These checks do not validate the complete scientific environment.

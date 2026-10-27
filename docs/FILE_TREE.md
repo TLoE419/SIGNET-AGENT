@@ -63,6 +63,7 @@ SIGNET-agent/
 │   ├── chat.css                  # Interface and narrow-window styles
 │   ├── i18n.js                   # Traditional Chinese / English switching
 │   ├── stage6.js                 # Parameter, network graph, and result-comparison interactions
+│   ├── hpc3.js                 # Sidebar HPC3 card: status, UCInetID, login and logout via /hpc3
 │   └── vendor/
 │       ├── README.md             # Package sources, versions, and modification history
 │       ├── vis-network.min.js    # Interactive network graph library
@@ -80,6 +81,7 @@ SIGNET-agent/
     ├── test_groq_provider.py    # Groq responses, rate limits, and tool format
     ├── test_hpc3_api.py         # /hpc3 routes: request checks, login progress, conflicts, .env updates
     ├── test_hpc3_askpass.py     # Login dialog helper: masking, argument safety, ssh contract
+    ├── test_hpc3_ui.cjs         # HPC3 card states, login polling, errors and language switching
     ├── test_hpc3_ssh.py         # HPC3 connection check: each failing layer, without network
     ├── test_i18n.cjs            # Language switching and content retention
     ├── test_list_files.py      # Recursive file listing and hidden-file / symlink exclusion
