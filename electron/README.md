@@ -49,11 +49,19 @@ normal SSH controls to Connect; dev login/unlock dialogs also show the live log.
 
 - **Connection diagnostics** monitors local key unlock, TCP connection, SSH
   handshake, host-key checks, authentication attempts, Duo challenge waiting,
-  success/failure and disconnect. It works before authentication. The last 300
+  success/failure and disconnect. The first event states the selected
+  `username@host:port`, so the actual target is visible before authentication.
+  It works before authentication. The last 300
   events stay in Electron Main memory across panel close, failure and page reload,
   until app exit. Only fixed allowlisted protocol messages and sanitized error
   codes are recorded; raw ssh2 debug output, banners, challenge text/responses,
   passwords, passphrases and private keys are never forwarded to this log.
+- When HPC3 returns a keyboard-interactive challenge, the complete server name,
+  instructions and prompts are forwarded to the active login dialog. Numbered
+  choices such as `1. Duo Push ...` are rendered as buttons; selecting one sends
+  that exact option back to the pending SSH challenge. Manual Duo passcodes remain
+  available through the prompt field. Prompt contents are displayed transiently
+  and are never added to diagnostics or persisted.
 - **Execution activity** previews Python SSH broker commands, stdout/stderr,
   start/end times, exit status and the current running count. It follows output
   while scrolled to the bottom. It is a bounded, in-memory preview: 128 KiB per

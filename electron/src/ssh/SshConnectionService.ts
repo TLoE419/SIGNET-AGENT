@@ -37,7 +37,7 @@ export class SshConnectionService extends EventEmitter {
    'Outbound: Sending USERAUTH_REQUEST (publickey -- check)':['authentication','Checking public-key acceptance.'],
    'Outbound: Sending USERAUTH_REQUEST (publickey)':['authentication','Trying public-key authentication.'],
    'Outbound: Sending USERAUTH_REQUEST (keyboard-interactive)':['authentication','Starting keyboard-interactive / Duo authentication.'],
-   'Client: password auth failed':['authentication','Password authentication not accepted; checking remaining methods.'],
+   'Client: password auth failed':['authentication','Password phase did not complete login; checking server-requested methods.'],
    'Client: publickey auth failed':['authentication','Public-key authentication not accepted.'],
    'Client: keyboard-interactive auth failed':['authentication','Keyboard-interactive authentication not accepted.'],
   };
@@ -73,7 +73,7 @@ export class SshConnectionService extends EventEmitter {
   const profile=profileInput(input.profile),key=await this.managedKeys.get(input.keyId);if(profile.auth.method!=='private-key'||profile.auth.privateKeyPath!==key.privateKeyPath||profile.auth.keyId!==key.keyId||profile.auth.managed!==true)fail('KEY_INVALID','Generated key reference does not match this profile.');if(typeof input.password!=='string'||!input.password.length||input.password.length>4096)fail('AUTH_FAILED','Enter your UCInetID password for temporary registration.');
   const registrationToken=++this.registrationAttempt;const checkActive=()=>{if(this.stopping||registrationToken!==this.registrationAttempt)fail('SESSION_CLOSED','Key registration cancelled.');};
   this.onboarding=true;let privateKey:string|undefined,password=input.password;input.password='';const sessionId=randomUUID();let alreadyPresent=false,temporary:Client|undefined,verifiedClient:Client|undefined;
-  this.trace(sessionId,'registration','Starting SSH key registration.');
+  this.trace(sessionId,'registration',`Starting SSH key registration to ${profile.username}@${profile.host}:${profile.port}.`);
   try{this.trace(sessionId,'unlock','Unlocking the generated key locally.');privateKey=await this.keys.unlock(key.privateKeyPath,input.passphrase);input.passphrase='';checkActive();let hostError:SshFailure|undefined;const temp=this.clientFactory();temporary=temp;this.registrationClients.add(temp);this.observeClient(temp,sessionId);
    await new Promise<void>((resolve,reject)=>{let settled=false;const timer=setTimeout(()=>finish(new SshFailure('CONNECTION_TIMEOUT','Registration timed out. Check network or VPN.')),180000);const finish=(error?:SshFailure)=>{if(settled)return;settled=true;clearTimeout(timer);error?reject(error):resolve()};this.registrationCancel=()=>finish(new SshFailure('SESSION_CLOSED','Key registration cancelled.'));this.forwardChallenges(temp,sessionId,()=>registrationToken===this.registrationAttempt&&!this.stopping);temp.on('ready',()=>finish());temp.on('error',e=>finish(hostError||safeError(e)));temp.on('close',()=>finish(hostError||new SshFailure('SESSION_CLOSED','Registration session closed before authentication.')));try{temp.connect({debug:this.protocolTrace(sessionId),host:profile.host,port:profile.port,username:profile.username,password,tryKeyboard:true,readyTimeout:180000,authHandler:['password','keyboard-interactive'],keepaliveInterval:15000,keepaliveCountMax:3,agentForward:false,hostVerifier:this.registrationHostVerifier(profile,sessionId,error=>hostError=error)})}catch(e){finish(safeError(e))}});password='';checkActive();
    this.trace(sessionId,'registration','Installing public key using the authenticated account.');
@@ -111,7 +111,7 @@ export class SshConnectionService extends EventEmitter {
   if(this.closing)return Promise.reject(new SshFailure('SESSION_CLOSED','Disconnect is still in progress.'));
   if(this.inFlight)return this.inFlight;if(this.snapshot.connection?.status==='connected')return Promise.resolve();
   if(this.onboarding||this.editing||this.stopping||this.snapshot.connection?.status==='disconnecting')return Promise.reject(new SshFailure('UNKNOWN','Another SSH operation is in progress.'));
-  const token=++this.attempt,diagnosticId=`connection-${token}`;this.trace(diagnosticId,'connect',p.auth.method==='duo'?'Connect requested: Duo.':'Connect requested: SSH key.');delete this.snapshot.pendingHost;this.snapshot.connection={profileId:id,status:'connecting'};this.publish();
+  const token=++this.attempt,diagnosticId=`connection-${token}`;this.trace(diagnosticId,'connect',`Connect requested: ${p.auth.method==='duo'?'Duo':'SSH key'} to ${p.username}@${p.host}:${p.port}.`);delete this.snapshot.pendingHost;this.snapshot.connection={profileId:id,status:'connecting'};this.publish();
   const run=(async()=>{
    let privateKey:string|undefined;
    try{

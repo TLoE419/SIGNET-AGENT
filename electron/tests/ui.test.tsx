@@ -10,6 +10,7 @@ dom.window.HTMLDialogElement.prototype.showModal=function(){this.open=true};dom.
 const require=createRequire(import.meta.url);
 const {render,screen,fireEvent,waitFor,cleanup,act}=require('@testing-library/react') as typeof import('@testing-library/react');
 import {AccountLoginPrompt} from '../src/ssh/AccountLoginPrompt';
+import {DuoChallenge} from '../modules/ssh/LoginSteps';
 import {UnlockPrompt} from '../src/ssh/UnlockPrompt';
 import {SshStatusBlock} from '../src/ssh/SshStatusBlock';
 import {ConnectionBadge} from '../modules/ssh/ConnectionBadge';
@@ -62,4 +63,24 @@ test('unlock prompt only collects a temporary passphrase and clears failed input
 test('account setup follows generation and clears the account password on submit and cancellation',async()=>{
  let logins=0,cancels=0,done=0;render(<AccountLoginPrompt open username="" keyToRegister={savedKey} onClose={()=>cancels++} onComplete={()=>done++} onAnswer={async()=>{}} onTrust={async()=>{}} onLogin={async(user,password)=>{logins++;assert.equal(user,'testuser');assert.equal(password,'account-secret');throw Error('Retry authentication')}}/>);
  assert.ok(screen.getByRole('heading',{name:'Set up SSH key'}));assert.equal(screen.queryByLabelText('Private-key passphrase'),null);fireEvent.change(screen.getByLabelText('UCInetID / username'),{target:{value:'testuser'}});fireEvent.change(screen.getByLabelText('UCInetID password'),{target:{value:'account-secret'}});fireEvent.click(screen.getByRole('button',{name:'Sign in and set up key'}));await screen.findByText('Retry authentication');assert.equal(logins,1);assert.equal(done,0);assert.equal((screen.getByLabelText('UCInetID password') as HTMLInputElement).value,'');fireEvent.click(screen.getByRole('button',{name:'Cancel'}));assert.equal(cancels,1);
+});
+
+test('Duo challenge forwards the server instructions and selected push option',async()=>{
+ const replies:Array<{session:string;challenge:string;answers:string[]}>=[];
+ render(<DuoChallenge challenge={{sessionId:'connection-3',challengeId:'challenge-1',name:'Duo two-factor login for testuser',instructions:'Enter a passcode or select one of the following options:\n\n 1. Duo Push to XXX-XXX-1234',prompts:[{prompt:'Passcode or option (1-1):',echo:false}]}} onAnswer={async(session,challenge,answers)=>{replies.push({session,challenge,answers})}}/>);
+ assert.ok(screen.getByText('Duo two-factor login for testuser'));
+ assert.ok(screen.getByText(/Enter a passcode or select one/));
+ assert.equal((screen.getByLabelText('Passcode or option (1-1):') as HTMLInputElement).type,'password');
+ fireEvent.click(screen.getByRole('button',{name:'1 Duo Push to XXX-XXX-1234'}));
+ await waitFor(()=>assert.deepEqual(replies,[{session:'connection-3',challenge:'challenge-1',answers:['1']}]));
+ assert.ok(screen.getByText('Waiting for Duo authentication…'));
+});
+
+test('Duo challenge keeps manual passcodes available when no numbered option is returned',async()=>{
+ let answers:string[]=[];
+ render(<DuoChallenge challenge={{sessionId:'connection-4',challengeId:'challenge-2',name:'Duo',instructions:'Enter your generated passcode.',prompts:[{prompt:'Passcode:',echo:false}]}} onAnswer={async(_session,_challenge,value)=>{answers=value}}/>);
+ assert.equal(screen.queryByRole('group',{name:'Available Duo options'}),null);
+ const input=screen.getByLabelText('Passcode:');fireEvent.change(input,{target:{value:'654321'}});fireEvent.click(screen.getByRole('button',{name:'Submit authentication response'}));
+ await waitFor(()=>assert.deepEqual(answers,['654321']));
+ assert.equal((input as HTMLInputElement).value,'');
 });
