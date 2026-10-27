@@ -25,28 +25,51 @@ class JsonFile<T> {
 }
 function document(v:unknown):ProfilesDocument {
  const d=v as ProfilesDocument;
- if(!d||d.version!==3||!Array.isArray(d.profiles)||d.profiles.length>100||Object.keys(d).some(k=>!['version','profiles','selectedProfileId'].includes(k)))throw Error();
+ if(!d||![3,4].includes(d.version)||!Array.isArray(d.profiles)||d.profiles.length>100||Object.keys(d).some(k=>!['version','profiles','selectedProfileId'].includes(k)))throw Error();
  const profiles=d.profiles.map(p=>{const valid=profileInput(p);if(!valid.id)throw Error();return valid as Profile});
  if(new Set(profiles.map(p=>p.id)).size!==profiles.length||(d.selectedProfileId!==null&&!profiles.some(p=>p.id===d.selectedProfileId)))throw Error();
- return {version:3,profiles,selectedProfileId:d.selectedProfileId};
+ if(d.version===3&&profiles.some(p=>p.auth.method==='duo'))throw Error();
+ return {version:d.version,profiles,selectedProfileId:d.selectedProfileId};
 }
 export class SshProfileRepository {
- private legacy=true;private file:JsonFile<ProfilesDocument>;private queue:Promise<unknown>=Promise.resolve();
- constructor(dir:string){this.file=new JsonFile(path.join(dir,'profiles.json'),value=>{
+ private version:1|3|4=4;
+ private file:JsonFile<ProfilesDocument>;
+ private queue:Promise<unknown>=Promise.resolve();
+ constructor(private dir:string){
+  this.file=new JsonFile(path.join(dir,'profiles.json'),value=>{
    const raw=value as {version:number;profiles:any[];selectedProfileId:string|null};
-   if(raw?.version!==1){const result=document(value);this.legacy=false;return result;}
+   if(raw?.version!==1){const result=document(value);this.version=result.version;return result;}
    if(!Array.isArray(raw.profiles)||Object.keys(raw).some(k=>!['version','profiles','selectedProfileId'].includes(k)))throw Error();
    const converted=raw.profiles.map(p=>{
     if(!p||Object.keys(p).some(k=>!['id','name','host','port','username','privateKeyPath','keyId'].includes(k)))throw Error();
     const {privateKeyPath,keyId,...rest}=p;
     return {...rest,auth:{method:'private-key',privateKeyPath,...(keyId?{keyId}: {})}};
    });
-   const result=document({...raw,version:3,profiles:converted});this.legacy=true;return result;
-  },()=>({version:3,profiles:[],selectedProfileId:null}),value=>this.legacy?{
-   version:1,selectedProfileId:value.selectedProfileId,profiles:value.profiles.map(p=>({id:p.id,name:p.name,host:p.host,port:p.port,username:p.username,privateKeyPath:p.auth.privateKeyPath,...(p.auth.keyId?{keyId:p.auth.keyId}: {})}))
-  }:value)}
- load(){return this.file.load()} async list(){return (await this.load()).profiles}
- private mutate<T>(fn:(d:ProfilesDocument)=>T):Promise<T>{const result=this.queue.then(async()=>{const d=await this.load();const value=fn(d);await this.file.write(d);return value});this.queue=result.catch(()=>{});return result}
+   const result=document({...raw,version:3,profiles:converted});this.version=1;return result;
+  },()=>({version:4,profiles:[],selectedProfileId:null}),value=>this.serialize(value));
+ }
+ private serialize(value:ProfilesDocument):unknown {
+  if(this.version!==1)return {...value,version:this.version};
+  return {version:1,selectedProfileId:value.selectedProfileId,profiles:value.profiles.map(p=>{
+   if(p.auth.method!=='private-key')throw Error('Duo profiles require version 4.');
+   return {id:p.id,name:p.name,host:p.host,port:p.port,username:p.username,privateKeyPath:p.auth.privateKeyPath,...(p.auth.keyId?{keyId:p.auth.keyId}: {})};
+  })};
+ }
+ load(){return this.file.load()}
+ async list(){return (await this.load()).profiles}
+ private mutate<T>(fn:(d:ProfilesDocument)=>T):Promise<T>{
+  const result=this.queue.then(async()=>{
+   const d=await this.load(),previous=structuredClone(this.serialize(d)),value=fn(d);
+   if(this.version!==4&&d.profiles.some(p=>p.auth.method==='duo')){
+    // Preserve the last readable pre-Duo document for an explicit rollback.
+    const backup=path.join(this.dir,`profiles.before-duo-${randomUUID()}.json`);
+    const file=await open(backup,'wx',0o600);
+    try{await file.writeFile(JSON.stringify(previous,null,2)+'\n');await file.sync()}finally{await file.close()}
+    this.version=4;d.version=4;
+   }
+   await this.file.write(d);return value;
+  });this.queue=result.catch(()=>{});return result;
+ }
  upsert(profile:Profile){return this.mutate(d=>{const p=profileInput(profile) as Profile;const i=d.profiles.findIndex(v=>v.id===p.id);if(i<0)d.profiles.push(p);else d.profiles[i]=p;d.selectedProfileId=p.id;return p})}
  remove(id:string){return this.mutate(d=>{d.profiles=d.profiles.filter(p=>p.id!==id);if(d.selectedProfileId===id)d.selectedProfileId=null})}
  setSelectedProfile(id:string|null){return this.mutate(d=>{if(id!==null&&!d.profiles.some(p=>p.id===id))fail('INVALID_PROFILE','Profile not found.');d.selectedProfileId=id})}

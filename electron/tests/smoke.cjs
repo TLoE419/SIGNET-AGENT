@@ -52,8 +52,12 @@ app.on('will-quit', () => { clearTimeout(deadline); rmSync(temporary, {recursive
   const flow = await window.webContents.executeJavaScript(`(async()=>{
     const settle=()=>new Promise(resolve=>setTimeout(resolve,80));
     document.querySelector('.ssh-identity').click();await settle();
-    const connection=document.querySelector('dialog[open]');
-    const result={connection:connection.querySelector('h2').textContent,advancedCollapsed:!connection.querySelector('.ssh-advanced').open,accountPassword:!!connection.querySelector('input[aria-label="UCInetID password"]')};
+    let connection=document.querySelector('dialog[open]');
+    const result={duo:connection.querySelector('[role=radio]').getAttribute('aria-checked'),sshDisabled:connection.querySelectorAll('[role=radio]')[1].disabled,passphrase:!!connection.querySelector('input[type=password]'),connection:connection.querySelector('h2').textContent,advancedCollapsed:!connection.querySelector('.ssh-advanced').open,accountPassword:!!connection.querySelector('input[aria-label="UCInetID password"]')};
+    const username=connection.querySelector('input[aria-label="UCInetID / username"]');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(username,'testuser');username.dispatchEvent(new Event('input',{bubbles:true}));await settle();
+    connection.querySelector('form').requestSubmit();await settle();await settle();
+    const account=document.querySelector('dialog[open]');result.duoPrompt=account.querySelector('h2').textContent;result.duoPassword=!!account.querySelector('input[aria-label="UCInetID password"]');
+    [...account.querySelectorAll('button')].find(b=>b.textContent==='Cancel').click();await settle();document.querySelector('.ssh-identity').click();await settle();connection=document.querySelector('dialog[open]');
     [...connection.querySelectorAll('button')].find(b=>b.textContent==='Add SSH key…').click();await settle();
     const registration=document.querySelector('dialog[open]');result.registration=registration.querySelector('h2').textContent;
     result.sources=[...registration.querySelectorAll('[role=radio]')].map(b=>b.textContent);
@@ -61,10 +65,16 @@ app.on('will-quit', () => { clearTimeout(deadline); rmSync(temporary, {recursive
     result.existing=!!registration.querySelector('input[aria-label="SSH private key"]');
     result.keyName=!!registration.querySelector('input[aria-label="Key name"]');
     result.account=!!registration.querySelector('input[aria-label="UCInetID / username"]');
+    registration.querySelectorAll('[role=radio]')[0].click();await settle();
+    for(const label of ['New key passphrase','Confirm passphrase']){const input=registration.querySelector('input[aria-label="'+label+'"]');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,'test-only-generation-secret');input.dispatchEvent(new Event('input',{bubbles:true}));}await settle();registration.querySelector('form').requestSubmit();
+    for(let attempt=0;attempt<100;attempt++){await settle();if(document.querySelector('.ssh-account-login[open]'))break;}
+    const setup=document.querySelector('.ssh-account-login[open]');result.setupTitle=setup?.querySelector('h2').textContent;result.setupPassword=!!setup?.querySelector('input[aria-label="UCInetID password"]');result.setupPassphrase=!!setup?.querySelector('input[aria-label="Private-key passphrase"]');
+    const saved=await window.signetDesktop.ssh.listKeys();result.generatedWithoutAccount=saved.ok&&saved.value.length===1&&!saved.value[0].username;
     return result;
   })()`);
-  assert.equal(flow.connection,'SSH connection');assert.equal(flow.advancedCollapsed,true);assert.equal(flow.accountPassword,false);
-  assert.equal(flow.registration,'Add SSH key');assert.equal(flow.sources.length,2);assert.equal(flow.existing,true);assert.equal(flow.keyName,true);assert.equal(flow.account,true);
+  assert.equal(flow.duoPrompt,'Sign in with Duo');assert.equal(flow.duoPassword,true);assert.equal(flow.duo,'true');assert.equal(flow.sshDisabled,true);assert.equal(flow.passphrase,false);assert.equal(flow.connection,'SSH connection');assert.equal(flow.advancedCollapsed,true);assert.equal(flow.accountPassword,false);
+  assert.equal(flow.registration,'Generate SSH key');assert.equal(flow.sources.length,2);assert.equal(flow.existing,true);assert.equal(flow.keyName,true);assert.equal(flow.account,false);
+  assert.equal(flow.setupTitle,'Set up SSH key');assert.equal(flow.setupPassword,true);assert.equal(flow.setupPassphrase,false);assert.equal(flow.generatedWithoutAccount,true);
   const screenshot = await window.webContents.capturePage();
   writeFileSync(path.join(os.tmpdir(), 'signet-ssh-original-flow.png'), screenshot.toPNG());
   let shutdownVerified = false;

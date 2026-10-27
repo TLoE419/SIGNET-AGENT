@@ -6,8 +6,8 @@ export interface SshBridge {
  saveProfile(p:FormInput):Promise<Reply<Profile>>;selectProfile(id:string):Promise<Reply<void>>;inspectPrivateKey(p:string):Promise<Reply<Inspection>>;
  pickPrivateKey():Promise<Reply<PrivateKeySelection>>;
  connect(id:string,p:string):Promise<Reply<void>>;disconnect(id:string):Promise<Reply<void>>;trustHost(i:HostIdentity):Promise<Reply<void>>;
- listKeys():Promise<Reply<KeyMetadata[]>>;generateKey(input:{label:string;username:string;passphrase:string}):Promise<Reply<KeyMetadata>>;addExternalKey(input:{label:string;username:string;privateKeyPath:string}):Promise<Reply<KeyMetadata>>;registerGenerated(input:{profile:FormInput;keyId:string;passphrase:string;password:string}):Promise<Reply<RegistrationResult>>;
- answerAuthChallenge(sessionId:string,challengeId:string,answers:string[]):Promise<Reply<void>>;subscribeAuthChallenge(fn:(challenge:AuthChallenge)=>void):()=>void;
+ listKeys():Promise<Reply<KeyMetadata[]>>;generateKey(input:{label:string;username?:string;passphrase:string}):Promise<Reply<KeyMetadata>>;addExternalKey(input:{label:string;username?:string;privateKeyPath:string}):Promise<Reply<KeyMetadata>>;registerGenerated(input:{profile:FormInput;keyId:string;passphrase:string;password:string}):Promise<Reply<RegistrationResult>>;
+ answerAuthChallenge(sessionId:string,challengeId:string,answers:string[]):Promise<Reply<void>>;subscribeAuthChallenge(fn:(challenge:AuthChallenge|null)=>void):()=>void;
  subscribe(fn:(s:Snapshot)=>void):()=>void;
 }
 async function unwrap<T>(p:Promise<Reply<T>>):Promise<T>{const r=await p;if(!r.ok)throw Object.assign(new Error(r.error.message),{code:r.error.code});return r.value}
@@ -22,9 +22,9 @@ export class ElectronSshConnectionPort implements SshConnectionPort {
 export class ElectronSshKeyOnboardingPort implements SshKeyOnboardingPort {
  constructor(private bridge:SshBridge){}
  listKeys=()=>unwrap(this.bridge.listKeys());
- generateKey=(input:{label:string;username:string;passphrase:string})=>unwrap(this.bridge.generateKey(input));
- addExternalKey=(input:{label:string;username:string;privateKeyPath:string})=>unwrap(this.bridge.addExternalKey(input));
+ generateKey=(input:{label:string;username?:string;passphrase:string})=>unwrap(this.bridge.generateKey(input));
+ addExternalKey=(input:{label:string;username?:string;privateKeyPath:string})=>unwrap(this.bridge.addExternalKey(input));
  registerKey=(input:{profile:FormInput;keyId:string;passphrase:string;password:string})=>unwrap(this.bridge.registerGenerated(input));
  answerAuthChallenge=(sessionId:string,challengeId:string,answers:string[])=>unwrap(this.bridge.answerAuthChallenge(sessionId,challengeId,answers));
- subscribeAuthChallenge=(listener:(challenge:AuthChallenge)=>void)=>this.bridge.subscribeAuthChallenge(listener);
+ subscribeAuthChallenge=(listener:(challenge:AuthChallenge|null)=>void)=>this.bridge.subscribeAuthChallenge(listener);
 }

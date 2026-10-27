@@ -35,21 +35,27 @@ are bundled.
 
 The top bar reuses the original `ssh-auth-key-management` status control: click
 its identity or LED to edit the connection; use the switch to connect, disconnect,
-or cancel. The switch opens a separate transient private-key unlock prompt.
+or cancel. Connect first checks the selected authentication method and only then
+opens the required temporary credential prompt.
 
-The connection dialog selects a saved key by name and UCInetID. Host and port
-are preset to UCI HPC3 and collapsed under **Advanced connection settings**.
-**Save** only saves the profile; **Connect** saves and connects.
+The connection dialog offers **Duo** and **SSH key**. With no saved key, only Duo
+is enabled. Host and port are preset to UCI HPC3 under **Advanced connection
+settings**. **Save** only saves the profile; **Connect** saves and connects.
+Neither account passwords nor private-key passphrases appear in this dialog.
+Duo sign-in requests the account password and forwards server-provided keyboard
+challenges. Both methods use an Electron-owned SSH session for Python commands.
 
-**Add SSH key…** opens a separate dialog with **Create New SSH Key** and
-**Use Existing SSH Key**. Existing keys use the native picker and offline
-inspection. New keys are encrypted RSA 4096 keys; **Register and verify** uses a
-temporary password/keyboard-interactive session, displays server-provided Duo
-prompts, installs the public key without duplicating the exact key, then verifies
-a fresh key-authenticated connection before replacing the saved profile.
-The public key remains available for manual setup if registration is unavailable.
-Account passwords appear only in registration and are never persisted.
-Closing registration cancels its temporary connections; old keys are retained.
+**Add SSH key…** opens **Generate SSH key**, which requests a key name and a new
+passphrase with confirmation, without UCInetID. It creates an encrypted RSA 4096
+key locally. Only afterwards does **Set up SSH key** request UCInetID and account
+password, complete Duo challenges, install the public key, and verify a fresh
+key-authenticated session before selecting the profile. Account association is
+saved only after verification succeeds. The public key is available there for
+manual setup. Cancelling retains the encrypted key but clears the temporary
+passphrase and cancels temporary authentication sessions.
+**Use Existing SSH Key** uses the native picker and offline inspection, also
+without account fields; the username is entered in connection settings later.
+Passwords and passphrases are never persisted.
 Existing private keys must be passphrase-protected OpenSSH keys owned by the
 current user with owner-only permissions (normally `0600`).
 As in the original design, inspection accepts one RSA, Ed25519 or NIST ECDSA
@@ -76,8 +82,12 @@ The original React/TypeScript SSH components are isolated in `modules/ssh` and
 `npm start` builds the SSH bundles automatically. A missing or corrupt SSH
 configuration is reported by the SSH controls without preventing chat startup.
 The earlier integration's flat version-1 profiles and host pins are read without
-rewriting them. Profile edits retain that format; original version-3 profiles
-are also supported and retain their format. Private keys are never migrated.
+rewriting them. Private-key-only edits retain their existing version (1 or 3).
+Saving a Duo profile upgrades profiles.json to version 4 and first writes an
+owner-private profiles.before-duo-<uuid>.json backup. New installations use
+version 4. Earlier app versions cannot read version 4: quit the app and restore
+the pre-Duo backup before rolling back; preserve the current profiles.json too.
+Private key files and host pins are not migrated.
 
 ## Architecture and ownership
 
