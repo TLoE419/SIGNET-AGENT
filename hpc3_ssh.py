@@ -21,8 +21,9 @@ result says *where* it broke and what to do about it:
 
 Usage:
   python3 hpc3_ssh.py check [--json]   # exit 0 when connected, 1 otherwise
-  python3 hpc3_ssh.py login            # open the shared connection (password + Duo once);
-                                       # does nothing if one is already open
+  python3 hpc3_ssh.py login [--popup]  # open the shared connection (password + Duo once);
+                                       # does nothing if one is already open. --popup asks in
+                                       # macOS dialogs instead of this terminal
   python3 hpc3_ssh.py logout           # close the shared connection, if there is one
 
 Settings come from the environment or .env: HPC3_USER (your UCInetID, required) and
@@ -38,6 +39,8 @@ import subprocess
 import sys
 
 DEFAULT_HOST = 'hpc3.rcic.uci.edu'
+# Dialog helper ssh calls for each login question when logging in without a terminal.
+ASKPASS = Path(__file__).resolve().with_name('hpc3_askpass.py')
 PORT = 22
 # How long the shared connection stays open after the last use.
 CONTROL_PERSIST = '8h'
@@ -153,19 +156,36 @@ def has_shared_connection(user, host):
     return code == 0
 
 
-def login(user, host):
+def askpass_environment():
+    """Environment that makes ssh ask every login question through hpc3_askpass.py.
+
+    SSH_ASKPASS_REQUIRE=force uses the dialog even when a terminal exists, which is what the
+    app's backend needs (it has no terminal) and lets the dialog be tried from a terminal.
+    """
+    return dict(os.environ, SSH_ASKPASS=str(ASKPASS), SSH_ASKPASS_REQUIRE='force')
+
+
+def login(user, host, popup=False):
     """Open the shared connection unless one is already open; returns (exit code, message).
 
     Without the pre-check, a second login would find the control socket taken, fall back to a
     separate unshared connection and ask for the password and Duo again for nothing.
+
+    popup=False: ssh asks in this terminal. popup=True: ssh asks through native dialogs
+    (hpc3_askpass.py), with stdin closed so it can never fall back to a terminal prompt.
     """
     if has_shared_connection(user, host):
         return 0, 'Already logged in to %s@%s; the shared connection is open.' % (user, host)
     # ssh needs ~/.ssh to exist for the control socket and known_hosts.
     (Path.home() / '.ssh').mkdir(mode=0o700, exist_ok=True)
     print('Opening a shared connection to %s@%s (kept for %s)...' % (user, host, CONTROL_PERSIST))
-    # ssh itself prompts for the password and Duo on this terminal; this program never reads them.
-    code = subprocess.call(login_command(user, host))
+    # ssh itself asks for the password and Duo (in this terminal, or in dialogs when popup is
+    # set); the answers go straight to ssh and this program never reads them.
+    if popup:
+        code = subprocess.call(login_command(user, host), env=askpass_environment(),
+                               stdin=subprocess.DEVNULL)
+    else:
+        code = subprocess.call(login_command(user, host))
     if code != 0:
         return code, 'Login failed (ssh exit %d). Run `python3 hpc3_ssh.py check` to see why.' % code
     return 0, 'Logged in. Run `python3 hpc3_ssh.py check` to confirm.'
@@ -279,7 +299,10 @@ def main(argv=None):
     except ValueError as error:
         print(error, file=sys.stderr)
         return 2
-    code, message = (login if command == 'login' else logout)(user, host)
+    if command == 'login':
+        code, message = login(user, host, popup='--popup' in argv[1:])
+    else:
+        code, message = logout(user, host)
     print(message, file=sys.stderr if code else sys.stdout)
     return code
 
