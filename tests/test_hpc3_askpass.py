@@ -22,9 +22,11 @@ class Dialogs:
     """Replaces ask()'s dialog runner: records each dialog and answers from a script."""
 
     def __init__(self, *answers):
+        """answers: what each successive dialog returns (None = cancelled)."""
         self.answers, self.shown = list(answers), []
 
     def __call__(self, kind, message, title, buttons):
+        """Stand in for show(): record the dialog and return the next answer."""
         self.shown.append({'kind': kind, 'message': message, 'title': title, 'buttons': buttons})
         return self.answers.pop(0)
 
@@ -57,6 +59,7 @@ class AskTest(unittest.TestCase):
     """How each ssh question becomes friendly dialogs, in both languages."""
 
     def ask(self, prompt, *answers, mode='', language='en'):
+        """Run ask() with scripted dialog answers; return (answer, dialogs shown)."""
         dialogs = Dialogs(*answers)
         with patch.object(ap, 'show', dialogs):
             return ap.ask(prompt, mode, language), dialogs.shown
@@ -108,9 +111,11 @@ class MainTest(unittest.TestCase):
     """The helper's contract with ssh: answer on stdout and exit 0; cancel exits 1 and ends ssh."""
 
     def run_main(self, answer, platform='darwin', language=None, parent_is_ssh=True):
+        """Run main() with ask() and process signalling faked; return what ssh would see."""
         killed, seen = [], {}
 
         def fake_ask(prompt, mode, lang):
+            """Record the language main() chose and return the scripted answer."""
             seen['language'] = lang
             return answer
         env = {'SIGNET_LANGUAGE': language} if language else {}
@@ -157,6 +162,7 @@ class PopupLoginTest(unittest.TestCase):
         seen = {}
 
         def call(argv, **kwargs):
+            """Record how subprocess.call was invoked."""
             seen.update(kwargs, argv=argv)
             return 0
         with patch.object(h, 'shared_connection_alive', lambda *a: False), \

@@ -280,10 +280,12 @@ def check():
               'checked_at': datetime.datetime.now().astimezone().isoformat(timespec='seconds')}
 
     def step(name, ok, detail):
+        """Record one layer's outcome in the result."""
         result['steps'].append({'name': name, 'ok': ok, 'detail': detail})
         return ok
 
     def fail(status, hint):
+        """Stop at this layer: set the status and the next step for the user."""
         result.update(status=status, hint=hint)
         return result
 

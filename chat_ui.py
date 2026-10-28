@@ -273,6 +273,7 @@ class ChatHandler(BaseHTTPRequestHandler):
             return self._error(400, str(exc))
 
     def hpc3_get(self, url):
+        """GET /hpc3/status (connection check, cached) and GET /hpc3/login (login progress)."""
         # Status names the user and login host, so even reads need the page token.
         if not secrets.compare_digest(self.headers.get('X-Chat-Token', ''), self.server.token):
             return self._error(403, 'Token required.')
@@ -282,6 +283,7 @@ class ChatHandler(BaseHTTPRequestHandler):
         return self.json_response(self.server.hpc3.login_state())
 
     def hpc3_post(self):
+        """POST /hpc3/user, /hpc3/login and /hpc3/logout; errors become JSON with an HTTP status."""
         # Host, Origin and token were already checked in do_POST. No route accepts a password.
         self.connection.settimeout(10)
         try:

@@ -24,11 +24,13 @@ class FakeSsh:
 
     def __init__(self, login=(0, IDENTITY, ''), master=(255, '', 'No such file or directory'), probe=None,
                  agent=(0, '256 SHA256:fake jdoe@laptop (ED25519)', '')):
+        """Scripted answers for each kind of ssh call made by hpc3_ssh."""
         # probe: answer to the `true` liveness probe; defaults to the same as login.
         # agent: answer to `ssh-add -l`; by default a key is loaded so a login may be tried.
         self.login, self.master, self.probe, self.agent, self.calls = login, master, probe or login, agent, []
 
     def __call__(self, argv, **kwargs):
+        """Stand in for subprocess.run: pick the scripted answer for this argv."""
         self.calls.append(argv)
         if argv[0] == 'ssh-add':
             code, out, err = self.agent
@@ -47,6 +49,7 @@ class CheckTest(unittest.TestCase):
     """check() stops at the first broken layer and names it."""
 
     def run_check(self, ssh=None, dns=None, tcp=None, env=ENV):
+        """Run check() with DNS, TCP and ssh replaced; defaults are a healthy connection."""
         dns = dns or (lambda *a, **k: [(socket.AF_INET, socket.SOCK_STREAM, 6, '', ('128.195.0.1', 22))])
         tcp = tcp or (lambda *a, **k: FakeSocket())
         ssh = ssh or FakeSsh()
@@ -55,6 +58,7 @@ class CheckTest(unittest.TestCase):
             return h.check()
 
     def assert_status(self, result, status, failed_step):
+        """check() stopped at failed_step with this status and a hint for the user."""
         self.assertEqual(result['status'], status)
         self.assertFalse(result['connected'])
         self.assertEqual(result['steps'][-1], {**result['steps'][-1], 'name': failed_step, 'ok': False})
@@ -113,11 +117,13 @@ class CheckTest(unittest.TestCase):
 
     def test_dns_failure(self):
         def dns(*args, **kwargs):
+            """A name that does not resolve."""
             raise socket.gaierror(8, 'nodename nor servname provided')
         self.assert_status(self.run_check(dns=dns), 'dns_failed', 'dns')
 
     def test_closed_port_means_vpn_is_needed_and_ssh_is_never_started(self):
         def tcp(*args, **kwargs):
+            """Port 22 that never answers (no VPN)."""
             raise socket.timeout('timed out')
         ssh = FakeSsh()
         result = self.run_check(tcp=tcp, ssh=ssh)
@@ -144,6 +150,7 @@ class CheckTest(unittest.TestCase):
         self.assert_status(self.run_check(ssh=FakeSsh(login=(None, '', ''))), 'timeout', 'ssh')
 
         def missing(argv, **kwargs):
+            """No ssh client installed."""
             raise FileNotFoundError('ssh')
         self.assert_status(self.run_check(ssh=missing), 'ssh_missing', 'ssh')
 
@@ -210,9 +217,11 @@ class LoginLogoutTest(unittest.TestCase):
         self.temp.cleanup()
 
     def run_with(self, function, master, login_code=0):
+        """Run login() or logout() with ssh faked; return code, message and the calls made."""
         ssh, interactive = FakeSsh(master=master), []
 
         def call(argv):
+            """Record the interactive ssh login and return the scripted exit code."""
             interactive.append(argv)
             return login_code
         with patch.object(h.subprocess, 'run', ssh), patch.object(h.subprocess, 'call', call), \
@@ -241,6 +250,7 @@ class LoginLogoutTest(unittest.TestCase):
         ssh, interactive = FakeSsh(login=(None, '', ''), master=self.OPEN), []
 
         def call(argv):
+            """Record the interactive ssh login and return success."""
             interactive.append(argv)
             return 0
         with patch.object(h.subprocess, 'run', ssh), patch.object(h.subprocess, 'call', call), patch('sys.stdout'):
@@ -269,6 +279,7 @@ class FakeSocket:
     """Stands in for a connected TCP socket."""
 
     def close(self):
+        """Nothing to close for a fake socket."""
         pass
 
 

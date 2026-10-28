@@ -19,6 +19,8 @@
     <div class="nav-label"><span data-i18n="工作空間">WORKSPACE</span></div>
     <div class="nav-item active"><span>◉</span> <span data-i18n="研究助手">Research assistant</span> <span class="nav-dot"></span></div>
     <div class="environment"><span class="local-dot"></span> <span data-i18n="本機工作階段">Local session</span><small>__MODEL__</small></div>
+    <!-- HPC3 connection card (web/hpc3.js): status, UCInetID, login and logout. The password is
+         never typed here: ssh asks for it in a native dialog (hpc3_askpass.py). -->
     <section id="hpc3-card" class="hpc3-card" data-state="checking" aria-label="HPC3 connection" data-i18n-aria="HPC3 連線" aria-live="polite">
       <div class="hpc3-head"><span class="hpc3-dot"></span><strong>HPC3</strong><span id="hpc3-state" data-i18n="正在檢查連線…">Checking connection…</span></div>
       <p id="hpc3-detail" class="hpc3-detail" hidden></p>

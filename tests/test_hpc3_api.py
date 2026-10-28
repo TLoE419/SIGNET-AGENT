@@ -30,28 +30,34 @@ class FakeSsh:
     CANCELLED = hpc3_ssh.CANCELLED
 
     def __init__(self):
+        """Start logged out; login() waits for `release`, like a user typing."""
         self.connected = False
         self.release = threading.Event()
         self.login_result = (0, 'Logged in.')
         self.calls = []
 
     def settings(self):
+        """Read HPC3_USER like hpc3_ssh.settings() does."""
         user = os.environ.get('HPC3_USER', '')
         if not hpc3_ssh.valid_user(user):
             raise ValueError('not configured')
         return user, HOST
 
     def has_shared_connection(self, user, host):
+        """Whether a shared connection exists (a flag here)."""
         return self.connected
 
     def shared_connection_alive(self, user, host):
+        """Whether the shared connection still answers (same flag here)."""
         return self.connected
 
     def check(self):
+        """A minimal check() result that follows the connected flag."""
         self.calls.append('check')
         return {'status': 'connected' if self.connected else 'auth_required', 'connected': self.connected}
 
     def login(self, user, host, popup=False, language='en'):
+        """Block until released, then connect unless login_result says otherwise."""
         self.calls.append(('login', user, popup))
         self.language = language
         self.release.wait(5)
@@ -59,12 +65,14 @@ class FakeSsh:
         return self.login_result
 
     def logout(self, user, host):
+        """Disconnect and report whether there was anything to close."""
         self.calls.append('logout')
         was, self.connected = self.connected, False
         return 0, 'Logged out.' if was else 'Not logged in.'
 
 
 class Hpc3ApiTest(unittest.TestCase):
+    """The /hpc3 routes through a real ChatServer with a fake ssh."""
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.env_file = Path(self.temp.name) / '.env'
@@ -76,6 +84,7 @@ class Hpc3ApiTest(unittest.TestCase):
 
         @contextmanager
         def factory(timing):
+            """Model client factory; no test here calls the model."""
             yield client
 
         self.server = chat_ui.ChatServer(('127.0.0.1', 0), factory)
@@ -94,6 +103,7 @@ class Hpc3ApiTest(unittest.TestCase):
         self.temp.cleanup()
 
     def request(self, method, path, payload=None, headers=None):
+        """Send one HTTP request with the page token and Origin unless headers are given."""
         conn = http.client.HTTPConnection('127.0.0.1', self.server.server_port, timeout=3)
         try:
             if headers is None:
@@ -106,6 +116,7 @@ class Hpc3ApiTest(unittest.TestCase):
             conn.close()
 
     def wait_for_login_end(self):
+        """Wait for the background login thread, then return the final login state."""
         self.server.hpc3.thread.join(3)
         return self.request('GET', '/hpc3/login')[1]
 
@@ -242,10 +253,12 @@ class WriteEnvTest(unittest.TestCase):
 
 
 class ServiceFailureTest(unittest.TestCase):
+    """Hpc3Service on its own, without HTTP."""
     def test_a_crashing_login_still_ends_in_failed(self):
         ssh = FakeSsh()
 
         def crash(*args, **kwargs):
+            """A login that raises instead of returning."""
             raise RuntimeError('boom')
         ssh.login = crash
         with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, {'HPC3_USER': 'jdoe'}):

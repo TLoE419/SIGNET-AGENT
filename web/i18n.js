@@ -1,4 +1,5 @@
 'use strict';
+// UI text is written in Traditional Chinese; uiEnglish maps each phrase to English.
 const uiEnglish = {
   // HPC3 connection card (web/hpc3.js)
   "HPC3 連線": "HPC3 connection",

@@ -36,6 +36,7 @@ class Hpc3Error(Exception):
     """A request that cannot be served; status is the HTTP code chat_ui.py returns."""
 
     def __init__(self, status, message):
+        """Keep the HTTP status next to the message."""
         super().__init__(message)
         self.status = status
 
@@ -44,6 +45,7 @@ class Hpc3Service:
     """One per ChatServer. Thread-safe: request threads and the login thread share it."""
 
     def __init__(self, env_file, ssh=hpc3_ssh, clock=time.monotonic, platform=None):
+        """env_file is the shared .env; ssh, clock and platform are replaceable for tests."""
         self.env_file = Path(env_file)
         self.ssh = ssh
         self.clock = clock
@@ -127,6 +129,7 @@ class Hpc3Service:
         self._finish(code, message)
 
     def _finish(self, code, message):
+        """Record how a login ended, drop the cached status, and return the new state."""
         with self.lock:
             self.cache = None
             self.login = {'state': 'succeeded' if code == 0 else 'failed', 'message': message,
