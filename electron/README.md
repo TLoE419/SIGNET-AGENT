@@ -83,6 +83,13 @@ normal SSH controls to Connect; dev login/unlock dialogs also show the live log.
   work through that channel. Use normal remote commands to inspect jobs or logs.
   This is a separate shell channel: its working directory/environment and stdin
   do not replace those of scientific commands already executing through Python.
+- Authentication success alone is not treated as connected. Electron immediately
+  opens and owns a persistent xterm-256color login shell, and publishes the
+  connected state only after that shell is ready. This mirrors HPC3's native SSH
+  login flow, keeps the transport tied to the app lifecycle, and captures the
+  server MOTD/prompt as `session-output` in **Raw SSH log**. Python commands and
+  the optional developer terminal continue to use sibling channels on the same
+  transport. Closing the persistent shell closes the owned connection.
 - **Close shell**, **Close panel** or page reload closes the shell channel while
   preserving the shared connection. SSH disconnect/app shutdown closes both.
   Reconnecting never automatically opens a new shell or replays input.
