@@ -1,12 +1,12 @@
 import {useEffect,useId,useRef,useState,type ReactNode} from 'react';
-import type {FormInput,HostIdentity,Inspection,KeyMetadata,SshError,Status} from './types';
+import type {FormInput,HostIdentity,Inspection,KeyMetadata,SshError,Status,ConnectionHealth} from './types';
 import {uciHpc3Preset} from './types';
 import {profileInput} from './validation';
 import {HostTrust} from './LoginSteps';
 export interface ConnectionModalProps {
  diagnostics?:ReactNode;open:boolean;profile:FormInput|null;keys:KeyMetadata[];status:Status|'unconfigured';busy?:boolean;error?:SshError|null;
  onInspectKey:(path:string)=>Promise<Inspection>;onSave:(input:FormInput)=>Promise<void>;onConnect:(input:FormInput)=>Promise<void>;
- onDisconnect:()=>Promise<void>;onClose:()=>void;onOpenKeyRegistration:()=>void;pendingHost?:HostIdentity;onTrustHost?:()=>Promise<void>;
+ onDisconnect:()=>Promise<void>;onCheck?:()=>Promise<void>;onClose:()=>void;onOpenKeyRegistration:()=>void;pendingHost?:HostIdentity;onTrustHost?:()=>Promise<void>;health?:ConnectionHealth;
 }
 export function ConnectionModal(p:ConnectionModalProps){
  const [form,setForm]=useState<FormInput>(p.profile||uciHpc3Preset),[inspection,setInspection]=useState<Inspection|null>(null),[error,setError]=useState(''),[working,setWorking]=useState(false);
@@ -30,7 +30,7 @@ export function ConnectionModal(p:ConnectionModalProps){
    <label>UCInetID / username<input aria-label="UCInetID / username" required autoComplete="username" value={form.username} maxLength={128} onChange={e=>setForm({...form,username:e.target.value})}/></label>
    <div className="ssh-key-actions"><button type="button" onClick={p.onOpenKeyRegistration}>Add SSH key…</button></div>
    <details className="ssh-advanced"><summary>Advanced connection settings</summary><label>Host<input required value={form.host} onChange={e=>setForm({...form,host:e.target.value})}/></label><label>Port<input required type="number" min="1" max="65535" value={form.port} onChange={e=>setForm({...form,port:Number(e.target.value)})}/></label></details>
-  </fieldset>{(error||p.error)&&<p role="alert">{error||p.error?.message}</p>}<HostTrust identity={p.pendingHost} onTrust={p.onTrustHost}/>
-  {p.diagnostics}<footer>{active?<button type="button" disabled={p.status==='disconnecting'} onClick={()=>void p.onDisconnect().catch(e=>setError(e.message))}>{p.status==='connecting'?'Cancel connection':'Disconnect'}</button>:<><button type="submit" className="ssh-primary" disabled={!!disabled||(form.auth.method==='private-key'&&inspection?.status!=='encrypted')}>Connect</button><button type="button" disabled={!!disabled||(form.auth.method==='private-key'&&inspection?.status!=='encrypted')} onClick={()=>void submit(false)}>Save</button></>}<button type="button" onClick={close}>Close</button></footer>
+  </fieldset>{p.health&&<section aria-label="HPC3 connection health"><strong>Last verified {new Date(p.health.checkedAt).toLocaleTimeString()}</strong><ul>{p.health.steps.map(step=><li key={step.name}>{step.ok?'✓':'×'} {step.detail}</li>)}</ul></section>}{(error||p.error)&&<p role="alert">{error||p.error?.message}</p>}<HostTrust identity={p.pendingHost} onTrust={p.onTrustHost}/>
+  {p.diagnostics}<footer>{active?<><button type="button" disabled={p.status==='disconnecting'} onClick={()=>void p.onDisconnect().catch(e=>setError(e.message))}>{p.status==='connecting'?'Cancel connection':'Disconnect'}</button>{p.status==='connected'&&p.onCheck&&<button type="button" disabled={working||p.busy} onClick={()=>{setWorking(true);setError('');void p.onCheck!().catch(e=>setError(e.message)).finally(()=>setWorking(false))}}>{working?'Checking…':'Check again'}</button>}</>:<><button type="submit" className="ssh-primary" disabled={!!disabled||(form.auth.method==='private-key'&&inspection?.status!=='encrypted')}>Connect</button><button type="button" disabled={!!disabled||(form.auth.method==='private-key'&&inspection?.status!=='encrypted')} onClick={()=>void submit(false)}>Save</button></>}<button type="button" onClick={close}>Close</button></footer>
  </form></dialog>;
 }

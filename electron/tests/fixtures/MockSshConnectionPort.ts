@@ -1,4 +1,4 @@
-import type {SshConnectionPort,Snapshot,Profile,FormInput,Inspection,HostIdentity} from '../../modules/ssh/types';
+import type {SshConnectionPort,Snapshot,Profile,FormInput,Inspection,HostIdentity,ConnectionHealth} from '../../modules/ssh/types';
 import {profileInput,SshFailure} from '../../modules/ssh/validation';
 /** Test-only adapter. No filesystem, credentials, network or timers. */
 export class MockSshConnectionPort implements SshConnectionPort {
@@ -12,6 +12,7 @@ export class MockSshConnectionPort implements SshConnectionPort {
  selectProfile=async(id:string)=>{const p=this.profiles.find(p=>p.id===id);if(!p)throw new SshFailure('INVALID_PROFILE','Unknown profile.');this.snapshot={selectedProfile:p,connection:{profileId:id,status:'disconnected'}};this.emit()};
  connect=async(id:string,passphrase:string)=>{if(!passphrase)throw new SshFailure('PASSPHRASE_REQUIRED','Enter a passphrase.');if(passphrase!=='test-only-passphrase')throw new SshFailure('INVALID_PASSPHRASE','Incorrect test passphrase.');this.connectCalls++;this.snapshot.connection={profileId:id,status:'connecting'};this.emit();if(this.outcome!=='connected'){const code=this.outcome==='auth-failed'?'AUTH_FAILED':'HOST_KEY_UNKNOWN';this.snapshot.connection={profileId:id,status:'error',error:{code,message:'Simulated connection failure.'}};if(code==='HOST_KEY_UNKNOWN')this.snapshot.pendingHost={host:this.snapshot.selectedProfile!.host,port:22,algorithm:'ssh-ed25519',fingerprint:'SHA256:'+'A'.repeat(43)};this.emit();throw new SshFailure(code,'Simulated connection failure.')}this.snapshot.connection={profileId:id,status:'connected',connectedAt:'2026-01-01T00:00:00.000Z'};this.emit()};
  disconnect=async(id:string)=>{this.snapshot.connection={profileId:id,status:'disconnected'};this.emit()};
+ healthCheck=async()=>{const profile=this.snapshot.selectedProfile;if(!profile)throw new SshFailure('SESSION_CLOSED','Not connected.');const health:ConnectionHealth={checkedAt:new Date().toISOString(),remote:{hostname:'login-i15',username:profile.username,slurm:true},steps:[{name:'transport',ok:true,detail:'SSH transport authenticated.'},{name:'session',ok:true,detail:'Persistent login shell open.'},{name:'identity',ok:true,detail:`${profile.username} on login-i15`},{name:'slurm',ok:true,detail:'sbatch available.'}]};if(this.snapshot.connection){this.snapshot.connection={...this.snapshot.connection,health};this.emit()}return health};
  trustHost=async(_i:HostIdentity)=>{this.outcome='connected';delete this.snapshot.pendingHost;this.emit()};
  subscribe=(fn:(s:Snapshot)=>void)=>{this.listeners.add(fn);return()=>{this.listeners.delete(fn)}};
 }

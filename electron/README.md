@@ -84,12 +84,22 @@ normal SSH controls to Connect; dev login/unlock dialogs also show the live log.
   This is a separate shell channel: its working directory/environment and stdin
   do not replace those of scientific commands already executing through Python.
 - Authentication success alone is not treated as connected. Electron immediately
-  opens and owns a persistent xterm-256color login shell, and publishes the
-  connected state only after that shell is ready. This mirrors HPC3's native SSH
+  opens and owns a persistent xterm-256color login shell, then runs a fixed,
+  input-free identity probe that verifies the selected username and confirms
+  `sbatch` exists. It publishes the connected state only after all checks pass.
+  This mirrors HPC3's native SSH
   login flow, keeps the transport tied to the app lifecycle, and captures the
   server MOTD/prompt as `session-output` in **Raw SSH log**. Python commands and
   the optional developer terminal continue to use sibling channels on the same
   transport. Closing the persistent shell closes the owned connection.
+- The connection snapshot includes the current phase, the verified remote
+  hostname/account, Slurm availability, check steps, and timestamp. **Check
+  again**, window focus, and return from background run the same health check;
+  results are cached for 15 seconds to avoid unnecessary HPC3 traffic. Python
+  broker work also requires a recent healthy result. A failed forced/proactive
+  check closes the stale transport and reports whether identity, Slurm, timeout,
+  DNS/network, or session health failed. No OpenSSH ControlMaster, ASKPASS,
+  polling web API, or second SSH owner is introduced.
 - **Close shell**, **Close panel** or page reload closes the shell channel while
   preserving the shared connection. SSH disconnect/app shutdown closes both.
   Reconnecting never automatically opens a new shell or replays input.

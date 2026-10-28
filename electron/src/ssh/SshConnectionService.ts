@@ -4,19 +4,22 @@ import {EventEmitter} from 'node:events';
 import {SshProfileRepository,HostKeyTrustStore,hostIdentity,validIdentity} from './stores';
 import {keyOperations} from './keyWorkerClient';
 import {fail,profileInput,SshFailure} from '../../modules/ssh/validation';
-import type {Snapshot,FormInput,HostIdentity,Inspection} from '../../modules/ssh/types';
+import type {Snapshot,FormInput,HostIdentity,Inspection,ConnectionHealth,Profile} from '../../modules/ssh/types';
 import type {AuthChallenge,KeyMetadata,RegistrationResult} from '../../modules/ssh/types';
 import {AppManagedKeyStore} from './AppManagedKeyStore';
+const HEALTH_CACHE_MS=15000;
+const HEALTH_COMMAND='printf "host=%s\\nuser=%s\\n" "$(hostname)" "$(id -un)"; command -v sbatch >/dev/null && echo slurm=yes || echo slurm=no';
 function safeError(e:unknown):SshFailure {
  if(e instanceof SshFailure)return e;
  const err=e as {code?:string;level?:string};
- if(['ECONNREFUSED','ENOTFOUND','EHOSTUNREACH','ENETUNREACH','ECONNRESET','EAI_AGAIN'].includes(err?.code||''))return new SshFailure('NETWORK_UNREACHABLE','Cannot reach host. Check the address, campus network or UCI VPN.');
+ if(['ENOTFOUND','EAI_AGAIN'].includes(err?.code||''))return new SshFailure('DNS_FAILED','The SSH host name could not be resolved. Check the address and network connection.');
+ if(['ECONNREFUSED','EHOSTUNREACH','ENETUNREACH','ECONNRESET'].includes(err?.code||''))return new SshFailure('NETWORK_UNREACHABLE','Cannot reach host. Check the address, campus network or UCI VPN.');
  if(err?.code==='ETIMEDOUT'||err?.level==='client-timeout')return new SshFailure('CONNECTION_TIMEOUT','Connection timed out. Check network or VPN.');
  if(err?.level==='client-authentication')return new SshFailure('AUTH_FAILED','Host rejected authentication. Check the username, account approval, credentials, and public-key enrollment.');
  return new SshFailure('UNKNOWN','SSH operation failed. Retry after checking local configuration and connectivity.');
 }
 export class SshConnectionService extends EventEmitter {
- private snapshot:Snapshot={selectedProfile:null,connection:null};private client?:Client;private controlShell?:ClientChannel;private attempt=0;private inFlight?:Promise<void>;private cancel?:()=>void;private editing=false;private stopping=false;private closing?:Promise<void>;private initializationError?:SshFailure;
+ private snapshot:Snapshot={selectedProfile:null,connection:null};private client?:Client;private controlShell?:ClientChannel;private attempt=0;private inFlight?:Promise<void>;private healthInFlight?:Promise<ConnectionHealth>;private cancel?:()=>void;private editing=false;private stopping=false;private closing?:Promise<void>;private initializationError?:SshFailure;
  private registrationCancel?:()=>void;private registrationAttempt=0;private registrationClients=new Set<Client>();
  private pendingChallenge?:{sessionId:string;challengeId:string;finish:(answers:string[])=>void;timer:NodeJS.Timeout};private onboarding=false;
  constructor(readonly profiles:SshProfileRepository,readonly trust:HostKeyTrustStore,private keys:{inspect:(path:string)=>Promise<Inspection>;unlock:(path:string,passphrase:string)=>Promise<string>}=keyOperations,private clientFactory=()=>new Client(),private managedKeys?:AppManagedKeyStore){super()}
@@ -51,6 +54,30 @@ export class SshConnectionService extends EventEmitter {
   return new Promise((resolve,reject)=>{let settled=false;const timer=setTimeout(()=>finish(new SshFailure('CONNECTION_TIMEOUT','SSH login shell did not open in time.')),10000),finish=(error?:SshFailure,stream?:ClientChannel)=>{if(settled)return;settled=true;clearTimeout(timer);error?reject(error):resolve(stream!)};
    client.shell({term:'xterm-256color',cols:120,rows:40},(error,stream)=>{if(error||!stream){finish(error?safeError(error):new SshFailure('SESSION_CLOSED','SSH login shell did not open.'));return}const output=(source:string)=>(chunk:Buffer)=>this.raw(id,source,chunk.toString('utf8'));stream.on('data',output('session-output'));stream.stderr.on('data',output('session-stderr'));this.trace(id,'session','Persistent login shell opened.');finish(undefined,stream)});
   });
+ }
+ private executeOn(client:Client,command:string,input:Buffer,timeoutMs:number,observe=true){
+  const activityId=randomUUID(),activity=(type:string,extra:Record<string,unknown>={})=>{if(observe&&this.listenerCount('activity'))this.emit('activity',{id:activityId,type,time:new Date().toISOString(),...extra})};
+  activity('start',{command:command.slice(0,4096)});let observed=0,truncated=false;
+  return new Promise<{returncode:number;signal:string|null;stdout:Buffer;stderr:Buffer}>((resolve,reject)=>{client.exec(command,(error,stream)=>{
+   if(error){activity('end',{error:'Could not start remote command.'});reject(safeError(error));return}
+   const stdout:Buffer[]=[],stderr:Buffer[]=[];let size=0,finished=false;
+   const timer=setTimeout(()=>{done(new SshFailure('CONNECTION_TIMEOUT','The remote command timed out.'));stream.close()},timeoutMs);
+   const collect=(target:Buffer[],channel:string)=>(chunk:Buffer)=>{if(observe&&this.listenerCount('activity')){const remaining=Math.max(0,131072-observed);if(remaining){activity('output',{channel,data:chunk.subarray(0,remaining).toString('utf8')});observed+=Math.min(chunk.length,remaining)}if(chunk.length>remaining&&!truncated){truncated=true;activity('output',{channel:'notice',data:'Output preview truncated at 128 KiB; command continues.'})}}size+=chunk.length;if(size>1024*1024*1024){done(new SshFailure('UNKNOWN','Remote output exceeded 1 GiB.'));stream.close()}else target.push(Buffer.from(chunk))};
+   const done=(failure:SshFailure|null,code=255,signal:string|null=null)=>{if(finished)return;finished=true;clearTimeout(timer);activity('end',{code,signal,error:failure?.message});failure?reject(failure):resolve({returncode:Number.isInteger(code)?code:255,signal,stdout:Buffer.concat(stdout),stderr:Buffer.concat(stderr)})};
+   stream.on('data',collect(stdout,'stdout'));stream.stderr.on('data',collect(stderr,'stderr'));stream.once('error',(error:Error)=>done(safeError(error)));stream.once('close',(code:number,signal:string|null)=>done(null,code,signal));if(input.length)stream.end(input);else stream.end();
+  })});
+ }
+ private async verifyRemote(client:Client,profile:Profile,id:string):Promise<ConnectionHealth>{
+  this.trace(id,'health','Verifying remote account and Slurm availability.');
+  let result;try{result=await this.executeOn(client,HEALTH_COMMAND,Buffer.alloc(0),8000,false)}catch{throw new SshFailure('STALE_CONNECTION','The SSH connection stopped responding. It may have been interrupted by sleep, VPN, or a network change.')}
+  if(result.returncode!==0)throw new SshFailure('STALE_CONNECTION','The SSH connection could not run its health check. Reconnect and try again.');
+  if(result.stdout.length>8192)throw new SshFailure('REMOTE_IDENTITY_MISMATCH','The remote identity response was invalid.');
+  const values=new Map<string,string>();for(const line of result.stdout.toString('utf8').split('\n')){const separator=line.indexOf('=');if(separator>0)values.set(line.slice(0,separator).trim(),line.slice(separator+1).trim())}
+  const hostname=values.get('host')||'',username=values.get('user')||'',slurm=values.get('slurm')==='yes';
+  if(!/^[A-Za-z0-9._-]{1,253}$/.test(hostname)||username!==profile.username){this.trace(id,'health','Remote identity did not match the selected profile.');throw new SshFailure('REMOTE_IDENTITY_MISMATCH',`SSH connected as an unexpected account or host. Expected ${profile.username}; disconnecting.`)}
+  if(!slurm){this.trace(id,'health','Remote host does not provide Slurm.');throw new SshFailure('SLURM_UNAVAILABLE','SSH connected, but sbatch is unavailable on the remote host. This does not appear to be an HPC3 login environment.')}
+  const health:ConnectionHealth={checkedAt:new Date().toISOString(),remote:{hostname,username,slurm},steps:[{name:'transport',ok:true,detail:'SSH transport authenticated.'},{name:'session',ok:true,detail:'Persistent login shell open.'},{name:'identity',ok:true,detail:`${username} on ${hostname}`},{name:'slurm',ok:true,detail:'sbatch available.'}]};
+  this.trace(id,'health',`Remote verified: ${username}@${hostname}; Slurm available.`);return health;
  }
  private publish(){this.emit('snapshot',this.getSnapshot())}
  getSnapshot():Snapshot{return structuredClone(this.snapshot)}
@@ -100,10 +127,10 @@ export class SshConnectionService extends EventEmitter {
      stream.once('close',(code:number)=>{if(code!==0||!/^(ADDED|EXISTS)$/.test(output))finish(new SshFailure('AUTH_FAILED','Public-key registration could not be confirmed. Existing authorized keys were preserved.'));else finish(undefined,output==='EXISTS')});
     });
    });checkActive();temporary.destroy();this.registrationClients.delete(temporary);temporary=undefined;
-   const candidate={...profile,id:profile.id||randomUUID()},verifyClient=this.clientFactory();verifiedClient=verifyClient;this.registrationClients.add(verifyClient);this.trace(sessionId,'verification','Opening a fresh connection to verify the installed key.');this.observeClient(verifyClient,sessionId);let verifyError:SshFailure|undefined,verifyShell:ClientChannel|undefined;
-   await new Promise<void>((resolve,reject)=>{let settled=false;const timer=setTimeout(()=>finish(new SshFailure('CONNECTION_TIMEOUT','Fresh key verification timed out. The generated key was retained for retry.')),25000);const finish=(error?:SshFailure)=>{if(settled)return;settled=true;clearTimeout(timer);error?reject(error):resolve()};this.registrationCancel=()=>finish(new SshFailure('SESSION_CLOSED','Key registration cancelled.'));verifyClient.on('ready',()=>void this.createControlShell(verifyClient,sessionId).then(stream=>{verifyShell=stream;stream.once('close',()=>finish(new SshFailure('SESSION_CLOSED','Fresh key login shell closed during verification.')));finish()}).catch(finish));verifyClient.on('error',e=>finish(verifyError||safeError(e)));verifyClient.on('close',()=>finish(verifyError||new SshFailure('SESSION_CLOSED','Fresh key verification closed before authentication.')));verifyClient.connect({debug:this.protocolTrace(sessionId),host:candidate.host,port:candidate.port,username:candidate.username,privateKey,tryKeyboard:false,agentForward:false,readyTimeout:20000,keepaliveInterval:15000,keepaliveCountMax:3,authHandler:['publickey'],hostVerifier:this.registrationHostVerifier(candidate,sessionId,error=>verifyError=error)})});
+   const candidate={...profile,id:profile.id||randomUUID()},verifyClient=this.clientFactory();verifiedClient=verifyClient;this.registrationClients.add(verifyClient);this.trace(sessionId,'verification','Opening a fresh connection to verify the installed key.');this.observeClient(verifyClient,sessionId);let verifyError:SshFailure|undefined,verifyShell:ClientChannel|undefined,verifiedHealth:ConnectionHealth|undefined;
+   await new Promise<void>((resolve,reject)=>{let settled=false;const timer=setTimeout(()=>finish(new SshFailure('CONNECTION_TIMEOUT','Fresh key verification timed out. The generated key was retained for retry.')),25000);const finish=(error?:SshFailure)=>{if(settled)return;settled=true;clearTimeout(timer);error?reject(error):resolve()};this.registrationCancel=()=>finish(new SshFailure('SESSION_CLOSED','Key registration cancelled.'));verifyClient.on('ready',()=>void this.createControlShell(verifyClient,sessionId).then(async stream=>{verifyShell=stream;stream.once('close',()=>finish(new SshFailure('SESSION_CLOSED','Fresh key login shell closed during verification.')));verifiedHealth=await this.verifyRemote(verifyClient,candidate,sessionId);finish()}).catch(finish));verifyClient.on('error',e=>finish(verifyError||safeError(e)));verifyClient.on('close',()=>finish(verifyError||new SshFailure('SESSION_CLOSED','Fresh key verification closed before authentication.')));verifyClient.connect({debug:this.protocolTrace(sessionId),host:candidate.host,port:candidate.port,username:candidate.username,privateKey,tryKeyboard:false,agentForward:false,readyTimeout:20000,keepaliveInterval:15000,keepaliveCountMax:3,authHandler:['publickey'],hostVerifier:this.registrationHostVerifier(candidate,sessionId,error=>verifyError=error)})});
    checkActive();await this.managedKeys.associate(key.keyId,candidate.username);checkActive();const saved=await this.profiles.upsert(candidate);checkActive();this.client=verifyClient;this.registrationClients.delete(verifyClient);verifiedClient=undefined;
-   this.controlShell=verifyShell;const closed=()=>{if(this.client!==verifyClient)return;this.client=undefined;this.controlShell=undefined;this.snapshot.connection={profileId:saved.id,status:'disconnected'};this.publish()};verifyShell!.once('close',()=>{if(this.controlShell===verifyShell)verifyClient.end()});verifyClient.once('close',closed);verifyClient.once('end',closed);verifyClient.on('error',()=>{verifyClient.destroy();closed()});this.snapshot={selectedProfile:saved,connection:{profileId:saved.id,status:'connected',connectedAt:new Date().toISOString()}};this.publish();return {alreadyPresent,verified:true};
+   this.controlShell=verifyShell;const closed=()=>{if(this.client!==verifyClient)return;this.client=undefined;this.controlShell=undefined;this.snapshot.connection={profileId:saved.id,status:'disconnected'};this.publish()};verifyShell!.once('close',()=>{if(this.controlShell===verifyShell)verifyClient.end()});verifyClient.once('close',closed);verifyClient.once('end',closed);verifyClient.on('error',()=>{verifyClient.destroy();closed()});this.snapshot={selectedProfile:saved,connection:{profileId:saved.id,status:'connected',phase:'ready',connectedAt:new Date().toISOString(),health:verifiedHealth}};this.publish();return {alreadyPresent,verified:true};
   }catch(e){const error=safeError(e);this.trace(sessionId,'failed',error.code);if(profile.id)this.snapshot.connection={profileId:profile.id,status:'error',error:{code:error.code,message:error.message}};this.publish();throw error}
   finally{this.registrationCancel=undefined;for(const client of this.registrationClients)client.destroy();this.registrationClients.clear();this.onboarding=false;password='';privateKey=undefined;temporary?.destroy();verifiedClient?.destroy();this.clearChallenge(sessionId)}
  }
@@ -121,7 +148,7 @@ export class SshConnectionService extends EventEmitter {
   if(this.closing)return Promise.reject(new SshFailure('SESSION_CLOSED','Disconnect is still in progress.'));
   if(this.inFlight)return this.inFlight;if(this.snapshot.connection?.status==='connected')return Promise.resolve();
   if(this.onboarding||this.editing||this.stopping||this.snapshot.connection?.status==='disconnecting')return Promise.reject(new SshFailure('UNKNOWN','Another SSH operation is in progress.'));
-  const token=++this.attempt,diagnosticId=`connection-${token}`;this.trace(diagnosticId,'connect',`Connect requested: ${p.auth.method==='duo'?'Duo':'SSH key'} to ${p.username}@${p.host}:${p.port}.`);delete this.snapshot.pendingHost;this.snapshot.connection={profileId:id,status:'connecting'};this.publish();
+  const token=++this.attempt,diagnosticId=`connection-${token}`;this.trace(diagnosticId,'connect',`Connect requested: ${p.auth.method==='duo'?'Duo':'SSH key'} to ${p.username}@${p.host}:${p.port}.`);delete this.snapshot.pendingHost;this.snapshot.connection={profileId:id,status:'connecting',phase:'opening-transport'};this.publish();
   const run=(async()=>{
    let privateKey:string|undefined;
    try{
@@ -133,7 +160,7 @@ export class SshConnectionService extends EventEmitter {
      const timer=setTimeout(()=>finish(new SshFailure('CONNECTION_TIMEOUT','Connection timed out.')),p.auth.method==='duo'?180000:25000);
      const finish=(error:SshFailure)=>{clearTimeout(timer);if(token!==this.attempt||terminal)return;terminal=true;reject(error);if(authenticated){this.snapshot.connection={profileId:id,status:'error',error:{code:error.code,message:error.message}};this.publish()}client.destroy();};
      this.cancel=()=>{clearTimeout(timer);reject(new SshFailure('SESSION_CLOSED','Connection cancelled.'))};
-     client.on('ready',()=>{if(token!==this.attempt||terminal){client.destroy();return}authenticated=true;void this.createControlShell(client,diagnosticId).then(stream=>{if(token!==this.attempt||terminal||this.client!==client){stream.destroy();return}this.controlShell=stream;stream.once('close',()=>{if(this.controlShell!==stream)return;this.controlShell=undefined;this.trace(diagnosticId,'session','Persistent login shell closed.');if(token===this.attempt&&this.client===client)client.end()});clearTimeout(timer);connected=true;this.cancel=undefined;this.snapshot.connection={profileId:id,status:'connected',connectedAt:new Date().toISOString()};this.publish();resolve()}).catch(error=>finish(safeError(error)))});
+     client.on('ready',()=>{if(token!==this.attempt||terminal){client.destroy();return}authenticated=true;this.snapshot.connection={profileId:id,status:'connecting',phase:'opening-session'};this.publish();void this.createControlShell(client,diagnosticId).then(async stream=>{if(token!==this.attempt||terminal||this.client!==client){stream.destroy();return}this.controlShell=stream;stream.once('close',()=>{if(this.controlShell!==stream)return;this.controlShell=undefined;this.trace(diagnosticId,'session','Persistent login shell closed.');if(token===this.attempt&&this.client===client)client.end()});this.snapshot.connection={profileId:id,status:'connecting',phase:'verifying-remote'};this.publish();const health=await this.verifyRemote(client,p,diagnosticId);if(token!==this.attempt||terminal||this.client!==client)return;clearTimeout(timer);connected=true;this.cancel=undefined;this.snapshot.connection={profileId:id,status:'connected',phase:'ready',connectedAt:new Date().toISOString(),health};this.publish();resolve()}).catch(error=>finish(safeError(error)))});
      client.on('error',e=>finish(hostError||safeError(e)));
      const closed=()=>{clearTimeout(timer);if(token!==this.attempt)return;terminal=true;if(!connected)reject(hostError||new SshFailure('SESSION_CLOSED',authenticated?'SSH transport closed before the login shell opened.':'SSH session closed before authentication.'));else if(this.snapshot.connection?.status==='connected'){this.snapshot.connection={profileId:id,status:'disconnected'};this.publish()}if(this.client===client){this.client=undefined;this.controlShell=undefined}};
      client.on('end',closed);client.on('close',closed);
@@ -172,42 +199,18 @@ export class SshConnectionService extends EventEmitter {
       client.shell({term:'xterm-256color',cols,rows},(error,stream)=>{clearTimeout(timer);if(settled||this.client!==client||this.snapshot.connection?.status!=='connected'){stream?.destroy();if(!settled)reject(new SshFailure('SESSION_CLOSED','SSH connection closed.'));return}settled=true;if(error)reject(safeError(error));else resolve(stream)});
     });
   }
-  async exec(command:string, input:Buffer, timeoutMs = 30000) {
-    if (!this.client || this.snapshot.connection?.status !== 'connected') fail('SESSION_CLOSED', 'Connect SSH before running remote work.');
-    if (typeof command !== 'string' || !command || command.length > 131072 || !Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 24 * 60 * 60 * 1000) {
-      fail('UNKNOWN', 'Invalid SSH execution request.');
-    }
-    const client = this.client,activityId=randomUUID();
-    const activity=(type:string,extra:Record<string,unknown>={})=>{if(this.listenerCount('activity'))this.emit('activity',{id:activityId,type,time:new Date().toISOString(),...extra})};
-    activity('start',{command:command.slice(0,4096)});let observed=0,truncated=false;
-    return new Promise<{returncode:number;signal:string|null;stdout:Buffer;stderr:Buffer}>((resolve, reject) => {
-      client.exec(command, (error, stream) => {
-        if (error) { activity('end',{error:'Could not start remote command.'});reject(safeError(error)); return; }
-        const stdout:Buffer[] = [], stderr:Buffer[] = [];
-        let size = 0, finished = false;
-        const timer = setTimeout(() => { stream.close(); done(new SshFailure('CONNECTION_TIMEOUT', 'The remote command timed out.')); }, timeoutMs);
-        const collect = (target:Buffer[],channel:string) => (chunk:Buffer) => {
-          if(this.listenerCount('activity')){const remaining=Math.max(0,131072-observed);if(remaining){activity('output',{channel,data:chunk.subarray(0,remaining).toString('utf8')});observed+=Math.min(chunk.length,remaining)}if(chunk.length>remaining&&!truncated){truncated=true;activity('output',{channel:'notice',data:'Output preview truncated at 128 KiB; command continues.'})}}
-          size += chunk.length;
-          if (size > 1024 * 1024 * 1024) { stream.close(); done(new SshFailure('UNKNOWN', 'Remote output exceeded 1 GiB.')); }
-          else target.push(Buffer.from(chunk));
-        };
-        const done = (failure:SshFailure|null, code = 255, signal:string|null = null) => {
-          if (finished) return;
-          finished = true;
-          clearTimeout(timer);
-          activity('end',{code,signal,error:failure?.message});
-          failure ? reject(failure) : resolve({returncode: Number.isInteger(code) ? code : 255, signal,
-            stdout: Buffer.concat(stdout), stderr: Buffer.concat(stderr)});
-        };
-        stream.on('data', collect(stdout,'stdout'));
-        stream.stderr.on('data', collect(stderr,'stderr'));
-        stream.once('error', (error:Error) => done(safeError(error)));
-        stream.once('close', (code:number, signal:string|null) => done(null, code, signal));
-        if (input?.length) stream.end(input); else stream.end();
-      });
-    });
-  }
+ healthCheck(force=false):Promise<ConnectionHealth>{
+  if(typeof force!=='boolean')return Promise.reject(new SshFailure('UNKNOWN','Invalid health-check request.'));
+  const p=this.snapshot.selectedProfile,connection=this.snapshot.connection,client=this.client;if(!p||!client||connection?.status!=='connected')return Promise.reject(new SshFailure('SESSION_CLOSED','Connect SSH before checking its health.'));
+  const cached=connection.health;if(!force&&cached&&Date.now()-Date.parse(cached.checkedAt)<HEALTH_CACHE_MS)return Promise.resolve(structuredClone(cached));
+  if(this.healthInFlight)return this.healthInFlight;const token=this.attempt,id=`connection-${token}`;
+  const run=(async()=>{try{const health=await this.verifyRemote(client,p,id);if(token!==this.attempt||this.client!==client||this.snapshot.connection?.status!=='connected')throw new SshFailure('SESSION_CLOSED','SSH connection changed during its health check.');this.snapshot.connection={...this.snapshot.connection,phase:'ready',health};this.publish();return structuredClone(health)}catch(e){const error=e instanceof SshFailure?e:new SshFailure('STALE_CONNECTION','The SSH connection stopped responding. Reconnect and try again.');if(token===this.attempt&&this.client===client){this.trace(id,'health',`${error.code}: closing unhealthy SSH transport.`);const shell=this.controlShell;this.controlShell=undefined;this.client=undefined;this.snapshot.connection={profileId:p.id,status:'error',error:{code:error.code,message:error.message}};this.publish();shell?.end();client.destroy()}throw error}})();
+  this.healthInFlight=run;void run.finally(()=>{if(this.healthInFlight===run)this.healthInFlight=undefined}).catch(()=>{});return run;
+ }
+ async exec(command:string,input:Buffer,timeoutMs=30000){
+  if(typeof command!=='string'||!command||command.length>131072||!Buffer.isBuffer(input)||!Number.isInteger(timeoutMs)||timeoutMs<1||timeoutMs>24*60*60*1000)fail('UNKNOWN','Invalid SSH execution request.');
+  await this.healthCheck(false);const client=this.client;if(!client||this.snapshot.connection?.status!=='connected')fail('SESSION_CLOSED','Connect SSH before running remote work.');return this.executeOn(client,command,input,timeoutMs,true);
+ }
 
  cancelRegistration(){++this.registrationAttempt;this.registrationCancel?.();for(const client of this.registrationClients)client.destroy();this.clearChallenge()}
  async shutdown(){this.stopping=true;this.cancelRegistration();if(this.snapshot.selectedProfile)await this.disconnect(this.snapshot.selectedProfile.id)}

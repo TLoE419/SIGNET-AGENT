@@ -8,5 +8,6 @@ export function useSshConnection(port:SshConnectionPort){
   connect:(input:FormInput,passphrase='')=>run(async()=>{const p=await port.saveProfile({...input,id:input.id||savedId.current});savedId.current=p.id;await port.connect(p.id,passphrase)}),
   connectSaved:(passphrase='')=>run(async()=>{const id=savedId.current;if(!id)throw Object.assign(new Error('Configure an SSH profile first. Click the connection details to open settings.'),{code:'INVALID_PROFILE'});await port.connect(id,passphrase)}),
   disconnect:async()=>{const p=snapshot.selectedProfile;if(p)await port.disconnect(p.id)},
+  healthCheck:(force=false)=>run(async()=>{await port.healthCheck(force)}),
   trustHost:()=>run(async()=>{if(snapshot.pendingHost)await port.trustHost(snapshot.pendingHost)}),inspect:(path:string)=>port.inspectPrivateKey(path),pickKey:()=>port.pickPrivateKey()};
 }

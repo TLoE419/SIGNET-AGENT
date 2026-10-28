@@ -31,6 +31,7 @@ contextBridge.exposeInMainWorld('signetDesktop', Object.freeze({isDesktop:true,.
   pickPrivateKey: () => call('pickPrivateKey'),
   connect: (id, passphrase) => call('connect', id, passphrase),
   disconnect: id => call('disconnect', id),
+  healthCheck: force => call('healthCheck', force),
   trustHost: identity => call('trustHost', identity),
   listKeys: () => call('listKeys'),
   generateKey: input => call('generateKey', input),

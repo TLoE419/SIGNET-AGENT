@@ -45,7 +45,7 @@ app.on('will-quit', () => { clearTimeout(deadline); rmSync(temporary, {recursive
     assert.equal(panel.disabled,true);assert.equal(panel.canvas,true);
   }
   assert.equal(value.sshButton, true);
-  assert.deepEqual(value.sshBridge, ['addExternalKey', 'answerAuthChallenge', 'cancelRegistration', 'connect', 'disconnect', 'generateKey', 'getSnapshot', 'initialize', 'inspectPrivateKey', 'listKeys', 'listProfiles', 'pickPrivateKey', 'registerGenerated', 'saveProfile', 'selectProfile', 'subscribe', 'subscribeAuthChallenge', 'trustHost']);
+  assert.deepEqual(value.sshBridge, ['addExternalKey', 'answerAuthChallenge', 'cancelRegistration', 'connect', 'disconnect', 'generateKey', 'getSnapshot', 'healthCheck', 'initialize', 'inspectPrivateKey', 'listKeys', 'listProfiles', 'pickPrivateKey', 'registerGenerated', 'saveProfile', 'selectProfile', 'subscribe', 'subscribeAuthChallenge', 'trustHost']);
   assert.equal(value.sshBridge.some(name => /exec|shell|readFile|writeFile/.test(name)), false);
   assert.ok(value.resources >= 5);
   await window.webContents.executeJavaScript(`document.querySelector('#language-toggle').click()`);

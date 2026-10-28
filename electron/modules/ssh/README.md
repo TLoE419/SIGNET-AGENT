@@ -5,6 +5,11 @@ components. The saved-key connection dialog, separate create/import registration
 dialog, transient unlock prompt, and Luminous Glass + Halo status block retain
 the original flow and appearance. CSS lives in `web/ssh.css`.
 
+`connected` means more than authentication: Electron owns a persistent login
+session and has verified the remote username plus Slurm availability. The
+connection dialog exposes the latest health steps and a forced **Check again**;
+focus and Python work reuse a 15-second cached probe and retire stale transports.
+
 The current host mounts these components in the chat workspace top bar. Electron
 Main owns the live SSH client and exposes only named configuration/authentication
 methods to the renderer. Python remote work uses the separate private broker.

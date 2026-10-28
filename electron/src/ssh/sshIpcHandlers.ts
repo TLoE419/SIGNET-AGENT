@@ -9,10 +9,10 @@ export function installSshHandlers(ipc:IpcMain,getWindow:()=>BrowserWindow|null,
   cancelRegistration:()=>service.cancelRegistration(),initialize:()=>service.initialSnapshot(),getSnapshot:()=>service.getSnapshot(),listProfiles:()=>service.listProfiles(),
   saveProfile:input=>service.saveProfile(profileInput(input)),
   selectProfile:id=>service.selectProfile(id),inspectPrivateKey:p=>service.inspectPrivateKey(p),pickPrivateKey,
-  connect:(id,passphrase)=>service.connect(id,passphrase),disconnect:id=>service.disconnect(id),trustHost:i=>service.trustHost(i),
+  connect:(id,passphrase)=>service.connect(id,passphrase),disconnect:id=>service.disconnect(id),healthCheck:force=>service.healthCheck(force),trustHost:i=>service.trustHost(i),
   listKeys:()=>service.listKeys(),generateKey:input=>service.generateKey(input),addExternalKey:input=>service.addExternalKey(input),registerGenerated:input=>service.registerGenerated(input),answerAuthChallenge:(sessionId,challengeId,answers)=>service.answerAuthChallenge(sessionId,challengeId,answers),
  };
- const arity:Record<string,number>={cancelRegistration:0,initialize:0,getSnapshot:0,listProfiles:0,saveProfile:1,selectProfile:1,inspectPrivateKey:1,pickPrivateKey:0,connect:2,disconnect:1,trustHost:1,listKeys:0,generateKey:1,addExternalKey:1,registerGenerated:1,answerAuthChallenge:3};
+ const arity:Record<string,number>={cancelRegistration:0,initialize:0,getSnapshot:0,listProfiles:0,saveProfile:1,selectProfile:1,inspectPrivateKey:1,pickPrivateKey:0,connect:2,disconnect:1,healthCheck:1,trustHost:1,listKeys:0,generateKey:1,addExternalKey:1,registerGenerated:1,answerAuthChallenge:3};
  for(const [name,fn] of Object.entries(operations))ipc.handle('ssh:'+name,async(event,...args)=>{
   if(!authorized(event,getWindow(),getOrigin()))return {ok:false,error:{code:'UNKNOWN',message:'Unauthorized SSH request.'}};
   try{
@@ -20,6 +20,7 @@ export function installSshHandlers(ipc:IpcMain,getWindow:()=>BrowserWindow|null,
    if(['connect','disconnect','selectProfile'].includes(name)&&(!text(args[0],80)||!/^[a-zA-Z0-9_-]+$/.test(args[0])))fail('INVALID_PROFILE','Invalid profile ID.');
    if(name==='inspectPrivateKey'&&!validPath(args[0]))fail('KEY_UNREADABLE','Use an absolute private-key path.');
    if(name==='connect'&&(typeof args[1]!=='string'||args[1].length>4096))fail('PASSPHRASE_REQUIRED','Enter a private-key passphrase.');
+   if(name==='healthCheck'&&typeof args[0]!=='boolean')fail('UNKNOWN','Invalid health-check request.');
    if(name==='generateKey'&&(!args[0]||typeof args[0].label!=='string'||(args[0].username!==undefined&&typeof args[0].username!=='string')||typeof args[0].passphrase!=='string'||Object.keys(args[0]).some(k=>!['label','username','passphrase'].includes(k))))fail('KEY_INVALID','Invalid key-generation request.');
    if(name==='addExternalKey'&&(!args[0]||typeof args[0].label!=='string'||(args[0].username!==undefined&&typeof args[0].username!=='string')||!validPath(args[0].privateKeyPath)||Object.keys(args[0]).some(k=>!['label','username','privateKeyPath'].includes(k))))fail('KEY_INVALID','Invalid saved-key request.');
    if(name==='registerGenerated'&&(!args[0]||typeof args[0].keyId!=='string'||typeof args[0].passphrase!=='string'||typeof args[0].password!=='string'||!args[0].profile||Object.keys(args[0]).some(k=>!['profile','keyId','passphrase','password'].includes(k))))fail('AUTH_FAILED','Invalid registration request.');
