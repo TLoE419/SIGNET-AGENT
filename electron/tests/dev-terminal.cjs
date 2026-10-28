@@ -26,7 +26,8 @@ async function until(check){for(let attempt=0;attempt<150;attempt++){if(await ch
  await until(()=>js(`!!document.querySelector('.ssh-dev-launch')`));
  const duoProfile=await js(`window.signetDesktop.ssh.saveProfile(${JSON.stringify({name:'Local Duo test',host:'127.0.0.1',port,username:'testuser',auth:{method:'duo'}})})`);assert.equal(duoProfile.ok,true);
  await until(()=>js(`document.querySelector('.ssh-identity')?.textContent.includes('Local Duo test')`));
- await js(`document.querySelector('[role=switch]').click()`);await until(()=>js(`!!document.querySelector('.ssh-account-login[open]')`));
+ await js(`document.querySelector('.ssh-identity').click()`);await until(()=>js(`document.querySelector('.ssh-modal[open] input[aria-label="UCInetID / username"]')?.value==='testuser'`));
+ await js(`document.querySelector('.ssh-modal[open] .ssh-primary').click()`);await until(()=>js(`!!document.querySelector('.ssh-account-login[open]')`));assert.equal(connections,0);
  await js(`(()=>{const input=document.querySelector('.ssh-account-login input[aria-label="UCInetID password"]');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,'account-secret');input.dispatchEvent(new Event('input',{bubbles:true}))})()`);await new Promise(resolve=>setTimeout(resolve,50));await js(`document.querySelector('.ssh-account-login form').requestSubmit()`);
  await until(()=>js(`!![...document.querySelectorAll('.ssh-auth-challenge button')].find(button=>button.textContent.includes('Duo Push'))`));
  assert.match(await js(`document.querySelector('.ssh-auth-challenge').textContent`),/Duo two-factor login for testuser/);assert.match(await js(`document.querySelector('.ssh-auth-challenge').textContent`),/Passcode or option \(1-1\)/);
