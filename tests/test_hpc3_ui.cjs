@@ -162,6 +162,16 @@ function page(routes, language = 'en') {
     assert.equal(p.el['hpc3-card'].dataset.state, 'disconnected');
   }
 
+  // 4b. Logged in but HPC3 is not answering: no login form (it would not help); logout and re-check.
+  {
+    const p = page({'GET /hpc3/login': [[200, {state: 'idle'}]],
+      'GET /hpc3/status': [[200, {status: 'node_unresponsive', connected: false, user: 'jdoe', auth: 'shared_connection'}]]});
+    await p.settle();
+    assert.equal(p.el['hpc3-state'].textContent, 'Logged in, HPC3 not responding');
+    assert.match(p.el['hpc3-detail'].textContent, /^You are logged in, but the HPC3 login node is not responding/);
+    assert.deepEqual(p.visible(), ['hpc3-detail', 'hpc3-logout', 'hpc3-refresh']);
+  }
+
   // 5. A reload during a login resumes polling instead of offering a second login.
   {
     const p = page({'GET /hpc3/login': [[200, {state: 'waiting_for_user'}], [200, {state: 'succeeded'}]],

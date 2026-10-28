@@ -26,11 +26,12 @@
     ssh_missing: '這台電腦沒有安裝 ssh。',
     unexpected_remote: '登入的帳號或主機不符，請檢查 UCInetID。',
     ssh_failed: 'SSH 連線失敗，請稍後再試。',
-    stale_connection: '之前的登入已失效（可能換了網路、電腦休眠或登入節點忙碌），請重新登入。',
+    stale_connection: '之前的登入已失效（可能換了網路或電腦休眠），請重新登入。',
+    node_unresponsive: '你已經登入，但 HPC3 登入節點目前沒有回應（可能太忙），請過幾分鐘再按「重新檢查」。',
   };
   // Logging in cannot fix these; the button only saves the account, and "Check again" is offered.
   const NO_LOGIN = new Set(['dns_failed', 'network_unreachable', 'host_key_changed', 'ssh_missing',
-    'connection_refused']);
+    'connection_refused', 'node_unresponsive']);
 
   let status = null;               // last GET /hpc3/status body, null while unknown
   let login = {state: 'idle'};     // last login progress from the server
@@ -69,13 +70,16 @@
     const waiting = login.state === 'waiting_for_user';
     const configured = status && status.status !== 'not_configured';
     const connected = !!(status && status.connected);
-    const formOpen = !!status && !waiting && !connected;
+    // Logged in but HPC3 is not answering: keep the connection, offer logout and re-check only.
+    const stuck = !!(status && status.status === 'node_unresponsive');
+    const formOpen = !!status && !waiting && !connected && !stuck;
     const canLogin = formOpen && !NO_LOGIN.has(status.status);
     card.dataset.state = waiting ? 'busy' : checking || !status ? 'checking' : connected ? 'connected' : 'disconnected';
 
     if (waiting) text('hpc3-state', '登入中…');
     else if (!status || checking) text('hpc3-state', '正在檢查連線…');
     else if (connected) text('hpc3-state', '已連線');
+    else if (stuck) text('hpc3-state', '已登入，HPC3 沒有回應');
     else if (!configured) text('hpc3-state', '尚未設定帳號');
     else text('hpc3-state', '未連線');
 
@@ -103,7 +107,7 @@
     // When login cannot help, the button only saves: nothing to do until the name changes.
     const unchanged = el('hpc3-user').value.trim() === (status && status.user || '');
     show('hpc3-refresh', !!status && !connected && !waiting && !(status && !configured));
-    show('hpc3-logout', connected && !waiting);
+    show('hpc3-logout', (connected || stuck) && !waiting);
     for (const id of ['hpc3-login', 'hpc3-refresh', 'hpc3-logout', 'hpc3-user']) el(id).disabled = busy;
     if (formOpen && !canLogin && unchanged) el('hpc3-login').disabled = true;
 

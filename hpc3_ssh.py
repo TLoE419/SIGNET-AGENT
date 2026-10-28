@@ -16,8 +16,9 @@ result says *where* it broke and what to do about it:
   2. dns       the host name resolves
   3. network   TCP port 22 answers (fails off campus without the VPN)
   4. master    whether a control-master connection is open and still answering; a dead
-               one (network change, sleep, busy login node) is closed and reported as stale
-  5. ssh       a non-interactive login works (BatchMode: it never prompts)
+               one (after a network change or sleep) is closed and reported as stale
+  5. ssh       a non-interactive login works (BatchMode: it never prompts); if the connection
+               is alive but HPC3 does not finish the command, that is node_unresponsive
   6. identity  the remote side is the expected user on a host with Slurm
 
 Usage:
@@ -189,14 +190,14 @@ def askpass_environment(language='en'):
 
 
 def probe_command(user, host):
-    """Cheap non-interactive command through the shared connection: `hostname`.
+    """Cheapest non-interactive command through the shared connection: the builtin `true`.
 
-    It must start a real program. A shell builtin such as `true` still answers when the login
-    node can no longer start programs (overloaded or a stuck filesystem), so it would call a
-    useless connection healthy and login would refuse to replace it.
+    It answers whether the *connection* is alive. It deliberately starts no program: when the
+    login node is overloaded and cannot start programs, the connection is still fine (logging
+    in again would not help), and check() reports that separately as node_unresponsive.
     """
     return (['ssh', '-o', 'BatchMode=yes', '-o', 'ControlMaster=no'] + ssh_options()
-            + ['-l', user, '--', host, 'hostname'])
+            + ['-l', user, '--', host, 'true'])
 
 
 def shared_connection_alive(user, host):
@@ -303,12 +304,19 @@ def check():
         run(master_command(user, host, 'exit'), timeout=10)
         step('master', False, 'shared connection stopped answering; closed it')
         return fail('stale_connection', 'The saved HPC3 connection stopped answering (network '
-                                        'change, sleep, or a busy login node). Log in again.')
+                                        'change or sleep). Log in again.')
 
     code, out, err = run(check_command(user, host), timeout=SSH_TIMEOUT)
     if code is None and 'not installed' in err:
         step('ssh', False, err)
         return fail('ssh_missing', 'Install the OpenSSH client.')
+    if code is None and has_master:
+        # The connection answered the probe, so it is alive; HPC3 just did not finish the
+        # identity command. Keep the connection: logging in again would land in the same place.
+        result['auth'] = 'shared_connection'
+        step('ssh', False, 'logged in, but HPC3 did not finish a simple command in %d s' % SSH_TIMEOUT)
+        return fail('node_unresponsive', 'You are logged in, but the HPC3 login node is not '
+                                         'responding (it may be overloaded). Try again in a few minutes.')
     if code != 0:
         step('ssh', False, last_line(err) or 'exit %s' % code)
         return fail(*classify_ssh_error(err))

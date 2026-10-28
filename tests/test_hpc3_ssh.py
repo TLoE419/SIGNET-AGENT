@@ -22,13 +22,16 @@ SHARED = 'shared_connection'
 class FakeSsh:
     """Answers `ssh -O check` and the BatchMode login with scripted (code, stdout, stderr)."""
 
-    def __init__(self, login=(0, IDENTITY, ''), master=(255, '', 'No such file or directory')):
-        self.login, self.master, self.calls = login, master, []
+    def __init__(self, login=(0, IDENTITY, ''), master=(255, '', 'No such file or directory'), probe=None):
+        # probe: answer to the `true` liveness probe; defaults to the same as login.
+        self.login, self.master, self.probe, self.calls = login, master, probe or login, []
 
     def __call__(self, argv, **kwargs):
         self.calls.append(argv)
         if 'BatchMode=yes' not in argv:
             code, out, err = self.master
+        elif argv[-1] == 'true':
+            code, out, err = self.probe
         else:
             code, out, err = self.login
         if code is None:
@@ -73,8 +76,18 @@ class CheckTest(unittest.TestCase):
         self.assert_status(result, 'stale_connection', 'master')
         self.assertIn('Log in again', result['hint'])
         self.assertIn('exit', [argv[2] for argv in ssh.calls if argv[1] == '-O'])
-        # The probe ran a real program (not a shell builtin), and nothing else followed it.
-        self.assertEqual(ssh.calls[-2][-1], 'hostname')
+        # The probe ran the builtin `true`, and nothing else followed it.
+        self.assertEqual(ssh.calls[-2][-1], 'true')
+
+    def test_alive_connection_to_a_stuck_login_node_is_kept_and_reported(self):
+        # The connection answers `true`, but HPC3 never finishes the identity command.
+        ssh = FakeSsh(login=(None, '', ''), probe=(0, '', ''), master=(0, '', 'Master running (pid=4242)'))
+        result = self.run_check(ssh=ssh)
+        self.assert_status(result, 'node_unresponsive', 'ssh')
+        self.assertEqual(result['auth'], 'shared_connection')
+        self.assertIn('logged in', result['hint'])
+        # The connection is NOT closed: logging in again would not help.
+        self.assertNotIn('exit', [argv[2] for argv in ssh.calls if argv[1] == '-O'])
 
     def test_missing_or_unsafe_user_is_not_configured_and_nothing_is_contacted(self):
         for user in ('', 'JDoe', '-oProxyCommand=x', 'a b', 'x' * 40):
