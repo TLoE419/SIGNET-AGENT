@@ -73,8 +73,8 @@ class CheckTest(unittest.TestCase):
         self.assert_status(result, 'stale_connection', 'master')
         self.assertIn('Log in again', result['hint'])
         self.assertIn('exit', [argv[2] for argv in ssh.calls if argv[1] == '-O'])
-        # The probe ran `true`, not the identity command, and nothing else followed it.
-        self.assertEqual(ssh.calls[-2][-1], 'true')
+        # The probe ran a real program (not a shell builtin), and nothing else followed it.
+        self.assertEqual(ssh.calls[-2][-1], 'hostname')
 
     def test_missing_or_unsafe_user_is_not_configured_and_nothing_is_contacted(self):
         for user in ('', 'JDoe', '-oProxyCommand=x', 'a b', 'x' * 40):
@@ -148,6 +148,12 @@ class CommandTest(unittest.TestCase):
         self.assertIn('ControlPersist=' + h.CONTROL_PERSIST, argv)
         self.assertIn('ServerAliveInterval=15', argv)
         self.assertEqual(argv[-2:], ['--', h.DEFAULT_HOST])
+
+    def test_control_socket_name_does_not_depend_on_this_computers_host_name(self):
+        # %C hashes the local host name too, which changes when a laptop changes networks.
+        self.assertNotIn('%C', h.control_path())
+        self.assertNotIn('%l', h.control_path())
+        self.assertTrue(h.control_path().endswith('signet-hpc3-%r@%h-%p'))
 
     def test_all_commands_share_one_control_socket(self):
         path = 'ControlPath=' + h.control_path()

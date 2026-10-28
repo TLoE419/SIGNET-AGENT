@@ -16,7 +16,7 @@ result says *where* it broke and what to do about it:
   2. dns       the host name resolves
   3. network   TCP port 22 answers (fails off campus without the VPN)
   4. master    whether a control-master connection is open and still answering; a dead
-               one (after a network change or sleep) is closed and reported as stale
+               one (network change, sleep, busy login node) is closed and reported as stale
   5. ssh       a non-interactive login works (BatchMode: it never prompts)
   6. identity  the remote side is the expected user on a host with Slurm
 
@@ -101,8 +101,12 @@ def settings():
 
 
 def control_path():
-    """Socket of the shared connection; %C is ssh's hash of user, host and port."""
-    return str(Path.home() / '.ssh' / 'signet-hpc3-%C')
+    """Socket of the shared connection, named by remote user, host and port.
+
+    Not ssh's %C: that hash also covers this computer's own host name, which changes when a
+    laptop moves between networks, so the app would lose track of a connection it opened.
+    """
+    return str(Path.home() / '.ssh' / 'signet-hpc3-%r@%h-%p')
 
 
 def ssh_options(host_key_checking='yes'):
@@ -185,9 +189,14 @@ def askpass_environment(language='en'):
 
 
 def probe_command(user, host):
-    """Cheapest non-interactive command through the shared connection: just `true`."""
+    """Cheap non-interactive command through the shared connection: `hostname`.
+
+    It must start a real program. A shell builtin such as `true` still answers when the login
+    node can no longer start programs (overloaded or a stuck filesystem), so it would call a
+    useless connection healthy and login would refuse to replace it.
+    """
     return (['ssh', '-o', 'BatchMode=yes', '-o', 'ControlMaster=no'] + ssh_options()
-            + ['-l', user, '--', host, 'true'])
+            + ['-l', user, '--', host, 'hostname'])
 
 
 def shared_connection_alive(user, host):
@@ -294,7 +303,7 @@ def check():
         run(master_command(user, host, 'exit'), timeout=10)
         step('master', False, 'shared connection stopped answering; closed it')
         return fail('stale_connection', 'The saved HPC3 connection stopped answering (network '
-                                        'change or sleep). Log in again.')
+                                        'change, sleep, or a busy login node). Log in again.')
 
     code, out, err = run(check_command(user, host), timeout=SSH_TIMEOUT)
     if code is None and 'not installed' in err:

@@ -26,7 +26,7 @@
     ssh_missing: '這台電腦沒有安裝 ssh。',
     unexpected_remote: '登入的帳號或主機不符，請檢查 UCInetID。',
     ssh_failed: 'SSH 連線失敗，請稍後再試。',
-    stale_connection: '之前的登入已失效（可能換了網路或電腦休眠），請重新登入。',
+    stale_connection: '之前的登入已失效（可能換了網路、電腦休眠或登入節點忙碌），請重新登入。',
   };
   // Logging in cannot fix these; the button only saves the account, and "Check again" is offered.
   const NO_LOGIN = new Set(['dns_failed', 'network_unreachable', 'host_key_changed', 'ssh_missing',
