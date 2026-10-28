@@ -38,6 +38,7 @@
   let notice = '';                 // what the last click did, when the status itself did not change
   let busy = false;                // a request from this card is in flight
   let checking = false;            // a status check is running (may take a few seconds off the VPN)
+  let prefilled = false;           // the account field was filled once since the form opened
   let timer = null;                // pending login-progress poll
 
   async function api(path, payload) {
@@ -91,8 +92,13 @@
     show('hpc3-detail', waiting || connected || !!(status && configured));
 
     show('hpc3-login-form', formOpen);
-    // Pre-fill the last account once; never overwrite what the user is typing.
-    if (formOpen && !el('hpc3-user').value) el('hpc3-user').value = status.user || '';
+    // Pre-fill the last account once when the form opens; after that the field is the user's,
+    // so clearing it to type another account must not bring the old one back.
+    if (formOpen && !prefilled) {
+      if (!el('hpc3-user').value) el('hpc3-user').value = status.user || '';
+      prefilled = true;
+    }
+    if (!formOpen) prefilled = false;
     text('hpc3-login', canLogin || !formOpen ? '登入 HPC3' : '儲存帳號');
     // When login cannot help, the button only saves: nothing to do until the name changes.
     const unchanged = el('hpc3-user').value.trim() === (status && status.user || '');

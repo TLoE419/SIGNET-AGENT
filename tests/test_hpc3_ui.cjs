@@ -84,6 +84,11 @@ function page(routes, language = 'en') {
     await p.settle();
     assert.equal(p.el['hpc3-user'].value, 'jdoe');
     assert.deepEqual(p.visible(), ['hpc3-detail', 'hpc3-login-form', 'hpc3-refresh']);
+    // Clearing the field to type another account must not refill the old one.
+    await p.type('');
+    assert.equal(p.el['hpc3-user'].value, '');
+    await p.type('asm');
+    assert.equal(p.el['hpc3-user'].value, 'asm');
     p.el['hpc3-user'].value = 'asmith';
     await p.submit();
     assert.deepEqual(p.requests.slice(-2).map(r => [r.method, r.path, r.body]),
