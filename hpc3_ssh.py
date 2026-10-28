@@ -17,7 +17,9 @@ result says *where* it broke and what to do about it:
   3. network   TCP port 22 answers (fails off campus without the VPN)
   4. master    whether a control-master connection is open and still answering; a dead
                one (after a network change or sleep) is closed and reported as stale
-  5. ssh       a non-interactive login works (BatchMode: it never prompts); if the connection
+  5. ssh       a non-interactive login works (BatchMode: it never prompts); skipped when there is
+               neither a shared connection nor a key in ssh-agent, because a login attempt that
+               must fail is still logged by HPC3 as a failed login; if the connection
                is alive but HPC3 does not finish the command, that is node_unresponsive
   6. identity  the remote side is the expected user on a host with Slurm
 
@@ -173,6 +175,18 @@ def last_line(text):
     return lines[-1] if lines else ''
 
 
+def has_loaded_key():
+    """True if ssh-agent holds at least one key (`ssh-add -l` exits 0).
+
+    Without a shared connection or a loaded key, a login attempt can only fail, and HPC3 logs
+    each one as a failed login ("There were N failed login attempts"); too many can get an
+    account or address blocked. check() therefore does not try in that case.
+    """
+    code = run(['ssh-add', '-l'], timeout=5)[0]
+    # None: ssh-add is missing or hung; let the real attempt run so ssh_missing can be reported.
+    return code == 0 or code is None
+
+
 def has_shared_connection(user, host):
     """True if a control-master connection from an earlier login is open (`ssh -O check`)."""
     code, _, _ = run(master_command(user, host, 'check'), timeout=10)
@@ -305,6 +319,12 @@ def check():
         step('master', False, 'shared connection stopped answering; closed it')
         return fail('stale_connection', 'The saved HPC3 connection stopped answering (network '
                                         'change or sleep). Log in again.')
+
+    if not has_master and not has_loaded_key():
+        # Nothing could log in without a prompt, so do not knock: it would be a failed login.
+        step('ssh', False, 'not attempted: no shared connection and no SSH key loaded')
+        return fail('auth_required', 'Not logged in. Run `python3 hpc3_ssh.py login` (password + Duo), '
+                                     'or unlock your SSH key with ssh-add.')
 
     code, out, err = run(check_command(user, host), timeout=SSH_TIMEOUT)
     if code is None and 'not installed' in err:

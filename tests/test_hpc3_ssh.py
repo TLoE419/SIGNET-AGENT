@@ -22,13 +22,17 @@ SHARED = 'shared_connection'
 class FakeSsh:
     """Answers `ssh -O check` and the BatchMode login with scripted (code, stdout, stderr)."""
 
-    def __init__(self, login=(0, IDENTITY, ''), master=(255, '', 'No such file or directory'), probe=None):
+    def __init__(self, login=(0, IDENTITY, ''), master=(255, '', 'No such file or directory'), probe=None,
+                 agent=(0, '256 SHA256:fake jdoe@laptop (ED25519)', '')):
         # probe: answer to the `true` liveness probe; defaults to the same as login.
-        self.login, self.master, self.probe, self.calls = login, master, probe or login, []
+        # agent: answer to `ssh-add -l`; by default a key is loaded so a login may be tried.
+        self.login, self.master, self.probe, self.agent, self.calls = login, master, probe or login, agent, []
 
     def __call__(self, argv, **kwargs):
         self.calls.append(argv)
-        if 'BatchMode=yes' not in argv:
+        if argv[0] == 'ssh-add':
+            code, out, err = self.agent
+        elif 'BatchMode=yes' not in argv:
             code, out, err = self.master
         elif argv[-1] == 'true':
             code, out, err = self.probe
@@ -69,6 +73,14 @@ class CheckTest(unittest.TestCase):
     def test_connected_through_the_shared_connection(self):
         result = self.run_check(ssh=FakeSsh(master=(0, '', 'Master running (pid=4242)')))
         self.assertEqual((result['status'], result['auth']), ('connected', SHARED))
+
+    def test_no_login_is_attempted_without_a_shared_connection_or_a_loaded_key(self):
+        # HPC3 logs every refused attempt as a failed login, so the check must not knock.
+        ssh = FakeSsh(agent=(1, 'The agent has no identities.', ''))
+        result = self.run_check(ssh=ssh)
+        self.assert_status(result, 'auth_required', 'ssh')
+        self.assertIn('not attempted', result['steps'][-1]['detail'])
+        self.assertFalse([argv for argv in ssh.calls if 'BatchMode=yes' in argv])
 
     def test_dead_shared_connection_is_closed_and_reported_stale(self):
         ssh = FakeSsh(login=(None, '', ''), master=(0, '', 'Master running (pid=4242)'))
