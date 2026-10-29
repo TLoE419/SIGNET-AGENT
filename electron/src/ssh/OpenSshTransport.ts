@@ -20,8 +20,13 @@ export interface SshTransport extends EventEmitter {
 type PtyFactory=(file:string,args:string[],options:pty.IPtyForkOptions)=>pty.IPty;
 
 function clean(value:string){return value.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g,'').replace(/\r/g,'')}
+function configValue(value:string){
+ if(/[\0\r\n]/.test(value))throw new SshFailure('UNKNOWN','Unsafe OpenSSH configuration path.');
+ return `"${value.replace(/\\/g,'\\\\').replace(/"/g,'\\"')}"`;
+}
 function failureFromOutput(text:string){
- if(/REMOTE HOST IDENTIFICATION HAS CHANGED|Host key verification failed/i.test(text))return new SshFailure('HOST_KEY_CHANGED','SECURITY WARNING: saved host identity changed. Connection blocked.');
+ if(/REMOTE HOST IDENTIFICATION HAS CHANGED|Offending .* key/i.test(text))return new SshFailure('HOST_KEY_CHANGED','SECURITY WARNING: saved host identity changed. Connection blocked.');
+ if(/No .* host key is known|Host key verification failed/i.test(text))return new SshFailure('HOST_KEY_UNKNOWN','OpenSSH could not verify the saved host identity. Connection blocked.');
  if(/Permission denied|Authentication failed/i.test(text))return new SshFailure('AUTH_FAILED','HPC3 rejected authentication. Check the account password, Duo response, username, or SSH key.');
  if(/Could not resolve hostname/i.test(text))return new SshFailure('DNS_FAILED','The SSH host name could not be resolved.');
  if(/Connection refused|No route to host|Network is unreachable/i.test(text))return new SshFailure('NETWORK_UNREACHABLE','Cannot reach the SSH host. Check the network or VPN.');
@@ -48,7 +53,7 @@ export class OpenSshTransport extends EventEmitter implements SshTransport {
   super();this.controlDirectory=path.join(controlRoot,`signet-ssh-${randomUUID()}`);this.controlPath=path.join(this.controlDirectory,'master.sock');
  }
  private args(){
-  const common=['-tt','-M','-S',this.controlPath,'-o','ControlPersist=no','-o','StrictHostKeyChecking=yes','-o',`UserKnownHostsFile=${this.knownHostsPath}`,'-o','ConnectTimeout=15','-o','ServerAliveInterval=15','-o','ServerAliveCountMax=3','-o','ClearAllForwardings=yes','-p',String(this.profile.port)];
+  const common=['-tt','-M','-S',this.controlPath,'-o','ControlPersist=no','-o','StrictHostKeyChecking=yes','-o',`UserKnownHostsFile=${configValue(this.knownHostsPath)}`,'-o','ConnectTimeout=15','-o','ServerAliveInterval=15','-o','ServerAliveCountMax=3','-o','ClearAllForwardings=yes','-p',String(this.profile.port)];
   const auth=this.profile.auth.method==='duo'?['-o','PubkeyAuthentication=no','-o','PreferredAuthentications=keyboard-interactive','-o','KbdInteractiveAuthentication=yes','-o','NumberOfPasswordPrompts=1']:['-o','IdentitiesOnly=yes','-o','PreferredAuthentications=publickey','-i',this.profile.auth.privateKeyPath];
   return [...common,...auth,'--',`${this.profile.username}@${this.profile.host}`];
  }
@@ -91,7 +96,7 @@ export class OpenSshTransport extends EventEmitter implements SshTransport {
  }
  async exec(command:string,input:Buffer,timeoutMs:number):Promise<RemoteResult>{
   if(!this.process||!this.ready)throw new SshFailure('SESSION_CLOSED','Connect SSH before running remote work.');
-  const args=['-S',this.controlPath,'-o','ControlMaster=no','-o','BatchMode=yes','-o','StrictHostKeyChecking=yes','-o',`UserKnownHostsFile=${this.knownHostsPath}`,'-p',String(this.profile.port),'--',`${this.profile.username}@${this.profile.host}`,command];
+  const args=['-S',this.controlPath,'-o','ControlMaster=no','-o','BatchMode=yes','-o','StrictHostKeyChecking=yes','-o',`UserKnownHostsFile=${configValue(this.knownHostsPath)}`,'-p',String(this.profile.port),'--',`${this.profile.username}@${this.profile.host}`,command];
   return new Promise((resolve,reject)=>{const child=spawnChild('/usr/bin/ssh',args,{stdio:['pipe','pipe','pipe']});const stdout:Buffer[]=[],stderr:Buffer[]=[];let size=0,settled=false;
    const done=(error?:SshFailure,code=255,signal:string|null=null)=>{if(settled)return;settled=true;clearTimeout(timer);error?reject(error):resolve({returncode:code,signal,stdout:Buffer.concat(stdout),stderr:Buffer.concat(stderr)})};
    const collect=(target:Buffer[])=>(chunk:Buffer)=>{size+=chunk.length;if(size>1024*1024*1024){child.kill('SIGTERM');done(new SshFailure('UNKNOWN','Remote output exceeded 1 GiB.'))}else target.push(Buffer.from(chunk))};
