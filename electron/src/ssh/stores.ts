@@ -84,8 +84,18 @@ export function validIdentity(v:unknown):v is HostIdentity {
 }
 export class HostKeyTrustStore {
  private file:JsonFile<{version:1;hosts:HostIdentity[]}>;private hosts:HostIdentity[]=[];private loaded=false;
- constructor(dir:string){this.file=new JsonFile(path.join(dir,'host-trust.json'),v=>{const d=v as {version:1;hosts:HostIdentity[]};if(!d||d.version!==1||!Array.isArray(d.hosts)||d.hosts.length>100||!d.hosts.every(validIdentity)||new Set(d.hosts.map(h=>h.host+':'+h.port)).size!==d.hosts.length)throw Error();return d},()=>({version:1,hosts:[]}))}
+ constructor(private readonly dir:string){this.file=new JsonFile(path.join(dir,'host-trust.json'),v=>{const d=v as {version:1;hosts:HostIdentity[]};if(!d||d.version!==1||!Array.isArray(d.hosts)||d.hosts.length>100||!d.hosts.every(validIdentity)||new Set(d.hosts.map(h=>h.host+':'+h.port)).size!==d.hosts.length)throw Error();return d},()=>({version:1,hosts:[]}))}
  async load(){this.hosts=(await this.file.load()).hosts;this.loaded=true}
+ get(host:string,port:number){if(!this.loaded)throw Error('Host trust store unavailable.');const identity=this.hosts.find(item=>item.host===host&&item.port===port);return identity?structuredClone(identity):undefined}
  check(identity:HostIdentity){if(!this.loaded)throw Error('Host trust store unavailable.');const known=this.hosts.find(h=>h.host===identity.host&&h.port===identity.port);return !known?'unknown':known.algorithm===identity.algorithm&&known.fingerprint===identity.fingerprint?'match':'changed'}
  async trust(identity:HostIdentity){if(!validIdentity(identity)||this.check(identity)!=='unknown')fail('HOST_KEY_CHANGED','Existing host trust cannot be replaced here. Contact your administrator.');const hosts=[...this.hosts,identity];await this.file.write({version:1,hosts});this.hosts=hosts}
+ async attachPublicKey(identity:HostIdentity){
+  if(!validIdentity(identity)||!identity.publicKey||this.check(identity)!=='match')fail('HOST_KEY_CHANGED','Saved host identity no longer matches the server. Connection blocked.');
+  const hosts=this.hosts.map(host=>host.host===identity.host&&host.port===identity.port?identity:host);await this.file.write({version:1,hosts});this.hosts=hosts;
+ }
+ async materializeKnownHosts(){
+  if(!this.loaded)throw Error('Host trust store unavailable.');const target=path.join(this.dir,'known_hosts'),temporary=target+'.'+randomUUID()+'.tmp';await this.file.prepare();
+  const lines=this.hosts.map(identity=>{if(!identity.publicKey)throw Error('Saved host key cannot be exported.');const host=identity.port===22?identity.host:`[${identity.host}]:${identity.port}`;return `${host} ${identity.algorithm} ${identity.publicKey}`});
+  try{const file=await open(temporary,'wx',0o600);try{await file.writeFile(lines.join('\n')+(lines.length?'\n':''));await file.sync()}finally{await file.close()}await rename(temporary,target);if(process.platform!=='win32')await chmod(target,0o600)}finally{await unlink(temporary).catch(()=>{})}return target;
+ }
 }

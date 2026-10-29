@@ -11,8 +11,11 @@ connection dialog exposes the latest health steps and a forced **Check again**;
 focus and Python work reuse a 15-second cached probe and retire stale transports.
 
 The current host mounts these components in the chat workspace top bar. Electron
-Main owns the live SSH client and exposes only named configuration/authentication
-methods to the renderer. Python remote work uses the separate private broker.
+Main owns a foreground system OpenSSH process in a real PTY, with an app-private
+ControlMaster socket and `ControlPersist=no`. The dev terminal attaches to that
+primary login PTY; Python remote work uses named command operations through the
+separate private broker and the same control connection. The renderer never owns
+the SSH process or receives a generic local command API.
 See `electron/README.md` for operation, storage compatibility and lifecycle.
 
 Test doubles are confined to `electron/tests/fixtures`; production code has no

@@ -1,13 +1,13 @@
 import {EventEmitter} from 'node:events';
-import type {ClientChannel} from 'ssh2';
+import type {ShellChannel} from './OpenSshTransport';
 import type {SshConnectionService} from './SshConnectionService';
 import {fail} from '../../modules/ssh/validation';
 import {authorized} from './sshIpcHandlers';
 import type {BrowserWindow,IpcMain} from 'electron';
 
-/** One PTY channel on the existing authenticated transport, never a new login. */
+/** Dev-only attachment to the Electron-owned primary OpenSSH PTY, never a new login. */
 export class DevTerminal extends EventEmitter {
- private id?:string;private stream?:ClientChannel;private outstanding=0;private generation=0;
+ private id?:string;private stream?:ShellChannel;private outstanding=0;private generation=0;
  constructor(private service:SshConnectionService){super();service.on('snapshot',this.snapshot)}
  private snapshot=()=>{if(this.service.getSnapshot().connection?.status!=='connected')this.close()};
  async open(id:string,cols:number,rows:number){

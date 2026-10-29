@@ -47,22 +47,23 @@ existing instance and does not change its mode. Before signing in, click
 **Dev terminal → Connection diagnostics** at the bottom right. Then use the
 normal SSH controls to Connect; dev login/unlock dialogs also show the live log.
 
-- **Connection diagnostics** monitors local key unlock, TCP connection, SSH
-  handshake, host-key checks, authentication attempts, Duo challenge waiting,
-  success/failure and disconnect. The first event states the selected
-  `username@host:port`, so the actual target is visible before authentication.
+- **Connection diagnostics** monitors local key unlock, system OpenSSH startup,
+  authentication, Duo challenge waiting, remote health, failure and disconnect.
+  The opening event states the exact `username@host:port` target before
+  authentication.
   It works before authentication. The last 300
   events stay in Electron Main memory across panel close, failure and page reload,
   until app exit. Only fixed allowlisted protocol messages and sanitized error
-  codes are recorded; raw ssh2 debug output, banners, challenge text/responses,
+  codes are recorded; raw PTY output, banners, challenge text/responses,
   passwords, passphrases and private keys are never forwarded to this log.
-- **Raw SSH log** shows the original ssh2 debug messages, server banners, and
-  keyboard-interactive name, instructions, and prompts received from the SSH
-  server. This is the place to inspect the exact Duo menu returned by HPC3.
+- **Raw SSH log** shows text received through the system OpenSSH PTY, including
+  server banners and keyboard-interactive prompts. This is the place to inspect
+  the exact Duo menu and login text returned by HPC3.
   Server-provided text can contain account or device details, so the view is
   available only in dev mode and is rendered as inert escaped text rather than
-  being executed by the interactive terminal. Passwords, passphrases, private
-  keys, and authentication answers submitted by the app are not logged. The
+  being executed by the interactive terminal. Passwords, passphrases and private
+  keys submitted by the app are not logged; OpenSSH may echo a non-secret menu
+  choice such as `2`. The
   latest 2 MiB / 2,000 entries stay only in Electron Main memory until app exit;
   attempts made before this feature was running cannot be recovered afterward.
 - When HPC3 returns a keyboard-interactive challenge, the complete server name,
@@ -78,31 +79,33 @@ normal SSH controls to Connect; dev login/unlock dialogs also show the live log.
   command and the last 200,000 characters in the panel; it is not a durable log.
   Local Python processes, LLM output and previously submitted scheduler jobs
   are not automatically attached to this view.
-- **Interactive shell → Open shell** requests an xterm-256color PTY on the
-  existing authenticated SSH transport. Input, Ctrl-C, ANSI output and resizing
-  work through that channel. Use normal remote commands to inspect jobs or logs.
-  This is a separate shell channel: its working directory/environment and stdin
-  do not replace those of scientific commands already executing through Python.
+- **Interactive shell → Attach terminal** attaches xterm to the primary
+  xterm-256color login PTY already owned by Electron. Input, Ctrl-C, ANSI output
+  and resizing affect that real login shell. Detaching or closing the panel only
+  removes the renderer view; it does not close SSH. Python commands use separate
+  channels through the same OpenSSH control connection.
 - Authentication success alone is not treated as connected. Electron immediately
-  opens and owns a persistent xterm-256color login shell, then runs a fixed,
+  starts `/usr/bin/ssh` in a foreground xterm-256color PTY with an app-private
+  ControlMaster socket and `ControlPersist=no`, then runs a fixed,
   input-free identity probe that verifies the selected username and confirms
   `sbatch` exists. It publishes the connected state only after all checks pass.
   This mirrors HPC3's native SSH
   login flow, keeps the transport tied to the app lifecycle, and captures the
-  server MOTD/prompt as `session-output` in **Raw SSH log**. Python commands and
-  the optional developer terminal continue to use sibling channels on the same
-  transport. Closing the persistent shell closes the owned connection.
+  server MOTD and prompt in **Raw SSH log**. The optional developer terminal
+  attaches to that primary PTY; Python commands open sibling channels through
+  its private control socket. Closing the primary process closes the connection.
 - The connection snapshot includes the current phase, the verified remote
   hostname/account, Slurm availability, check steps, and timestamp. **Check
   again**, window focus, and return from background run the same health check;
   results are cached for 15 seconds to avoid unnecessary HPC3 traffic. Python
   broker work also requires a recent healthy result. A failed forced/proactive
   check closes the stale transport and reports whether identity, Slurm, timeout,
-  DNS/network, or session health failed. No OpenSSH ControlMaster, ASKPASS,
-  polling web API, or second SSH owner is introduced.
-- **Close shell**, **Close panel** or page reload closes the shell channel while
-  preserving the shared connection. SSH disconnect/app shutdown closes both.
-  Reconnecting never automatically opens a new shell or replays input.
+  DNS/network, or session health failed. No ASKPASS, polling web API, detached
+  `ssh -f`, long-lived `ControlPersist`, or second SSH owner is introduced.
+- **Detach terminal**, **Close panel** or page reload detaches the renderer while
+  preserving the Electron-owned primary PTY. SSH disconnect/app shutdown first
+  requests `ssh -O exit`, then terminates the owned PTY if needed and removes its
+  private control directory. Reconnecting never replays input.
 
 `npm start` and browser mode have no terminal UI or terminal bridge. Main only
 registers the dev IPC handlers for an explicit `--dev` in an unpackaged app;
@@ -156,7 +159,8 @@ stored below Electron's `userData/ssh` directory with owner-only permissions.
 Passwords and passphrases are not persisted.
 
 Once connected, Python scientific commands use a per-launch private Unix socket
-to ask Electron Main to run commands over the owned `ssh2.Client`. The socket is
+to ask Electron Main to open command channels through the owned OpenSSH
+ControlMaster. The broker socket is
 placed in a random owner-private short directory, requires a random token passed
 only to the owned Python child, and transfers command input/output as binary data.
 The browser launcher has no broker variables and continues to use its configured
@@ -200,9 +204,11 @@ Private key files and host pins are not migrated.
   owned local process group. Tools which create separate sessions and remote jobs
   may outlive that group; inspect run records before retrying. This does not cancel
   VM/SLURM jobs and does not automatically cancel remote scheduler jobs.
-- Main owns the SSH socket. Normal quit first drains and checkpoints Python work,
-  then disconnects SSH and removes the private broker socket. A Main crash releases
-  the SSH TCP connection; already-submitted remote jobs may continue independently.
+- Main owns the foreground SSH PTY and its private control socket. Normal quit
+  first drains and checkpoints Python work, then sends `ssh -O exit`, applies a
+  bounded TERM/KILL fallback, and removes both SSH and broker socket directories.
+  A Main crash closes the PTY file descriptors and releases the SSH TCP
+  connection; already-submitted remote jobs may continue independently.
 - A backend crash closes the desktop session with an error instead of restarting
   it and risking replay. A single-instance lock prevents a second desktop host
   using the same state directory.

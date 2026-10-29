@@ -5,6 +5,7 @@
   "description": "Optional desktop host for the existing SIGNET Python web application",
   "main": "entry.cjs",
   "scripts": {
+    "postinstall": "node scripts/prepare-node-pty.cjs",
     "start": "electron .",
     "test": "npm run typecheck && node --test tests/*.test.cjs && node --import tsx --test tests/ssh.test.ts && node --import tsx --test tests/ui.test.tsx",
     "test:smoke": "electron tests/smoke.cjs",
@@ -37,6 +38,7 @@
   "dependencies": {
     "@xterm/addon-fit": "0.11.0",
     "@xterm/xterm": "6.0.0",
+    "node-pty": "1.1.0",
     "react": "19.3.1",
     "react-dom": "19.3.1",
     "ssh2": "1.17.0"
