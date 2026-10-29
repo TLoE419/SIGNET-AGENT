@@ -7,8 +7,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-import signet_runtime as rt
-import signet_tools as st
+import agent.runtime.remote as rt
+import agent.tools.signet as st
 
 
 def archive_of(files):

@@ -2,7 +2,7 @@ import unittest
 from unittest.mock import patch
 
 from google.genai import errors, types
-import main
+import agent.core.conversation as main
 from test_chat import client_for, response
 
 

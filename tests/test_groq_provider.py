@@ -5,10 +5,10 @@ from unittest.mock import patch
 import httpx
 from google.genai import types
 
-import main
-from groq_provider import GROQ_MODEL, GroqClient, RequestPacer, groq_messages, rate_limit_delay, tool_schema
-from signet_tools import SIGNET_TOOLS, signet_catalog
-from tools import PROJECT
+import agent.core.conversation as main
+from agent.providers.groq_client import GROQ_MODEL, GroqClient, RequestPacer, groq_messages, rate_limit_delay, tool_schema
+from agent.tools.signet import SIGNET_TOOLS, signet_catalog
+from agent.tools.general import PROJECT
 
 
 def completion(text=None, calls=None, finish=None):
@@ -180,7 +180,7 @@ class GroqTest(unittest.TestCase):
         dispatch.assert_not_called()
 
     def test_rate_limit_after_tool_waits_and_resends_only_model_request(self):
-        from model_timing import ModelRequestTiming
+        from agent.core.model_timing import ModelRequestTiming
         responses = [(200, completion(calls=[call()])),
                      (429, {'error':{'message':'Rate limit reached on input tokens per minute (ITPM): Limit 7000, Used 3341, Requested 3674. Please try again in 128.571428ms.'}}),
                      (200, completion('已依工具結果完成說明。'))]

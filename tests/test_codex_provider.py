@@ -7,11 +7,11 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch, MagicMock
 
-import main
-import chat_ui
-from codex_provider import CodexClient, CodexCLIError, DISABLED_FEATURES, STOP
+import agent.core.conversation as main
+import agent.app.chat_ui as chat_ui
+from agent.providers.codex_client import CodexClient, CodexCLIError, DISABLED_FEATURES, STOP
 from google.genai import types
-from tools import PROJECT
+from agent.tools.general import PROJECT
 
 
 FAKE = '''#!/usr/bin/env python3
@@ -72,9 +72,9 @@ class CodexProviderTest(unittest.TestCase):
         server.server_port = 8880
         server.serve_forever.side_effect = KeyboardInterrupt()
         with patch.dict(os.environ, {}, clear=True), patch('sys.argv', ['chat_ui.py']), \
-                patch('chat_ui.load_dotenv'), patch('chat_ui.ChatServer', return_value=server) as create_server, \
-                patch('codex_provider.configured_model', return_value='test-model'), \
-                patch('codex_provider.CodexClient') as create_client, patch('sys.stdout', new_callable=io.StringIO):
+                patch('agent.app.chat_ui.load_dotenv'), patch('agent.app.chat_ui.ChatServer', return_value=server) as create_server, \
+                patch('agent.providers.codex_client.configured_model', return_value='test-model'), \
+                patch('agent.providers.codex_client.CodexClient') as create_client, patch('sys.stdout', new_callable=io.StringIO):
             chat_ui.main()
             args, kwargs = create_server.call_args
             self.assertEqual(args[0], ('127.0.0.1', 8880))

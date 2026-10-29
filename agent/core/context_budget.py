@@ -4,7 +4,8 @@ import json
 from pathlib import Path
 import re
 
-from tools import PROJECT
+from agent.paths import PROJECT_ROOT
+from agent.tools.general import PROJECT
 
 # Leave room below the observed 7,000 ITPM cap for service templates and reservations.
 MAX_INPUT_TOKENS = 5200
@@ -73,7 +74,7 @@ def compact_evidence(evidence):
 @lru_cache(maxsize=1)
 def _qwen_tokenizer():
     from tokenizers import Tokenizer
-    return Tokenizer.from_file(str(Path(__file__).parent / 'assets/tokenizers/qwen3.8-27b.json'))
+    return Tokenizer.from_file(str(PROJECT_ROOT / 'assets/tokenizers/qwen3.8-27b.json'))
 
 
 def input_tokens(body, model):

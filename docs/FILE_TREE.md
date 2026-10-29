@@ -11,22 +11,29 @@ SIGNET-agent/
 ├── .gitignore                    # Excludes all data, credentials, records, and local dependencies
 ├── README.md                     # Project overview, scope, and quick start
 ├── requirements.txt              # Pins four direct dependency versions
-├── chat_ui.py                    # Local web service, conversation storage, and workspace API
-├── llm_providers/                # Factory dispatch and isolated Codex, Gemini and Groq adapters
-├── main.py                       # Conversation flow, public progress, and controlled tool calls
-├── codex_provider.py             # Uses the downloader's own signed-in model CLI
-├── groq_provider.py              # Groq connection, tool format, and rate-limit waits
-├── context_budget.py             # Input length and compression of repeated tool evidence
-├── model_timing.py               # Model request and transport timing
-├── tools.py                      # Restricted file listing and paginated text reading
-├── signet_tools.py               # Scientific tools, parameter validation, and isolated job preparation
 ├── signet_inventory.json         # Official code version, classification, and file hashes
-├── signet_runtime.py             # Local VM connection, packaging, and output collection
-├── ssh_transport.py              # Private Electron broker client for SSH command transport
-├── network_runtime.py            # Network inference submission, queries, cancellation, and result checks
-├── network_worker.py             # Background control and supervision of owned jobs inside the VM
-├── visualization_runtime.py      # Stage 6 plotting and input/output checks
-├── stage6_workspace.py           # Parameter proposals, human confirmation, history, and comparison
+├── agent/                        # All Python code, one package
+│   ├── paths.py                  # The single definition of the project root (data/, runs/, .env, assets/)
+│   ├── app/
+│   │   └── chat_ui.py            # Local web service, conversation storage, and workspace API
+│   ├── core/
+│   │   ├── conversation.py       # Conversation flow, public progress, controlled tool calls; terminal chat entry point
+│   │   ├── context_budget.py     # Input length and compression of repeated tool evidence
+│   │   └── model_timing.py       # Model request and transport timing
+│   ├── providers/                # Factory dispatch and isolated Codex, Gemini and Groq adapters
+│   │   ├── codex_client.py       # Uses the downloader's own signed-in model CLI
+│   │   └── groq_client.py        # Groq connection, tool format, and rate-limit waits
+│   ├── tools/
+│   │   ├── general.py            # Restricted file listing and paginated text reading
+│   │   └── signet.py             # Scientific tools, parameter validation, and isolated job preparation
+│   ├── runtime/
+│   │   ├── remote.py             # Remote connection, packaging, and output collection
+│   │   ├── ssh_transport.py      # Private Electron broker client for SSH command transport
+│   │   ├── network.py            # Network inference submission, queries, cancellation, and result checks
+│   │   ├── network_worker.py     # Uploaded on its own; supervises owned jobs on the remote host
+│   │   └── visualization.py      # Stage 6 plotting and input/output checks
+│   └── stage6/
+│       └── workspace.py          # Parameter proposals, human confirmation, history, and comparison
 ├── assets/
 │   └── tokenizers/
 │       ├── qwen3.8-27b.json       # About 12.8 MB of tokenizer data; no study data or model weights

@@ -14,12 +14,13 @@ from urllib.parse import urlsplit, parse_qs
 from dotenv import load_dotenv
 from google.genai import types
 
-from main import MODEL, run_conversation
-from model_timing import ModelRequestTiming
-from llm_providers import PROVIDERS, create_provider_adapter
-from stage6_workspace import Workspace, CHAT_CONTEXT
+from agent.core.conversation import MODEL, run_conversation
+from agent.core.model_timing import ModelRequestTiming
+from agent.paths import PROJECT_ROOT
+from agent.providers import PROVIDERS, create_provider_adapter
+from agent.stage6.workspace import Workspace, CHAT_CONTEXT
 
-ROOT = Path(__file__).resolve().parent
+ROOT = PROJECT_ROOT
 
 
 class ChatServer(ThreadingHTTPServer):
@@ -246,8 +247,8 @@ class ChatHandler(BaseHTTPRequestHandler):
                     return self._error(403, 'Workspace token required.')
                 return self.json_response(self.server.stage6.view(session))
             if url.path == '/stage6/file':
-                import signet_tools as st
-                from stage6_workspace import load_run
+                import agent.tools.signet as st
+                from agent.stage6.workspace import load_run
                 run = query.get('run', [''])[0]
                 name = query.get('name', [''])[0]
                 if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*', name):
@@ -314,7 +315,7 @@ def create_server(provider='codex', port=8880, state_file=ROOT / '.chat-state.js
         raise ValueError('Unsupported model provider.')
     load_dotenv(ROOT / '.env')
     configured = create_provider_adapter(provider, gemini_model=MODEL)
-    from signet_tools import source_path
+    from agent.tools.signet import source_path
     for message in configured.startup_messages:
         print(message, flush=True)
     if not source_path().is_dir():

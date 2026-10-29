@@ -7,7 +7,7 @@ from pathlib import Path
 import unittest
 from unittest.mock import patch
 
-import chat_ui
+import agent.app.chat_ui as chat_ui
 from test_chat import client_for, response
 from google.genai import types
 
@@ -219,7 +219,7 @@ class ChatUITest(unittest.TestCase):
     def test_real_loop_tool_events_and_second_model_response(self):
         call = types.FunctionCall(id='catalog', name='signet_catalog', args={})
         self.client, self.requests = client_for(response(calls=[call]), response('已查詢能力，尚未執行分析。'))
-        with patch('main.dispatch_tool', return_value={'status': 'prepared', 'executed': False}):
+        with patch('agent.core.conversation.dispatch_tool', return_value={'status': 'prepared', 'executed': False}):
             status, body = self.post('有哪些分析？')
         self.assertEqual(status, 200)
         events = [json.loads(line) for line in body.splitlines()]

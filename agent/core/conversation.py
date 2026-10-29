@@ -8,10 +8,11 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import errors, types
 
-from tools import list_files, read_file, GENERAL_TOOLS
-from model_timing import ModelRequestTiming
-from context_budget import ContextBudgetError
-from signet_tools import SIGNET_TOOLS, dispatch_tool
+from agent.tools.general import list_files, read_file, GENERAL_TOOLS
+from agent.core.model_timing import ModelRequestTiming
+from agent.core.context_budget import ContextBudgetError
+from agent.paths import PROJECT_ROOT
+from agent.tools.signet import SIGNET_TOOLS, dispatch_tool
 
 MODEL = "gemini-3.8-flash"
 MAX_TOOL_ROUNDS = 4
@@ -366,7 +367,7 @@ if __name__ == "__main__":
     parser.add_argument('--provider', choices=('codex', 'gemini', 'groq'), default='codex', help='模型來源，預設使用已登入的 Codex 命令列。')
     parser.add_argument('prompt', nargs='*', help='單次自然語言需求；不必指定工具名。')
     args = parser.parse_args()
-    load_dotenv(Path(__file__).with_name(".env"))
+    load_dotenv(PROJECT_ROOT / ".env")
     # Read credentials from the environment rather than storing them in source.
     api_key = None
     if args.provider != 'codex':
@@ -377,11 +378,11 @@ if __name__ == "__main__":
     prompt = " ".join(args.prompt).strip()
     http_timing = ModelRequestTiming()
     if args.provider == 'codex':
-        from codex_provider import CodexClient
+        from agent.providers.codex_client import CodexClient
         client_context = CodexClient(timing=http_timing)
         _progress('Codex 命令列：使用既有登入與模型設定；SIGNET 操作仍由受控工具執行。')
     elif args.provider == 'groq':
-        from groq_provider import GroqClient
+        from agent.providers.groq_client import GroqClient
         client_context = GroqClient(api_key, timing=http_timing)
         _progress('Groq：正常請求立即送出；只有收到 429 才等待 30 秒重送，不重跑已完成工具。Ctrl+C 可中斷等待。')
     else:

@@ -233,7 +233,7 @@ interface at a time to run scientific work: the existing turn lock is per proces
 not a cross-process scientific lock.
 
 Switching back to browser mode requires only closing Electron and running the
-original `.venv/bin/python chat_ui.py` command. Desktop state stays available for
+original `.venv/bin/python -m agent.app.chat_ui` command. Desktop state stays available for
 the next desktop launch.
 
 ## Checks

@@ -3,19 +3,19 @@ import os
 import unittest
 from unittest.mock import Mock, patch
 
-from model_timing import ModelRequestTiming
-from llm_providers.codex import CodexProviderAdapter
-from llm_providers.factory import create_provider_adapter
-from llm_providers.gemini import GeminiProviderAdapter
-from llm_providers.groq import GroqProviderAdapter
+from agent.core.model_timing import ModelRequestTiming
+from agent.providers.codex import CodexProviderAdapter
+from agent.providers.factory import create_provider_adapter
+from agent.providers.gemini import GeminiProviderAdapter
+from agent.providers.groq import GroqProviderAdapter
 
 
 class ProviderFactoryTest(unittest.TestCase):
     def test_match_dispatches_to_a_dedicated_adapter(self):
         environment = {'GROQ_API_KEY': 'groq-key', 'GEMINI_API_KEY': 'gemini-key'}
         with patch.dict(os.environ, environment, clear=True), \
-                patch('llm_providers.codex.shutil.which', return_value='/test/codex'), \
-                patch('codex_provider.configured_model', return_value=None):
+                patch('agent.providers.codex.shutil.which', return_value='/test/codex'), \
+                patch('agent.providers.codex_client.configured_model', return_value=None):
             cases = {'codex': CodexProviderAdapter, 'groq': GroqProviderAdapter,
                      'gemini': GeminiProviderAdapter}
             for name, adapter_type in cases.items():
@@ -27,9 +27,9 @@ class ProviderFactoryTest(unittest.TestCase):
 
     def test_codex_adapter_defers_client_creation_and_needs_no_api_key(self):
         with patch.dict(os.environ, {}, clear=True), \
-                patch('llm_providers.codex.shutil.which', return_value=None), \
-                patch('codex_provider.configured_model', return_value='configured-model'), \
-                patch('codex_provider.CodexClient') as client:
+                patch('agent.providers.codex.shutil.which', return_value=None), \
+                patch('agent.providers.codex_client.configured_model', return_value='configured-model'), \
+                patch('agent.providers.codex_client.CodexClient') as client:
             adapter = create_provider_adapter('codex', gemini_model='unused')
             self.assertEqual(adapter.label, 'Codex CLI / configured-model')
             self.assertEqual(len(adapter.startup_messages), 1)
@@ -44,7 +44,7 @@ class ProviderFactoryTest(unittest.TestCase):
         environment = {'GROQ_API_KEY': 'test-groq-key', 'GEMINI_API_KEY': 'test-gemini-key',
                        'GROQ_MODEL': 'configured-groq-model'}
         with patch.dict(os.environ, environment, clear=True), \
-                patch('groq_provider.GroqClient') as groq, \
+                patch('agent.providers.groq_client.GroqClient') as groq, \
                 patch('google.genai.Client') as gemini:
             adapters = [create_provider_adapter('groq', gemini_model='gemini-test'),
                         create_provider_adapter('gemini', gemini_model='gemini-test')]
@@ -74,10 +74,10 @@ class ProviderFactoryTest(unittest.TestCase):
     def test_each_adapter_owns_its_stop_behavior(self):
         codex_stop, groq_stop = Mock(), Mock()
         with patch.dict(os.environ, {'GROQ_API_KEY': 'test', 'GEMINI_API_KEY': 'test'}, clear=True), \
-                patch('codex_provider.STOP', codex_stop), \
-                patch('codex_provider.configured_model', return_value=None), \
-                patch('llm_providers.codex.shutil.which', return_value='/test/codex'), \
-                patch('groq_provider.REQUEST_PACER.stopped', groq_stop):
+                patch('agent.providers.codex_client.STOP', codex_stop), \
+                patch('agent.providers.codex_client.configured_model', return_value=None), \
+                patch('agent.providers.codex.shutil.which', return_value='/test/codex'), \
+                patch('agent.providers.groq_client.REQUEST_PACER.stopped', groq_stop):
             create_provider_adapter('gemini', gemini_model='test').stop()
             codex_stop.set.assert_not_called()
             groq_stop.set.assert_not_called()

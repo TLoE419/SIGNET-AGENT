@@ -3,8 +3,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-import tools
-import signet_tools as st
+import agent.tools.general as tools
+import agent.tools.signet as st
 
 
 class ListFilesTest(unittest.TestCase):

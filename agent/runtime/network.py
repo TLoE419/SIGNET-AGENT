@@ -7,7 +7,8 @@ import re
 import subprocess
 import time
 
-import signet_runtime as vm
+from agent.paths import PROJECT_ROOT
+import agent.runtime.remote as vm
 
 INPUT_KEYS = ('net.gexp.data', 'net.geno.data', 'sig.pair', 'net.genename', 'net.genepos')
 TERMINAL = {'process_completed', 'failed', 'blocked', 'cancelled', 'timed_out'}
@@ -113,7 +114,7 @@ def verify(root, state):
                   for job, v in jobs.items()]
     (log / 'scheduler-jobs.json').write_text(json.dumps(accounting))
     (log / 'job_ids.txt').write_text('\n'.join(jobs) + '\n')
-    verifier = Path(__file__).resolve().parent / 'scripts/advanced/verify_network.cjs'
+    verifier = PROJECT_ROOT / 'scripts/advanced/verify_network.cjs'
     code = 'const R=require(process.argv[1]);process.stdout.write(JSON.stringify(R.verify(process.argv[2],Number(process.argv[3]))));'
     result = subprocess.run(['node', '-e', code, str(verifier), str(root / 'work'),
                              str(json.loads((root / 'network.json').read_text())['parameters']['nboots'])],

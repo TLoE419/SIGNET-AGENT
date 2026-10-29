@@ -10,7 +10,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-import chat_ui
+import agent.app.chat_ui as chat_ui
 from electron.server import serve
 
 
@@ -51,7 +51,7 @@ class DesktopServerTest(unittest.TestCase):
             self.assertEqual(json.loads(events.getvalue().splitlines()[-1])['event'], 'stopped')
 
     def test_server_factory_keeps_loopback_and_browser_defaults(self):
-        with patch.object(chat_ui, 'load_dotenv'), patch('codex_provider.configured_model', return_value='test-model'):
+        with patch.object(chat_ui, 'load_dotenv'), patch('agent.providers.codex_client.configured_model', return_value='test-model'):
             with chat_ui.create_server(port=0, state_file=None) as server:
                 self.assertEqual(server.server_address[0], '127.0.0.1')
                 self.assertEqual(server.model_label, 'Codex CLI / test-model')

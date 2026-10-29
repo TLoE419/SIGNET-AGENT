@@ -79,7 +79,7 @@ Add the key to the matching `GROQ_API_KEY` or `GEMINI_API_KEY` line in `.env`. K
 From the project root, start the default Codex provider:
 
 ```sh
-.venv/bin/python chat_ui.py
+.venv/bin/python -m agent.app.chat_ui
 ```
 
 Open [http://127.0.0.1:8880](http://127.0.0.1:8880). The page should load. Send a short question to check the model connection, then follow the [no-data demonstration](DEMO.md). A loaded page alone does not confirm model sign-in or scientific readiness. The first launch has no study data, completed results, or example network graph.
@@ -87,17 +87,17 @@ Open [http://127.0.0.1:8880](http://127.0.0.1:8880). The page should load. Send 
 If you chose Groq or Gemini, start the selected provider instead:
 
 ```sh
-.venv/bin/python chat_ui.py --provider groq
+.venv/bin/python -m agent.app.chat_ui --provider groq
 ```
 
 ```sh
-.venv/bin/python chat_ui.py --provider gemini
+.venv/bin/python -m agent.app.chat_ui --provider gemini
 ```
 
 If port 8880 is already in use, start on another port and open the matching address:
 
 ```sh
-.venv/bin/python chat_ui.py --port 8881
+.venv/bin/python -m agent.app.chat_ui --port 8881
 ```
 
 Press Ctrl+C in the terminal to stop the chat service. It listens only on `127.0.0.1`. Chat messages and the information needed by tools are sent to the model provider you selected; local hosting does not mean model requests run offline. Closing the browser tab does not cancel a tool that has already started.
@@ -111,11 +111,11 @@ Press Ctrl+C in the terminal to stop the chat service. It listens only on `127.0
 | `pip install` fails | Check network access, confirm the terminal is in the project root, and retry the install command. Do not use `sudo pip`. |
 | `codex` is not found | Complete the official CLI installation, open a new terminal, and run `codex --version`. |
 | Model sign-in fails | Run `codex login status` and complete sign-in again, or switch to a provider with a valid key in `.env`. |
-| The page opens but chat fails | Check the selected provider's sign-in or key and inspect the terminal where `chat_ui.py` is running. |
+| The page opens but chat fails | Check the selected provider's sign-in or key and inspect the terminal where `agent.app.chat_ui` is running. |
 | Port 8880 is busy | Use `--port 8881` and open `http://127.0.0.1:8881`. |
 
 ## Scientific analysis requires a separate setup
 
 The steps above install and run the chat interface; they do not prepare the scientific analysis environment. For the scientific software, VM, data, and stage-by-stage prerequisites, read the [scientific setup guide](SCIENTIFIC_SETUP.md). This repository does not include study or reference datasets, VM disks, or container images, and it does not provide a from-scratch scientific-environment installer. The repository has not been verified to run all six scientific stages from a clean machine.
 
-For terminal chat instead of the web page, run `.venv/bin/python main.py` from the project root.
+For terminal chat instead of the web page, run `.venv/bin/python -m agent.core.conversation` from the project root.

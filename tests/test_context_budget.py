@@ -4,11 +4,11 @@ import unittest
 
 from google.genai import types
 
-import main
-from context_budget import compact_evidence, input_tokens, MAX_INPUT_TOKENS
-from groq_provider import groq_messages, tool_schema
-from signet_tools import get_signet_settings, INVENTORY
-from tools import PROJECT
+import agent.core.conversation as main
+from agent.core.context_budget import compact_evidence, input_tokens, MAX_INPUT_TOKENS
+from agent.providers.groq_client import groq_messages, tool_schema
+from agent.tools.signet import get_signet_settings, INVENTORY
+from agent.tools.general import PROJECT
 
 
 class ContextBudgetTest(unittest.TestCase):

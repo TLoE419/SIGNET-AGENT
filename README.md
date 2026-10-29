@@ -21,7 +21,7 @@ If Python is not installed yet or you need to set up Codex CLI, follow the [from
 ```sh
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
-.venv/bin/python chat_ui.py
+.venv/bin/python -m agent.app.chat_ui
 ```
 
 Open the [local interface](http://127.0.0.1:8880). A page loading successfully does not establish that your model is signed in or that the scientific environment is ready.

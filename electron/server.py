@@ -1,4 +1,4 @@
-"""Desktop-owned launcher; HTTP handlers and scientific execution stay in chat_ui.
+"""Desktop-owned launcher; HTTP handlers and scientific execution stay in agent.app.chat_ui.
 
 stdin is a parent-owned control pipe. EOF requests graceful shutdown even if
 Electron crashes. stdout carries lifecycle events only; application logs use stderr.
@@ -55,7 +55,7 @@ def main():
     args = parser.parse_args()
     events = sys.stdout
     sys.stdout = sys.stderr
-    from chat_ui import create_server
+    from agent.app.chat_ui import create_server
     args.state_file.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     server = create_server(args.provider, port=0, state_file=args.state_file)
     # A graceful signal follows the same drain path as closing the owner pipe.

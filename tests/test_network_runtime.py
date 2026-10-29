@@ -8,10 +8,10 @@ import unittest
 from unittest.mock import patch
 from unittest.mock import Mock
 
-import network_runtime as net
-import network_worker as worker
-import signet_runtime as vm
-import signet_tools as st
+import agent.runtime.network as net
+import agent.runtime.network_worker as worker
+import agent.runtime.remote as vm
+import agent.tools.signet as st
 
 
 class NetworkTest(unittest.TestCase):

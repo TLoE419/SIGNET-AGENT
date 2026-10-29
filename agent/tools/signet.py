@@ -14,7 +14,9 @@ import signal
 import subprocess
 import sys
 
-PROJECT = Path(__file__).resolve().parent
+from agent.paths import PROJECT_ROOT
+
+PROJECT = PROJECT_ROOT
 SOURCE = PROJECT / '.dependencies/official-signet'
 INVENTORY = json.loads((PROJECT / 'signet_inventory.json').read_text())
 TIMEOUT_SECONDS = 300
@@ -115,7 +117,7 @@ def _update(root, values):
 
 def signet_catalog() -> dict:
     """List audited SIGNET scripts, analysis tools, phases and execution restrictions."""
-    from tools import GENERAL_TOOLS
+    from agent.tools.general import GENERAL_TOOLS
     return {'status': 'ok', 'revision': INVENTORY['revision'], 'analysis_script_files': 138,
             'source_entries': 16, 'internal_scripts': 121, 'development_files': 3,
             'analysis_tools': 15, 'signet_tools': 23, 'all_tools_including_list_files': 25,
@@ -226,10 +228,10 @@ def _execute(run_id, operation, command, values=None, dependencies=(), modules=(
         if values:
             _update(root, values)
         if operation == 'cis_eqtl' and sys.platform == 'darwin' and not prepare:
-            from signet_runtime import execute_cis
+            from agent.runtime.remote import execute_cis
             return execute_cis(root, _settings(root))
         if operation == 'visualization' and not prepare:
-            from visualization_runtime import execute
+            from agent.runtime.visualization import execute
             return execute(root, _settings(root))
         missing = [name for name in dependencies if shutil.which(name) is None]
         missing += [f'Python module: {name}' for name in modules if importlib.util.find_spec(name) is None]
@@ -401,8 +403,8 @@ def submit_network(run_id: str, expression: str, genotype: str, significant_pair
     image, local queue, 4 cores, 4 GB. Never replay an uncertain submission; query status.
     Pinned official code supports three markers per gene; other values are rejected.
     """
-    from network_runtime import submit
-    from signet_runtime import image_path
+    from agent.runtime.network import submit
+    from agent.runtime.remote import image_path
     root = _run(run_id)
     _verify_source(root / 'work')
     for item in INVENTORY['support_files']:
@@ -445,7 +447,7 @@ def cancel_network(run_id: str) -> dict:
 
 
 def _network_status(run_id, cancel=False):
-    from network_runtime import status
+    from agent.runtime.network import status
     root = _run(run_id)
     if not (root / 'network.json').is_file():
         raise ValueError('No Stage 5 submission is recorded for this run.')
@@ -569,7 +571,7 @@ def _standalone(run_id, operation, argv, modules, output, dependencies=()):
 
 def get_visualization_workspace() -> dict:
     """Read the current session Stage 6 baseline, parameters and pending changes; no execution."""
-    from stage6_workspace import get_visualization_workspace as read
+    from agent.stage6.workspace import get_visualization_workspace as read
     return read()
 
 
@@ -580,7 +582,7 @@ def propose_visualization_change(frequency: float = -1, top_networks: int = 0) -
     top_networks: Requested count 1..100; 0 preserves the pending value, or baseline if no proposal.
     Only change parameters explicitly requested. Never execute a proposal yourself.
     """
-    from stage6_workspace import propose_visualization_change as propose
+    from agent.stage6.workspace import propose_visualization_change as propose
     return propose(frequency, top_networks)
 
 
@@ -592,13 +594,13 @@ SIGNET_TOOLS = [signet_catalog,configure_signet,get_signet_settings,genotype_tcg
 
 def dispatch_tool(name, arguments):
     """Validate the model's tool name, keyword arguments and primitive types before dispatch."""
-    from tools import GENERAL_TOOLS
+    from agent.tools.general import GENERAL_TOOLS
     functions = {fn.__name__:fn for fn in [*GENERAL_TOOLS,*SIGNET_TOOLS]}
     try:
         if name not in functions or not isinstance(arguments, dict):
             raise ValueError('Unsupported tool or argument object.')
         if name == 'run_visualization':
-            from stage6_workspace import CHAT_CONTEXT
+            from agent.stage6.workspace import CHAT_CONTEXT
             if CHAT_CONTEXT.get() is not None:
                 return {'status': 'awaiting_confirmation', 'executed': False,
                         'reason': 'Use propose_visualization_change. Only the UI confirmation endpoint can execute Stage 6.'}

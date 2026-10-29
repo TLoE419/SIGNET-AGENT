@@ -7,8 +7,8 @@ import threading
 import unittest
 from unittest.mock import patch
 
-import signet_runtime
-import ssh_transport
+import agent.runtime.remote as signet_runtime
+import agent.runtime.ssh_transport as ssh_transport
 
 
 class TransportTest(unittest.TestCase):

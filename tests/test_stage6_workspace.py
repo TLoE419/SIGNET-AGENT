@@ -6,8 +6,8 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-import signet_tools as st
-from stage6_workspace import Workspace, CHAT_CONTEXT
+import agent.tools.signet as st
+from agent.stage6.workspace import Workspace, CHAT_CONTEXT
 
 
 class WorkspaceTest(unittest.TestCase):
@@ -39,7 +39,7 @@ class WorkspaceTest(unittest.TestCase):
         self.assertTrue(fresh['runs'])
         token=CHAT_CONTEXT.set((self.w,'fresh'))
         try:
-            from stage6_workspace import get_visualization_workspace
+            from agent.stage6.workspace import get_visualization_workspace
             self.assertTrue(get_visualization_workspace()['active'])
         finally:
             CHAT_CONTEXT.reset(token)
@@ -113,7 +113,7 @@ class WorkspaceTest(unittest.TestCase):
         self.assertEqual(len(self.server.histories['s1']),2)
 
     def test_workspace_http_guards_duplicate_and_cross_session_confirmations(self):
-        import chat_ui
+        import agent.app.chat_ui as chat_ui
         import http.client
         server = chat_ui.ChatServer(('127.0.0.1',0),Mock())
         server.stage6 = self.w

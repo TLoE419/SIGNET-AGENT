@@ -15,7 +15,7 @@ import uuid
 
 from google.genai import types
 
-from groq_provider import groq_messages, tool_schema
+from agent.providers.groq_client import groq_messages, tool_schema
 
 STOP = threading.Event()
 DISABLED_FEATURES = ('shell_tool', 'unified_exec', 'apps', 'plugins', 'computer_use',
