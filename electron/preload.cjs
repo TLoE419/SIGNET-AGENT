@@ -20,7 +20,12 @@ const devTerminal=process.argv.includes('--signet-dev-terminal')?Object.freeze({
   raw:listener=>subscribe('ssh-dev:raw',listener),
   rawHistory:()=>ipcRenderer.invoke('ssh-dev:rawHistory'),
 }):undefined;
-contextBridge.exposeInMainWorld('signetDesktop', Object.freeze({isDesktop:true,...(devTerminal?{devTerminal}:{}), ssh:Object.freeze({
+const model=Object.freeze({
+  getStatus:()=>ipcRenderer.invoke('model:getStatus'),
+  saveGeminiKey:key=>ipcRenderer.invoke('model:saveGeminiKey',key),
+  clearGeminiKey:()=>ipcRenderer.invoke('model:clearGeminiKey'),
+});
+contextBridge.exposeInMainWorld('signetDesktop', Object.freeze({isDesktop:true,model,...(devTerminal?{devTerminal}:{}), ssh:Object.freeze({
   cancelRegistration: () => call('cancelRegistration'),
   initialize: () => call('initialize'),
   getSnapshot: () => call('getSnapshot'),

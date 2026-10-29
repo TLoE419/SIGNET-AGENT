@@ -7,7 +7,7 @@
   "scripts": {
     "postinstall": "node scripts/prepare-node-pty.cjs",
     "start": "electron .",
-    "test": "npm run typecheck && node --test tests/*.test.cjs && node --import tsx --test tests/ssh.test.ts && node --import tsx --test tests/ui.test.tsx",
+    "test": "npm run typecheck && node --test tests/*.test.cjs && node --import tsx --test tests/ssh.test.ts && node --import tsx --test tests/ui.test.tsx && node --import tsx --test tests/model-ui.test.tsx",
     "test:smoke": "electron tests/smoke.cjs",
     "test:startup": "electron tests/startup.cjs",
     "build": "node build-ssh.mjs",

@@ -8,6 +8,7 @@ import {AccountLoginPrompt} from './AccountLoginPrompt';
 import {DevTerminalPanel,type DevTerminalBridge} from './DevTerminalPanel';
 import {ConnectionDiagnostics,useConnectionDiagnostics} from './ConnectionDiagnostics';
 import {SshStatusBlock} from './SshStatusBlock';
+import {ModelControls,type ModelBridge} from '../model/ModelControls';
 const bridge=(window as unknown as {signetDesktop:{ssh:SshBridge}}).signetDesktop.ssh,port=new ElectronSshConnectionPort(bridge),onboarding=new ElectronSshKeyOnboardingPort(bridge);
 const devTerminal=(window as unknown as {signetDesktop:{devTerminal?:DevTerminalBridge}}).signetDesktop.devTerminal;
 function SshControls(){
@@ -28,4 +29,5 @@ function SshControls(){
  </>;
 }
 const mount=document.getElementById('ssh-root');
-if(mount){mount.classList.add('ssh-ui-root');mount.hidden=false;createRoot(mount).render(<SshControls/>)}
+const modelBridge=(window as unknown as {signetDesktop:{model?:ModelBridge}}).signetDesktop.model;
+if(mount){mount.classList.add('ssh-ui-root');mount.hidden=false;createRoot(mount).render(<><SshControls/>{modelBridge&&<ModelControls bridge={modelBridge}/>}</>)}
