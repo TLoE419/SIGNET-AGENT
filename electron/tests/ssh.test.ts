@@ -49,3 +49,34 @@ test('OpenSSH transport owns a foreground ControlMaster PTY and forwards Duo cho
 test('dev terminal attaches to the primary transport instead of creating another login',async t=>{const s=await setup(t),profile=await s.service.saveProfile(s.input),run=s.service.connect(profile.id,phrase);await until(()=>s.transports.length===1);s.transports[0].succeed();await run;const terminal=new compiled.DevTerminal(s.service),events:any[]=[];terminal.on('event',event=>events.push(event));await terminal.open('terminal',80,24);s.transports[0].shell.emit('data',Buffer.from('remote output'));await until(()=>events.some(event=>event.type==='data'));terminal.input('terminal','pwd\r');assert.deepEqual(s.transports[0].shell.writes,['pwd\r']);terminal.close('terminal');assert.equal(s.service.getSnapshot().connection?.status,'connected');terminal.dispose();await s.service.disconnect(profile.id)});
 test('diagnostic history is bounded and disposed with dev IPC',async t=>{const s=await setup(t),handlers=new Map<string,Function>(),frame={url:'http://127.0.0.1:1234/'},wc={mainFrame:frame,send:()=>{}},win={isDestroyed:()=>false,webContents:wc},ipc={handle:(name:string,fn:Function)=>handlers.set(name,fn),removeHandler:(name:string)=>handlers.delete(name)},dev=compiled.installDevTerminal(ipc as any,()=>win as any,s.service,()=>frame.url.slice(0,-1)),event={sender:wc,senderFrame:frame};for(let index=0;index<350;index++)s.service.emit('diagnostic',{id:'attempt',stage:'connect',message:'Starting',time:'test'});const history=(await handlers.get('ssh-dev:history')!(event)).value;assert.equal(history.length,300);dev.dispose();assert.equal(handlers.size,0)});
 test('portable UI boundary keeps native PTY and process APIs in Electron Main',async t=>{const s=await setup(t);await s.service.saveProfile(s.input);const {readdir}=await import('node:fs/promises');for(const file of await readdir(path.resolve(import.meta.dirname,'../modules/ssh'))){if(!/\.tsx?$/.test(file))continue;const source=await readFile(path.resolve(import.meta.dirname,'../modules/ssh',file),'utf8');assert.doesNotMatch(source,/from ['"](?:electron|node:|ssh2|node-pty)/)}const main=await readFile(path.resolve(import.meta.dirname,'../src/ssh/OpenSshTransport.ts'),'utf8');assert.match(main,/ControlPersist=no/);assert.match(main,/node-pty/)});
+
+test('saved key edits persist and removal preserves private key files',async t=>{
+ const f=await fixture(t),dir=path.join(f.dir,'management'),store=new compiled.AppManagedKeyStore(dir);
+ const key=await store.addExternal({label:'Original',privateKeyPath:f.key});
+ await store.update(key.keyId,{label:'Renamed',username:'newuser'});
+ const reopened=new compiled.AppManagedKeyStore(dir);
+ assert.equal((await reopened.list())[0].label,'Renamed');
+ assert.equal((await reopened.list())[0].username,'newuser');
+ await assert.rejects(()=>reopened.update(key.keyId,{label:'',username:'invalid user'}));
+ await reopened.remove(key.keyId);
+ assert.equal((await reopened.list()).length,0);
+ assert.equal((await inspectPrivateKey(f.key)).status,'encrypted');
+});
+
+test('removing a saved key switches referencing profiles to Duo and preserves selection',async t=>{
+ const f=await fixture(t),repo=new SshProfileRepository(path.join(f.dir,'profiles'));
+ await repo.upsert({...f.input,id:'first',auth:{method:'private-key',privateKeyPath:f.key,keyId:'key-test'}} as Profile);
+ await repo.upsert({...f.input,id:'second'} as Profile);
+ await repo.upsert({...f.input,id:'unrelated',auth:{method:'duo'}} as Profile);
+ await repo.clearKey('key-test',f.key);
+ assert.ok((await repo.list()).every(p=>p.auth.method==='duo'));
+ const raw=JSON.parse(await readFile(path.join(f.dir,'profiles','profiles.json'),'utf8'));
+ assert.equal(raw.selectedProfileId,'unrelated');
+});
+
+test('key storage rejects an imported private key without a passphrase',async t=>{
+ const f=await fixture(t),store=new compiled.AppManagedKeyStore(path.join(f.dir,'reject-plain'));
+ await writeFile(f.key,plain.private,{mode:0o600});
+ await assert.rejects(()=>store.addExternal({label:'Unprotected',privateKeyPath:f.key}),{code:'KEY_UNENCRYPTED'});
+ assert.deepEqual(await store.list(),[]);
+});

@@ -126,8 +126,8 @@ its identity or LED to edit the connection; use the switch to connect, disconnec
 or cancel. Connect first checks the selected authentication method and only then
 opens the required temporary credential prompt.
 
-The connection dialog offers **Duo** and **SSH key**. With no saved key, only Duo
-is enabled. Host and port are preset to UCI HPC3 under **Advanced connection
+The connection dialog offers **Duo** and **SSH key**. With no saved key, the SSH
+key block offers key creation/import. Host and port are preset to UCI HPC3 under **Advanced connection
 settings**. **Save** only saves the profile; **Connect** saves and connects.
 Neither account passwords nor private-key passphrases appear in this dialog.
 Duo sign-in requests the account password and forwards server-provided keyboard
@@ -259,3 +259,15 @@ window afterward. This catches
 entry-point failures that a direct call to `launch()` in the smoke test bypasses.
 On Linux run both native checks with a display, or prefix each command with
 `xvfb-run -a`. GitHub Actions runs all three Electron checks on macOS.
+
+### SSH key management
+
+Selecting **SSH key** reveals the key management block, including when no keys
+are saved. The block contains the saved-key selector, **Add SSH key…**,
+a details icon that opens key information and actions in a separate dialog.
+**Edit key** (name and optional account) and **Delete key** each open their own
+dialog; confirmation and errors stay in that dialog.
+Duo mode hides this block. Deleting removes the saved metadata entry and changes
+profiles referencing that key to Duo. It preserves private-key files and remote
+authorized_keys entries; it does not revoke remote access. Disconnect before
+changing keys. After changing the desktop bridge, restart Electron to load it.

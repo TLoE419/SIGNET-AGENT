@@ -33,6 +33,8 @@ contextBridge.exposeInMainWorld('signetDesktop', Object.freeze({isDesktop:true,.
   disconnect: id => call('disconnect', id),
   healthCheck: force => call('healthCheck', force),
   trustHost: identity => call('trustHost', identity),
+  updateKey: (id, input) => call('updateKey', id, input),
+  removeKey: id => call('removeKey', id),
   listKeys: () => call('listKeys'),
   generateKey: input => call('generateKey', input),
   addExternalKey: input => call('addExternalKey', input),

@@ -25,6 +25,14 @@ export class AppManagedKeyStore {
   catch(e){await unlink(privateKeyPath).catch(()=>{});await unlink(publicPath).catch(()=>{});throw e}finally{generated.private='';generated.public=''}
  }
  async addExternal(input:{label:string;username?:string;privateKeyPath:string}){if(!text(input.label,120)||(input.username!==undefined&&(!text(input.username,128)||!/^[a-zA-Z0-9_.@-]+$/.test(input.username)))||!validPath(input.privateKeyPath))fail('INVALID_PROFILE','Enter a key name and valid private-key path.');const inspection=await inspectPrivateKey(input.privateKeyPath);if(inspection.status!=='encrypted'||!inspection.publicKey||!inspection.fingerprint||!inspection.keyType)fail(inspection.status==='unencrypted'?'KEY_UNENCRYPTED':'KEY_INVALID','Select a supported passphrase-protected OpenSSH private key.');const metadata:KeyMetadata={keyId:'key-'+randomUUID(),label:input.label,username:input.username,source:'external',algorithm:inspection.keyType,publicKey:inspection.publicKey,fingerprint:inspection.fingerprint,createdAt:new Date().toISOString(),privateKeyPath:input.privateKeyPath};const saved=this.queue.then(async()=>{const doc=await this.load();const duplicate=doc.keys.find(key=>key.privateKeyPath===metadata.privateKeyPath||key.fingerprint===metadata.fingerprint);if(duplicate)return duplicate;doc.keys.push(metadata);await this.write(doc);return metadata});this.queue=saved.catch(()=>{});return await saved}
+ async update(keyId:string,input:{label:string;username?:string}){
+  if(!text(keyId,80)||!text(input.label,120)||(input.username!==undefined&&(!text(input.username,128)||!/^[a-zA-Z0-9_.@-]+$/.test(input.username))))fail('INVALID_PROFILE','Enter a key name and valid UCInetID.');
+  const saved=this.queue.then(async()=>{const doc=await this.load(),key=doc.keys.find(k=>k.keyId===keyId);if(!key)fail('KEY_NOT_FOUND','Key not found.');key.label=input.label;key.username=input.username;await this.write(doc);return key});this.queue=saved.catch(()=>{});return saved;
+ }
+ async remove(keyId:string){
+  if(!text(keyId,80))fail('KEY_NOT_FOUND','Key not found.');
+  const saved=this.queue.then(async()=>{const doc=await this.load();if(!doc.keys.some(k=>k.keyId===keyId))fail('KEY_NOT_FOUND','Key not found.');doc.keys=doc.keys.filter(k=>k.keyId!==keyId);await this.write(doc)});this.queue=saved.catch(()=>{});return saved;
+ }
  async associate(keyId:string,username:string){
   if(!text(username,128)||!/^[a-zA-Z0-9_.@-]+$/.test(username))fail('INVALID_PROFILE','Enter a valid UCInetID.');
   const saved=this.queue.then(async()=>{const doc=await this.load(),key=doc.keys.find(k=>k.keyId===keyId);if(!key)fail('KEY_NOT_FOUND','Key not found.');key.username=username;await this.write(doc)});

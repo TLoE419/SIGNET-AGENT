@@ -26,6 +26,7 @@ export interface KeyMetadata {keyId:string;label:string;algorithm:string;publicK
 export interface AuthChallenge {sessionId:string;challengeId:string;name:string;instructions:string;prompts:{prompt:string;echo:boolean}[]}
 export interface RegistrationResult {alreadyPresent:boolean;verified:boolean}
 export interface SshKeyOnboardingPort {
+ updateKey(id:string,input:{label:string;username?:string}):Promise<KeyMetadata>;removeKey(id:string):Promise<void>;
  listKeys():Promise<KeyMetadata[]>;
  generateKey(input:{label:string;username?:string;passphrase:string}):Promise<KeyMetadata>;
  addExternalKey(input:{label:string;username?:string;privateKeyPath:string}):Promise<KeyMetadata>;

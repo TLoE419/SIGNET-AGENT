@@ -14,6 +14,7 @@ import {DuoChallenge} from '../modules/ssh/LoginSteps';
 import {UnlockPrompt} from '../src/ssh/UnlockPrompt';
 import {SshStatusBlock} from '../src/ssh/SshStatusBlock';
 import {ConnectionBadge} from '../modules/ssh/ConnectionBadge';
+import {KeyDetailsModal} from '../modules/ssh/KeyDetailsModal';
 import {ConnectionModal} from '../modules/ssh/ConnectionModal';
 import {KeyRegistrationModal} from '../modules/ssh/KeyRegistrationModal';
 import {useSshConnection} from '../modules/ssh/useSshConnection';
@@ -25,12 +26,12 @@ const profile={...uciHpc3Preset,id:'test',username:'testuser',auth:{method:'priv
 const savedKey={keyId:'key-test',label:'My HPC3 key',username:'testuser',source:'external' as const,algorithm:'ssh-rsa',publicKey:'ssh-rsa AAAATEST test',fingerprint:'SHA256:'+'A'.repeat(43),createdAt:'2026-01-01T00:00:00.000Z',privateKeyPath:'/test/encrypted'};
 function fill(){fireEvent.change(screen.getByLabelText('SSH key'),{target:{value:savedKey.keyId}})}
 function Harness({port}:{port:MockSshConnectionPort}){const ssh=useSshConnection(port),[open,setOpen]=useState(false);return <><ConnectionBadge status={ssh.snapshot.connection?.status||'unconfigured'} onClick={()=>setOpen(true)}/><button onClick={()=>setOpen(true)}>Edit</button><ConnectionModal open={open} profile={ssh.snapshot.selectedProfile} keys={[savedKey]} status={ssh.snapshot.connection?.status||'unconfigured'} onClose={()=>setOpen(false)} onOpenKeyRegistration={()=>{}} onInspectKey={ssh.inspect} onSave={ssh.save} onConnect={ssh.connect} onDisconnect={ssh.disconnect} error={ssh.error} busy={ssh.busy}/></>}
-test('connection offers Duo by default and disables SSH without saved keys; never collects secrets',async()=>{
+test('connection offers Duo by default and allows an empty SSH management block; never collects secrets',async()=>{
  render(<ConnectionModal open profile={null} keys={[]} status="unconfigured" onClose={()=>{}} onOpenKeyRegistration={()=>{}} onInspectKey={new MockSshConnectionPort().inspectPrivateKey} onSave={async()=>{}} onConnect={async()=>{}} onDisconnect={async()=>{}}/>);
- assert.equal(screen.getByRole('radio',{name:'Duo'}).getAttribute('aria-checked'),'true');assert.ok((screen.getByRole('radio',{name:'SSH key'}) as HTMLButtonElement).disabled);assert.equal(screen.queryByLabelText('Private-key passphrase'),null);assert.equal(screen.queryByLabelText('UCInetID password'),null);
+ assert.equal(screen.getByRole('radio',{name:'Duo'}).getAttribute('aria-checked'),'true');assert.equal(screen.queryByRole('button',{name:'Add SSH key…'}),null);fireEvent.click(screen.getByRole('radio',{name:'SSH key'}));assert.ok(screen.getByRole('region',{name:'SSH key management'}));assert.ok(screen.getByRole('button',{name:'Add SSH key…'}));assert.equal(screen.queryByLabelText('Private-key passphrase'),null);assert.equal(screen.queryByLabelText('UCInetID password'),null);
 });
 test('saved SSH keys can be selected without entering a passphrase in settings',async()=>{
- const port=new MockSshConnectionPort();await act(async()=>{render(<Harness port={port}/>)});fireEvent.click(screen.getByRole('button',{name:'Not configured'}));fireEvent.click(screen.getByRole('radio',{name:'SSH key'}));await screen.findByText('Passphrase protected');assert.equal(screen.queryByLabelText('Private-key passphrase'),null);assert.equal((screen.getByLabelText('UCInetID / username') as HTMLInputElement).value,'testuser');fireEvent.click(screen.getByRole('button',{name:'Save'}));await waitFor(()=>assert.equal(port.saveCalls,1));assert.equal(port.connectCalls,0);
+ const port=new MockSshConnectionPort();await act(async()=>{render(<Harness port={port}/>)});fireEvent.click(screen.getByRole('button',{name:'Not configured'}));fireEvent.click(screen.getByRole('radio',{name:'SSH key'}));await waitFor(()=>assert.equal((screen.getByRole('button',{name:'Connect'}) as HTMLButtonElement).disabled,false));assert.equal(screen.queryByLabelText('Private-key passphrase'),null);assert.equal((screen.getByLabelText('UCInetID / username') as HTMLInputElement).value,'testuser');fireEvent.click(screen.getByRole('button',{name:'Save'}));await waitFor(()=>assert.equal(port.saveCalls,1));assert.equal(port.connectCalls,0);
 });
 test('generate key needs no account and hands off to the separate account step',async()=>{
  let generated=0,completed=0;const key={...savedKey,username:undefined,source:'managed' as const};
@@ -39,7 +40,7 @@ test('generate key needs no account and hands off to the separate account step',
  fireEvent.change(screen.getByLabelText('Key name'),{target:{value:'Laptop key'}});fireEvent.change(screen.getByLabelText('New key passphrase'),{target:{value:'1234567890'}});fireEvent.change(screen.getByLabelText('Confirm passphrase'),{target:{value:'1234567890'}});fireEvent.click(screen.getByRole('button',{name:'Generate SSH key'}));await waitFor(()=>assert.equal(completed,1));assert.equal(generated,1);assert.equal((screen.getByLabelText('New key passphrase') as HTMLInputElement).value,'');
 });
 test('unencrypted keys block Save and Connect with visible warning',async()=>{render(<ConnectionModal open profile={{...profile,auth:{method:'private-key',privateKeyPath:'/test/unencrypted'}}} keys={[]} status="disconnected" onClose={()=>{}} onOpenKeyRegistration={()=>{}} onInspectKey={new MockSshConnectionPort().inspectPrivateKey} onSave={async()=>assert.fail()} onConnect={async()=>assert.fail()} onDisconnect={async()=>{}}/>);await screen.findByText('This key has no passphrase');assert.ok((screen.getByRole('button',{name:'Connect'}) as HTMLButtonElement).disabled);assert.ok((screen.getByRole('button',{name:'Save'}) as HTMLButtonElement).disabled)});
-test('rapid connection submissions run once and closing ignores stale completion',async()=>{let calls=0,release!:()=>void,closed=0;const props={open:true,profile,keys:[],status:'disconnected' as const,onClose:()=>closed++,onOpenKeyRegistration:()=>{},onInspectKey:new MockSshConnectionPort().inspectPrivateKey,onSave:async()=>{},onConnect:async()=>{calls++;await new Promise<void>(r=>release=r)},onDisconnect:async()=>{}};const result=render(<ConnectionModal {...props}/>);await screen.findByText('Passphrase protected');const button=screen.getByRole('button',{name:'Connect'});fireEvent.click(button);fireEvent.click(button);assert.equal(calls,1);fireEvent.click(screen.getByRole('button',{name:'Close'}));result.rerender(<ConnectionModal {...props} open={false}/>);await act(async()=>release());assert.equal(closed,1)});
+test('rapid connection submissions run once and closing ignores stale completion',async()=>{let calls=0,release!:()=>void,closed=0;const props={open:true,profile,keys:[],status:'disconnected' as const,onClose:()=>closed++,onOpenKeyRegistration:()=>{},onInspectKey:new MockSshConnectionPort().inspectPrivateKey,onSave:async()=>{},onConnect:async()=>{calls++;await new Promise<void>(r=>release=r)},onDisconnect:async()=>{}};const result=render(<ConnectionModal {...props}/>);await waitFor(()=>assert.equal((screen.getByRole('button',{name:'Connect'}) as HTMLButtonElement).disabled,false));const button=screen.getByRole('button',{name:'Connect'});fireEvent.click(button);fireEvent.click(button);assert.equal(calls,1);fireEvent.click(screen.getByRole('button',{name:'Close'}));result.rerender(<ConnectionModal {...props} open={false}/>);await act(async()=>release());assert.equal(closed,1)});
 test('stale inspection cannot enable a newly selected invalid key; trust enrollment requires explicit verification',async()=>{let resolve!:(v:any)=>void,trust=0;const invalidKey={...savedKey,keyId:'invalid',label:'Invalid key',privateKeyPath:'/test/invalid'};const inspect=async(path:string)=>path.endsWith('encrypted')?new Promise<any>(done=>resolve=done):{status:'invalid' as const,reason:'Not a key'};render(<ConnectionModal open profile={profile} keys={[invalidKey]} status="error" pendingHost={{host:'example.test',port:22,algorithm:'ssh-ed25519',fingerprint:'SHA256:'+'A'.repeat(43)}} onTrustHost={async()=>{trust++;throw Error('Store unavailable')}} onOpenKeyRegistration={()=>{}} onInspectKey={inspect} onSave={async()=>{}} onConnect={async()=>{}} onDisconnect={async()=>{}} onClose={()=>{}}/>);await waitFor(()=>assert.ok(resolve));fireEvent.change(screen.getByLabelText('SSH key'),{target:{value:'invalid'}});await screen.findByText('Not a key');await act(async()=>resolve({status:'encrypted',format:'test'}));assert.ok((screen.getByRole('button',{name:'Connect'}) as HTMLButtonElement).disabled);const button=screen.getByRole('button',{name:'Trust verified host'});assert.ok((button as HTMLButtonElement).disabled);fireEvent.click(screen.getByRole('checkbox'));fireEvent.click(button);await screen.findByText('Store unavailable');assert.equal(trust,1)});
 
 test('glass status block maps live states to text and switch semantics without simulating connections',()=>{
@@ -94,4 +95,101 @@ test('Duo challenge keeps manual passcodes available when no numbered option is 
  const input=screen.getByLabelText('Passcode:');fireEvent.change(input,{target:{value:'654321'}});fireEvent.click(screen.getByRole('button',{name:'Submit authentication response'}));
  await waitFor(()=>assert.deepEqual(answers,['654321']));
  assert.equal((input as HTMLInputElement).value,'');
+});
+
+test('connection modal closes with X, backdrop or Escape but not content or padding',()=>{
+ let closed=0;
+ render(<ConnectionModal open profile={null} keys={[]} status="unconfigured" onClose={()=>closed++} onOpenKeyRegistration={()=>{}} onInspectKey={new MockSshConnectionPort().inspectPrivateKey} onSave={async()=>{}} onConnect={async()=>{}} onDisconnect={async()=>{}}/>);
+ const dialog=screen.getByRole('dialog');
+ dialog.getBoundingClientRect=()=>({left:100,top:100,right:680,bottom:700,width:580,height:600,x:100,y:100,toJSON:()=>({})});
+ assert.equal(dialog.querySelector('footer')?.textContent,'SaveConnect');
+ fireEvent.click(screen.getByRole('heading',{name:'SSH connection'}));
+ fireEvent.click(dialog,{clientX:110,clientY:110});
+ assert.equal(closed,0);
+ fireEvent.click(dialog,{clientX:90,clientY:110});
+ assert.equal(closed,1);
+ fireEvent.click(screen.getByRole('button',{name:'Close'}));
+ assert.equal(closed,2);
+ fireEvent(dialog,new dom.window.Event('cancel',{bubbles:false,cancelable:true}));
+ assert.equal(closed,3);
+});
+
+test('SSH key details open separate edit and confirmation dialogs',async()=>{
+ let updated:any,removed='';
+ render(<ConnectionModal open profile={{...profile,auth:{method:'private-key',privateKeyPath:savedKey.privateKeyPath,keyId:savedKey.keyId}}} keys={[savedKey]} status="disconnected" onClose={()=>{}} onOpenKeyRegistration={()=>{}} onUpdateKey={async(id,input)=>{updated={id,...input}}} onRemoveKey={async id=>{removed=id}} onInspectKey={new MockSshConnectionPort().inspectPrivateKey} onSave={async()=>{}} onConnect={async()=>{}} onDisconnect={async()=>{}}/>);
+ await waitFor(()=>assert.equal((screen.getByRole('button',{name:'Connect'}) as HTMLButtonElement).disabled,false));
+ assert.equal(screen.queryByRole('button',{name:'Edit key'}),null);
+ fireEvent.click(screen.getByRole('button',{name:'SSH key details'}));
+ assert.ok(screen.getByRole('dialog',{name:'SSH key details'}));
+ assert.ok(screen.getByText('Linked account'));
+ assert.ok(screen.getByText('testuser'));
+ fireEvent.click(screen.getByRole('button',{name:'Edit key'}));
+ assert.ok(screen.getByRole('dialog',{name:'Edit SSH key'}));
+ fireEvent.change(screen.getByLabelText('Key name'),{target:{value:'Renamed key'}});
+ fireEvent.click(screen.getByRole('button',{name:'Save key changes'}));
+ await waitFor(()=>assert.equal(updated?.label,'Renamed key'));
+ await waitFor(()=>assert.equal(screen.queryByRole('dialog',{name:'Edit SSH key'}),null));
+ fireEvent.click(screen.getByRole('button',{name:'Delete key'}));
+ assert.equal(removed,'');
+ assert.ok(screen.getByRole('dialog',{name:'Delete SSH key?'}));
+ fireEvent.click(screen.getByRole('button',{name:'Cancel delete'}));
+ assert.equal(removed,'');
+ assert.equal(screen.queryByRole('dialog',{name:'Delete SSH key?'}),null);
+ assert.ok(screen.getByRole('dialog',{name:'SSH key details'}));
+ fireEvent.click(screen.getByRole('button',{name:'Delete key'}));
+ fireEvent.click(screen.getByRole('button',{name:'Confirm delete'}));
+ await waitFor(()=>assert.equal(removed,savedKey.keyId));
+ await waitFor(()=>assert.ok((screen.getByRole('button',{name:'Connect'}) as HTMLButtonElement).disabled));
+ fireEvent.click(screen.getByRole('radio',{name:'Duo'}));
+ assert.equal(screen.queryByRole('region',{name:'SSH key management'}),null);
+});
+
+test('key details show an unlinked account and keep deletion errors in the confirmation dialog',async()=>{
+ let calls=0;
+ render(<KeyDetailsModal keyInfo={{...savedKey,username:undefined}} onClose={()=>{}} onAccountChanged={()=>{}} onRemove={async()=>{calls++;throw Error('Storage unavailable')}}/>);
+ assert.ok(screen.getByText('No linked account'));
+ fireEvent.click(screen.getByRole('button',{name:'Delete key'}));
+ fireEvent.click(screen.getByRole('button',{name:'Confirm delete'}));
+ const error=await screen.findByRole('alert');
+ assert.equal(error.textContent,'Storage unavailable');
+ assert.equal(error.closest('dialog'),screen.getByRole('dialog',{name:'Delete SSH key?'}));
+ assert.equal(calls,1);
+ fireEvent.click(screen.getByRole('button',{name:'Cancel delete'}));
+ assert.equal(screen.queryByRole('alert'),null);
+ assert.ok(screen.getByRole('dialog',{name:'SSH key details'}));
+});
+
+test('new key defaults avoid existing names and refresh on reopening without replacing user edits',()=>{
+ const props={open:true,keys:[savedKey,{...savedKey,keyId:'second',label:' my HPC3 KEY 2 '}],onClose:()=>{},onPickKey:async()=>({canceled:true as const}),onInspectKey:new MockSshConnectionPort().inspectPrivateKey,onAddExternalKey:async()=>savedKey,onImported:()=>{},onGenerateKey:async()=>savedKey,onGenerated:()=>{}};
+ const view=render(<KeyRegistrationModal {...props}/>);
+ const input=screen.getByLabelText('Key name') as HTMLInputElement;
+ assert.equal(input.value,'My HPC3 key 3');
+ fireEvent.change(input,{target:{value:'My laptop'}});
+ const keys=[...props.keys,{...savedKey,keyId:'third',label:'My HPC3 key 3'}];
+ view.rerender(<KeyRegistrationModal {...props} keys={keys}/>);
+ assert.equal(input.value,'My laptop');
+ view.rerender(<KeyRegistrationModal {...props} keys={keys} open={false}/>);
+ view.rerender(<KeyRegistrationModal {...props} keys={keys}/>);
+ assert.equal(input.value,'My HPC3 key 4');
+ view.rerender(<KeyRegistrationModal {...props} keys={[]} open={false}/>);
+ view.rerender(<KeyRegistrationModal {...props} keys={[]}/>);
+ assert.equal(input.value,'My HPC3 key');
+});
+
+test('importing a key rejects unencrypted keys and hides redundant success text',async()=>{
+ let encrypted=false,imports=0;
+ render(<KeyRegistrationModal open onClose={()=>{}} onPickKey={async()=>({canceled:false,path:'/test/key',name:'key'})} onInspectKey={async()=>({status:encrypted?'encrypted':'unencrypted',format:'OpenSSH'})} onAddExternalKey={async()=>{imports++;return savedKey}} onImported={()=>{}} onGenerateKey={async()=>savedKey} onGenerated={()=>{}}/>);
+ fireEvent.click(screen.getByRole('radio',{name:'Use Existing SSH Key'}));
+ fireEvent.click(screen.getByRole('button',{name:'Choose private key…'}));
+ await screen.findByText('This key has no passphrase. Choose a passphrase-protected key.');
+ const save=screen.getByRole('button',{name:'Save key'}) as HTMLButtonElement;
+ assert.ok(save.disabled);
+ fireEvent.submit(save.closest('form')!);
+ assert.equal(imports,0);
+ encrypted=true;
+ fireEvent.click(screen.getByRole('button',{name:'Choose private key…'}));
+ await waitFor(()=>assert.equal(save.disabled,false));
+ assert.equal(screen.queryByText('Passphrase protected'),null);
+ fireEvent.click(save);
+ await waitFor(()=>assert.equal(imports,1));
 });

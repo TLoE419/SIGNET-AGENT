@@ -9,5 +9,5 @@ export function useConnectionDiagnostics(bridge?:DiagnosticBridge){
 export function ConnectionDiagnostics({entries}:{entries:Diagnostic[]}){
  const view=useRef<HTMLPreElement>(null),follow=useRef(true);
  useEffect(()=>{if(follow.current&&view.current)view.current.scrollTop=view.current.scrollHeight},[entries]);
- return <details className="ssh-connection-diagnostics" open><summary>SSH connection diagnostics · dev</summary><pre ref={view} aria-label="SSH connection diagnostics" onScroll={event=>{const el=event.currentTarget;follow.current=el.scrollHeight-el.scrollTop-el.clientHeight<32}}>{entries.length?entries.map(event=>`[${event.time}] ${event.id} · ${event.stage}: ${event.message}`).join('\n'):'Ready to monitor. Press Connect in SSH settings; no login is required to view this log.'}</pre></details>;
+ return <details className="ssh-connection-diagnostics" open><summary><span className="ssh-dev-badge">DEV</span> SSH connection diagnostics</summary><pre ref={view} aria-label="SSH connection diagnostics" onScroll={event=>{const el=event.currentTarget;follow.current=el.scrollHeight-el.scrollTop-el.clientHeight<32}}>{entries.length?entries.map(event=>`[${event.time}] ${event.id} · ${event.stage}: ${event.message}`).join('\n'):'Ready to monitor. Press Connect in SSH settings; no login is required to view this log.'}</pre></details>;
 }

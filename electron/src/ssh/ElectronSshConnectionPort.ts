@@ -6,6 +6,7 @@ export interface SshBridge {
  saveProfile(p:FormInput):Promise<Reply<Profile>>;selectProfile(id:string):Promise<Reply<void>>;inspectPrivateKey(p:string):Promise<Reply<Inspection>>;
  pickPrivateKey():Promise<Reply<PrivateKeySelection>>;
  connect(id:string,p:string):Promise<Reply<void>>;disconnect(id:string):Promise<Reply<void>>;healthCheck(force:boolean):Promise<Reply<ConnectionHealth>>;trustHost(i:HostIdentity):Promise<Reply<void>>;
+ updateKey(id:string,input:{label:string;username?:string}):Promise<Reply<KeyMetadata>>;removeKey(id:string):Promise<Reply<void>>;
  listKeys():Promise<Reply<KeyMetadata[]>>;generateKey(input:{label:string;username?:string;passphrase:string}):Promise<Reply<KeyMetadata>>;addExternalKey(input:{label:string;username?:string;privateKeyPath:string}):Promise<Reply<KeyMetadata>>;registerGenerated(input:{profile:FormInput;keyId:string;passphrase:string;password:string}):Promise<Reply<RegistrationResult>>;
  answerAuthChallenge(sessionId:string,challengeId:string,answers:string[]):Promise<Reply<void>>;subscribeAuthChallenge(fn:(challenge:AuthChallenge|null)=>void):()=>void;
  subscribe(fn:(s:Snapshot)=>void):()=>void;
@@ -21,6 +22,8 @@ export class ElectronSshConnectionPort implements SshConnectionPort {
 }
 export class ElectronSshKeyOnboardingPort implements SshKeyOnboardingPort {
  constructor(private bridge:SshBridge){}
+ updateKey=(id:string,input:{label:string;username?:string})=>unwrap(this.bridge.updateKey(id,input));
+ removeKey=(id:string)=>unwrap(this.bridge.removeKey(id));
  listKeys=()=>unwrap(this.bridge.listKeys());
  generateKey=(input:{label:string;username?:string;passphrase:string})=>unwrap(this.bridge.generateKey(input));
  addExternalKey=(input:{label:string;username?:string;privateKeyPath:string})=>unwrap(this.bridge.addExternalKey(input));

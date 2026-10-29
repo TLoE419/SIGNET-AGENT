@@ -71,6 +71,7 @@ export class SshProfileRepository {
   });this.queue=result.catch(()=>{});return result;
  }
  upsert(profile:Profile){return this.mutate(d=>{const p=profileInput(profile) as Profile;const i=d.profiles.findIndex(v=>v.id===p.id);if(i<0)d.profiles.push(p);else d.profiles[i]=p;d.selectedProfileId=p.id;return p})}
+ clearKey(keyId:string,keyPath:string){return this.mutate(d=>{for(const p of d.profiles)if(p.auth.method==='private-key'&&(p.auth.keyId===keyId||p.auth.privateKeyPath===keyPath))p.auth={method:'duo'}})}
  remove(id:string){return this.mutate(d=>{d.profiles=d.profiles.filter(p=>p.id!==id);if(d.selectedProfileId===id)d.selectedProfileId=null})}
  setSelectedProfile(id:string|null){return this.mutate(d=>{if(id!==null&&!d.profiles.some(p=>p.id===id))fail('INVALID_PROFILE','Profile not found.');d.selectedProfileId=id})}
 }
