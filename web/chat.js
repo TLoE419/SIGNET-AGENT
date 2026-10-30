@@ -52,18 +52,24 @@ const initialChat = JSON.parse($('initial-chat')?.textContent || '{}');
 const session = initialChat.session || crypto.randomUUID();
 if (initialChat.session) history.replaceState(null, '', '/?session=' + session);
 let busy = false, turns = 0;
-const savedChats = $('saved-chats');
+// Saved conversations are listed in the rail; the current one is marked and not a link.
+const chatList = $('chat-list');
 for (const saved of initialChat.sessions || []) {
-  const option = document.createElement('option');
-  option.value = saved.session;
-  option.textContent = saved.title;
-  savedChats.append(option);
-}
-if (savedChats) {
-  savedChats.value = initialChat.session || '';
-  savedChats.addEventListener('change', () => {
-    if (!busy) location.assign(savedChats.value ? '/?session=' + encodeURIComponent(savedChats.value) : '/?new=1');
+  const item = document.createElement('button');
+  item.type = 'button';
+  item.className = 'chat-link';
+  item.dataset.session = saved.session;
+  item.textContent = saved.title;
+  item.title = saved.title;
+  if (saved.session === initialChat.session) item.setAttribute('aria-current', 'page');
+  item.addEventListener('click', () => {
+    if (!busy && saved.session !== initialChat.session) location.assign('/?session=' + encodeURIComponent(saved.session));
   });
+  chatList?.append(item);
+}
+if ($('chat-list-label')) $('chat-list-label').hidden = !(initialChat.sessions || []).length;
+function setChatListDisabled(value) {
+  for (const item of chatList?.children || []) item.disabled = value;
 }
 const statusLabels = {ok:'查詢完成', created:'工作已建立', process_completed:'程序已結束，分析有效性仍須核對', completed:'已完成', prepared:'僅完成準備', unavailable:'目前無法執行', blocked:'條件不足', invalid:'參數無效', error:'發生錯誤', interrupted:'已中斷', skipped:'已跳過', unknown:'狀態未知', failed:'執行失敗', timed_out:'執行逾時', timeout:'執行逾時'};
 Object.assign(statusLabels, {submitted:'已送出，待確認啟動', starting:'正在啟動', running:'執行中', verified_completed:'已完成並通過輸出核對', verification_failed:'輸出核對未通過', cancelled:'已確認停止'});
@@ -147,7 +153,7 @@ async function send(text) {
   window.dispatchEvent(new Event('chat-busy'));
   $('send').disabled = true;
   $('new-chat').disabled = true;
-  if (savedChats) savedChats.disabled = true;
+  setChatListDisabled(true);
   document.querySelectorAll('[data-prompt]').forEach(button => button.disabled = true);
   $('welcome')?.remove();
   $('activity-empty')?.remove();
@@ -172,6 +178,7 @@ async function send(text) {
       if (!line.trim()) return;
       const event = JSON.parse(line);
       if (event.type === 'workspace') window.dispatchEvent(new CustomEvent('stage6-update', {detail:event.text}));
+      if (event.type === 'ui') window.dispatchEvent(new CustomEvent('panel-request', {detail:event.text}));
       if (event.type === 'progress') progress(turn, event.text);
       if (event.type === 'answer') {
         delete answer.dataset.i18n;
@@ -211,7 +218,7 @@ async function send(text) {
     window.dispatchEvent(new Event('chat-idle'));
     $('send').disabled = false;
     $('new-chat').disabled = false;
-    if (savedChats) savedChats.disabled = false;
+    setChatListDisabled(false);
     $('prompt').focus();
     $('messages').scrollTop = $('messages').scrollHeight;
   }

@@ -25,8 +25,13 @@ SIGNET-agent/
 │   │   └── groq_client.py        # Groq connection, tool format, and rate-limit waits
 │   ├── tools/
 │   │   ├── general.py            # Restricted file listing and paginated text reading
+│   │   ├── registry.py           # Every model-callable tool; also the dispatch allow-list
+│   │   ├── hpc.py                # HPC3 readiness check, one tool per setup step, setup logs
 │   │   └── signet.py             # Scientific tools, parameter validation, and isolated job preparation
 │   ├── runtime/
+│   │   ├── hpc.py                # HPC3 workspace layout, read-only checks, background setup steps
+│   │   ├── jobs/
+│   │   │   └── prepare_reference.py  # Runs on HPC3: detects ref/gmap formats and converts them for one study
 │   │   ├── remote.py             # Remote connection, packaging, and output collection
 │   │   ├── ssh_transport.py      # Private Electron broker client for SSH command transport
 │   │   ├── network.py            # Network inference submission, queries, cancellation, and result checks

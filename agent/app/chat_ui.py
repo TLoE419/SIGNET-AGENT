@@ -19,6 +19,7 @@ from agent.core.model_timing import ModelRequestTiming
 from agent.paths import PROJECT_ROOT
 from agent.providers import PROVIDERS, create_provider_adapter
 from agent.stage6.workspace import Workspace, CHAT_CONTEXT
+from agent.tools.ui import UI_CHANNEL
 
 ROOT = PROJECT_ROOT
 
@@ -115,6 +116,8 @@ class ChatHandler(BaseHTTPRequestHandler):
                   '/ssh.css': ('ssh.css', 'text/css; charset=utf-8'),
                   '/ssh-ui.js': ('../electron/build/ssh-ui.js', 'text/javascript; charset=utf-8'),
                   '/stage6.js': ('stage6.js', 'text/javascript; charset=utf-8'),
+                  '/workflow.js': ('workflow.js', 'text/javascript; charset=utf-8'),
+                  '/workflow.css': ('workflow.css', 'text/css; charset=utf-8'),
                   '/vendor/vis-network.min.js': ('vendor/vis-network.min.js', 'text/javascript; charset=utf-8')}
         url = urlsplit(self.path)
         if url.path in ('/stage6', '/stage6/file'):
@@ -165,6 +168,8 @@ class ChatHandler(BaseHTTPRequestHandler):
             return self._error(403, '請從本機聊天頁面送出。')
         if self.path.startswith('/stage6/'):
             return self.stage6_post()
+        if self.path.startswith('/hpc/'):
+            return self.hpc_post()
         if self.path != '/chat':
             return self._error(404, '找不到此操作。')
         try:
@@ -213,11 +218,14 @@ class ChatHandler(BaseHTTPRequestHandler):
                 timing = ModelRequestTiming()
                 with self.server.client_factory(timing) as client:
                     context_token = CHAT_CONTEXT.set((self.server.stage6, session))
+                    # Panel requests from show_panel go straight to this page as they happen.
+                    ui_token = UI_CHANNEL.set(lambda request: emit('ui', request))
                     try:
                         answer = run_conversation(client, text.strip(), history,
                                               progress=lambda message: emit('progress', message), http_timing=timing,
                                                   language=language)
                     finally:
+                        UI_CHANNEL.reset(ui_token)
                         CHAT_CONTEXT.reset(context_token)
                 emit('workspace', self.server.stage6.view(session))
                 emit('answer', answer)
@@ -235,6 +243,29 @@ class ChatHandler(BaseHTTPRequestHandler):
         data = json.dumps(value).encode()
         self._headers(status, 'application/json; charset=utf-8', len(data))
         self.wfile.write(data)
+
+    def hpc_post(self):
+        """Workflow-panel buttons call one HPC3 tool directly; the click is the user's approval."""
+        from agent.tools import hpc as hpc_tools
+        actions = {'/hpc/check': hpc_tools.check_hpc_environment,
+                   '/hpc/workspace': hpc_tools.create_hpc_workspace,
+                   '/hpc/signet': hpc_tools.install_signet_source,
+                   '/hpc/container': hpc_tools.download_signet_container,
+                   '/hpc/prepare': hpc_tools.prepare_imputation_reference,
+                   **{f'/hpc/reference/{key}': (lambda key=key: hpc_tools.download_reference_file(key))
+                      for key in ('ref', 'gmap', 'gtf', 'clinical')}}
+        action = actions.get(self.path)
+        if action is None:
+            return self._error(404, '找不到此操作。')
+        try:
+            size = int(self.headers.get('Content-Length', '0') or 0)
+        except ValueError:
+            size = -1
+        if not 0 <= size <= 1024:
+            return self._error(400, 'Invalid request length.')
+        self.connection.settimeout(10)
+        self.rfile.read(size)  # The body carries no parameters; each path is one fixed action.
+        return self.json_response(action())
 
     def stage6_get(self, url):
         query = parse_qs(url.query)

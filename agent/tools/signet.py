@@ -118,10 +118,12 @@ def _update(root, values):
 def signet_catalog() -> dict:
     """List audited SIGNET scripts, analysis tools, phases and execution restrictions."""
     from agent.tools.general import GENERAL_TOOLS
+    from agent.tools.hpc import HPC_TOOLS
+    from agent.tools.registry import ALL_TOOLS
     return {'status': 'ok', 'revision': INVENTORY['revision'], 'analysis_script_files': 138,
             'source_entries': 16, 'internal_scripts': 121, 'development_files': 3,
-            'analysis_tools': 15, 'signet_tools': 23, 'all_tools_including_list_files': 25,
-            'general_tools': [fn.__name__ for fn in GENERAL_TOOLS],
+            'analysis_tools': 15, 'signet_tools': 23, 'all_tools_including_list_files': len(ALL_TOOLS),
+            'general_tools': [fn.__name__ for fn in GENERAL_TOOLS], 'hpc_tools': [fn.__name__ for fn in HPC_TOOLS],
             'scripts': INVENTORY['scripts'],
             'prepare_only': ['prepare_network', 'prepare_visualization'],
             'network_execution': ['submit_network', 'get_network_status', 'cancel_network'],
@@ -594,8 +596,8 @@ SIGNET_TOOLS = [signet_catalog,configure_signet,get_signet_settings,genotype_tcg
 
 def dispatch_tool(name, arguments):
     """Validate the model's tool name, keyword arguments and primitive types before dispatch."""
-    from agent.tools.general import GENERAL_TOOLS
-    functions = {fn.__name__:fn for fn in [*GENERAL_TOOLS,*SIGNET_TOOLS]}
+    from agent.tools.registry import ALL_TOOLS
+    functions = {fn.__name__:fn for fn in ALL_TOOLS}
     try:
         if name not in functions or not isinstance(arguments, dict):
             raise ValueError('Unsupported tool or argument object.')

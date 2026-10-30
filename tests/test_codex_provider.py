@@ -92,7 +92,7 @@ class CodexProviderTest(unittest.TestCase):
         self.assertEqual(answer, '已連線。')
         captured = json.loads(self.capture.read_text())
         self.assertEqual(captured['payload']['messages'][-1]['content'], text)
-        self.assertEqual(len(captured['payload']['available_tools']), 25)
+        self.assertEqual(len(captured['payload']['available_tools']), 33)
         self.assertEqual(captured['keys_present'], [])
         self.assertNotIn('PRIVATE-REASONING', '\n'.join(events))
         for feature in DISABLED_FEATURES:

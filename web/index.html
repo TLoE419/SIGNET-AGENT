@@ -7,8 +7,10 @@
   <title data-i18n="SIGNET · 研究助手">SIGNET · Research Assistant</title>
   <link rel="stylesheet" href="/chat.css">
   <link rel="stylesheet" href="/ssh.css">
+  <link rel="stylesheet" href="/workflow.css">
   <script defer src="/i18n.js"></script>
   <script defer src="/chat.js"></script>
+  <script defer src="/workflow.js"></script>
   <script defer src="/vendor/vis-network.min.js"></script>
   <script defer src="/stage6.js"></script>
   <script defer src="/ssh.js"></script>
@@ -19,6 +21,9 @@
     <button id="new-chat" class="new-chat"><span data-i18n="＋ 開始新對話">+ New chat</span></button>
     <div class="nav-label"><span data-i18n="工作空間">WORKSPACE</span></div>
     <div class="nav-item active"><span>◉</span> <span data-i18n="研究助手">Research assistant</span> <span class="nav-dot"></span></div>
+    <button id="s6-open" class="nav-item nav-button" type="button" aria-controls="stage6-pane" aria-expanded="false" hidden><span aria-hidden="true">◇</span> <span id="s6-open-label">Network visualization</span></button>
+    <div id="chat-list-label" class="nav-label" data-i18n="聊天紀錄">CHATS</div>
+    <nav id="chat-list" class="chat-list" aria-label="Saved conversations" data-i18n-aria="已存對話"></nav>
     <div class="environment"><span class="local-dot"></span> <span data-i18n="本機工作階段">Local session</span><small>__MODEL__</small></div>
     <button id="language-toggle" type="button" aria-label="Switch to Traditional Chinese">繁體中文</button>
   </aside>
@@ -26,11 +31,33 @@
     <div class="ssh-topbar" id="ssh-root" hidden></div>
     <div class="workspace chat-only">
       <section class="chat-pane" aria-label="Chat" data-i18n-aria="聊天">
-        <div class="pane-title"><h2><span data-i18n="對話">Chat</span></h2><span><span data-i18n="你與 SIGNET 助手">You and SIGNET</span></span><button id="s6-open" type="button" aria-controls="stage6-pane" aria-expanded="false" hidden>Show visualization</button></div>
-        <div class="conversation-controls">
-          <label for="saved-chats" data-i18n="已存對話">Saved conversations</label>
-          <select id="saved-chats" aria-label="Saved conversations" data-i18n-aria="已存對話"><option value="" data-i18n="＋ 開始新對話">+ New chat</option></select>
-        </div>
+        <details id="workflow" class="workflow">
+          <summary><span data-i18n="分析流程">Workflow</span><span id="workflow-summary" class="workflow-summary" data-i18n="展開以檢查 HPC3 環境">Open to check HPC3</span></summary>
+          <ol class="workflow-stages">
+            <li class="workflow-stage" data-stage="environment">
+              <details id="workflow-environment" open>
+                <summary class="workflow-stage-head"><span class="workflow-step">1</span><strong data-i18n="準備環境">Prepare environment</strong><span id="workflow-environment-status" class="workflow-note"></span></summary>
+                <div class="workflow-stage-body">
+                  <div class="workflow-stage-actions"><button id="workflow-check" type="button" data-i18n="重新檢查">Check again</button></div>
+                  <ul id="workflow-items" class="workflow-items"></ul>
+                  <p id="workflow-message" class="workflow-message" role="status" hidden></p>
+                </div>
+              </details>
+            </li>
+            <li class="workflow-stage locked" data-stage="preprocess">
+              <details>
+                <summary class="workflow-stage-head"><span class="workflow-step">2</span><strong data-i18n="資料前處理">Data preprocessing</strong></summary>
+                <p class="workflow-stage-body workflow-note" data-i18n="環境準備好後開放">Available after setup</p>
+              </details>
+            </li>
+            <li class="workflow-stage locked" data-stage="results">
+              <details>
+                <summary class="workflow-stage-head"><span class="workflow-step">3</span><strong data-i18n="分析與結果">Analysis and results</strong></summary>
+                <p class="workflow-stage-body workflow-note" data-i18n="環境準備好後開放">Available after setup</p>
+              </details>
+            </li>
+          </ol>
+        </details>
         <div id="messages" class="messages" role="log" aria-label="Conversation" data-i18n-aria="對話紀錄" aria-live="polite">
           <div id="welcome" class="welcome"><span class="welcome-mark">✳</span><h2><span data-i18n="今天想探索什麼？">What would you like to explore?</span></h2><p><span data-i18n="從一個研究問題開始。<br>聊天下方可查看執行過程，右側可比較網路結果。">Start with a research question.<br>See chat activity below and compare networks on the right.</span></p><p><span data-i18n="此版本未附資料或分析結果。聊天需登入模型；科學分析另需來源、資料與執行環境。">No data or analysis results are bundled. Chat requires model sign-in; scientific analysis also requires source code, data and a configured runtime.</span></p><div class="suggestions"><button data-prompt="Introduce the available analyses and the data each requires. Do not run any analyses yet." data-i18n-prompt="先介紹目前可以做的分析，以及各自需要哪些資料，暫時不要執行分析。"><span data-i18n="了解分析能力">Explore analyses</span> <span>↗</span></button><button data-prompt="Review this project’s data files and existing run records. Do not run any analyses yet." data-i18n-prompt="幫我查看目前專案有哪些資料檔案，以及已有工作的記錄狀態，暫時不要執行分析。"><span data-i18n="檢查目前資料與工作">Review data and runs</span> <span>↗</span></button></div></div>
         </div>

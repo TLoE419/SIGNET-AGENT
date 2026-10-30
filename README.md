@@ -59,7 +59,7 @@ the existing system-SSH configuration and does not display the desktop SSH UI.
 | Run scientific analysis | The corresponding scientific dependencies, VM, or scheduler | Runs within each tool's limits and retains logs; completion does not establish biological validity |
 | Compare Stage 6 results | Your own technically verified results and scientific environment | Proposes changes, starts a separate run after your confirmation, and compares results |
 
-There are **23 SIGNET tools and 2 general file tools, for a total of 25 model tools**. See [signet_inventory.json](signet_inventory.json) for the complete scientific-source inventory. Scientific code is pinned to the [official SIGNET commit](https://github.com/signet4grn/SIGNET/tree/bed55b3e121de0edf5fd43da683dc59850ff82d3); the assistant does not execute arbitrary scripts.
+There are **23 SIGNET tools, 2 general file tools, 7 HPC3 setup tools and 1 page control, for a total of 33 model tools**. See [signet_inventory.json](signet_inventory.json) for the complete scientific-source inventory. Scientific code is pinned to the [official SIGNET commit](https://github.com/signet4grn/SIGNET/tree/bed55b3e121de0edf5fd43da683dc59850ff82d3); the assistant does not execute arbitrary scripts.
 
 ## Usage and Data
 

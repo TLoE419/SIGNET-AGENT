@@ -35,6 +35,9 @@ const context=vm.createContext({$,session:'test-session',uiLanguage:'en',busy:fa
 (async()=>{
   vm.runInContext(fs.readFileSync('web/stage6.js','utf8'),context);
   await new Promise(setImmediate);
+  assert.equal(live.length,0,'visualization starts collapsed even when results exist');
+  assert.equal($('s6-open').hidden,false);
+  $('s6-open').events.click();
   assert.equal(live.length,2);
   const first=live[0], initial=structuredClone(first.positions);
   first.events.dragStart({nodes:['A']});assert.equal(first.physics,true);
@@ -65,10 +68,20 @@ const context=vm.createContext({$,session:'test-session',uiLanguage:'en',busy:fa
   assert.ok(classes.has('chat-only'));
   events['chat-idle']();assert.equal(pane.hidden,true,'normal updates do not reopen a manually collapsed pane');
   $('s6-open').events.click();
-  assert.equal(pane.hidden,false);assert.equal($('s6-open').hidden,true);
+  assert.equal(pane.hidden,false);assert.equal($('s6-open').hidden,false,'the rail entry stays as a toggle');
   assert.equal(live.at(-2).scale,2.1,'reopening preserves zoom');
   assert.deepEqual(live.at(-2).position,{x:100,y:200},'reopening preserves pan');
   assert.deepEqual(live.at(-2).positions.A,initial.A,'reopening preserves dragged nodes');
+  // The assistant's show_panel requests collapse and reopen the pane like the rail entry does.
+  events['panel-request']({detail:{panel:'visualization',visible:false}});
+  assert.equal(pane.hidden,true);
+  events['panel-request']({detail:{panel:'workflow',visible:true}});
+  assert.equal(pane.hidden,true,'requests for other panels are ignored');
+  events['panel-request']({detail:{panel:'visualization',visible:true}});
+  assert.equal(pane.hidden,false);
+  $('s6-open').events.click();
+  assert.equal(pane.hidden,true,'the rail entry also collapses an open pane');
+  $('s6-open').events.click();
   $('s6-close').events.click();
   vm.runInContext(fs.readFileSync('web/stage6.js','utf8'),context);
   await new Promise(setImmediate);

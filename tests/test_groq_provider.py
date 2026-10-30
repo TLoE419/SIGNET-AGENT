@@ -215,7 +215,7 @@ class GroqTest(unittest.TestCase):
 
     def test_all_tools_have_required_and_optional_typed_schemas(self):
         schemas = [tool_schema(function) for function in main.config.tools]
-        self.assertEqual(len(schemas), 25)
+        self.assertEqual(len(schemas), 33)
         configure = next(x['function'] for x in schemas if x['function']['name'] == 'configure_signet')
         self.assertEqual(configure['parameters']['required'], ['run_id'])
         self.assertEqual(configure['parameters']['properties']['nchr'], {'type':'integer', 'default':22})
@@ -240,7 +240,7 @@ class GroqTest(unittest.TestCase):
         self.assertEqual(messages[-1]['role'], 'tool')
         compact = json.loads(messages[-1]['content'])
         self.assertNotIn('scripts', compact)
-        self.assertEqual(compact['all_tools_including_list_files'], 25)
+        self.assertEqual(compact['all_tools_including_list_files'], 33)
         self.assertTrue(compact['scripts_omitted'])
         self.assertIn('scripts', history[2].parts[0].function_response.response)
         self.assertIn(GROQ_MODEL, events[0])

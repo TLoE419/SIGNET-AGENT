@@ -4,8 +4,9 @@
   // Presentation state stays in this browser tab, separate from research files and run records.
   const viewStorageKey = 'signet-stage6-view-v1:' + session;
   const collapsedStorageKey='signet-stage6-collapsed:' + session;
-  let collapsed=false;
-  try {collapsed=sessionStorage.getItem(collapsedStorageKey)==='true';} catch (_) {}
+  // Starts collapsed; it opens only after the researcher chooses to show it in this tab.
+  let collapsed=true;
+  try {collapsed=sessionStorage.getItem(collapsedStorageKey)!=='false';} catch (_) {}
   function setCollapsed(value) {
     collapsed=value;
     try {sessionStorage.setItem(collapsedStorageKey,String(value));} catch (_) {}
@@ -303,8 +304,10 @@
     disposeGraphs();
     const available=Boolean(data.active || data.comparison || data.proposals.length);
     const visible=available && !collapsed;
-    $('s6-open').hidden=!available || visible;
-    $('s6-open').textContent=text('Show visualization','展開視覺化');
+    $('s6-open').hidden=!available;
+    $('s6-open').classList.toggle('active',visible);
+    $('s6-open').setAttribute('aria-expanded',String(visible));
+    $('s6-open-label').textContent=text('Network visualization','網路視覺化');
     $('s6-close').textContent=text('Collapse','收合');
     const pane=document.querySelector('.stage6-pane');
     pane.hidden=!visible;
@@ -325,11 +328,12 @@
     $('new-chat').disabled = running || busy;
     if(data.error)error(data.error);
   }
-  $('s6-open').addEventListener('click',()=>setCollapsed(false));
+  $('s6-open').addEventListener('click',()=>setCollapsed(!collapsed));
   $('s6-close').addEventListener('click',()=>setCollapsed(true));
   const tabs=[...document.querySelectorAll('[data-tab]')];
   tabs.forEach((b,i)=>{b.addEventListener('click',()=>{tab=b.dataset.tab;render();});b.addEventListener('keydown',e=>{if(['ArrowLeft','ArrowRight'].includes(e.key)){e.preventDefault();const next=tabs[(i+(e.key==='ArrowRight'?1:tabs.length-1))%tabs.length];next.click();next.focus();}});});
   window.addEventListener('stage6-update',e=>accept(e.detail));
+  window.addEventListener('panel-request',e=>{if(e.detail?.panel==='visualization'&&collapsed===e.detail.visible)setCollapsed(!e.detail.visible);});
   window.addEventListener('languagechange',render);
   window.addEventListener('chat-idle',render);
   window.addEventListener('chat-busy',render);
