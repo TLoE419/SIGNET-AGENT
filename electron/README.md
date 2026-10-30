@@ -327,3 +327,8 @@ See [environment setup](main/environment/README.md) for behavior and limitations
 
 Run `npm run test:environment --prefix electron` for the localhost SSH mock flow;
 it never connects to HPC3 or downloads the real image.
+
+SSH readiness is detected through a bounded local OpenSSH ControlMaster check,
+independent of the user's prompt. Authentication text is parsed only before the
+transport becomes ready. Upload pipe failures are handled as command failures,
+including broken input pipes, without terminating the application.

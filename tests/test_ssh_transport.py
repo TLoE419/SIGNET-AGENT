@@ -39,7 +39,7 @@ class TransportTest(unittest.TestCase):
         return thread
 
     def test_remote_uses_private_socket_and_decodes_completed_process(self):
-        with tempfile.TemporaryDirectory(dir='/private/tmp') as directory:
+        with tempfile.TemporaryDirectory(dir='/tmp') as directory:
             path = str(Path(directory) / 'broker.sock')
             thread = self.serve_once(path, 'secret')
             with patch.dict(os.environ, {'SIGNET_SSH_BROKER': path, 'SIGNET_SSH_BROKER_TOKEN': 'secret'}):

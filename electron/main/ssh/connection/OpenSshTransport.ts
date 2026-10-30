@@ -17,6 +17,7 @@ export interface SshTransport extends EventEmitter {
  connect(secret:string):Promise<void>;exec(command:string,input:Buffer,timeoutMs:number):Promise<RemoteResult>;
  openShell(cols:number,rows:number):Promise<ShellChannel>;close():Promise<void>;
 }
+type ReadinessProbe=()=>Promise<number>;
 type PtyFactory=(file:string,args:string[],options:pty.IPtyForkOptions)=>pty.IPty;
 
 function clean(value:string){return value.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g,'').replace(/\r/g,'')}
@@ -49,7 +50,7 @@ export class OpenSshTransport extends EventEmitter implements SshTransport {
  private process?:pty.IPty;private exit?:Promise<void>;private finishExit?:()=>void;private ready=false;private closing=false;
  private secret='';private secretSubmitted=false;private challengeOpen=false;private text='';private history='';private shells=new Set<AttachedShell>();
  readonly controlDirectory:string;readonly controlPath:string;
- constructor(readonly profile:Profile,private knownHostsPath:string,controlRoot='/tmp',private ptyFactory:PtyFactory=pty.spawn){
+ constructor(readonly profile:Profile,private knownHostsPath:string,controlRoot='/tmp',private ptyFactory:PtyFactory=pty.spawn,private readinessProbe?:ReadinessProbe,private spawnCommand=spawnChild){
   super();this.controlDirectory=path.join(controlRoot,`signet-ssh-${randomUUID()}`);this.controlPath=path.join(this.controlDirectory,'master.sock');
  }
  private args(){
@@ -61,16 +62,25 @@ export class OpenSshTransport extends EventEmitter implements SshTransport {
   if(this.process)throw new SshFailure('UNKNOWN','SSH transport is already open.');
   await mkdir(this.controlDirectory,{recursive:true,mode:0o700});this.secret=secret;this.emit('diagnostic',{stage:'transport',message:`Opening PTY-backed system OpenSSH transport to ${this.profile.username}@${this.profile.host}:${this.profile.port}.`});
   return new Promise<void>((resolve,reject)=>{
-   let settled=false;const done=(error?:SshFailure)=>{if(settled)return;settled=true;clearTimeout(timer);this.secret='';error?reject(error):resolve()};
+   let settled=false;let probeTimer:ReturnType<typeof setInterval>|undefined;let probing=false;const done=(error?:SshFailure)=>{if(settled)return;settled=true;clearTimeout(timer);clearInterval(probeTimer);this.secret='';error?reject(error):resolve()};
    const timer=setTimeout(()=>{done(new SshFailure('CONNECTION_TIMEOUT','OpenSSH login timed out.'));void this.close()},180000);
    try{this.process=this.ptyFactory('/usr/bin/ssh',this.args(),{name:'xterm-256color',cols:120,rows:40,cwd:process.cwd(),env:{...process.env,TERM:'xterm-256color'} as Record<string,string>})}catch(error){this.emit('diagnostic',{stage:'transport',message:`PTY launch failed: ${error instanceof Error?error.message:'unknown native error'}`});done(new SshFailure('UNKNOWN','System OpenSSH or PTY support is unavailable.'));return}
    this.exit=new Promise<void>(finish=>this.finishExit=finish);
-   this.process.onData(data=>{this.consume(data,()=>done());});
+   this.process.onData(data=>{this.consume(data);});
    this.process.onExit(({exitCode})=>{this.process=undefined;this.finishExit?.();this.finishExit=undefined;const wasReady=this.ready;this.ready=false;void rm(this.controlDirectory,{recursive:true,force:true}).catch(()=>{});this.emit('diagnostic',{stage:'closed',message:'OpenSSH transport closed.'});if(!settled)done(failureFromOutput(this.text+`\nexit=${exitCode}`));else if(wasReady&&!this.closing)this.emit('failure',new SshFailure('SESSION_CLOSED','OpenSSH transport closed unexpectedly.'));this.emit('close')});
+   // The local mux control socket becomes usable after authentication. Probing it
+   // neither starts another login nor relies on remote shell prompt formatting.
+   const activePty=this.process;
+   const check=async()=>{if(settled||probing||this.closing)return;probing=true;try{
+    const code=await(this.readinessProbe?this.readinessProbe():this.control('check'));
+    if(code===0&&!settled&&!this.closing&&this.process===activePty){this.ready=true;this.emit('diagnostic',{stage:'session',message:'Persistent PTY login shell opened.'});done()}
+   }catch{}finally{probing=false}};
+   probeTimer=setInterval(()=>void check(),150);void check();
   });
  }
- private consume(data:string,onReady:()=>void){
+ private consume(data:string){
   this.emit('raw',{source:'openssh-pty',text:data});this.history=(this.history+data).slice(-262144);for(const shell of this.shells)shell.push(data);
+  if(this.ready)return;
   this.text=(this.text+clean(data)).slice(-65536);const tail=this.text;
   if(!this.secretSubmitted&&this.profile.auth.method==='duo'&&/Password:\s*$/i.test(tail)){
    this.secretSubmitted=true;this.emit('diagnostic',{stage:'authentication',message:'Answering HPC3 password challenge from transient memory.'});this.write(this.secret+'\r');this.secret='';return;
@@ -84,9 +94,7 @@ export class OpenSshTransport extends EventEmitter implements SshTransport {
    this.emit('challenge',{name:'Duo authentication',instructions:'Select the Duo destination returned by HPC3.',prompts:[{prompt,echo:true}],respond:(answers:string[])=>{if(!this.challengeOpen)return;this.challengeOpen=false;this.write((answers[0]||'')+'\r');this.emit('diagnostic',{stage:'challenge',message:'Authentication response submitted (contents omitted).'})}} satisfies TransportChallenge);return;
   }
   if(/Permission denied|Authentication failed/i.test(tail)){void this.close();return}
-  if(!this.ready&&/\[[^\r\n]+@[^\r\n]+\][^\r\n]*[$#]\s*$/m.test(tail)){
-   this.ready=true;this.emit('diagnostic',{stage:'session',message:'Persistent PTY login shell opened.'});onReady();
-  }
+
  }
  write(data:string){this.process?.write(data)}
  resize(cols:number,rows:number){if(this.process)this.process.resize(Math.max(2,Math.min(500,cols)),Math.max(2,Math.min(200,rows)))}
@@ -97,10 +105,10 @@ export class OpenSshTransport extends EventEmitter implements SshTransport {
  async exec(command:string,input:Buffer,timeoutMs:number):Promise<RemoteResult>{
   if(!this.process||!this.ready)throw new SshFailure('SESSION_CLOSED','Connect SSH before running remote work.');
   const args=['-S',this.controlPath,'-o','ControlMaster=no','-o','BatchMode=yes','-o','StrictHostKeyChecking=yes','-o',`UserKnownHostsFile=${configValue(this.knownHostsPath)}`,'-p',String(this.profile.port),'--',`${this.profile.username}@${this.profile.host}`,command];
-  return new Promise((resolve,reject)=>{const child=spawnChild('/usr/bin/ssh',args,{stdio:['pipe','pipe','pipe']});const stdout:Buffer[]=[],stderr:Buffer[]=[];let size=0,settled=false;
+  return new Promise((resolve,reject)=>{const child=this.spawnCommand('/usr/bin/ssh',args,{stdio:['pipe','pipe','pipe']});const stdout:Buffer[]=[],stderr:Buffer[]=[];let size=0,settled=false,inputError=false;
    const done=(error?:SshFailure,code=255,signal:string|null=null)=>{if(settled)return;settled=true;clearTimeout(timer);error?reject(error):resolve({returncode:code,signal,stdout:Buffer.concat(stdout),stderr:Buffer.concat(stderr)})};
    const collect=(target:Buffer[])=>(chunk:Buffer)=>{size+=chunk.length;if(size>1024*1024*1024){child.kill('SIGTERM');done(new SshFailure('UNKNOWN','Remote output exceeded 1 GiB.'))}else target.push(Buffer.from(chunk))};
-   child.stdin.on('error',(error:NodeJS.ErrnoException)=>{if(error.code!=='EPIPE')done(new SshFailure('UNKNOWN','Could not send input to the remote command.'))});child.stdout.on('data',collect(stdout));child.stderr.on('data',collect(stderr));child.on('error',()=>done(new SshFailure('UNKNOWN','Could not start the system OpenSSH command.')));child.on('close',(code,signal)=>done(undefined,Number.isInteger(code)?code!:255,signal));
+   child.stdin.on('error',(error:NodeJS.ErrnoException)=>{inputError=true;if(error.code!=='EPIPE'){child.kill('SIGTERM');done(new SshFailure('UNKNOWN','Could not send input to the remote command.'))}});child.stdout.on('data',collect(stdout));child.stderr.on('data',collect(stderr));child.on('error',()=>done(new SshFailure('UNKNOWN','Could not start the system OpenSSH command.')));child.on('close',(code,signal)=>{if(inputError&&code===0)done(new SshFailure('UNKNOWN','Remote input was not fully delivered.'));else done(undefined,Number.isInteger(code)?code!:255,signal)});
    const timer=setTimeout(()=>{child.kill('SIGTERM');done(new SshFailure('CONNECTION_TIMEOUT','The remote command timed out.'))},timeoutMs);if(input.length)child.stdin.end(input);else child.stdin.end();
   });
  }
