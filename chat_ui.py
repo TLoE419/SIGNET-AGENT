@@ -1,6 +1,5 @@
-"""Loopback-only chat UI over the existing conversation loop; no new dependencies."""
+"""Loopback-only Python API for the Electron client and standalone backend development."""
 import argparse
-import html
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
@@ -106,56 +105,41 @@ class ChatHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if not self._local_request():
             return self._error(403, '僅允許本機介面。')
-        assets = {'/': ('index.html', 'text/html; charset=utf-8'),
-                  '/chat.js': ('chat.js', 'text/javascript; charset=utf-8'),
-                  '/i18n.js': ('i18n.js', 'text/javascript; charset=utf-8'),
-                  '/chat.css': ('chat.css', 'text/css; charset=utf-8'),
-                  '/ssh.js': ('ssh.js', 'text/javascript; charset=utf-8'),
-                  '/ssh.css': ('ssh.css', 'text/css; charset=utf-8'),
-                  '/ssh-ui.js': ('../electron/build/ssh-ui.js', 'text/javascript; charset=utf-8'),
-                  '/stage6.js': ('stage6.js', 'text/javascript; charset=utf-8'),
-                  '/vendor/vis-network.min.js': ('vendor/vis-network.min.js', 'text/javascript; charset=utf-8')}
         url = urlsplit(self.path)
         if url.path in ('/stage6', '/stage6/file'):
             return self.stage6_get(url)
-        if url.path not in assets:
-            return self._error(404, '找不到頁面。')
-        filename, content_type = assets[url.path]
+        if url.path != '/bootstrap':
+            return self._error(404, '找不到此 API。')
+        if not self.server.turn_lock.acquire(blocking=False):
+            return self._error(409, '回合仍在執行，請保留原頁面等待完成。')
         try:
-            body = (ROOT / 'web' / filename).read_text()
-        except FileNotFoundError:
-            return self._error(404, '找不到頁面。')
-        if url.path == '/':
-            if not self.server.turn_lock.acquire(blocking=False):
-                return self._error(409, '回合仍在執行，請保留原頁面等待完成。')
-            try:
-                query = parse_qs(url.query)
-                session = query.get('session', [None])[0]
-                saved = list(dict.fromkeys([*self.server.histories, *self.server.stage6.sessions]))
-                saved = [key for key in saved if re.fullmatch(r'[a-f0-9-]{36}', key)]
-                if session is None and query.get('new') != ['1']:
-                    active = self.server.active_session
-                    histories = [key for key in self.server.histories if key in saved]
-                    session = active if active in saved else next(reversed(histories or saved), None)
-                initial = {'sessions': []}
-                for key in reversed(saved):
-                    messages = self.server.visible_messages(key)
-                    title = next((item['text'] for item in messages if item['role'] == 'user'), key[:8])
-                    initial['sessions'].append({'session': key, 'title': ' '.join(title.split())[:80]})
-                if session is not None:
-                    if session not in saved:
-                        return self._error(404, '找不到這段對話。')
-                    initial.update(session=session, messages=self.server.visible_messages(session),
-                                   events=self.server.events.get(session, []))
-                    if self.server.active_session != session:
-                        self.server.active_session = session
-                        self.server.save_state()
-            finally:
-                self.server.turn_lock.release()
-            body = body.replace('__TOKEN__', self.server.token).replace('__MODEL__', html.escape(self.server.model_label))
-            body = body.replace('__INITIAL_CHAT__', json.dumps(initial, ensure_ascii=False).replace('<', '\\u003c'))
-        self._headers(200, content_type)
-        self.wfile.write(body.encode())
+            query = parse_qs(url.query)
+            session = query.get('session', [None])[0]
+            saved = list(dict.fromkeys([*self.server.histories, *self.server.stage6.sessions]))
+            saved = [key for key in saved if re.fullmatch(r'[a-f0-9-]{36}', key)]
+            if session is None and query.get('new') != ['1']:
+                active = self.server.active_session
+                histories = [key for key in self.server.histories if key in saved]
+                session = active if active in saved else next(reversed(histories or saved), None)
+            initial = {'sessions': []}
+            for key in reversed(saved):
+                messages = self.server.visible_messages(key)
+                title = next((item['text'] for item in messages if item['role'] == 'user'), key[:8])
+                initial['sessions'].append({'session': key, 'title': ' '.join(title.split())[:80]})
+            if session is not None:
+                if session not in saved:
+                    return self._error(404, '找不到這段對話。')
+                initial.update(session=session, messages=self.server.visible_messages(session),
+                               events=self.server.events.get(session, []))
+                if self.server.active_session != session:
+                    self.server.active_session = session
+                    self.server.save_state()
+        finally:
+            self.server.turn_lock.release()
+        body = json.dumps({'token': self.server.token, 'model': self.server.model_label,
+                           'initial': initial}, ensure_ascii=False).encode()
+        self._headers(200, 'application/json; charset=utf-8', len(body))
+        self.wfile.write(body)
 
     def do_POST(self):
         origin = f'http://127.0.0.1:{self.server.server_port}'
@@ -309,7 +293,7 @@ class ChatHandler(BaseHTTPRequestHandler):
 
 
 def create_server(provider='codex', port=8880, state_file=ROOT / '.chat-state.json'):
-    """Build the same local service for the browser CLI or the optional desktop host."""
+    """Build the Python API for Electron or standalone backend development."""
     if provider not in PROVIDERS:
         raise ValueError('Unsupported model provider.')
     load_dotenv(ROOT / '.env')
@@ -325,13 +309,13 @@ def create_server(provider='codex', port=8880, state_file=ROOT / '.chat-state.js
 
 
 def main():
-    parser = argparse.ArgumentParser(description='啟動 SIGNET 本機聊天介面。')
+    parser = argparse.ArgumentParser(description='啟動 SIGNET 本機後端 API。')
     parser.add_argument('--port', type=int, default=8880)
     parser.add_argument('--provider', choices=PROVIDERS, default='codex')
     parser.add_argument('--state-file', type=Path, default=ROOT / '.chat-state.json')
     args = parser.parse_args()
     with create_server(args.provider, args.port, args.state_file) as server:
-        print(f'SIGNET 聊天介面：http://127.0.0.1:{server.server_port}', flush=True)
+        print(f'SIGNET 後端 API：http://127.0.0.1:{server.server_port}', flush=True)
         print('僅供本機使用；送出訊息會呼叫模型服務。Ctrl+C 結束；進行中的工具會等待完成。', flush=True)
         try:
             server.serve_forever()

@@ -17,10 +17,10 @@
     ]
   },
   "include": [
-    "modules/**/*.ts",
-    "modules/**/*.tsx",
-    "src/**/*.ts",
-    "src/**/*.tsx",
+    "main/**/*.ts",
+    "renderer/**/*.ts",
+    "renderer/**/*.tsx",
+    "shared/**/*.ts",
     "tests/**/*.ts",
     "tests/**/*.tsx"
   ]

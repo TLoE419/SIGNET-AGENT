@@ -57,5 +57,31 @@ class TransportTest(unittest.TestCase):
             remote.assert_called_once_with('true', timeout=4)
 
 
+class EnvironmentContractTest(unittest.TestCase):
+    def config(self):
+        return {'root': '/home/user/signet', 'source': '/home/user/signet/software/rev',
+                'image': '/home/user/signet/images/signet.sif', 'executor': '/usr/bin/apptainer',
+                'workRoot': '/home/user/signet/runs', 'partition': 'standard', 'revision': 'rev'}
+
+    def test_runtime_uses_the_verified_desktop_configuration(self):
+        with patch.dict(os.environ, {'SIGNET_SSH_BROKER': '/tmp/test', 'SIGNET_SSH_BROKER_TOKEN': 'secret'}), \
+                patch.object(ssh_transport, 'request', return_value={'stdout': json.dumps(self.config()).encode()}):
+            self.assertEqual(signet_runtime.image_path(), self.config()['image'])
+            self.assertEqual(signet_runtime.container_command(), '/usr/bin/apptainer')
+            self.assertEqual(signet_runtime.partition(), 'standard')
+            self.assertEqual(signet_runtime.remote_work_root(), '/home/user/signet/runs/cis')
+            self.assertEqual(signet_runtime.remote_work_root(network=True), '/home/user/signet/runs/network')
+
+    def test_environment_rejects_unsafe_paths_and_propagates_not_ready(self):
+        config = self.config()
+        config['workRoot'] = '/home/user/../other'
+        with patch.object(ssh_transport, 'request', return_value={'stdout': json.dumps(config).encode()}):
+            with self.assertRaises(OSError):
+                ssh_transport.environment()
+        with patch.object(ssh_transport, 'request', side_effect=ssh_transport.SshRemoteError('Prepare environment')):
+            with self.assertRaisesRegex(OSError, 'Prepare environment'):
+                ssh_transport.environment()
+
+
 if __name__ == '__main__':
     unittest.main()

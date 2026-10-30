@@ -1,5 +1,5 @@
-import type {SshConnectionPort,Snapshot,Profile,FormInput,Inspection,HostIdentity,ConnectionHealth} from '../../modules/ssh/types';
-import {profileInput,SshFailure} from '../../modules/ssh/validation';
+import type {SshConnectionPort,Snapshot,Profile,FormInput,Inspection,HostIdentity,ConnectionHealth} from '../../shared/ssh/types';
+import {profileInput,SshFailure} from '../../shared/ssh/validation';
 /** Test-only adapter. No filesystem, credentials, network or timers. */
 export class MockSshConnectionPort implements SshConnectionPort {
  private snapshot:Snapshot={selectedProfile:null,connection:null};private listeners=new Set<(s:Snapshot)=>void>();profiles:Profile[]=[];connectCalls=0;saveCalls=0;

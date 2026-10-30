@@ -5,7 +5,7 @@ const {mkdtemp}=require('node:fs/promises');
 const os=require('node:os');
 const path=require('node:path');
 const net=require('node:net');
-const {SshBroker}=require('../ssh/broker.cjs');
+const {SshBroker}=require('../main/ssh/ipc/broker.cjs');
 test('private broker requires its launch token and returns binary command output', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'signet-broker-'));
   const socketPath = path.join(root, 'runtime', 'broker.sock');
@@ -56,4 +56,14 @@ test('broker shutdown closes incomplete local clients without hanging', async ()
   await broker.close();
   await closed;
   assert.equal(socket.destroyed, true);
+});
+
+test('Python can query only a ready environment through the authenticated broker',async()=>{
+ let phase='checking';
+ const config={image:'/home/user/signet/image.sif'};
+ const broker=new SshBroker({socketPath:'/unused',token:'token',service:{},environment:{getSnapshot:()=>({phase,config})}});
+ await assert.rejects(()=>broker.request({token:'wrong',action:'environment',inputLength:0},Buffer.alloc(0)),/Unauthorized/);
+ await assert.rejects(()=>broker.request({token:'token',action:'environment',inputLength:0},Buffer.alloc(0)),/Prepare/);
+ phase='ready';
+ assert.deepEqual(JSON.parse((await broker.request({token:'token',action:'environment',inputLength:0},Buffer.alloc(0))).stdout),config);
 });

@@ -6,7 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const {app} = require('electron');
 const devMode = process.argv.includes('--dev-test');
-const {launch} = require('../main.cjs');
+const {launch} = require('../main/app/main.cjs');
 const temporary = mkdtempSync(path.join(os.tmpdir(), 'signet-electron-smoke-'));
 let running;
 const deadline = setTimeout(async () => {
@@ -41,7 +41,7 @@ app.on('will-quit', () => { clearTimeout(deadline); rmSync(temporary, {recursive
   assert.equal(value.node, 'undefined'); assert.equal(value.chatStatus, 403); assert.equal(value.workspace, 200);
   assert.equal(value.devBridge,devMode);assert.equal(value.devButton,devMode);
   if(devMode){
-    const panel=await window.webContents.executeJavaScript(`(async()=>{document.querySelector('.ssh-dev-launch').click();await new Promise(r=>setTimeout(r,100));const root=document.querySelector('.ssh-dev-panel');[...root.querySelectorAll('button')].find(b=>b.textContent==='Interactive shell').click();await new Promise(r=>setTimeout(r,100));const disabled=[...root.querySelectorAll('button')].find(b=>b.textContent==='Open shell').disabled;const canvas=!!root.querySelector('.xterm');[...root.querySelectorAll('button')].find(b=>b.textContent==='Close panel').click();return {disabled,canvas}})()`);
+    const panel=await window.webContents.executeJavaScript(`(async()=>{document.querySelector('.ssh-dev-launch').click();await new Promise(r=>setTimeout(r,100));const root=document.querySelector('.ssh-dev-panel');[...root.querySelectorAll('button')].find(b=>b.textContent==='Interactive shell').click();await new Promise(r=>setTimeout(r,100));const disabled=![...root.querySelectorAll('button')].some(b=>b.textContent==='Set up connection');const canvas=!!root.querySelector('.xterm');[...root.querySelectorAll('button')].find(b=>b.textContent==='Close panel').click();return {disabled,canvas}})()`);
     assert.equal(panel.disabled,true);assert.equal(panel.canvas,true);
   }
   assert.equal(value.sshButton, true);
@@ -65,6 +65,7 @@ app.on('will-quit', () => { clearTimeout(deadline); rmSync(temporary, {recursive
     connection.querySelector('form').requestSubmit();await settle();await settle();
     const account=document.querySelector('dialog[open]');result.duoPrompt=account.querySelector('h2').textContent;result.duoPassword=!!account.querySelector('input[aria-label="UCInetID password"]');
     [...account.querySelectorAll('button')].find(b=>b.textContent==='Cancel').click();await settle();document.querySelector('.ssh-identity').click();await settle();connection=document.querySelector('dialog[open]');
+    connection.querySelectorAll('[role=radio]')[1].click();await settle();
     [...connection.querySelectorAll('button')].find(b=>b.textContent==='Add SSH key…').click();await settle();
     const registration=document.querySelector('dialog[open]');result.registration=registration.querySelector('h2').textContent;
     result.sources=[...registration.querySelectorAll('[role=radio]')].map(b=>b.textContent);
@@ -79,7 +80,7 @@ app.on('will-quit', () => { clearTimeout(deadline); rmSync(temporary, {recursive
     const saved=await window.signetDesktop.ssh.listKeys();result.generatedWithoutAccount=saved.ok&&saved.value.length===1&&!saved.value[0].username;
     return result;
   })()`);
-  assert.equal(flow.duoPrompt,'Sign in with Duo');assert.equal(flow.duoPassword,true);assert.equal(flow.duo,'true');assert.equal(flow.sshDisabled,true);assert.equal(flow.passphrase,false);assert.equal(flow.connection,'SSH connection');assert.equal(flow.advancedCollapsed,true);assert.equal(flow.accountPassword,false);
+  assert.equal(flow.duoPrompt,'Sign in with Duo');assert.equal(flow.duoPassword,true);assert.equal(flow.duo,'true');assert.equal(flow.sshDisabled,false);assert.equal(flow.passphrase,false);assert.equal(flow.connection,'SSH connection');assert.equal(flow.advancedCollapsed,true);assert.equal(flow.accountPassword,false);
   assert.equal(flow.registration,'Generate SSH key');assert.equal(flow.sources.length,2);assert.equal(flow.existing,true);assert.equal(flow.keyName,true);assert.equal(flow.account,false);
   assert.equal(flow.setupTitle,'Set up SSH key');assert.equal(flow.setupPassword,true);assert.equal(flow.setupPassphrase,false);assert.equal(flow.generatedWithoutAccount,true);
   const screenshot = await window.webContents.capturePage();

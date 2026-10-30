@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const path = require('node:path');
-const root = path.join(__dirname, '..', 'web');
+const root = path.join(__dirname, '..', 'electron', 'renderer', 'features', 'chat');
 const context = vm.createContext({});
 context.window = context;
 vm.runInContext(fs.readFileSync(path.join(root, 'chat.js'), 'utf8').split('// SIGNET chat interface')[0], context);

@@ -1,11 +1,10 @@
 # Optional Electron shell
 
-This source-run desktop host displays the existing `web/` UI from an owned
-`chat_ui.ChatServer`. Browser startup, HTTP routes, model providers, scientific
-tools, VM transport and the Web UI remain available. Electron Main owns the
-optional SSH connection used by the Python scientific runtime; the renderer never
-receives a socket or private-key contents. Normal mode exposes no command API;
-explicit development mode adds a restricted interactive SSH terminal.
+Electron is the only supported UI. `renderer/` owns the application shell,
+styles, translations, chat and Stage 6 controllers. One React entry renders the
+shell and SSH controls. Existing chat/graph DOM controllers remain isolated in
+`workspace.js` to preserve their behavior during integration.
+Python remains a separate API service and can be developed without Electron.
 
 ## Run
 
@@ -107,7 +106,7 @@ normal SSH controls to Connect; dev login/unlock dialogs also show the live log.
   requests `ssh -O exit`, then terminates the owned PTY if needed and removes its
   private control directory. Reconnecting never replays input.
 
-`npm start` and browser mode have no terminal UI or terminal bridge. Main only
+`npm start` have no terminal UI or terminal bridge. Main only
 registers the dev IPC handlers for an explicit `--dev` in an unpackaged app;
 packaged apps ignore the flag. Dev IPC checks the owning window/main-frame
 origin, caps input and dimensions, and bounds unacknowledged terminal output.
@@ -163,12 +162,13 @@ to ask Electron Main to open command channels through the owned OpenSSH
 ControlMaster. The broker socket is
 placed in a random owner-private short directory, requires a random token passed
 only to the owned Python child, and transfers command input/output as binary data.
-The browser launcher has no broker variables and continues to use its configured
+Standalone Python has no broker variables and continues to use its configured
 system OpenSSH transport.
 
-The original React/TypeScript SSH components are isolated in `modules/ssh` and
-`src/ssh`; the chat and Stage 6 UI retain their existing JavaScript implementation.
-`npm start` builds the SSH bundles automatically. A missing or corrupt SSH
+SSH UI lives in `renderer/features/ssh`, native SSH services in `main/ssh`,
+and their contracts in `shared/ssh`. Chat and Stage 6 retain their existing
+JavaScript controllers under `renderer/features`.
+`npm start` builds the renderer and SSH Main/worker bundles automatically. A missing or corrupt SSH
 configuration is reported by the SSH controls without preventing chat startup.
 The earlier integration's flat version-1 profiles and host pins are read without
 rewriting them. Private-key-only edits retain their existing version (1 or 3).
@@ -180,12 +180,12 @@ Private key files and host pins are not migrated.
 
 ## Architecture and ownership
 
-- Electron Main spawns `server.py` with an anonymous control pipe. The wrapper
-  calls the same `create_server` factory as the original browser CLI.
+- Electron Main spawns `main/backend/server.py` with an anonymous control pipe. The wrapper
+  calls the independently usable `create_server` API factory.
 - Python binds an OS-assigned loopback port, reports readiness over stdout, and
   sends existing application diagnostics to stderr. Main never adopts another
   server or assumes that an occupied fixed port belongs to SIGNET.
-- Renderer loads the same HTML, scripts and HTTP APIs. Node integration is off,
+- Electron serves an allowlisted local renderer build through its session protocol handler. API requests are forwarded unchanged to the owned Python origin. Python serves no HTML or frontend assets. Node integration is off,
   context isolation and sandboxing are on. A narrow preload exposes only named SSH
   profile, key-picker, trust, registration and connection methods. Normal mode
   exposes no generic IPC, filesystem, shell or remote-exec method; explicit dev
@@ -226,15 +226,23 @@ it never repeats a model request or scientific operation. The previous 32-chat h
 limit is removed. Histories are retained without automatic eviction, so the local
 state file grows with usage.
 
-The browser CLI still uses its original project-local files. No existing history
-is moved, overwritten or automatically imported. Both interfaces share the same
-project `data/`, `runs/`, `.env`, and configured scientific runtime. Use only one
-interface at a time to run scientific work: the existing turn lock is per process,
-not a cross-process scientific lock.
+Standalone backend development still uses project-local state by default. No
+existing history is moved, overwritten, or automatically imported. The desktop
+and standalone backend share scientific files; do not run concurrent scientific
+work through separate processes (the turn lock is per process).
 
-Switching back to browser mode requires only closing Electron and running the
-original `.venv/bin/python chat_ui.py` command. Desktop state stays available for
-the next desktop launch.
+## Renderer integration migration
+
+- Removed: root `web/`, the browser UI at Python `/`, and Python static-asset routes.
+- Frontend sources now live in `electron/renderer/`; generated assets are in
+  `electron/build/renderer/` (not tracked). Run `npm ci --prefix electron`, then
+  `npm start --prefix electron`.
+- `python chat_ui.py` still starts a standalone API. `/bootstrap` returns JSON with
+  `token`, `model`, and `initial`; it replaces the former HTML bootstrap response.
+  `/chat`, `/stage6`, and file downloads retain their contracts and protections.
+- No stored-data migration is required. Preserve existing state files when
+  switching revisions; returning to the previous revision restores its browser
+  launcher without requiring a data conversion.
 
 ## Checks
 
@@ -271,3 +279,51 @@ Duo mode hides this block. Deleting removes the saved metadata entry and changes
 profiles referencing that key to Duo. It preserves private-key files and remote
 authorized_keys entries; it does not revoke remote access. Disconnect before
 changing keys. After changing the desktop bridge, restart Electron to load it.
+
+## Source layout and ownership
+
+```text
+electron/
+  main/
+    app/          Application entry, windows and lifecycle
+    backend/      Python process supervision and server.py
+    security/     Navigation and origin policy
+    renderer/     Allowlisted assets and API forwarding
+    ssh/          Service coordinator; connection/, keys/, storage/, ipc/
+    devtools/     Developer terminal service and IPC
+  preload/        Explicit, restricted desktop bridge
+  renderer/
+    app/          React root, application shell and feature composition
+    features/
+      chat/       Chat, streaming progress and Markdown controller
+      stage6/     Parameters, network graphs and comparisons
+      ssh/        connection/, auth/, keys/, state/ and feature composition
+      devtools/   Diagnostics and interactive terminal UI
+    components/   Shared modal, confirmation, actions and icons
+    styles/       Application styles and SSH color/layout tokens
+    i18n/         English and Traditional Chinese translations
+    vendor/       Third-party assets and licenses
+  shared/ssh/     Contracts and pure validation shared across processes
+  scripts/        Build and native dependency preparation
+  tests/          Unit, protocol, lifecycle and native application tests
+  build/          Generated renderer and Main/worker bundles (ignored)
+```
+
+Renderer and shared code must not import Main or native Node APIs. Main owns
+processes, filesystem access and private credentials. Renderer accesses desktop
+capabilities only through preload. `scripts/build.mjs` builds the entire app;
+`npm start`, `npm test` and the generated `build/ssh`/`build/renderer` locations
+remain stable. Source paths changed from the former `src/ssh`, `modules/ssh`,
+and root launcher files; no stored data or wire protocol changed.
+
+## Remote environment setup
+
+After SSH connects, the status block shows environment checks and installation
+progress. Click its environment row to choose a shared installation root/partition,
+review missing prerequisites, confirm installation, or retry a failed check.
+SSH stays connected when the scientific environment is unavailable. In development
+mode, the setup dialog and developer panel show step diagnostics.
+See [environment setup](main/environment/README.md) for behavior and limitations.
+
+Run `npm run test:environment --prefix electron` for the localhost SSH mock flow;
+it never connects to HPC3 or downloads the real image.

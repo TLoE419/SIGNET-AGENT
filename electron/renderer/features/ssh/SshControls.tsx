@@ -1,0 +1,35 @@
+import {EnvironmentModal} from '../environment/EnvironmentModal';
+import type {EnvironmentBridge,EnvironmentSnapshot} from '../../../shared/environment/types';
+import {useEffect,useState} from 'react';
+import {ConnectionModal,KeyRegistrationModal,useSshConnection} from './index';
+import {ElectronSshConnectionPort,ElectronSshKeyOnboardingPort,type SshBridge} from './state/ElectronSshConnectionPort';
+import {uciHpc3Preset,type AuthChallenge,type KeyMetadata,type FormInput} from '../../../shared/ssh/types';
+import {UnlockPrompt} from './auth/UnlockPrompt';
+import {AccountLoginPrompt} from './auth/AccountLoginPrompt';
+import {DevTerminalPanel,type DevTerminalBridge} from '../devtools/DevTerminalPanel';
+import {ConnectionDiagnostics,useConnectionDiagnostics} from '../devtools/ConnectionDiagnostics';
+import {connectionIdentity} from './connection/connectionIdentity';
+import {SshStatusBlock} from './connection/SshStatusBlock';
+const bridge=(window as unknown as {signetDesktop:{ssh:SshBridge}}).signetDesktop.ssh,port=new ElectronSshConnectionPort(bridge),onboarding=new ElectronSshKeyOnboardingPort(bridge);
+const devTerminal=(window as unknown as {signetDesktop:{devTerminal?:DevTerminalBridge}}).signetDesktop.devTerminal;
+const environmentBridge=(window as unknown as {signetDesktop:{environment:EnvironmentBridge}}).signetDesktop.environment;
+export function SshControls(){
+ const [environment,setEnvironment]=useState<EnvironmentSnapshot>({phase:'disconnected',message:'Connect SSH first.'}),[environmentOpen,setEnvironmentOpen]=useState(false);
+ useEffect(()=>{let active=true,received=false;const off=environmentBridge.subscribe(value=>{received=true;if(active)setEnvironment(value)});void environmentBridge.getSnapshot().then(reply=>{if(active&&!received&&reply.ok&&reply.value)setEnvironment(reply.value)});return()=>{active=false;off()}},[]);
+ const diagnostics=useConnectionDiagnostics(devTerminal),diagnosticView=devTerminal?<ConnectionDiagnostics entries={diagnostics}/>:undefined;
+ const ssh=useSshConnection(port),[open,setOpen]=useState(false),[keyOpen,setKeyOpen]=useState(false),[unlock,setUnlock]=useState(false),[account,setAccount]=useState(false),[draft,setDraft]=useState<FormInput|null>(null),[registration,setRegistration]=useState<{key:KeyMetadata;passphrase:string}|null>(null),[challenge,setChallenge]=useState<AuthChallenge|null>(null),[keys,setKeys]=useState<KeyMetadata[]>([]),p=ssh.snapshot.selectedProfile,liveStatus=ssh.snapshot.connection?.status||'unconfigured',status=ssh.error&&!['connected','connecting','disconnecting'].includes(liveStatus)?'error':liveStatus;
+ useEffect(()=>{void onboarding.listKeys().then(setKeys);return onboarding.subscribeAuthChallenge(setChallenge)},[]);
+ useEffect(()=>{const check=()=>{if(liveStatus==='connected'&&document.visibilityState!=='hidden')void ssh.healthCheck(false).catch(()=>{})};window.addEventListener('focus',check);document.addEventListener('visibilitychange',check);return()=>{window.removeEventListener('focus',check);document.removeEventListener('visibilitychange',check)}},[liveStatus]);
+ async function refreshKeys(){setKeys(await onboarding.listKeys())}
+ function credentialRequest(e:unknown){const code=(e as {code?:string}).code;if(code==='PASSPHRASE_REQUIRED'){setUnlock(true);return}if(code==='PASSWORD_REQUIRED'){setAccount(true);return}throw e}
+ async function connect(input:FormInput){setDraft(null);if(input.auth.method==='duo'){await ssh.save(input);setOpen(false);setAccount(true);return}try{await ssh.connect(input)}catch(e){credentialRequest(e)}}
+ async function toggle(){if(liveStatus==='connected'||liveStatus==='connecting'){await ssh.disconnect();return}if(!p){setOpen(true);return}if(p.auth.method==='duo'){setAccount(true);return}try{await ssh.connectSaved()}catch(e){credentialRequest(e)}}
+ const connection=ssh.snapshot.connection,identity=connectionIdentity(p,keys);
+ return <>{devTerminal&&<DevTerminalPanel onConnect={()=>setOpen(true)} diagnostics={diagnostics} bridge={devTerminal} connected={liveStatus==='connected'} status={liveStatus}/>}<SshStatusBlock environment={environment} onEnvironment={()=>setEnvironmentOpen(true)} name={identity.name} host={identity.endpoint} status={status} phase={connection?.phase} error={ssh.error||connection?.error} busy={ssh.busy} onEdit={()=>setOpen(true)} onToggle={()=>void toggle().catch(()=>{})}/>
+ {environmentOpen&&<EnvironmentModal diagnostics={diagnosticView} snapshot={environment} bridge={environmentBridge} onClose={()=>setEnvironmentOpen(false)}/>}
+ <UnlockPrompt diagnostics={diagnosticView} open={unlock} name={identity.name} onClose={()=>{setUnlock(false);if(liveStatus==='connecting')void ssh.disconnect()}} onConnect={ssh.connectSaved} pendingHost={ssh.snapshot.pendingHost} onTrust={ssh.trustHost}/>
+ <ConnectionModal diagnostics={diagnosticView} open={open} onClose={()=>setOpen(false)} profile={draft||p} keys={keys} status={status} busy={ssh.busy} health={connection?.health} error={ssh.error||connection?.error} onOpenKeyRegistration={input=>{setDraft(input);setOpen(false);setKeyOpen(true)}} onUpdateKey={async(id,input)=>{await onboarding.updateKey(id,input);await refreshKeys()}} onRemoveKey={async id=>{await onboarding.removeKey(id);setDraft(null);await refreshKeys()}} onInspectKey={ssh.inspect} onSave={async input=>{await ssh.save(input);setDraft(null)}} onConnect={connect} onDisconnect={ssh.disconnect} onCheck={()=>ssh.healthCheck(true)} pendingHost={ssh.snapshot.pendingHost} onTrustHost={ssh.trustHost}/>
+ <KeyRegistrationModal keys={keys} open={keyOpen} onClose={()=>{setKeyOpen(false);setOpen(true)}} onPickKey={ssh.pickKey} onInspectKey={ssh.inspect} onGenerateKey={onboarding.generateKey} onAddExternalKey={onboarding.addExternalKey} onGenerated={(key,passphrase)=>{setRegistration({key,passphrase});setKeyOpen(false);setAccount(true);void refreshKeys()}} onImported={async key=>{await refreshKeys();setDraft({...((draft||p)||uciHpc3Preset),username:key.username||draft?.username||p?.username||'',auth:{method:'private-key',privateKeyPath:key.privateKeyPath,keyId:key.keyId,managed:false}} as FormInput);setKeyOpen(false);setOpen(true)}}/>
+ <AccountLoginPrompt diagnostics={diagnosticView} onComplete={()=>{setAccount(false);setRegistration(null);setChallenge(null)}} open={account} username={p?.username||''} keyToRegister={registration?.key} challenge={challenge} onAnswer={onboarding.answerAuthChallenge} pendingHost={ssh.snapshot.pendingHost} onTrust={ssh.trustHost} onClose={()=>{setAccount(false);setRegistration(null);setChallenge(null);void bridge.cancelRegistration();if(liveStatus==='connecting')void ssh.disconnect()}} onLogin={async(username,password)=>{if(registration){const key=registration.key;await onboarding.registerKey({profile:{...(p||uciHpc3Preset),username,auth:{method:'private-key',privateKeyPath:key.privateKeyPath,keyId:key.keyId,managed:true}},keyId:key.keyId,passphrase:registration.passphrase,password});setRegistration(null);await refreshKeys()}else await ssh.connect({...p,...(!p?uciHpc3Preset:{}),username,auth:{method:'duo'}} as FormInput,password)}}/>
+ </>;
+}

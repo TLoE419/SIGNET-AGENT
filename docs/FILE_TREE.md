@@ -11,7 +11,7 @@ SIGNET-agent/
 ├── .gitignore                    # Excludes all data, credentials, records, and local dependencies
 ├── README.md                     # Project overview, scope, and quick start
 ├── requirements.txt              # Pins four direct dependency versions
-├── chat_ui.py                    # Local web service, conversation storage, and workspace API
+├── chat_ui.py                    # Independent local API service, conversation storage, and workspace API
 ├── llm_providers/                # Factory dispatch and isolated Codex, Gemini and Groq adapters
 ├── main.py                       # Conversation flow, public progress, and controlled tool calls
 ├── codex_provider.py             # Uses the downloader's own signed-in model CLI
@@ -47,32 +47,25 @@ SIGNET-agent/
 │       ├── start_scientific_vm.sh # Advanced startup script for the existing recovery environment
 │       └── verify_network.cjs     # Verifies scheduler, matrices, commands, and resampling results
 ├── electron/
-│   ├── main.cjs                  # Optional desktop window, security policy and application lifecycle
-│   ├── preload.cjs               # Narrow renderer bridge for SSH profiles, keys, trust and connection
-│   ├── backend.cjs               # Owned Python process, readiness and shutdown
-│   ├── server.py                 # Launcher around the existing ChatServer; parent-pipe supervision
-│   ├── policy.cjs                # Owned-origin request and navigation rules
-│   ├── package.json              # Electron startup and lifecycle/smoke tests
-│   ├── package-lock.json         # Pinned desktop dependencies
-│   ├── README.md                 # Desktop setup, state and lifecycle limitations
-│   ├── ssh/                      # Private Python-to-Main SSH broker
-│   ├── src/ssh/                  # Original SSH service, secure storage, IPC and host UI components
-│   ├── modules/ssh/              # Original connection/key dialogs, contracts and React hook
-│   ├── build-ssh.mjs             # Builds isolated SSH Main/worker and renderer bundles
-│   └── tests/                    # Lifecycle, SSH integration and native Electron smoke tests
-├── web/
-│   ├── index.html                # Chat and Stage 6 page structure
-│   ├── chat.js                   # Chat, progress, and response formatting, including the markup parser
-│   ├── chat.css                  # Interface and narrow-window styles
-│   ├── ssh.js                    # Desktop SSH profile, key, host-trust and connection UI
-│   ├── ssh.css                   # SSH dialog, status and responsive layout styles
-│   ├── i18n.js                   # Traditional Chinese / English switching
-│   ├── stage6.js                 # Parameter, network graph, and result-comparison interactions
-│   └── vendor/
-│       ├── README.md             # Package sources, versions, and modification history
-│       ├── vis-network.min.js    # Interactive network graph library
-│       ├── vis-network-LICENSE.txt  # Network graph library license
-│       └── markdown-it-LICENSE.txt  # Response markup parser license
+│   ├── main/
+│   │   ├── app/                  # Entry, windows and application lifecycle
+│   │   ├── backend/              # Python process supervision and server.py
+│   │   ├── security/             # Navigation and owned-origin policy
+│   │   ├── renderer/             # Asset serving and API forwarding
+│   │   ├── ssh/                  # Native transport, keys, trust, IPC and broker
+│   │   └── devtools/             # Developer terminal service
+│   ├── preload/                  # Restricted desktop API bridge
+│   ├── renderer/
+│   │   ├── app/                  # React root and application shell
+│   │   ├── features/             # chat/, stage6/, ssh/, devtools/
+│   │   ├── components/           # Shared dialogs, actions and icons
+│   │   ├── styles/               # Colors, spacing and interface styles
+│   │   ├── i18n/                 # English / Traditional Chinese
+│   │   └── vendor/               # Third-party assets and licenses
+│   ├── shared/ssh/               # Shared contracts and validation
+│   ├── scripts/                  # Build and native dependency preparation
+│   ├── tests/                    # Unit, integration and Electron smoke tests
+│   └── package.json              # App entry and build/test commands
 └── tests/
     ├── test_chat.py              # Conversation and tool flow
     ├── test_chat_progress.cjs     # Chat progress visibility, restoration, errors, and visualization isolation

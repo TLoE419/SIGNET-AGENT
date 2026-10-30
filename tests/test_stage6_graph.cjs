@@ -33,7 +33,7 @@ const data={baseline:'base',comparison:'new',runs:[{run_id:'base',frequency:1,to
 const original=JSON.stringify(data);
 const context=vm.createContext({$,session:'test-session',uiLanguage:'en',busy:false,uiText(el,text){el.textContent=text;},vis:{Network},window:{vis:true,addEventListener:(name,fn)=>events[name]=fn},document:{createElement(tag){const e=new Element(tag);elements.push(e);return e;},querySelector:selector=>selector==='.stage6-pane'?pane:selector==='.workspace'?workspace:{content:'token'},querySelectorAll:()=>tabs,addEventListener(){}},history:{replaceState(){}},sessionStorage:{getItem:k=>storage.get(k),setItem:(k,v)=>storage.set(k,v)},fetch:async()=>({ok:true,json:async()=>structuredClone(data)}),setInterval(){},clearInterval(){},setTimeout(fn){timers.set(++timerId,fn);return timerId;},clearTimeout(id){timers.delete(id);},requestAnimationFrame(fn){timers.set(++timerId,fn);return timerId;},cancelAnimationFrame(id){timers.delete(id);}});
 (async()=>{
-  vm.runInContext(fs.readFileSync('web/stage6.js','utf8'),context);
+  vm.runInContext(fs.readFileSync('electron/renderer/features/stage6/stage6.js','utf8'),context);
   await new Promise(setImmediate);
   assert.equal(live.length,2);
   const first=live[0], initial=structuredClone(first.positions);
@@ -53,7 +53,7 @@ const context=vm.createContext({$,session:'test-session',uiLanguage:'en',busy:fa
   assert.equal(restored.scale,2.1);assert.deepEqual(restored.positions.A,initial.A);
   restored.events.dragStart({nodes:[]});assert.notEqual(restored.physics,true,'panning must not start physics');restored.events.dragEnd();
   events.pagehide();
-  vm.runInContext(fs.readFileSync('web/stage6.js','utf8'),context);
+  vm.runInContext(fs.readFileSync('electron/renderer/features/stage6/stage6.js','utf8'),context);
   await new Promise(setImmediate);
   assert.equal(live.at(-2).scale,2.1,'reload restores the saved zoom');
   assert.deepEqual(live.at(-2).positions.A,initial.A,'reload restores dragged positions');
@@ -70,7 +70,7 @@ const context=vm.createContext({$,session:'test-session',uiLanguage:'en',busy:fa
   assert.deepEqual(live.at(-2).position,{x:100,y:200},'reopening preserves pan');
   assert.deepEqual(live.at(-2).positions.A,initial.A,'reopening preserves dragged nodes');
   $('s6-close').events.click();
-  vm.runInContext(fs.readFileSync('web/stage6.js','utf8'),context);
+  vm.runInContext(fs.readFileSync('electron/renderer/features/stage6/stage6.js','utf8'),context);
   await new Promise(setImmediate);
   assert.equal(pane.hidden,true,'reload remembers manual collapse');
   $('s6-open').events.click();

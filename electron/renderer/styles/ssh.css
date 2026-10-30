@@ -1,0 +1,192 @@
+/* Shared SSH palette and layout tokens. */
+#ssh-root,.ssh-modal{--ssh-accent-color:#34765e;--ssh-accent-hover:#285a49;--ssh-accent-soft:#edf4ee;--ssh-danger-color:#b91c1c;--ssh-danger-hover:#991b1b;--ssh-danger-active:#7f1d1d;--ssh-dev-accent:#7e22ce;--ssh-dev-accent-hover:#6b21a8;--ssh-dev-surface:#21132f;--ssh-dev-text:#f3e8ff;--ssh-input-border:#d9e2d6;--ssh-dialog-padding:24px;--ssh-action-gap:10px;--ssh-section-gap:24px}
+#ssh-root{position:fixed;right:20px;bottom:16px;z-index:2000;font:14px Inter,system-ui,sans-serif;color:#222}.ssh-inline{display:flex;gap:10px;align-items:center;background:white;border:1px solid #ddd;border-radius:8px;padding:10px;box-shadow:0 2px 10px #0001}.ssh-inline small{display:block;color:#555}#ssh-root button,.ssh-modal button{font:inherit;cursor:pointer;border:1px solid #aaa;border-radius:5px;background:#fff;padding:7px 12px}.ssh-badge{border-radius:20px!important}.ssh-modal{width:min(580px,90vw);max-height:85vh;overflow:auto;border:1px solid #bbb;border-radius:12px;padding:var(--ssh-dialog-padding);color:#222;font:14px Inter,system-ui,sans-serif}.ssh-modal::backdrop{background:#0007}.ssh-modal h2{margin-top:0;padding-right:40px}.ssh-modal label{display:block;margin:12px 0}.ssh-modal label input:not([type=checkbox]){box-sizing:border-box;display:block;width:100%;padding:8px;margin-top:5px;border:1px solid #888;border-radius:4px;font:inherit}.ssh-modal label span{display:block;font-size:12px;margin-top:5px}.ssh-modal p{line-height:1.5}.ssh-modal fieldset{border:1px solid #ddd}.ssh-dialog-actions{display:flex;justify-content:flex-end;flex-wrap:wrap;gap:var(--ssh-action-gap);margin-top:var(--ssh-section-gap)}.ssh-modal .ssh-primary{background:var(--ssh-accent-color);color:#fff}.ssh-modal button:disabled{opacity:.5;cursor:default}.ssh-modal code{overflow-wrap:anywhere}.ssh-modal [role=alert]{color:#a32121}.ssh-modal :focus-visible,.ssh-inline :focus-visible{outline:3px solid var(--ssh-accent-color);outline-offset:2px}.ssh-modal section{border:1px solid #ad7600;padding:12px}
+
+#ssh-root .ssh-modal .ssh-primary{background:var(--ssh-accent-color);color:#fff}.ssh-modal a{display:inline;color:var(--ssh-accent-color);text-decoration:underline}.ssh-modal p{margin:10px 0}.ssh-modal details{margin:12px 0}.ssh-modal summary{cursor:pointer;color:var(--ssh-accent-color)}.ssh-modal button:disabled{opacity:.65}
+.ssh-modal .ssh-advanced{margin:14px 0;padding:10px 12px;border:1px solid var(--ssh-input-border);border-radius:7px;background:#f7f8f5}.ssh-modal .ssh-advanced summary{font-weight:600;color:#526953}.ssh-modal .ssh-advanced>p{color:#75847b;font-size:12px}.ssh-modal .ssh-advanced label:last-child{margin-bottom:2px}
+.ssh-modal label select{box-sizing:border-box;display:block;width:100%;padding:8px;margin-top:5px;border:1px solid #888;border-radius:4px;background:#fff;color:inherit;font:inherit}.ssh-key-actions{display:flex;justify-content:flex-end;margin-top:-4px}
+.ssh-modal .ssh-key-source{display:grid;gap:8px;margin:14px 0;padding:0;border:0}.ssh-key-source>button{display:block;width:100%;padding:10px 12px;border:1px solid var(--ssh-input-border);border-radius:7px;background:#f7f8f5;color:#1e293b;text-align:left}.ssh-key-source>button[aria-checked=true]{border-color:#10b981;background:#f0fdf4;box-shadow:0 0 0 2px #10b9811f}.ssh-key-source strong{display:flex;align-items:center;justify-content:space-between;gap:8px}.ssh-key-source strong span{padding:2px 5px;border-radius:4px;background:#eef2f7;color:#64748b;font:9px ui-monospace,SFMono-Regular,monospace;white-space:nowrap}.ssh-key-source small{display:block;margin-top:5px;color:#64748b;font-size:12px;line-height:17px}.ssh-key-source-active strong span{background:#dcfce7;color:#047857}.ssh-onboarding{margin:12px 0;padding:12px!important;border:1px solid var(--ssh-input-border)!important;border-radius:7px;background:#f7f8f5}.ssh-onboarding textarea{box-sizing:border-box;width:100%;resize:vertical;font:11px/16px ui-monospace,SFMono-Regular,monospace}.ssh-auth-challenge{margin:12px 0;border-color:#9ab7a6!important;background:var(--ssh-accent-soft)}.ssh-auth-challenge strong{display:block}.ssh-modal .ssh-onboarding code{display:block;color:#334155}
+.ssh-duo-instructions{white-space:pre-wrap}.ssh-duo-options{display:grid;gap:8px;margin:10px 0}.ssh-modal .ssh-duo-options button{width:100%;text-align:left;border-color:var(--ssh-accent-color);background:#fff}.ssh-duo-options button b{display:inline-block;min-width:20px;color:var(--ssh-accent-hover)}
+
+/* Luminous glass status block; local SVG/CSS only, no CDN or icon fonts. */
+#ssh-root .ssh-status-block{--ssh-accent:#94a3b8;--ssh-border:#334155;position:relative;display:flex;align-items:center;gap:12px;width:390px;max-width:calc(100vw - 40px);box-sizing:border-box;padding:9px 14px;border:1px solid var(--ssh-border);border-radius:14px;background:linear-gradient(110deg,rgba(15,23,42,.97),rgba(8,15,30,.96));box-shadow:0 8px 24px #02061726,inset 0 1px 0 #ffffff05;backdrop-filter:blur(16px);color:#e2e8f0;transition:border-color .2s,box-shadow .2s}
+#ssh-root .ssh-status-block button{font:inherit;box-sizing:border-box;cursor:pointer}
+#ssh-root .ssh-identity{display:flex;align-items:center;gap:11px;flex:1;min-width:0;padding:0;border:0;border-radius:5px;background:transparent;color:inherit;text-align:left}
+.ssh-status-icon{display:grid;place-items:center;flex:0 0 27px;height:27px;border:1px solid #47556966;border-radius:8px;background:#1e293b80;color:var(--ssh-accent)}
+.ssh-status-icon svg{width:17px;height:17px}
+.ssh-status-copy{display:block;min-width:0;flex:1}
+.ssh-status-heading{display:flex;align-items:center;gap:6px;min-width:0;line-height:18px}
+.ssh-status-heading strong{font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.ssh-protocol{font:9px ui-monospace,SFMono-Regular,monospace;padding:0 3px;border:1px solid #47556980;border-radius:3px;color:var(--ssh-accent)}
+.ssh-state-text{font-size:10px;color:var(--ssh-accent);white-space:nowrap;margin-left:auto}
+.ssh-status-subtitle{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%;font:10px/16px ui-monospace,SFMono-Regular,Consolas,monospace;color:#94a3b8}
+.ssh-status-divider{width:1px;height:26px;background:#33415580;flex-shrink:0}
+#ssh-root .ssh-toggle{position:relative;flex:0 0 36px;width:36px;height:20px;padding:0;border:1px solid transparent;border-radius:20px;background:#475569;transition:background .2s}
+.ssh-toggle>span{position:absolute;left:2px;top:2px;width:14px;height:14px;border-radius:50%;background:#cbd5e1;box-shadow:0 1px 3px #0003;transition:transform .2s,background .2s}
+#ssh-root .ssh-indicator{position:relative;display:grid;place-items:center;flex:0 0 20px;width:20px;height:28px;padding:0;border:0;background:transparent;color:var(--ssh-accent)}
+.ssh-indicator .ssh-badge-label{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+.ssh-led{display:none}.ssh-indicator .ssh-led{position:relative;display:block;width:9px;height:9px;border-radius:50%;background:#64748b}
+#ssh-root .ssh-status-block[data-status=connected]{--ssh-accent:#34d399;--ssh-border:#10b98166;box-shadow:0 8px 24px #022c2226,inset 0 1px 0 #ffffff05}
+[data-status=connected] .ssh-status-icon,[data-status=connecting] .ssh-status-icon{background:#022c2280;border-color:#10b98155}
+#ssh-root [data-status=connected] .ssh-toggle{background:#10b981}
+[data-status=connected] .ssh-toggle>span{transform:translateX(16px);background:#fff}
+[data-status=connected] .ssh-led{background:#34d399;box-shadow:0 0 8px #10b981,0 0 14px #10b98166}
+#ssh-root .ssh-status-block[data-status=error]{--ssh-accent:#f87171;--ssh-border:#ef444466;background:linear-gradient(110deg,#0f172af5,#2b1018eb)}
+[data-status=error] .ssh-status-icon{background:#450a0a80;border-color:#ef444455}
+[data-status=error] .ssh-status-subtitle{color:#f87171}
+#ssh-root [data-status=error] .ssh-toggle{background:#1e293b;border-color:#ef444466}
+[data-status=error] .ssh-toggle>span{background:#fca5a5}
+[data-status=error] .ssh-led{background:#ef4444;box-shadow:0 0 8px #ef444455}
+[data-status=error] .ssh-led::before{content:'';position:absolute;inset:-4px;border-radius:50%;background:#ef444440;animation:ssh-danger-halo 2s ease-out infinite}
+#ssh-root .ssh-status-block:is([data-status=connecting],[data-status=disconnecting]){--ssh-accent:#34d399;--ssh-border:transparent}
+[data-status=connecting] .ssh-status-subtitle,[data-status=disconnecting] .ssh-status-subtitle{color:#34d399}
+#ssh-root .ssh-status-block:is([data-status=connecting],[data-status=disconnecting]) .ssh-toggle{background:#10b98133;border-color:#10b98166}
+:is([data-status=connecting],[data-status=disconnecting]) .ssh-toggle>span{transform:translateX(8px);background:#34d399}
+:is([data-status=connecting],[data-status=disconnecting]) .ssh-led{width:8px;height:8px;background:#6ee7b7;box-shadow:0 0 10px #34d399;animation:ssh-loading-glow 1.4s ease-in-out infinite}
+:is([data-status=connecting],[data-status=disconnecting]) .ssh-indicator::before{content:'';position:absolute;width:18px;height:18px;border:1px dashed #34d399;border-radius:50%;animation:ssh-orbit 1.4s linear infinite}
+.ssh-status-outline{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible}
+.ssh-status-outline rect{fill:none;stroke:#34d399;stroke-width:1.5;stroke-linecap:round;stroke-dasharray:2 9;animation:ssh-border-travel 4s linear infinite}
+#ssh-root .ssh-status-block button:focus-visible{outline:2px solid #6ee7b7;outline-offset:4px}
+#ssh-root .ssh-status-block button:disabled{cursor:wait;opacity:.65}
+#ssh-root .ssh-status-block:hover{border-color:var(--ssh-accent)}
+@keyframes ssh-orbit{to{transform:rotate(360deg)}}
+@keyframes ssh-border-travel{to{stroke-dashoffset:-88}}
+@keyframes ssh-loading-glow{50%{opacity:.5;box-shadow:0 0 4px #34d39966}}
+@keyframes ssh-danger-halo{0%{transform:scale(.7);opacity:.7}100%{transform:scale(1.5);opacity:0}}
+@media(prefers-reduced-motion:reduce){.ssh-status-block *,.ssh-status-block *::before{animation:none!important;transition:none!important}}
+@media(max-width:500px){#ssh-root .ssh-status-block{gap:9px;padding:9px 11px}.ssh-state-text{font-size:9px}.ssh-protocol{display:none}}
+
+/* Header integration: transparent surface, readable on the host app's light bar. */
+#ssh-root{position:static;flex:0 0 auto;z-index:auto;color:#1e293b}
+#ssh-root[hidden]{display:none}
+[data-name="Top bar"].ssh-topbar{align-items:center;padding-top:3px;padding-bottom:3px;overflow:visible}
+.ssh-topbar>p{flex:1;min-width:0;width:auto}
+#ssh-root .ssh-status-block,#ssh-root .ssh-status-block[data-status=connected],#ssh-root .ssh-status-block[data-status=error]{background:transparent;box-shadow:none;backdrop-filter:none;color:#1e293b;cursor:pointer}
+#ssh-root .ssh-status-block{--ssh-accent:#64748b;--ssh-border:#cbd5e1;padding:6px 12px;width:370px}
+#ssh-root .ssh-status-block[data-status=connected]{--ssh-accent:#047857;--ssh-border:#10b98166}
+#ssh-root .ssh-status-block[data-status=error]{--ssh-accent:var(--ssh-danger-color);--ssh-border:#ef444466}
+#ssh-root .ssh-status-block:is([data-status=connecting],[data-status=disconnecting]){--ssh-accent:#047857}
+.ssh-status-subtitle{color:#64748b}
+[data-status=error] .ssh-status-subtitle{color:var(--ssh-danger-color)}
+[data-status=connecting] .ssh-status-subtitle,[data-status=disconnecting] .ssh-status-subtitle{color:#047857}
+.ssh-status-icon{background:transparent}
+[data-status=connected] .ssh-status-icon,[data-status=connecting] .ssh-status-icon,[data-status=error] .ssh-status-icon{background:transparent}
+.ssh-unlock{max-width:420px}
+
+/* Mount the original status control in the current workspace header. */
+main > #ssh-root { align-self:flex-end; margin:0 0 16px; flex-shrink:0; }
+.ssh-modal { max-height:calc(100dvh - 40px); overflow:auto; }
+.ssh-account-login code{display:block;margin-top:6px;color:#334155;font-size:12px;line-height:1.5}.ssh-account-login textarea{box-sizing:border-box;width:100%;resize:vertical;font:11px/16px ui-monospace,SFMono-Regular,monospace}
+#ssh-root .ssh-dev-launch{position:fixed;right:20px;bottom:18px;background:#111827;color:#e5e7eb;border-color:#475569;font-size:12px}.ssh-dev-panel{position:fixed;inset:auto 20px 18px max(20px,15vw);z-index:3000;box-sizing:border-box;background:#111827;color:#e5e7eb;border:1px solid #475569;border-radius:10px;padding:14px;box-shadow:0 8px 40px #0006}.ssh-dev-panel header,.ssh-dev-panel nav,.ssh-dev-actions{display:flex;align-items:center;gap:12px;margin-bottom:10px;flex-wrap:wrap}.ssh-dev-panel header span{flex:1}.ssh-dev-panel p,.ssh-dev-actions span{font-size:12px;color:#cbd5e1}#ssh-root .ssh-dev-panel button{background:#38204f;color:var(--ssh-dev-text);border-color:#a855f7}#ssh-root .ssh-dev-panel button[aria-pressed=true]{background:var(--ssh-dev-accent);border-color:#d8b4fe;color:#fff}.ssh-dev-panel button:disabled{opacity:.45;cursor:default!important}.ssh-dev-panel pre{height:min(36vh,360px);overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.5 ui-monospace,monospace}.ssh-dev-terminal{height:min(40vh,400px);min-height:160px}.ssh-dev-panel [role=alert]{color:#fca5a5}.ssh-dev-panel [hidden]{display:none!important}
+.ssh-connection-diagnostics pre{box-sizing:border-box;max-height:220px;overflow:auto;background:#111827;color:#d1fae5;padding:12px;border-radius:6px;white-space:pre-wrap;overflow-wrap:anywhere;font:11px/1.5 ui-monospace,monospace}.ssh-connection-diagnostics summary{cursor:pointer}.ssh-dev-panel .ssh-connection-diagnostics pre{height:min(36vh,360px);max-height:360px}
+
+/* Icon radio tiles inspired by https://codepen.io/caseycallow/pen/yaGQMo. */
+.ssh-modal .ssh-mode-tiles{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin:16px 0 20px;padding:0;border:0}
+#ssh-root .ssh-modal .ssh-mode-tiles>button{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;min-width:0;min-height:92px;padding:12px;border:2px solid var(--ssh-accent-color);border-radius:8px;background:#fff;color:var(--ssh-accent-color);text-align:center;box-shadow:none;transition:transform .2s ease,background-color .2s ease,box-shadow .2s ease}
+#ssh-root .ssh-modal .ssh-mode-tiles>button>span{font-size:12px;font-weight:650;line-height:1.5;letter-spacing:.7px;text-transform:uppercase}
+.ssh-mode-tiles .ssh-mode-icon{width:28px;height:28px;flex-shrink:0}
+#ssh-root .ssh-modal .ssh-mode-tiles>button:not(:disabled):not([aria-checked=true]):hover{background:var(--ssh-accent-soft);box-shadow:0 3px 12px #285a491a}
+#ssh-root .ssh-modal .ssh-mode-tiles>button[aria-checked=true]{background:var(--ssh-accent-color);border-color:var(--ssh-accent-color);color:#fff;cursor:not-allowed;box-shadow:none;transition:none}
+#ssh-root .ssh-modal .ssh-mode-tiles>button:focus-visible{outline:3px solid var(--ssh-accent-color);outline-offset:4px}
+#ssh-root .ssh-modal .ssh-mode-tiles>button:disabled{cursor:default;opacity:.55}
+@media(prefers-reduced-motion:reduce){#ssh-root .ssh-modal .ssh-mode-tiles>button{transition:none}}
+@media(max-width:420px){.ssh-modal .ssh-mode-tiles{gap:16px}#ssh-root .ssh-modal .ssh-mode-tiles>button{padding:10px 8px;min-height:92px}}
+
+#ssh-root .ssh-modal .ssh-modal-close{position:absolute;top:16px;right:16px;display:grid;place-items:center;width:36px;height:36px;padding:0;border:0;border-radius:8px;background:transparent;color:#64748b}
+#ssh-root .ssh-modal .ssh-modal-close:hover{background:var(--ssh-accent-soft);color:var(--ssh-accent-hover)}
+
+.ssh-modal .ssh-key-block{margin:14px 0;padding:16px;border:1px solid #cbded3;border-radius:10px;background:#f6faf7}.ssh-key-block h3{margin:0 0 12px;font-size:15px}.ssh-key-block code{display:block;font-size:11px;color:#64748b}.ssh-key-block .ssh-key-actions{justify-content:flex-start;gap:8px;margin:20px 0 0;flex-wrap:wrap}.ssh-key-editor,.ssh-key-delete{margin-top:12px;padding-top:12px;border-top:1px solid #cbded3}.ssh-key-editor>button,.ssh-key-delete>button{margin-right:8px}
+
+.ssh-key-selection{display:flex;align-items:flex-end;gap:10px}.ssh-key-selection>label{flex:1;min-width:0}.ssh-key-selection .ssh-key-detail-button{display:grid;place-items:center;flex:0 0 38px;height:38px;margin-bottom:12px;color:var(--ssh-accent-hover)}.ssh-key-dialog{width:min(460px,90vw)}.ssh-key-details{display:grid;grid-template-columns:130px minmax(0,1fr);gap:12px;margin:20px 0}.ssh-key-details dt{color:#64748b}.ssh-key-details dd{margin:0;overflow-wrap:anywhere}.ssh-key-details code{font-size:12px}.ssh-key-account-note{font-size:12px;color:#64748b}
+
+/* Destructive actions share a consistent red treatment. */
+#ssh-root .ssh-modal button.ssh-danger{background:var(--ssh-danger-color);border-color:var(--ssh-danger-color);color:#fff}
+#ssh-root .ssh-modal button.ssh-danger:not(:disabled):hover{background:var(--ssh-danger-hover);border-color:var(--ssh-danger-hover)}
+#ssh-root .ssh-modal button.ssh-danger:not(:disabled):active{background:var(--ssh-danger-active);border-color:var(--ssh-danger-active)}
+#ssh-root .ssh-modal button.ssh-danger:focus-visible{outline-color:#dc2626}
+
+/* Shared spacing for key details, editing, and confirmation dialogs. */
+.ssh-key-dialog{padding:var(--ssh-dialog-padding)}
+.ssh-key-dialog h2{margin:0 0 24px;line-height:1.3}
+.ssh-key-dialog form{margin:0}
+.ssh-key-dialog form>fieldset{display:grid;gap:20px;min-width:0;margin:0;padding:0;border:0}
+.ssh-key-dialog form>fieldset>label{margin:0}
+.ssh-key-dialog form>fieldset>label input:not([type=checkbox]){margin-top:8px;padding:10px 12px;border-radius:6px}
+
+.ssh-key-dialog>p{margin:0;line-height:1.6}
+.ssh-key-dialog .ssh-key-account-note{margin-top:16px}
+.ssh-key-dialog [role=alert]{margin:16px 0 0}
+
+#ssh-root .ssh-modal .ssh-primary{border-color:var(--ssh-accent-color)}
+#ssh-root .ssh-modal .ssh-primary:not(:disabled):hover{background:var(--ssh-accent-hover);border-color:var(--ssh-accent-hover)}
+.ssh-modal .ssh-advanced summary:hover{color:var(--ssh-accent-color)}
+.ssh-modal input[type=checkbox],.ssh-modal input[type=radio]{accent-color:var(--ssh-accent-color)}
+
+.ssh-dialog-actions>.ssh-danger:first-child{margin-right:auto}
+
+/* Developer tools have their own purple identity, including embedded diagnostics. */
+#ssh-root .ssh-dev-launch{background:var(--ssh-dev-accent);color:#fff;border:2px solid #c084fc;box-shadow:0 4px 18px #7e22ce40;font-weight:650}
+#ssh-root .ssh-dev-launch:hover{background:var(--ssh-dev-accent-hover)}
+.ssh-dev-badge{display:inline-block;flex:0 0 auto!important;padding:2px 6px;margin-right:6px;border-radius:4px;background:var(--ssh-dev-accent);color:#fff;font:700 10px/1.5 ui-monospace,monospace;letter-spacing:1px;vertical-align:middle}
+.ssh-dev-launch .ssh-dev-badge{background:var(--ssh-dev-text);color:var(--ssh-dev-accent-hover)}
+.ssh-dev-panel{background:var(--ssh-dev-surface);color:var(--ssh-dev-text);border:2px solid #a855f7;box-shadow:0 8px 40px #581c8740}
+.ssh-dev-panel header{padding-bottom:12px;border-bottom:1px solid var(--ssh-dev-accent)}
+.ssh-dev-panel p,.ssh-dev-actions span,.ssh-dev-panel header>span{color:#d8b4fe}
+#ssh-root .ssh-dev-panel button:not(:disabled):hover{background:#581c87}
+#ssh-root .ssh-dev-panel button[aria-pressed=true]:hover{background:var(--ssh-dev-accent)}
+#ssh-root .ssh-dev-panel :focus-visible,#ssh-root .ssh-dev-launch:focus-visible{outline:3px solid #c084fc;outline-offset:3px}
+#ssh-root .ssh-connection-diagnostics{margin:20px 0;padding:12px;border:1px solid #c084fc;border-left:4px solid #9333ea;border-radius:8px;background:#faf5ff}
+#ssh-root .ssh-connection-diagnostics summary{color:var(--ssh-dev-accent-hover);font-weight:600}
+#ssh-root .ssh-connection-diagnostics summary:focus-visible{outline-color:#9333ea}
+.ssh-connection-diagnostics pre,.ssh-dev-panel pre{background:var(--ssh-dev-surface);color:var(--ssh-dev-text)}
+#ssh-root .ssh-dev-panel .ssh-connection-diagnostics{background:#2e1942;border-color:#a855f7}
+#ssh-root .ssh-dev-panel .ssh-connection-diagnostics summary{color:#e9d5ff}
+
+.ssh-dev-actions>span{flex:1}
+#ssh-root .ssh-dev-panel .ssh-dev-switch{position:relative;flex:0 0 42px;width:42px;height:24px;padding:0;border:1px solid #c084fc;border-radius:16px;background:#38204f}
+.ssh-dev-switch>span{position:absolute;left:3px;top:3px;width:16px;height:16px;border-radius:50%;background:#e9d5ff;transition:transform .15s ease}
+#ssh-root .ssh-dev-panel .ssh-dev-switch[aria-checked=true]{background:#9333ea}
+.ssh-dev-switch[aria-checked=true]>span{transform:translateX(18px);background:#fff}
+@media(prefers-reduced-motion:reduce){.ssh-dev-switch>span{transition:none}}
+
+#ssh-root .ssh-status-block .ssh-status-subtitle{color:#64748b}
+
+#ssh-root .ssh-status-block{flex-wrap:wrap;row-gap:6px}
+#ssh-root .ssh-status-block .ssh-environment-status{order:2;display:flex;align-items:center;gap:7px;width:100%;flex:0 0 100%;padding:6px 0 0;border:0;border-top:1px solid #d9e2d6;border-radius:0;background:transparent;text-align:left;color:#526953;font-size:11px}
+.ssh-environment-status>span:nth-child(2){flex:1}
+.ssh-environment-dot{width:6px;height:6px;background:#94a3b8;border-radius:50%}
+[data-phase=ready] .ssh-environment-dot{background:var(--ssh-accent-color)}
+[data-phase=error] .ssh-environment-dot,[data-phase=blocked] .ssh-environment-dot{background:var(--ssh-danger-color)}
+.ssh-environment-status:is([data-phase=checking],[data-phase=installing-source],[data-phase=installing-image],[data-phase=verifying]) .ssh-environment-dot{background:var(--ssh-accent-color);animation:ssh-loading-glow 1.4s ease-in-out infinite}
+.ssh-environment-modal code{font-size:11px}
+@media(prefers-reduced-motion:reduce){.ssh-environment-dot{animation:none!important}}
+
+/* Disclosure hides details while preserving the switch and state indicator. */
+#ssh-root .ssh-status-block{height:48px;min-height:48px;max-height:48px;flex-shrink:0;flex-wrap:nowrap;transition:width .22s ease,padding .22s ease,gap .22s ease,border-color .2s,box-shadow .2s;interpolate-size:allow-keywords}
+#ssh-root .ssh-collapse{display:grid;place-items:center;flex:0 0 20px;padding:0;border:0;border-radius:4px;background:transparent;color:var(--ssh-accent)}
+.ssh-disclosure-arrow{transition:transform .22s ease}
+[data-expanded=true] .ssh-disclosure-arrow{transform:rotate(180deg)}
+.ssh-status-details{display:flex;flex-direction:column;justify-content:center;height:34px;position:relative;flex:1;min-width:0;overflow:hidden;opacity:1;transition:opacity .16s ease,max-width .22s ease;max-width:500px}
+#ssh-root .ssh-identity{width:100%;flex:none}
+#ssh-root .ssh-status-block[data-expanded=false]{width:136px;padding:6px 12px;gap:10px}
+[data-expanded=false] .ssh-status-details{max-width:0;opacity:0;pointer-events:none}
+#ssh-root [data-expanded=false] .ssh-status-divider{display:none}
+#ssh-root .ssh-status-block .ssh-environment-status{margin-top:6px;white-space:nowrap;flex:none}
+.ssh-modal-content{display:flow-root;min-width:0}
+.ssh-modal{box-sizing:border-box;scrollbar-gutter:stable;transition:opacity .18s ease,translate .18s ease,display .18s allow-discrete,overlay .18s allow-discrete;opacity:0;translate:0 8px}
+.ssh-modal[open]{opacity:1;translate:0 0}
+.ssh-modal::backdrop{transition:opacity .18s ease,display .18s allow-discrete,overlay .18s allow-discrete;opacity:0}
+.ssh-modal[open]::backdrop{opacity:1}
+@starting-style{.ssh-modal[open]{opacity:0;translate:0 8px}.ssh-modal[open]::backdrop{opacity:0}}
+@media(prefers-reduced-motion:reduce){.ssh-modal,.ssh-modal::backdrop,.ssh-disclosure-arrow,.ssh-status-details,#ssh-root .ssh-status-block{transition:none!important}}
+
+/* Keep initialization on the existing heading row at the original compact height. */
+#ssh-root .ssh-status-details .ssh-environment-status{position:absolute;top:0;right:0;width:auto;max-width:60%;margin:0;padding:0;border:0;line-height:18px;font-size:10px;gap:4px}
+.ssh-status-details:has(.ssh-environment-status) .ssh-status-heading{padding-right:60%}
+#ssh-root .ssh-status-details .ssh-environment-status>span:nth-child(2){overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+#ssh-root .ssh-collapse{flex-basis:24px;width:24px;height:28px;border-radius:6px;transition:background-color .15s ease,color .15s ease,box-shadow .15s ease}
+#ssh-root .ssh-collapse:hover{background:var(--ssh-accent-soft);color:var(--ssh-accent-color);box-shadow:inset 0 0 0 1px #34765e26}
+#ssh-root .ssh-collapse:active{background:#dce9df}
+#ssh-root .ssh-collapse:focus-visible{outline:2px solid var(--ssh-accent-color);outline-offset:2px}
+@media(prefers-reduced-motion:reduce){#ssh-root .ssh-collapse{transition:none}}

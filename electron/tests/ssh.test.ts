@@ -6,15 +6,15 @@ import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {EventEmitter} from 'node:events';
 import {utils} from 'ssh2';
-import {inspectPrivateKey,inspectBytes} from '../src/ssh/PrivateKeyInspector';
-import {unlockPrivateKey} from '../src/ssh/PrivateKeyUnlocker';
-import {SshProfileRepository,HostKeyTrustStore,hostIdentity} from '../src/ssh/stores';
-import {SshConnectionService} from '../src/ssh/SshConnectionService';
-import {OpenSshTransport,type RemoteResult,type ShellChannel,type SshTransport} from '../src/ssh/OpenSshTransport';
-import {installSshHandlers} from '../src/ssh/sshIpcHandlers';
-import {SshFailure} from '../modules/ssh/validation';
-import type {FormInput,HostIdentity,Profile} from '../modules/ssh/types';
-const compiled=createRequire(import.meta.url)('../build/ssh/index.cjs') as typeof import('../src/ssh');
+import {inspectPrivateKey,inspectBytes} from '../main/ssh/keys/PrivateKeyInspector';
+import {unlockPrivateKey} from '../main/ssh/keys/PrivateKeyUnlocker';
+import {SshProfileRepository,HostKeyTrustStore,hostIdentity} from '../main/ssh/storage/stores';
+import {SshConnectionService} from '../main/ssh/SshConnectionService';
+import {OpenSshTransport,type RemoteResult,type ShellChannel,type SshTransport} from '../main/ssh/connection/OpenSshTransport';
+import {installSshHandlers} from '../main/ssh/ipc/sshIpcHandlers';
+import {SshFailure} from '../shared/ssh/validation';
+import type {FormInput,HostIdentity,Profile} from '../shared/ssh/types';
+const compiled=createRequire(import.meta.url)('../build/ssh/index.cjs') as typeof import('../main/ssh/index');
 const phrase='test-only-passphrase';
 const encrypted=utils.generateKeyPairSync('ed25519',{passphrase:phrase,cipher:'aes256-ctr',rounds:4}),plain=utils.generateKeyPairSync('ed25519',{}),rsa=utils.generateKeyPairSync('rsa',{bits:2048,passphrase:phrase,cipher:'aes256-ctr',rounds:4}),ec=utils.generateKeyPairSync('ecdsa',{bits:256,passphrase:phrase,cipher:'aes256-ctr',rounds:4});
 const publicBlob=(pub:string)=>Buffer.from(pub.split(' ')[1],'base64');
@@ -48,7 +48,7 @@ test('IPC rejects untrusted frames and malformed health requests',async t=>{cons
 test('OpenSSH transport owns a foreground ControlMaster PTY and forwards Duo choices',async t=>{let data!:(value:string)=>void,exit!:(event:{exitCode:number;signal?:number})=>void,args:string[]=[],writes:string[]=[];const fake:any={onData:(fn:typeof data)=>{data=fn;return{dispose(){}}},onExit:(fn:typeof exit)=>{exit=fn;return{dispose(){}}},write:(value:string)=>writes.push(value),resize:()=>{},kill:()=>exit({exitCode:0})};const profile:Profile={id:'p',name:'HPC3',host:'hpc3.rcic.uci.edu',port:22,username:'testuser',auth:{method:'duo'}},transport=new OpenSshTransport(profile,'/tmp/Application Support/known_hosts','/tmp',(_file,argv)=>{args=argv;return fake});t.after(()=>exit?.({exitCode:0}));const connected=transport.connect('account-secret');await until(()=>!!data);data('(testuser@hpc3) Password: ');assert.equal(writes.at(-1),'account-secret\r');const received=new Promise<any>(resolve=>transport.once('challenge',resolve));data('\n1. Duo Push to device A\n2. Duo Push to device B\nPasscode or option (1-2): ');const challenge=await received;challenge.respond(['2']);assert.equal(writes.at(-1),'2\r');data('\n[testuser@login-i15:~] $ ');await connected;assert.ok(args.includes('-M'));assert.ok(args.includes('ControlPersist=no'));assert.ok(args.includes('PreferredAuthentications=keyboard-interactive'));assert.ok(args.includes('UserKnownHostsFile="/tmp/Application Support/known_hosts"'));assert.ok(args.includes('-tt'))});
 test('dev terminal attaches to the primary transport instead of creating another login',async t=>{const s=await setup(t),profile=await s.service.saveProfile(s.input),run=s.service.connect(profile.id,phrase);await until(()=>s.transports.length===1);s.transports[0].succeed();await run;const terminal=new compiled.DevTerminal(s.service),events:any[]=[];terminal.on('event',event=>events.push(event));await terminal.open('terminal',80,24);s.transports[0].shell.emit('data',Buffer.from('remote output'));await until(()=>events.some(event=>event.type==='data'));terminal.input('terminal','pwd\r');assert.deepEqual(s.transports[0].shell.writes,['pwd\r']);terminal.close('terminal');assert.equal(s.service.getSnapshot().connection?.status,'connected');terminal.dispose();await s.service.disconnect(profile.id)});
 test('diagnostic history is bounded and disposed with dev IPC',async t=>{const s=await setup(t),handlers=new Map<string,Function>(),frame={url:'http://127.0.0.1:1234/'},wc={mainFrame:frame,send:()=>{}},win={isDestroyed:()=>false,webContents:wc},ipc={handle:(name:string,fn:Function)=>handlers.set(name,fn),removeHandler:(name:string)=>handlers.delete(name)},dev=compiled.installDevTerminal(ipc as any,()=>win as any,s.service,()=>frame.url.slice(0,-1)),event={sender:wc,senderFrame:frame};for(let index=0;index<350;index++)s.service.emit('diagnostic',{id:'attempt',stage:'connect',message:'Starting',time:'test'});const history=(await handlers.get('ssh-dev:history')!(event)).value;assert.equal(history.length,300);dev.dispose();assert.equal(handlers.size,0)});
-test('portable UI boundary keeps native PTY and process APIs in Electron Main',async t=>{const s=await setup(t);await s.service.saveProfile(s.input);const {readdir}=await import('node:fs/promises');for(const file of await readdir(path.resolve(import.meta.dirname,'../modules/ssh'))){if(!/\.tsx?$/.test(file))continue;const source=await readFile(path.resolve(import.meta.dirname,'../modules/ssh',file),'utf8');assert.doesNotMatch(source,/from ['"](?:electron|node:|ssh2|node-pty)/)}const main=await readFile(path.resolve(import.meta.dirname,'../src/ssh/OpenSshTransport.ts'),'utf8');assert.match(main,/ControlPersist=no/);assert.match(main,/node-pty/)});
+test('portable UI boundary keeps native PTY and process APIs in Electron Main',async t=>{const s=await setup(t);await s.service.saveProfile(s.input);const {readdir}=await import('node:fs/promises');for(const file of await readdir(path.resolve(import.meta.dirname,'../renderer/features/ssh'),{recursive:true})){if(!/\.tsx?$/.test(file))continue;const source=await readFile(path.resolve(import.meta.dirname,'../renderer/features/ssh',file),'utf8');assert.doesNotMatch(source,/from ['"](?:electron|node:|ssh2|node-pty)/)}const main=await readFile(path.resolve(import.meta.dirname,'../main/ssh/connection/OpenSshTransport.ts'),'utf8');assert.match(main,/ControlPersist=no/);assert.match(main,/node-pty/)});
 
 test('saved key edits persist and removal preserves private key files',async t=>{
  const f=await fixture(t),dir=path.join(f.dir,'management'),store=new compiled.AppManagedKeyStore(dir);

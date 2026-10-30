@@ -5,6 +5,7 @@ per-launch token only to the Python child process it owns.
 """
 import json
 import os
+import re
 import socket
 import subprocess
 
@@ -59,6 +60,19 @@ def request(action, **values):
     finally:
         connection.close()
     return {**value, 'stdout': stdout, 'stderr': stderr}
+
+
+def environment():
+    """Verified environment for the currently connected desktop SSH account."""
+    value = request('environment')
+    config = json.loads(value['stdout'])
+    for key in ('root', 'source', 'image', 'executor', 'workRoot'):
+        candidate = config.get(key)
+        if not isinstance(candidate, str) or not re.fullmatch(r'/[A-Za-z0-9_./-]+', candidate) or '..' in candidate.split('/'):
+            raise OSError('Invalid remote environment path.')
+    if not re.fullmatch(r'[A-Za-z0-9_-]{1,80}', config.get('partition', '')):
+        raise OSError('Invalid remote scheduler partition.')
+    return config
 
 
 def remote(command, **kwargs):

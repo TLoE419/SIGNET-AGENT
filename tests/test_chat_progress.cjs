@@ -29,7 +29,7 @@ class Element {
 function setup(initial={}) {
   const ids=new Map(), all=[], root=new Element('root'), stack=[root];
   // Use the shipped markup, so a hidden ancestor or closed details catches the real regression.
-  const html=fs.readFileSync('web/index.html','utf8');
+  const html=(fs.readFileSync('electron/renderer/app/App.tsx','utf8').replaceAll('className=', 'class=').replaceAll('htmlFor=', 'for=') + '<script id="initial-chat"></script>');
   for(const match of html.matchAll(/<(?:[^>"']|"[^"]*"|'[^']*')*>/g)){
     const token=match[0];if(token.startsWith('<!'))continue;
     if(token.startsWith('</')){stack.pop();continue;}
@@ -68,8 +68,8 @@ function setup(initial={}) {
       }})}};
     }});
   context.window=context;
-  vm.runInContext(fs.readFileSync('web/chat.js','utf8'),context);
-  vm.runInContext(fs.readFileSync('web/stage6.js','utf8'),context);
+  vm.runInContext(fs.readFileSync('electron/renderer/features/chat/chat.js','utf8'),context);
+  vm.runInContext(fs.readFileSync('electron/renderer/features/stage6/stage6.js','utf8'),context);
   function visible(el){
     if(!el)return false;
     let child=el;

@@ -2,22 +2,23 @@
   "name": "signet-electron-shell",
   "version": "0.1.0",
   "private": true,
-  "description": "Optional desktop host for the existing SIGNET Python web application",
-  "main": "entry.cjs",
+  "description": "SIGNET desktop client with an independent Python backend",
+  "main": "main/app/entry.cjs",
   "scripts": {
     "postinstall": "node scripts/prepare-node-pty.cjs",
     "start": "electron .",
-    "test": "npm run typecheck && node --test tests/*.test.cjs && node --import tsx --test tests/ssh.test.ts && node --import tsx --test tests/ui.test.tsx",
+    "test": "npm run typecheck && node --test tests/*.test.cjs && node --import tsx --test tests/ssh.test.ts tests/environment.test.ts && node --import tsx --test tests/ui.test.tsx",
     "test:smoke": "electron tests/smoke.cjs",
     "test:startup": "electron tests/startup.cjs",
-    "build": "node build-ssh.mjs",
+    "build": "node scripts/build.mjs",
     "prestart": "npm run build",
     "pretest": "npm run build",
     "typecheck": "tsc --noEmit",
     "pretest:smoke": "npm run build",
     "pretest:startup": "npm run build",
     "dev": "npm run build && electron . --dev",
-    "test:dev": "npm run build && electron tests/dev-terminal.cjs"
+    "test:dev": "npm run build && electron tests/dev-terminal.cjs",
+    "test:environment": "npm run build && electron tests/environment.cjs"
   },
   "engines": {
     "node": ">=22.12.0"

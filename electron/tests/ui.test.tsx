@@ -9,17 +9,19 @@ Object.defineProperty(globalThis,'navigator',{value:dom.window.navigator,configu
 dom.window.HTMLDialogElement.prototype.showModal=function(){this.open=true};dom.window.HTMLDialogElement.prototype.close=function(){this.open=false};
 const require=createRequire(import.meta.url);
 const {render,screen,fireEvent,waitFor,cleanup,act}=require('@testing-library/react') as typeof import('@testing-library/react');
-import {AccountLoginPrompt} from '../src/ssh/AccountLoginPrompt';
-import {DuoChallenge} from '../modules/ssh/LoginSteps';
-import {UnlockPrompt} from '../src/ssh/UnlockPrompt';
-import {SshStatusBlock} from '../src/ssh/SshStatusBlock';
-import {ConnectionBadge} from '../modules/ssh/ConnectionBadge';
-import {KeyDetailsModal} from '../modules/ssh/KeyDetailsModal';
-import {ConnectionModal} from '../modules/ssh/ConnectionModal';
-import {KeyRegistrationModal} from '../modules/ssh/KeyRegistrationModal';
-import {useSshConnection} from '../modules/ssh/useSshConnection';
+import {AccountLoginPrompt} from '../renderer/features/ssh/auth/AccountLoginPrompt';
+import {DuoChallenge} from '../renderer/features/ssh/auth/LoginSteps';
+import {UnlockPrompt} from '../renderer/features/ssh/auth/UnlockPrompt';
+import {SshStatusBlock} from '../renderer/features/ssh/connection/SshStatusBlock';
+import {ConnectionBadge} from '../renderer/features/ssh/connection/ConnectionBadge';
+import {connectionIdentity} from '../renderer/features/ssh/connection/connectionIdentity';
+import {Modal} from '../renderer/components/Modal';
+import {KeyDetailsModal} from '../renderer/features/ssh/keys/KeyDetailsModal';
+import {ConnectionModal} from '../renderer/features/ssh/connection/ConnectionModal';
+import {KeyRegistrationModal} from '../renderer/features/ssh/keys/KeyRegistrationModal';
+import {useSshConnection} from '../renderer/features/ssh/state/useSshConnection';
 import {MockSshConnectionPort} from './fixtures/MockSshConnectionPort';
-import {uciHpc3Preset} from '../modules/ssh/types';
+import {uciHpc3Preset} from '../shared/ssh/types';
 import {useState} from 'react';
 afterEach(cleanup);
 const profile={...uciHpc3Preset,id:'test',username:'testuser',auth:{method:'private-key' as const,privateKeyPath:'/test/encrypted'}};
@@ -28,7 +30,7 @@ function fill(){fireEvent.change(screen.getByLabelText('SSH key'),{target:{value
 function Harness({port}:{port:MockSshConnectionPort}){const ssh=useSshConnection(port),[open,setOpen]=useState(false);return <><ConnectionBadge status={ssh.snapshot.connection?.status||'unconfigured'} onClick={()=>setOpen(true)}/><button onClick={()=>setOpen(true)}>Edit</button><ConnectionModal open={open} profile={ssh.snapshot.selectedProfile} keys={[savedKey]} status={ssh.snapshot.connection?.status||'unconfigured'} onClose={()=>setOpen(false)} onOpenKeyRegistration={()=>{}} onInspectKey={ssh.inspect} onSave={ssh.save} onConnect={ssh.connect} onDisconnect={ssh.disconnect} error={ssh.error} busy={ssh.busy}/></>}
 test('connection offers Duo by default and allows an empty SSH management block; never collects secrets',async()=>{
  render(<ConnectionModal open profile={null} keys={[]} status="unconfigured" onClose={()=>{}} onOpenKeyRegistration={()=>{}} onInspectKey={new MockSshConnectionPort().inspectPrivateKey} onSave={async()=>{}} onConnect={async()=>{}} onDisconnect={async()=>{}}/>);
- assert.equal(screen.getByRole('radio',{name:'Duo'}).getAttribute('aria-checked'),'true');assert.equal(screen.queryByRole('button',{name:'Add SSH key…'}),null);fireEvent.click(screen.getByRole('radio',{name:'SSH key'}));assert.ok(screen.getByRole('region',{name:'SSH key management'}));assert.ok(screen.getByRole('button',{name:'Add SSH key…'}));assert.equal(screen.queryByLabelText('Private-key passphrase'),null);assert.equal(screen.queryByLabelText('UCInetID password'),null);
+ assert.equal(screen.queryByLabelText('Connection name'),null);assert.equal(screen.getByRole('radio',{name:'Duo'}).getAttribute('aria-checked'),'true');assert.equal(screen.queryByRole('button',{name:'Add SSH key…'}),null);fireEvent.click(screen.getByRole('radio',{name:'SSH key'}));assert.ok(screen.getByRole('region',{name:'SSH key management'}));assert.ok(screen.getByRole('button',{name:'Add SSH key…'}));assert.equal(screen.queryByLabelText('Private-key passphrase'),null);assert.equal(screen.queryByLabelText('UCInetID password'),null);
 });
 test('saved SSH keys can be selected without entering a passphrase in settings',async()=>{
  const port=new MockSshConnectionPort();await act(async()=>{render(<Harness port={port}/>)});fireEvent.click(screen.getByRole('button',{name:'Not configured'}));fireEvent.click(screen.getByRole('radio',{name:'SSH key'}));await waitFor(()=>assert.equal((screen.getByRole('button',{name:'Connect'}) as HTMLButtonElement).disabled,false));assert.equal(screen.queryByLabelText('Private-key passphrase'),null);assert.equal((screen.getByLabelText('UCInetID / username') as HTMLInputElement).value,'testuser');fireEvent.click(screen.getByRole('button',{name:'Save'}));await waitFor(()=>assert.equal(port.saveCalls,1));assert.equal(port.connectCalls,0);
@@ -46,7 +48,7 @@ test('stale inspection cannot enable a newly selected invalid key; trust enrollm
 test('glass status block maps live states to text and switch semantics without simulating connections',()=>{
  const states=['unconfigured','disconnected','connecting','connected','disconnecting','error'] as const;let edits=0,toggles=0;
  const result=render(<SshStatusBlock name="UCI HPC3" host="hpc3.rcic.uci.edu:22" status="unconfigured" onEdit={()=>edits++} onToggle={()=>toggles++}/>);
- for(const status of states){result.rerender(<SshStatusBlock name="UCI HPC3" host="hpc3.rcic.uci.edu:22" status={status} error={status==='error'?{code:'CONNECTION_TIMEOUT',message:'Connection timed out.'}:null} onEdit={()=>edits++} onToggle={()=>toggles++}/>);const control=screen.getByRole('switch',{name:'SSH connection enabled'});assert.equal(control.getAttribute('aria-checked'),String(status==='connected'));assert.equal((control as HTMLButtonElement).disabled,status==='disconnecting');assert.equal(result.container.querySelector('.ssh-status-block')?.getAttribute('data-status'),status);assert.equal(!!result.container.querySelector('.ssh-status-outline'),status==='connecting'||status==='disconnecting');if(status==='error')assert.ok(screen.getByText('Connection timed out.'))}
+ for(const status of states){result.rerender(<SshStatusBlock name="UCI HPC3" host="hpc3.rcic.uci.edu:22" status={status} error={status==='error'?{code:'CONNECTION_TIMEOUT',message:'Connection timed out.'}:null} onEdit={()=>edits++} onToggle={()=>toggles++}/>);if(status==='connected')fireEvent.click(screen.getByRole('button',{name:'Expand SSH connection'}));const control=screen.getByRole('switch',{name:'SSH connection enabled'});assert.equal(control.getAttribute('aria-checked'),String(status==='connected'));assert.equal((control as HTMLButtonElement).disabled,status==='disconnecting');assert.equal(result.container.querySelector('.ssh-status-block')?.getAttribute('data-status'),status);assert.equal(!!result.container.querySelector('.ssh-status-outline'),status==='connecting'||status==='disconnecting');if(status==='error')assert.match(screen.getByRole('button',{name:'Edit SSH connection: UCI HPC3'}).title,/Connection timed out/)}
  fireEvent.click(screen.getByRole('button',{name:'Edit SSH connection: UCI HPC3'}));fireEvent.click(screen.getByRole('button',{name:'Error'}));assert.equal(edits,2);fireEvent.click(screen.getByRole('switch'));assert.equal(toggles,1);assert.equal(result.container.querySelector('.ssh-status-block')?.getAttribute('data-status'),'error');
 });
 test('connected settings show verified HPC health and Check again refreshes it',async()=>{
@@ -192,4 +194,70 @@ test('importing a key rejects unencrypted keys and hides redundant success text'
  assert.equal(screen.queryByText('Passphrase protected'),null);
  fireEvent.click(save);
  await waitFor(()=>assert.equal(imports,1));
+});
+
+test('shared modal blocks dismissal while busy and closes its native dialog on unmount',()=>{
+ let closed=0;
+ const view=render(<Modal title="Shared modal" dismissDisabled onClose={()=>closed++}>Content</Modal>);
+ const dialog=screen.getByRole('dialog',{name:'Shared modal'}) as HTMLDialogElement;
+ dialog.getBoundingClientRect=()=>({left:100,top:100,right:400,bottom:400,width:300,height:300,x:100,y:100,toJSON:()=>({})});
+ fireEvent.click(dialog,{clientX:10,clientY:10});
+ fireEvent(dialog,new dom.window.Event('cancel',{cancelable:true}));
+ assert.equal(closed,0);
+ assert.ok((screen.getByRole('button',{name:'Close'}) as HTMLButtonElement).disabled);
+ view.rerender(<Modal title="Shared modal" onClose={()=>closed++}>Content</Modal>);
+ fireEvent.click(dialog,{clientX:10,clientY:10});
+ assert.equal(closed,1);
+ view.unmount();
+ assert.equal(dialog.open,false);
+});
+
+test('status identity uses key labels or Duo accounts and the configured SSH endpoint',()=>{
+ assert.deepEqual(connectionIdentity({...profile,auth:{...profile.auth,keyId:savedKey.keyId}},[savedKey]),{name:savedKey.label,endpoint:'testuser@hpc3.rcic.uci.edu:22'});
+ assert.equal(connectionIdentity(profile,[savedKey]).name,savedKey.label);
+ assert.equal(connectionIdentity(profile,[]).name,'SSH key');
+ assert.deepEqual(connectionIdentity({...profile,auth:{method:'duo'}},[]),{name:'testuser · Duo',endpoint:'testuser@hpc3.rcic.uci.edu:22'});
+ assert.equal(connectionIdentity({...profile,host:'::1',port:2222},[]).endpoint,'testuser@[::1]:2222');
+});
+
+test('status block displays environment initialization while retaining the SSH endpoint',async()=>{
+ const {environmentLabels}=await import('../shared/environment/types');let opened=0;
+ const view=render(<SshStatusBlock name="Key" host="user@host:22" status="connected" environment={{phase:'checking',message:'Probing remote tools'}} onEnvironment={()=>opened++} onEdit={()=>{}} onToggle={()=>{}}/>);
+ assert.ok(screen.getByText('user@host:22'));assert.ok(screen.getByText(environmentLabels.checking));
+ fireEvent.click(screen.getByRole('button',{name:'SIGNET environment: '+environmentLabels.checking}));assert.equal(opened,1);
+ view.rerender(<SshStatusBlock name="Key" host="user@host:22" status="connected" environment={{phase:'installing-image',message:'Downloading container'}} onEdit={()=>{}} onToggle={()=>{}}/>);
+ assert.ok(screen.getByText('Downloading container…'));assert.ok(screen.getByText('user@host:22'));
+});
+
+test('environment installation opens a separate confirmation and never starts on the first click',async()=>{
+ const {EnvironmentModal}=await import('../renderer/features/environment/EnvironmentModal');let installs=0;
+ const bridge={getSnapshot:async()=>({ok:true}),check:async()=>({ok:true}),install:async()=>{installs++;return {ok:true}},subscribe:()=>()=>{}};
+ render(<EnvironmentModal snapshot={{phase:'needs-install',message:'Source missing'}} bridge={bridge} onClose={()=>{}}/>);
+ fireEvent.click(screen.getByRole('button',{name:'Install missing components…'}));assert.equal(installs,0);
+ assert.ok(screen.getByRole('dialog',{name:'Install SIGNET environment?'}));
+ fireEvent.click(screen.getByRole('button',{name:'Install environment'}));await waitFor(()=>assert.equal(installs,1));
+});
+
+test('SSH icon collapses manually and reapplies defaults on status changes',()=>{
+ const props={name:'Key',host:'user@host:22',onEdit:()=>{},onToggle:()=>{}};
+ const view=render(<SshStatusBlock {...props} status="disconnected"/>);
+ assert.ok(screen.getByRole('switch'));
+ fireEvent.click(screen.getByRole('button',{name:'Collapse SSH connection'}));
+ assert.ok(screen.getByRole('switch'));assert.equal(screen.queryByRole('button',{name:'Edit SSH connection: Key'}),null);
+ view.rerender(<SshStatusBlock {...props} status="connecting"/>);
+ assert.ok(screen.getByRole('switch'));
+ view.rerender(<SshStatusBlock {...props} status="disconnected"/>);
+ assert.ok(screen.getByRole('switch'));
+ view.rerender(<SshStatusBlock {...props} status="connected"/>);
+ assert.ok(screen.getByRole('switch'));assert.equal(screen.queryByRole('button',{name:'Edit SSH connection: Key'}),null);
+ fireEvent.click(screen.getByRole('button',{name:'Expand SSH connection'}));
+ assert.ok(screen.getByRole('switch'));
+ view.rerender(<SshStatusBlock {...props} status="connected"/>);
+ assert.ok(screen.getByRole('switch'));
+ view.rerender(<SshStatusBlock {...props} status="connected" environment={{phase:'checking',message:'Checking'}}/>);
+ assert.ok(screen.getByRole('switch'));
+ view.rerender(<SshStatusBlock {...props} status="connected" environment={{phase:'ready',message:'Ready'}}/>);
+ assert.ok(screen.getByRole('switch'));assert.equal(screen.queryByRole('button',{name:'Edit SSH connection: Key'}),null);
+ view.rerender(<SshStatusBlock {...props} status="error"/>);
+ assert.ok(screen.getByRole('switch'));
 });

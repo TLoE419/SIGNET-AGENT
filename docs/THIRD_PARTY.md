@@ -1,6 +1,6 @@
 # Third-Party Sources and Licensing Status
 
-- `web/vendor/`: retains the markdown-it and vis-network license files. See that directory's README for versions and modifications.
+- `electron/renderer/vendor/`: retains the markdown-it and vis-network license files. See that directory's README for versions and modifications.
 - `assets/tokenizers/`: Qwen tokenizer data under Apache 2.0. See that directory's README for the pinned version and hash. No model weights are included.
 - `electron/`: restores the SSH components from the local `ssh-auth-key-management` branch. React and React DOM render those components (MIT license); esbuild builds local bundles. Exact versions are recorded in `electron/package-lock.json`. It uses `ssh2` 1.17.0 under the MIT license for the desktop-owned SSH connection. The pinned package and transitive dependency metadata are recorded in `electron/package-lock.json`.
 - Official SIGNET scientific source: not bundled with this project. `scripts/setup_source.py` installs only inventoried code, configuration templates, and upstream license documents from the commit specified by `signet_inventory.json`. It does not install example or study data. Each file must pass the existing SHA-256 check.
