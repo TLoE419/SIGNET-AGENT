@@ -29,9 +29,9 @@ function failureFromOutput(text:string){
  if(/REMOTE HOST IDENTIFICATION HAS CHANGED|Offending .* key/i.test(text))return new SshFailure('HOST_KEY_CHANGED','SECURITY WARNING: saved host identity changed. Connection blocked.');
  if(/No .* host key is known|Host key verification failed/i.test(text))return new SshFailure('HOST_KEY_UNKNOWN','OpenSSH could not verify the saved host identity. Connection blocked.');
  if(/Permission denied|Authentication failed/i.test(text))return new SshFailure('AUTH_FAILED','HPC3 rejected authentication. Check the account password, Duo response, username, or SSH key.');
- if(/Could not resolve hostname/i.test(text))return new SshFailure('DNS_FAILED','The SSH host name could not be resolved.');
- if(/Connection refused|No route to host|Network is unreachable/i.test(text))return new SshFailure('NETWORK_UNREACHABLE','Cannot reach the SSH host. Check the network or VPN.');
- if(/Operation timed out|Connection timed out/i.test(text))return new SshFailure('CONNECTION_TIMEOUT','The SSH connection timed out.');
+ if(/Could not resolve hostname/i.test(text))return new SshFailure('DNS_FAILED','The SSH host name could not be resolved. Check your internet connection and the host in Advanced connection settings.');
+ if(/Connection refused|No route to host|Network is unreachable/i.test(text))return new SshFailure('NETWORK_UNREACHABLE','Cannot reach the SSH host. Connect to the UCI VPN or campus network, then retry.');
+ if(/Operation timed out|Connection timed out/i.test(text))return new SshFailure('CONNECTION_TIMEOUT','The SSH connection timed out. Check your network or UCI VPN, then retry.');
  return new SshFailure('SESSION_CLOSED','The OpenSSH session closed before the login shell was ready.');
 }
 
@@ -63,7 +63,7 @@ export class OpenSshTransport extends EventEmitter implements SshTransport {
   await mkdir(this.controlDirectory,{recursive:true,mode:0o700});this.secret=secret;this.emit('diagnostic',{stage:'transport',message:`Opening PTY-backed system OpenSSH transport to ${this.profile.username}@${this.profile.host}:${this.profile.port}.`});
   return new Promise<void>((resolve,reject)=>{
    let settled=false;let probeTimer:ReturnType<typeof setInterval>|undefined;let probing=false;const done=(error?:SshFailure)=>{if(settled)return;settled=true;clearTimeout(timer);clearInterval(probeTimer);this.secret='';error?reject(error):resolve()};
-   const timer=setTimeout(()=>{done(new SshFailure('CONNECTION_TIMEOUT','OpenSSH login timed out.'));void this.close()},180000);
+   const timer=setTimeout(()=>{done(new SshFailure('CONNECTION_TIMEOUT','OpenSSH login timed out after three minutes. Check your network or UCI VPN and complete authentication before retrying.'));void this.close()},180000);
    try{this.process=this.ptyFactory('/usr/bin/ssh',this.args(),{name:'xterm-256color',cols:120,rows:40,cwd:process.cwd(),env:{...process.env,TERM:'xterm-256color'} as Record<string,string>})}catch(error){this.emit('diagnostic',{stage:'transport',message:`PTY launch failed: ${error instanceof Error?error.message:'unknown native error'}`});done(new SshFailure('UNKNOWN','System OpenSSH or PTY support is unavailable.'));return}
    this.exit=new Promise<void>(finish=>this.finishExit=finish);
    this.process.onData(data=>{this.consume(data);});

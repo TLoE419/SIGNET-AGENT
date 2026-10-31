@@ -332,3 +332,19 @@ SSH readiness is detected through a bounded local OpenSSH ControlMaster check,
 independent of the user's prompt. Authentication text is parsed only before the
 transport becomes ready. Upload pipe failures are handled as command failures,
 including broken input pipes, without terminating the application.
+
+## Integration with baseline monitoring and the earlier login proposal
+
+The standalone monitoring scripts in `hpc/baseline/` run on HPC3; they do not add
+a second connection or a monitoring screen to the desktop. Their fixtures and
+local account settings remain separate from Electron's private connection state.
+
+The desktop keeps one SSH owner and one login entry point. The useful network,
+VPN, DNS and reconnect guidance from the earlier browser login proposal is
+incorporated into the existing connection dialog and errors. That proposal's
+`/hpc3` polling API, detached shared master, ASKPASS helper and sidebar card are
+not imported. Existing desktop cancellation, three-minute authentication timeout,
+health checks, host trust and owned-connection cleanup continue to apply.
+
+This integration does not verify a real HPC3 login or scientific job. Localhost
+SSH fixtures exercise desktop behavior; actual remote acceptance remains separate.

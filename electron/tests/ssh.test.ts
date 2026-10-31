@@ -106,3 +106,29 @@ test('an authenticated control socket establishes readiness without any shell pr
  output('Permission denied\nAuthentication failed\nEnter passphrase for key:');
  assert.ok(await transport.openShell(80,24));await transport.close();
 });
+
+// Port the legacy card's actionable hints through the existing desktop transport.
+test('SSH login failures explain the next action without exposing server text',async t=>{
+ const f=await fixture(t);
+ for(const [output,code,hint] of [
+  ['ssh: Could not resolve hostname invalid.example: nodename nor servname provided','DNS_FAILED','Advanced connection settings'],
+  ['ssh: connect to host example port 22: Connection refused','NETWORK_UNREACHABLE','UCI VPN or campus network'],
+  ['ssh: connect to host example port 22: Operation timed out','CONNECTION_TIMEOUT','Check your network or UCI VPN'],
+  ['Permission denied (keyboard-interactive).','AUTH_FAILED','Check the account password, Duo response, username, or SSH key'],
+  ['REMOTE HOST IDENTIFICATION HAS CHANGED!','HOST_KEY_CHANGED','Connection blocked'],
+ ] as const){
+  await t.test(code,async()=>{
+   let outputReady!:(data:string)=>void,exited!:(event:{exitCode:number})=>void;
+   const fake:any={onData:(fn:typeof outputReady)=>{outputReady=fn;return{dispose(){}}},onExit:(fn:typeof exited)=>{exited=fn;return{dispose(){}}},write:()=>{},resize:()=>{},kill:()=>exited({exitCode:255})};
+   const transport=new OpenSshTransport({...f.input,id:code} as Profile,'/test/known-hosts',f.dir,()=>fake,async()=>255);
+   const rejected=assert.rejects(transport.connect('transient-test-secret'),(error:SshFailure)=>{
+    assert.equal(error.code,code);assert.ok(error.message.includes(hint));assert.doesNotMatch(error.message,/transient-test-secret|server-private-marker/);return true;
+   });
+   await until(()=>!!outputReady);
+   outputReady(output+'\nserver-private-marker\n');
+   exited({exitCode:255});
+   await rejected;
+   await transport.close();
+  });
+ }
+});
