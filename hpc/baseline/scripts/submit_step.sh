@@ -45,7 +45,8 @@ fi
 
 # SIGNET keeps one analysis per install directory (shared tmp/, res/, config.ini).
 if [[ $uses_signet -eq 1 && "${BASELINE_ALLOW_CONCURRENT:-0}" != 1 ]]; then
-    active=$(squeue -u "$USER" -h -o '%i %j' | awk '$2 ~ /^signet_[gtac]$/')
+    queue=$(squeue -u "$USER" -h -o '%i %j') || die "could not check active SIGNET jobs; refusing submission"
+    active=$(printf '%s\n' "$queue" | awk '$2 ~ /^signet_[gtac]$/')
     [[ -z "$active" ]] || die "another SIGNET step is queued or running: $active"
 fi
 

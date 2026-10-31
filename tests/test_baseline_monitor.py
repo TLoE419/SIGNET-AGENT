@@ -216,6 +216,17 @@ class NetworkObserverTest(unittest.TestCase):
         self.assertEqual({c['stage'] for c in children}, {1, 2})
         self.assertEqual((self.fixture / 'sacct_final.txt').read_text(), done)
 
+    def test_live_queue_prevents_terminal_while_accounting_lags(self):
+        queue = '501|sub1.sh|RUNNING|None|0:01|1:00|1|1G|node|free|lab'
+        slurm = FakeSlurm(squeue=[(0, queue, ''), (0, queue, ''), (0, '', ''), (0, '', '')],
+                          sacct=[(0, '', '')])
+        with patch.object(fixture_io, 'run_command', slurm):
+            status = observe_network.observe(self.fixture, self.signet, self.START,
+                parent_pid=99, user='u', sleep=lambda _: None, is_alive=lambda _: False)
+        self.assertEqual(status['status'], 'terminal')
+        records = [json.loads(line) for line in (self.fixture / 'snapshots.jsonl').read_text().splitlines()]
+        self.assertEqual([r['active_children'] for r in records], [['501'], ['501'], [], []])
+
     def test_observer_needs_a_way_to_know_the_parent_ended(self):
         with self.assertRaises(ValueError):
             observe_network.observe(self.fixture, self.signet, self.START, user='u')
@@ -401,6 +412,14 @@ class ShellTest(unittest.TestCase):
         sleep = self.run_script('submit_step.sh', 'sleep', 'E1', FAKE_SQUEUE='12 signet_t')
         self.assertEqual(sleep.returncode, 0, sleep.stderr)
         self.assertFalse(Path(self.env['FAKE_LOG']).read_text().count('signet_t.sub'))
+
+    def test_submit_refuses_scheduler_failure_before_creating_fixture(self):
+        self.script(self.bin / 'squeue', 'echo unavailable >&2; exit 1')
+        result = self.run_script('submit_step.sh', 't', 'outage')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('could not check active SIGNET jobs', result.stderr)
+        self.assertFalse(Path(self.env['FAKE_LOG']).exists())
+        self.assertFalse((self.baseline / 'fixtures').exists())
 
     def test_apply_config_sets_and_verifies_values_and_skips_missing_inputs(self):
         result = self.run_script('apply_config.sh')

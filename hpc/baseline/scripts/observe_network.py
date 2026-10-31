@@ -110,9 +110,14 @@ def poll(user, start, signet_dir, parent_job_id):
     account = io.capture('sacct', sp.sacct_command(user=user, start=started), sp.parse_sacct)
     stages = stage_files(signet_dir)
     found = children(account['parsed'], start, stages, parent_job_id)
+    # Accounting can lag behind the live queue. Conservatively wait for every queued
+    # candidate except the parent, even before its accounting/stage record appears.
+    active = {c['JobID'] for c in found if not sp.is_terminal(c['State'])}
+    active.update(r['job_id'] for r in queue['parsed']
+                  if r['job_id'] != parent_job_id and not sp.is_terminal(r['state']))
     record = {'ts': io.now_iso(), 'source': 'squeue+sacct', 'squeue': queue, 'sacct': account,
               'stages': stages, 'children': len(found),
-              'active_children': sorted(c['JobID'] for c in found if not sp.is_terminal(c['State']))}
+              'active_children': sorted(active)}
     return record, found, account
 
 
