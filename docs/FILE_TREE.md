@@ -23,6 +23,9 @@ SIGNET-agent/
 ├── signet_inventory.json         # Official code version, classification, and file hashes
 ├── signet_runtime.py             # Local VM connection, packaging, and output collection
 ├── network_runtime.py            # Network inference submission, queries, cancellation, and result checks
+├── hpc3_ssh.py                # HPC3 SSH reachability check, one-time login and logout
+├── hpc3_askpass.py            # Native macOS dialog ssh uses for HPC3 password and Duo questions
+├── hpc3_service.py            # HPC3 login state behind the /hpc3 web API; writes HPC3_USER to .env
 ├── network_worker.py             # Background control and supervision of owned jobs inside the VM
 ├── visualization_runtime.py      # Stage 6 plotting and input/output checks
 ├── stage6_workspace.py           # Parameter proposals, human confirmation, history, and comparison
@@ -60,6 +63,7 @@ SIGNET-agent/
 │   ├── chat.css                  # Interface and narrow-window styles
 │   ├── i18n.js                   # Traditional Chinese / English switching
 │   ├── stage6.js                 # Parameter, network graph, and result-comparison interactions
+│   ├── hpc3.js                 # Sidebar HPC3 card: status, UCInetID, login and logout via /hpc3
 │   └── vendor/
 │       ├── README.md             # Package sources, versions, and modification history
 │       ├── vis-network.min.js    # Interactive network graph library
@@ -75,6 +79,10 @@ SIGNET-agent/
     ├── test_diagnostics.py      # Error reporting and sensitive-content redaction
     ├── test_genotype_reference.py # Reference-data conversion
     ├── test_groq_provider.py    # Groq responses, rate limits, and tool format
+    ├── test_hpc3_api.py         # /hpc3 routes: request checks, login progress, conflicts, .env updates
+    ├── test_hpc3_askpass.py     # Login dialog helper: masking, argument safety, ssh contract
+    ├── test_hpc3_ui.cjs         # HPC3 card states, login polling, errors and language switching
+    ├── test_hpc3_ssh.py         # HPC3 connection check: each failing layer, without network
     ├── test_i18n.cjs            # Language switching and content retention
     ├── test_list_files.py      # Recursive file listing and hidden-file / symlink exclusion
     ├── test_markdown.cjs       # Response formatting and unsafe-content handling

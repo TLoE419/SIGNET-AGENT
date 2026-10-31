@@ -1,3 +1,4 @@
+"""Local chat web service: assets, request protection, streaming and saved conversations."""
 from contextlib import contextmanager
 import http.client
 import json
@@ -52,7 +53,8 @@ class ChatUITest(unittest.TestCase):
         self.assertNotIn('__MODEL__', html)
         self.server.model_label = 'Groq / qwen/qwen3.8-27b'
         self.assertIn(self.server.model_label, self.request()[1])
-        for path in ['/chat.css', '/chat.js']:
+        # Every shipped script, including the HPC3 card, is served; nothing else is.
+        for path in ['/chat.css', '/chat.js', '/hpc3.js']:
             self.assertEqual(self.request(path)[0], 200)
         for path in ['/.env', '/../main.py', '/signet_inventory.json']:
             self.assertEqual(self.request(path)[0], 404)

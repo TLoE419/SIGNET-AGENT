@@ -18,6 +18,7 @@ from main import MODEL, run_conversation
 from model_timing import ModelRequestTiming
 from llm_providers import PROVIDERS, create_provider_adapter
 from stage6_workspace import Workspace, CHAT_CONTEXT
+from hpc3_service import Hpc3Error, Hpc3Service
 
 ROOT = Path(__file__).resolve().parent
 
@@ -47,12 +48,21 @@ class ChatServer(ThreadingHTTPServer):
         # Scientific tools share local runs, so serialize turns across browser tabs.
         self.turn_lock = threading.Lock()
         self.stage6 = Workspace(self)
+        # HPC3 login state; the .env it writes is the same one create_server loads.
+        self.hpc3 = Hpc3Service(ROOT / '.env')
         super().__init__(address, ChatHandler)
 
     def server_bind(self):
         # The loopback service needs no reverse DNS, which can stall on offline hosts.
         TCPServer.server_bind(self)
         self.server_name, self.server_port = self.server_address[:2]
+
+    def server_close(self):
+        # Both the browser context manager and Electron's owner-pipe drain use this path.
+        try:
+            self.hpc3.shutdown()
+        finally:
+            super().server_close()
 
     def visible_messages(self, session):
         messages = []
@@ -111,8 +121,11 @@ class ChatHandler(BaseHTTPRequestHandler):
                   '/i18n.js': ('i18n.js', 'text/javascript; charset=utf-8'),
                   '/chat.css': ('chat.css', 'text/css; charset=utf-8'),
                   '/stage6.js': ('stage6.js', 'text/javascript; charset=utf-8'),
+                  '/hpc3.js': ('hpc3.js', 'text/javascript; charset=utf-8'),
                   '/vendor/vis-network.min.js': ('vendor/vis-network.min.js', 'text/javascript; charset=utf-8')}
         url = urlsplit(self.path)
+        if url.path in ('/hpc3/status', '/hpc3/login'):
+            return self.hpc3_get(url)
         if url.path in ('/stage6', '/stage6/file'):
             return self.stage6_get(url)
         if url.path not in assets:
@@ -158,6 +171,8 @@ class ChatHandler(BaseHTTPRequestHandler):
             return self._error(403, '請從本機聊天頁面送出。')
         if self.path.startswith('/stage6/'):
             return self.stage6_post()
+        if self.path.startswith('/hpc3/'):
+            return self.hpc3_post()
         if self.path != '/chat':
             return self._error(404, '找不到此操作。')
         try:
@@ -262,6 +277,42 @@ class ChatHandler(BaseHTTPRequestHandler):
                 return
             return self._error(404, 'Unknown workspace operation.')
         except (OSError, ValueError, KeyError) as exc:
+            return self._error(400, str(exc))
+
+    def hpc3_get(self, url):
+        """GET /hpc3/status (connection check, cached) and GET /hpc3/login (login progress)."""
+        # Status names the user and login host, so even reads need the page token.
+        if not secrets.compare_digest(self.headers.get('X-Chat-Token', ''), self.server.token):
+            return self._error(403, 'Token required.')
+        if url.path == '/hpc3/status':
+            refresh = parse_qs(url.query).get('refresh', [''])[0] == '1'
+            return self.json_response(self.server.hpc3.status(refresh=refresh))
+        return self.json_response(self.server.hpc3.login_state())
+
+    def hpc3_post(self):
+        """POST /hpc3/user, /hpc3/login and /hpc3/logout; errors become JSON with an HTTP status."""
+        # Host, Origin and token were already checked in do_POST. No route accepts a password.
+        self.connection.settimeout(10)
+        try:
+            size = int(self.headers.get('Content-Length', '0'))
+            if not 0 <= size <= 4096:
+                raise ValueError('Invalid request length.')
+            payload = json.loads(self.rfile.read(size)) if size else {}
+            if not isinstance(payload, dict):
+                raise ValueError('Invalid request body.')
+            if self.path == '/hpc3/user':
+                return self.json_response(self.server.hpc3.set_user(payload.get('user')))
+            if self.path == '/hpc3/login':
+                # 202: the login continues in the background; poll GET /hpc3/login.
+                # The page's language only picks the dialogs' wording; hpc3_ssh validates it.
+                state = self.server.hpc3.start_login(language=payload.get('language'))
+                return self.json_response(state, 202 if state['state'] == 'waiting_for_user' else 200)
+            if self.path == '/hpc3/logout':
+                return self.json_response(self.server.hpc3.logout())
+            return self._error(404, 'Unknown HPC3 operation.')
+        except Hpc3Error as exc:
+            return self._error(exc.status, str(exc))
+        except (OSError, ValueError) as exc:
             return self._error(400, str(exc))
 
     def stage6_post(self):
