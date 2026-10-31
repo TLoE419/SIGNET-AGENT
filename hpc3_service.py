@@ -54,6 +54,9 @@ class Hpc3Service:
         self.cache = None  # (time taken, check() result)
         self.login = {'state': 'idle', 'message': None}
         self.thread = None
+        self.cancel_login = threading.Event()
+        self.closing = False
+        self.owned_connection = None
 
     def status(self, refresh=False):
         """Connection status; reuses a result younger than STATUS_CACHE_SECONDS unless refresh."""
@@ -76,6 +79,8 @@ class Hpc3Service:
             raise Hpc3Error(400, 'Enter your UCInetID: lowercase letters, digits, _ or -.')
         user = user.strip()
         with self.lock:
+            if self.closing:
+                raise Hpc3Error(503, 'The application is closing.')
             if self.login['state'] == 'waiting_for_user':
                 raise Hpc3Error(409, 'A login is in progress.')
         current = self._current_settings(required=False)
@@ -95,6 +100,8 @@ class Hpc3Service:
             raise Hpc3Error(501, 'Login dialogs need macOS. Run `python3 hpc3_ssh.py login` in a terminal.')
         user, host = self._current_settings(required=True)
         with self.lock:
+            if self.closing:
+                raise Hpc3Error(503, 'The application is closing.')
             if self.login['state'] == 'waiting_for_user':
                 raise Hpc3Error(409, 'A login is already in progress.')
             # Claim the slot before the slower connection check, so two clicks cannot both start.
@@ -102,8 +109,12 @@ class Hpc3Service:
         # A connection that exists but no longer answers is closed and replaced, not trusted.
         if self.ssh.shared_connection_alive(user, host):
             return self._finish(0, 'Already logged in to %s@%s.' % (user, host))
-        self.thread = threading.Thread(target=self._run_login, args=(user, host, language), daemon=True)
-        self.thread.start()
+        with self.lock:
+            if self.closing:
+                raise Hpc3Error(503, 'The application is closing.')
+            self.cancel_login.clear()
+            self.thread = threading.Thread(target=self._run_login, args=(user, host, language), daemon=True)
+            self.thread.start()
         return self.login_state()
 
     def logout(self):
@@ -118,12 +129,34 @@ class Hpc3Service:
             self.login = {'state': 'idle', 'message': None}
         if code != 0:
             raise Hpc3Error(502, message)
+        with self.lock:
+            if self.owned_connection == (user, host):
+                self.owned_connection = None
         return {'message': message}
+
+    def _remember_connection(self, user, host):
+        """Only a newly authenticated connection belongs to this app instance."""
+        with self.lock:
+            self.owned_connection = (user, host)
+
+    def shutdown(self):
+        """Cancel owned dialogs, then close only a connection opened by this instance."""
+        with self.lock:
+            self.closing = True
+            self.cancel_login.set()
+            thread = self.thread
+        if thread and thread is not threading.current_thread():
+            thread.join()
+        with self.lock:
+            owned, self.owned_connection = self.owned_connection, None
+        if owned:
+            self.ssh.logout(*owned)
 
     def _run_login(self, user, host, language):
         """Background thread: ssh shows the dialogs; record how it ended."""
         try:
-            code, message = self.ssh.login(user, host, popup=True, language=language)
+            code, message = self.ssh.login(user, host, popup=True, language=language,
+                cancel_event=self.cancel_login, on_connected=self._remember_connection)
         except Exception:  # Any crash must still leave a final state for the page to read.
             code, message = 1, 'Login failed unexpectedly. Run `python3 hpc3_ssh.py check` to see why.'
         self._finish(code, message)

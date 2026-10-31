@@ -121,3 +121,9 @@
 #hpc3-refresh{padding:2px 0;border:0;background:none;color:var(--muted);text-decoration:underline;text-underline-offset:2px}
 .hpc3-actions button{white-space:nowrap}
 .hpc3-card button[hidden]{display:none}
+@media(max-width:850px){
+  .rail{position:static;width:auto;flex-direction:row;align-items:flex-start;gap:10px;padding:12px;flex-wrap:wrap}
+  body{flex-direction:column}
+  .rail>#hpc3-card{display:block;flex:1;min-width:220px;margin:0}
+  #language-toggle{margin:0 0 0 auto}
+}

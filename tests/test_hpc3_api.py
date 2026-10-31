@@ -56,11 +56,15 @@ class FakeSsh:
         self.calls.append('check')
         return {'status': 'connected' if self.connected else 'auth_required', 'connected': self.connected}
 
-    def login(self, user, host, popup=False, language='en'):
+    def login(self, user, host, popup=False, language='en', cancel_event=None, on_connected=None):
         """Block until released, then connect unless login_result says otherwise."""
         self.calls.append(('login', user, popup))
         self.language = language
-        self.release.wait(5)
+        while not self.release.wait(0.01):
+            if cancel_event and cancel_event.is_set():
+                return self.CANCELLED, 'Login cancelled.'
+        if self.login_result[0] == 0 and on_connected:
+            on_connected(user, host)
         self.connected = self.login_result[0] == 0
         return self.login_result
 
@@ -160,6 +164,31 @@ class Hpc3ApiTest(unittest.TestCase):
         self.ssh.release.set()
         self.assertEqual(self.wait_for_login_end(), {'state': 'succeeded', 'message': 'Logged in.', 'cancelled': False})
         self.assertIn(('login', 'jdoe', True), self.ssh.calls)
+
+    def test_shutdown_cancels_pending_login_and_refuses_new_work(self):
+        self.request('POST', '/hpc3/login', {})
+        self.server.hpc3.shutdown()
+        self.assertFalse(self.server.hpc3.thread.is_alive())
+        self.assertTrue(self.server.hpc3.login_state()['cancelled'])
+        self.assertNotIn('logout', self.ssh.calls)
+        self.assertEqual(self.request('POST', '/hpc3/login', {})[0], 503)
+        self.assertEqual(self.request('POST', '/hpc3/user', {'user': 'other'})[0], 503)
+
+    def test_server_close_closes_its_new_connection_exactly_once(self):
+        self.request('POST', '/hpc3/login', {})
+        self.ssh.release.set()
+        self.wait_for_login_end()
+        self.server.server_close()
+        self.server.server_close()
+        self.assertFalse(self.ssh.connected)
+        self.assertEqual(self.ssh.calls.count('logout'), 1)
+
+    def test_shutdown_preserves_a_reused_external_connection(self):
+        self.ssh.connected = True
+        self.request('POST', '/hpc3/login', {})
+        self.server.hpc3.shutdown()
+        self.assertTrue(self.ssh.connected)
+        self.assertNotIn('logout', self.ssh.calls)
 
     def test_page_language_reaches_the_login_dialogs(self):
         self.request('POST', '/hpc3/login', {'language': 'zh-Hant'})

@@ -42,6 +42,8 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
+import time
 
 DEFAULT_HOST = 'hpc3.rcic.uci.edu'
 # Lowercase letter first, then letters, digits, _ or -; at most 32 characters.
@@ -53,6 +55,7 @@ PORT = 22
 LANGUAGES = ('en', 'zh-Hant')
 # Exit code of an ssh stopped by hpc3_askpass.py when the user presses Cancel (killed by SIGTERM).
 CANCELLED = -signal.SIGTERM
+LOGIN_TIMEOUT = 180
 # How long the shared connection stays open after the last use.
 CONTROL_PERSIST = '8h'
 # Seconds allowed for each layer; a dropped VPN should fail fast, not hang.
@@ -230,7 +233,47 @@ def shared_connection_alive(user, host):
     return False
 
 
-def login(user, host, popup=False, language='en'):
+def stop_login_process(process):
+    """Stop only the new session owned by this popup attempt, including its dialogs."""
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    try:
+        process.wait(timeout=1)
+    except subprocess.TimeoutExpired:
+        pass
+    # The ssh parent may have exited while an askpass/osascript child is still alive.
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    process.wait()
+
+
+def popup_login(argv, environment, cancel_event, timeout):
+    """Bound a real popup process group without capturing any secret answers."""
+    if cancel_event.is_set():
+        return CANCELLED, 'Login cancelled.'
+    process = subprocess.Popen(argv, env=environment, stdin=subprocess.DEVNULL,
+                               start_new_session=True)
+    deadline = time.monotonic() + timeout
+    try:
+        while process.poll() is None:
+            if cancel_event.is_set() or time.monotonic() >= deadline:
+                timed_out = not cancel_event.is_set()
+                stop_login_process(process)
+                return CANCELLED, 'Login timed out.' if timed_out else 'Login cancelled.'
+            cancel_event.wait(min(0.1, max(0, deadline - time.monotonic())))
+        if process.returncode != 0:
+            stop_login_process(process)
+        return process.returncode, None
+    except BaseException:
+        stop_login_process(process)
+        raise
+
+
+def login(user, host, popup=False, language='en', cancel_event=None, on_connected=None):
     """Open the shared connection unless one is already open; returns (exit code, message).
 
     Without the pre-check, a second login would find the control socket taken, fall back to a
@@ -240,6 +283,9 @@ def login(user, host, popup=False, language='en'):
     (hpc3_askpass.py), with stdin closed so it can never fall back to a terminal prompt;
     language picks the dialogs' wording.
     """
+    cancel_event = cancel_event or threading.Event()
+    if cancel_event.is_set():
+        return CANCELLED, 'Login cancelled.'
     if shared_connection_alive(user, host):
         return 0, 'Already logged in to %s@%s; the shared connection is open.' % (user, host)
     # ssh needs ~/.ssh to exist for the control socket and known_hosts.
@@ -248,14 +294,18 @@ def login(user, host, popup=False, language='en'):
     # ssh itself asks for the password and Duo (in this terminal, or in dialogs when popup is
     # set); the answers go straight to ssh and this program never reads them.
     if popup:
-        code = subprocess.call(login_command(user, host), env=askpass_environment(language),
-                               stdin=subprocess.DEVNULL)
+        code, message = popup_login(login_command(user, host), askpass_environment(language),
+                                    cancel_event, LOGIN_TIMEOUT)
+        if message:
+            return code, message
     else:
         code = subprocess.call(login_command(user, host))
     if code == CANCELLED:
         return code, 'Login cancelled.'
     if code != 0:
         return code, 'Login failed (ssh exit %d). Run `python3 hpc3_ssh.py check` to see why.' % code
+    if on_connected:
+        on_connected(user, host)
     return 0, 'Logged in. Run `python3 hpc3_ssh.py check` to confirm.'
 
 

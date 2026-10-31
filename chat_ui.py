@@ -57,6 +57,13 @@ class ChatServer(ThreadingHTTPServer):
         TCPServer.server_bind(self)
         self.server_name, self.server_port = self.server_address[:2]
 
+    def server_close(self):
+        # Both the browser context manager and Electron's owner-pipe drain use this path.
+        try:
+            self.hpc3.shutdown()
+        finally:
+            super().server_close()
+
     def visible_messages(self, session):
         messages = []
         for item in self.histories.get(session, []):

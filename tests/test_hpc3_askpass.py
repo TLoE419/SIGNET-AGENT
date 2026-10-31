@@ -7,6 +7,7 @@ HPC3. The account name is made up.
 import io
 import os
 import subprocess
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -162,15 +163,16 @@ class PopupLoginTest(unittest.TestCase):
         seen = {}
 
         def call(argv, **kwargs):
-            """Record how subprocess.call was invoked."""
+            """Record how the isolated popup process was started."""
             seen.update(kwargs, argv=argv)
-            return 0
+            return SimpleNamespace(returncode=0, poll=lambda: 0)
         with patch.object(h, 'shared_connection_alive', lambda *a: False), \
-                patch.object(h.subprocess, 'call', call), patch('sys.stdout'):
+                patch.object(h.subprocess, 'Popen', call), patch('sys.stdout'):
             code, _ = h.login('jdoe', h.DEFAULT_HOST, popup=True, language='zh-Hant')
         self.assertEqual(code, 0)
         self.assertEqual(seen['argv'], h.login_command('jdoe', h.DEFAULT_HOST))
         self.assertIs(seen['stdin'], subprocess.DEVNULL)
+        self.assertTrue(seen['start_new_session'])
         self.assertEqual(seen['env']['SSH_ASKPASS'], str(h.ASKPASS))
         self.assertEqual(seen['env']['SSH_ASKPASS_REQUIRE'], 'force')
         self.assertEqual(seen['env']['SIGNET_LANGUAGE'], 'zh-Hant')
