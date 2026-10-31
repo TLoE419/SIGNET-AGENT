@@ -1,0 +1,22 @@
+#!/bin/bash
+#SBATCH --job-name=signet_sleep
+# sleep_test.sub - scheduler-only job for experiments E1-E3, E5, E6, E9 (Spec 01, 8.2).
+#
+# Does not touch SIGNET. Sleeps SLEEP_SECONDS (default 60) after allocating ALLOC_MB
+# megabytes (default 0), so timeouts, out-of-memory kills, cancellations and pending
+# reasons can be observed without depending on SIGNET's runtime.
+# shellcheck source=common.sh
+source "$BASELINE_DIR/templates/common.sh"
+baseline_start sleep
+echo "[BASELINE] SLEEP_SECONDS=${SLEEP_SECONDS:-60} ALLOC_MB=${ALLOC_MB:-0}"
+# Touch every page so the allocation counts toward RSS instead of staying lazily zero-mapped.
+python3 -c '
+import sys, time
+mb, seconds = int(sys.argv[1]), int(sys.argv[2])
+block = bytearray(mb * 1024 * 1024)
+for i in range(0, len(block), 4096):
+    block[i] = 1
+print("[BASELINE] allocated_mb=%d" % mb, flush=True)
+time.sleep(seconds)
+' "${ALLOC_MB:-0}" "${SLEEP_SECONDS:-60}"
+baseline_end $?

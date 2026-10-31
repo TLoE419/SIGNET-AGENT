@@ -1,0 +1,47 @@
+# Applied with `signet -s --KEY VALUE` before every baseline job (scripts/apply_config.sh).
+# Paths are relative to the SIGNET install directory, as config.ini expects.
+# @NAME@ is replaced from env.sh; a key whose variable is empty is skipped and reported,
+# which marks that step as blocked instead of silently using the authors' defaults.
+
+# Batch jobs cannot answer the "overwrite temporary files?" prompt.
+forcerm = T
+cohort = TCGA
+
+# -g: shipped example genotypes (config.ini.default points at example/geno-prep/test.*,
+# which does not exist in the pinned commit).
+ped.file = example/geno/example.ped
+map.file = example/geno/example.map
+ref = @SIGNET_REF_PREFIX@
+gmap = @SIGNET_GMAP_PREFIX@
+
+# -t: shipped example expression; the GENCODE v22 GTF is not shipped.
+gexp.file = example/gexp/example_gexp
+pmap.file = @SIGNET_GTF@
+
+# -a: no clinical file ships with SIGNET.
+cli.file = @SIGNET_CLINICAL@
+
+# -c: shipped matched inputs, so -c does not depend on -a having succeeded.
+snps.map = example/ciseqtl/signet_new.Geno.map
+snps.maf = example/ciseqtl/signet_new.Geno.maf
+matched.gexp = example/ciseqtl/signet_gexp_rmpc.data
+matched.gexp.withpc = example/ciseqtl/signet_gexp.data
+matched.geno = example/ciseqtl/signet_geno.data
+gene.pos = example/ciseqtl/signet_gene_pos
+
+# -n (N1): shipped network inputs, sized for HPC3's free partition.
+net.gexp.data = example/network/signet_net.gexp.data
+net.geno.data = example/network/signet_all.eQTL.data
+sig.pair = example/network/signet_all.sig.pValue_0.05
+net.genename = example/network/signet_net.genename
+net.genepos = example/network/signet_net.genepos
+nboots = 2
+ncores = 4
+memory = 16
+walltime = 0:30:00
+queue = free
+# T would rewrite `sbatch -W` to `srun -n1 bash` and no child jobs would exist.
+interactive = F
+email = F
+computing = slurm
+sif = @SIGNET_SIF@

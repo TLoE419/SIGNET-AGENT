@@ -1,0 +1,16 @@
+#!/bin/bash
+#SBATCH --job-name=signet_g
+# signet_g.sub - run `signet -g`, genotype preprocessing: PLINK QC and IMPUTE2 imputation (B1, E8).
+#
+# Submitted by submit_step.sh; see templates/common.sh for the helpers used below.
+# --output/--error come from submit_step.sh: #SBATCH lines cannot expand $FIXTURE_DIR.
+# Partition, account, CPUs, memory and time also come from the sbatch command line.
+# shellcheck source=common.sh
+source "$BASELINE_DIR/templates/common.sh"
+# Start marker, config reset and extra flags, then the step itself.
+baseline_start g
+prepare_signet
+signet_args
+# -g is the only step with a core option; the others read ncore_local (set by prepare_signet).
+in_container ./signet -g --ncores "${SLURM_CPUS_PER_TASK:-1}" "${SIGNET_EXTRA[@]}"
+baseline_end $?
