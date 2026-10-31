@@ -196,6 +196,20 @@ def has_shared_connection(user, host):
     return code == 0
 
 
+def shared_connection_identity(user, host):
+    """Identify this socket instance, so a replacement terminal master is never owned.
+
+    The control path intentionally stays stable across logins; its filesystem identity
+    changes when OpenSSH removes it and creates a different master at the same path.
+    """
+    path = control_path().replace('%r', user).replace('%h', host).replace('%p', str(PORT))
+    try:
+        info = Path(path).stat()
+    except FileNotFoundError:
+        return None
+    return info.st_dev, info.st_ino, info.st_ctime_ns
+
+
 def askpass_environment(language='en'):
     """Environment that makes ssh ask every login question through hpc3_askpass.py.
 

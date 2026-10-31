@@ -32,6 +32,7 @@ class FakeSsh:
     def __init__(self):
         """Start logged out; login() waits for `release`, like a user typing."""
         self.connected = False
+        self.master_id = 1
         self.release = threading.Event()
         self.login_result = (0, 'Logged in.')
         self.calls = []
@@ -51,6 +52,10 @@ class FakeSsh:
         """Whether the shared connection still answers (same flag here)."""
         return self.connected
 
+    def shared_connection_identity(self, user, host):
+        """Distinct masters can occupy the same user/host control path."""
+        return self.master_id if self.connected else None
+
     def check(self):
         """A minimal check() result that follows the connected flag."""
         self.calls.append('check')
@@ -63,9 +68,9 @@ class FakeSsh:
         while not self.release.wait(0.01):
             if cancel_event and cancel_event.is_set():
                 return self.CANCELLED, 'Login cancelled.'
-        if self.login_result[0] == 0 and on_connected:
-            on_connected(user, host)
         self.connected = self.login_result[0] == 0
+        if self.connected and on_connected:
+            on_connected(user, host)
         return self.login_result
 
     def logout(self, user, host):
@@ -182,6 +187,25 @@ class Hpc3ApiTest(unittest.TestCase):
         self.server.server_close()
         self.assertFalse(self.ssh.connected)
         self.assertEqual(self.ssh.calls.count('logout'), 1)
+
+    def test_shutdown_preserves_external_replacement_of_its_old_master(self):
+        self.request('POST', '/hpc3/login', {})
+        self.ssh.release.set()
+        self.wait_for_login_end()
+        # The original app-owned master ended; a terminal created a new socket.
+        self.ssh.master_id += 1
+        self.assertEqual(self.request('POST', '/hpc3/login', {})[0], 200)
+        self.server.hpc3.shutdown()
+        self.assertTrue(self.ssh.connected)
+        self.assertNotIn('logout', self.ssh.calls)
+
+    def test_shutdown_ignores_a_disappeared_owned_master(self):
+        self.request('POST', '/hpc3/login', {})
+        self.ssh.release.set()
+        self.wait_for_login_end()
+        self.ssh.connected = False
+        self.server.hpc3.shutdown()
+        self.assertNotIn('logout', self.ssh.calls)
 
     def test_shutdown_preserves_a_reused_external_connection(self):
         self.ssh.connected = True

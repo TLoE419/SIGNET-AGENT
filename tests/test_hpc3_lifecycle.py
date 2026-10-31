@@ -2,6 +2,7 @@
 import os
 from pathlib import Path
 import subprocess
+import socket
 import sys
 import tempfile
 import threading
@@ -68,6 +69,20 @@ class PopupLifecycleTest(unittest.TestCase):
 
     def test_cancellation_stops_popup_process_and_dialog_descendant(self):
         self.exercise_stop(cancel=True)
+
+    def test_socket_identity_changes_when_master_is_replaced_at_same_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = str(Path(directory) / 'master')
+            with patch.object(ssh, 'control_path', return_value=path):
+                self.assertIsNone(ssh.shared_connection_identity('jdoe', 'host'))
+                with socket.socket(socket.AF_UNIX) as first:
+                    first.bind(path)
+                    identity = ssh.shared_connection_identity('jdoe', 'host')
+                    self.assertEqual(ssh.shared_connection_identity('jdoe', 'host'), identity)
+                    os.unlink(path)
+                    with socket.socket(socket.AF_UNIX) as replacement:
+                        replacement.bind(path)
+                        self.assertNotEqual(ssh.shared_connection_identity('jdoe', 'host'), identity)
 
     def test_pre_cancelled_attempt_never_starts_a_process(self):
         event = threading.Event()

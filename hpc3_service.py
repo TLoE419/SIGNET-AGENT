@@ -130,14 +130,15 @@ class Hpc3Service:
         if code != 0:
             raise Hpc3Error(502, message)
         with self.lock:
-            if self.owned_connection == (user, host):
+            if self.owned_connection and self.owned_connection[:2] == (user, host):
                 self.owned_connection = None
         return {'message': message}
 
     def _remember_connection(self, user, host):
         """Only a newly authenticated connection belongs to this app instance."""
+        identity = self.ssh.shared_connection_identity(user, host)
         with self.lock:
-            self.owned_connection = (user, host)
+            self.owned_connection = (user, host, identity) if identity is not None else None
 
     def shutdown(self):
         """Cancel owned dialogs, then close only a connection opened by this instance."""
@@ -150,7 +151,9 @@ class Hpc3Service:
         with self.lock:
             owned, self.owned_connection = self.owned_connection, None
         if owned:
-            self.ssh.logout(*owned)
+            user, host, identity = owned
+            if self.ssh.shared_connection_identity(user, host) == identity:
+                self.ssh.logout(user, host)
 
     def _run_login(self, user, host, language):
         """Background thread: ssh shows the dialogs; record how it ended."""

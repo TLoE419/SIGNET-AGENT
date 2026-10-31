@@ -108,7 +108,8 @@ On Linux run both native checks with a display, or prefix each command with
 Popup authentication has a three-minute deadline. Closing the browser server or
 Electron backend cancels its pending SSH attempt and native dialog subprocesses,
 then closes the shared connection if this app instance opened it. A connection
-that was already open and reused is left running. Explicit Log out still closes
+that was already open and reused is left running. Ownership records the control
+socket instance; a later terminal replacement at the same path is also preserved. Explicit Log out still closes
 the selected shared connection. No password or Duo response is stored.
 
 The login card remains available in compact windows, including Electron's minimum
