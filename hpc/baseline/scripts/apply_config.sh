@@ -10,7 +10,8 @@
 # filled from env.sh; an empty variable skips that key and prints SKIPPED, which marks the
 # step that needs it as blocked.
 #
-# Usage:   apply_config.sh               (BASELINE_DIR / SIGNET_DIR come from env.sh)
+# Usage:   apply_config.sh [g|t|a|c|n]    (validate that step before changing config)
+#          apply_config.sh --check-only <step> (submission preflight; changes nothing)
 # Env:     OVERRIDES=path                (optional; default config/baseline.overrides)
 # Output:  one "[apply_config] key = value" or "SKIPPED" line per key on stdout
 # Exit:    0 if every key was applied or skipped, 1 if any line was rejected or mismatched
@@ -20,6 +21,27 @@ BASELINE_DIR=${BASELINE_DIR:-$(cd "$(dirname "$0")/.." && pwd)}
 # shellcheck source=/dev/null
 [[ -n "${SIGNET_DIR:-}" ]] || source "$BASELINE_DIR/env.sh"
 : "${SIGNET_DIR:?SIGNET_DIR is not set; copy env.sh.example to env.sh}"
+check_only=0
+if [[ "${1:-}" == --check-only ]]; then check_only=1; shift; fi
+step=${1:-}
+[[ $# -le 1 ]] || { echo '[apply_config] expected one step' >&2; exit 1; }
+case "$step" in
+    g) required='SIGNET_SIF SIGNET_REF_PREFIX SIGNET_GMAP_PREFIX';;
+    t) required='SIGNET_SIF SIGNET_GTF';;
+    a) required='SIGNET_SIF SIGNET_CLINICAL';;
+    c|n) required='SIGNET_SIF';;
+    '') [[ $check_only == 0 ]] || { echo '[apply_config] --check-only needs a step' >&2; exit 1; }; required='';;
+    *) echo "[apply_config] unknown step '$step'" >&2; exit 1;;
+esac
+missing=0
+for var in $required; do
+    if [[ -z "${!var:-}" ]]; then
+        echo "[apply_config] BLOCKED step=$step: $var is empty in env.sh" >&2
+        missing=1
+    fi
+done
+[[ $missing == 0 ]] || exit 1
+[[ $check_only == 0 ]] || exit 0
 OVERRIDES=${OVERRIDES:-$BASELINE_DIR/config/baseline.overrides}
 # Only these env.sh variables may fill @NAME@ placeholders.
 ALLOWED_VARS=" SIGNET_REF_PREFIX SIGNET_GMAP_PREFIX SIGNET_GTF SIGNET_CLINICAL SIGNET_SIF "

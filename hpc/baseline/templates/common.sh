@@ -28,7 +28,7 @@ baseline_end() {
 # Reset config.ini to the baseline overlay so a previous run's CLI flags cannot leak in,
 # then size SIGNET's local parallelism to the cores Slurm actually granted.
 prepare_signet() {
-    bash "$BASELINE_DIR/scripts/apply_config.sh" || baseline_end 90
+    bash "$BASELINE_DIR/scripts/apply_config.sh" "$BASELINE_STEP" || baseline_end 90
     cd "$SIGNET_DIR" || baseline_end 91
     ./signet -s --ncore_local "${SLURM_CPUS_PER_TASK:-1}" || baseline_end 92
 }

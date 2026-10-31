@@ -27,7 +27,7 @@ fixture=$BASELINE_DIR/fixtures/$run_id
 mkdir -p "$BASELINE_DIR/fixtures"
 mkdir "$fixture" || exit 1
 cp "$BASELINE_DIR/config/baseline.overrides" "$fixture/config_overrides.txt"
-bash "$BASELINE_DIR/scripts/apply_config.sh" > "$fixture/apply_config.log" 2>&1 \
+bash "$BASELINE_DIR/scripts/apply_config.sh" n > "$fixture/apply_config.log" 2>&1 \
     || { echo "apply_config failed; see $fixture/apply_config.log" >&2; exit 1; }
 python3 "$BASELINE_DIR/scripts/outputs.py" before --signet-dir "$SIGNET_DIR" --fixture-dir "$fixture"
 

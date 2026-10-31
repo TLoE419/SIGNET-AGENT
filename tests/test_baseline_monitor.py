@@ -220,6 +220,29 @@ class NetworkObserverTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             observe_network.observe(self.fixture, self.signet, self.START, user='u')
 
+    def test_scheduler_errors_cannot_establish_terminal_state(self):
+        for queue, account in [((1, '', 'scheduler unavailable'), (0, '', '')),
+                               ((0, '', ''), (1, '', 'accounting unavailable')),
+                               ((0, 'unparseable', ''), (0, '', ''))]:
+            with self.subTest(queue=queue, account=account):
+                slurm = FakeSlurm(squeue=[queue], sacct=[account])
+                ticks = iter([0, 0, 1, 2])
+                with patch.object(fixture_io, 'run_command', slurm):
+                    status = observe_network.observe(self.fixture, self.signet, self.START,
+                        parent_pid=99, user='u', sleep=lambda _: None,
+                        clock=lambda: next(ticks), max_hours=2 / 3600, is_alive=lambda _: False)
+                self.assertEqual(status['status'], 'observer_deadline')
+
+    def test_query_failure_resets_quiet_polls_and_recovery_can_finish(self):
+        slurm = FakeSlurm(squeue=[(0, '', ''), (1, '', 'unavailable'), (0, '', ''), (0, '', '')],
+                          sacct=[(0, '', '')])
+        with patch.object(fixture_io, 'run_command', slurm):
+            status = observe_network.observe(self.fixture, self.signet, self.START,
+                parent_pid=99, user='u', sleep=lambda _: None, is_alive=lambda _: False)
+        self.assertEqual(status['status'], 'terminal')
+        records = (self.fixture / 'snapshots.jsonl').read_text().splitlines()
+        self.assertEqual(len(records), 4)
+
 
 class OutputsTest(unittest.TestCase):
     """outputs.py: res*/tmp* listing and the before/after diff."""
@@ -389,6 +412,28 @@ class ShellTest(unittest.TestCase):
         self.assertIn('interactive=F\n', state)
         self.assertIn('SKIPPED cli.file: SIGNET_CLINICAL is empty', result.stdout)
         self.assertTrue((self.signet / 'config.ini.pre-baseline').is_file())
+
+    def test_missing_step_inputs_block_before_changing_previous_configuration(self):
+        previous = 'cli.file = previous-clinical.txt\nforcerm = F\n'
+        (self.signet / 'config.ini').write_text(previous)
+        result = self.run_script('apply_config.sh', 'a', SIGNET_CLINICAL='')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('BLOCKED step=a: SIGNET_CLINICAL', result.stderr)
+        self.assertEqual((self.signet / 'config.ini').read_text(), previous)
+        self.assertFalse((self.signet / 'state').exists())
+        self.assertFalse((self.signet / 'config.ini.pre-baseline').exists())
+
+    def test_submit_refuses_missing_inputs_without_submitting_or_creating_fixture(self):
+        result = self.run_script('submit_step.sh', 'g', 'missing-reference',
+                                 SIGNET_REF_PREFIX='', SIGNET_GMAP_PREFIX='')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('SIGNET_REF_PREFIX', result.stderr)
+        self.assertFalse(Path(self.env['FAKE_LOG']).exists())
+        self.assertFalse((self.baseline / 'fixtures').exists())
+        # Unrelated missing genotype/clinical inputs must not block expression work.
+        result = self.run_script('apply_config.sh', '--check-only', 't', SIGNET_CLINICAL='')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((self.signet / 'state').exists())
 
     def test_all_shell_files_parse(self):
         for path in sorted((BASELINE / 'scripts').glob('*.sh')) + sorted((BASELINE / 'templates').iterdir()):

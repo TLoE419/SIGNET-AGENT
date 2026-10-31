@@ -39,6 +39,10 @@ for option in "$@"; do
     esac
 done
 
+if [[ $uses_signet -eq 1 ]]; then
+    bash "$BASELINE_DIR/scripts/apply_config.sh" --check-only "$step" || exit 1
+fi
+
 # SIGNET keeps one analysis per install directory (shared tmp/, res/, config.ini).
 if [[ $uses_signet -eq 1 && "${BASELINE_ALLOW_CONCURRENT:-0}" != 1 ]]; then
     active=$(squeue -u "$USER" -h -o '%i %j' | awk '$2 ~ /^signet_[gtac]$/')

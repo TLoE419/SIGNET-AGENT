@@ -145,7 +145,10 @@ def observe(fixture, signet_dir, start, parent_pid=None, parent_job_id=None, use
         # Rewritten every poll so a partial list survives if the observer is killed.
         io.write_json(fixture / 'children.json', found)
         # Two quiet polls in a row: sacct may still be catching up on the last child.
-        quiet = quiet + 1 if parent_done and not record['active_children'] else 0
+        observed = all(record[name]['returncode'] == 0 and not record[name].get('error')
+                       for name in ('squeue', 'sacct'))
+        # A failed query says nothing about whether child jobs are still running.
+        quiet = quiet + 1 if observed and parent_done and not record['active_children'] else 0
         timed_out = clock() >= deadline
         if quiet >= 2 or timed_out:
             (fixture / 'sacct_final.txt').write_text(account['raw'])

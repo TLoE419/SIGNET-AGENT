@@ -37,6 +37,12 @@ bash scripts/apply_config.sh            # check every line says "key = value" or
 ```
 
 `apply_config.sh` backs up the original `config.ini` once as `config.ini.pre-baseline`.
+The setup command without a step only applies available settings and reports skipped
+inputs. Submission validates the requested step's required inputs before creating a
+fixture or calling `sbatch`; each job checks again before changing configuration.
+For example, `bash scripts/apply_config.sh --check-only a` refuses an empty
+`SIGNET_CLINICAL` instead of retaining a previous clinical input. Missing inputs for
+unrelated steps do not block a ready step.
 
 ## Running
 
