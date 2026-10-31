@@ -11,10 +11,10 @@ import type {SshConnectionService} from '../main/ssh/SshConnectionService';
 import type {EnvironmentConfig} from '../shared/environment/types';
 const inventory={repository:'https://github.com/signet4grn/SIGNET.git',revision:'a'.repeat(40),scripts:[{path:'signet',sha256:'b'.repeat(64)}],support_files:[]};
 class FakeSsh extends EventEmitter {
- connected=true;source=false;image=false;slurm=true;failStep='';commands:string[]=[];pause?:()=>Promise<void>;
+ connected=true;source=false;image=false;slurm=true;runtimeModule='';failStep='';commands:string[]=[];pause?:()=>Promise<void>;
  getSnapshot(){return {selectedProfile:{id:'profile',username:'user',host:'host',port:22},connection:{status:this.connected?'connected':'disconnected',connectedAt:'now'}}}
  async exec(command:string,input:Buffer){assert.equal(command,'bash -s');const s=input.toString();this.commands.push(s);await this.pause?.();
-  if(s.includes('printf \'home='))return {returncode:0,stderr:Buffer.alloc(0),stdout:Buffer.from(`home=/home/user\nroot=/home/user/signet\n${['bash','git','tar','sha256sum','timeout','python3','setsid','sbatch','scontrol','sinfo','squeue'].map(t=>`${t}=${t==='sbatch'&&!this.slurm?'no':'yes'}`).join('\n')}\nexecutor=/usr/bin/apptainer\npartition=standard\nwritable=yes\nsource=${this.source?'exists':'missing'}\nimage=${this.image?'exists':'missing'}\n`)};
+  if(s.includes('printf \'home='))return {returncode:0,stderr:Buffer.alloc(0),stdout:Buffer.from(`home=/home/user\nroot=/home/user/signet\n${['bash','git','tar','sha256sum','timeout','python3','setsid','sbatch','scontrol','sinfo','squeue'].map(t=>`${t}=${t==='sbatch'&&!this.slurm?'no':'yes'}`).join('\n')}\nexecutor=/usr/bin/apptainer\nruntime_module=${this.runtimeModule}\npartition=standard\nwritable=yes\nsource=${this.source?'exists':'missing'}\nimage=${this.image?'exists':'missing'}\n`)};
   if(s.includes('git -C'))this.source=true;
   if(s.includes(' pull ')&&!this.failStep)this.image=true;
   return {returncode:this.failStep&&s.includes(this.failStep)?1:0,stdout:Buffer.alloc(0),stderr:Buffer.from(this.failStep&&s.includes(this.failStep)?'Download unavailable':'')};
@@ -51,4 +51,12 @@ test('generated remote commands have valid Bash syntax',async()=>{
  const {execFileSync}=await import('node:child_process');
  const c:EnvironmentConfig={root:'/home/user/signet',source:'/home/user/signet/software/rev',image:'/home/user/signet/images/signet.sif',executor:'/usr/bin/apptainer',workRoot:'/home/user/signet/runs',revision:inventory.revision,partition:'standard'};
  for(const script of [probe('', '',inventory.revision),installSource(c,inventory),installImage(c),verify(c)])execFileSync('/bin/bash',['-n'],{input:script});
+});
+
+test('environment retains a validated module descriptor and rejects unsafe remote module metadata',async t=>{
+ const {ssh,service}=await fixture(t);ssh.runtimeModule='singularity/3.9.4';
+ assert.equal((await service.check()).config?.runtimeModule,'singularity/3.9.4');
+ ssh.runtimeModule='singularity/3.9.4; unsafe';
+ await assert.rejects(()=>service.check(),/Invalid container runtime module/);
+ assert.equal(service.getSnapshot().phase,'error');
 });

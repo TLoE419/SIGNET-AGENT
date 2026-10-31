@@ -348,3 +348,29 @@ health checks, host trust and owned-connection cleanup continue to apply.
 
 This integration does not verify a real HPC3 login or scientific job. Localhost
 SSH fixtures exercise desktop behavior; actual remote acceptance remains separate.
+
+## HPC3 container modules
+
+HPC3 provides container tools through Environment Modules. The environment check
+first tests executables already on PATH. If none work, it lists available
+Singularity/Apptainer modules, prefers RCIC's documented `singularity/3.9.4` when
+available, and otherwise tries explicit discovered versions. It verifies the
+chosen executable with `--version` and displays the selected runtime module in
+the environment dialog. It never runs an unversioned `module load`.
+
+Each container download/verification and scientific command reloads that exact
+module in its own shell. Uploaded command wrappers do the same inside a clean
+worker/job environment. The shared `runtime_modules.sh` initializes the system
+module function and HPC3's category paths when necessary, including USER in clean
+worker environments. No `.bashrc` or `.bash_profile` is modified, and loading a
+module does not download an image, start a container or submit a scheduler job.
+Existing globally available runtimes still work without modules. If no usable
+runtime/module exists, setup stays blocked.
+
+Remote installation still requires the explicit Install confirmation. Study data
+and scientific execution are separate. Follow RCIC's allocation guidance for
+container building and use; this detection change does not authorize or verify
+an installation or scientific job on a login node.
+
+- [RCIC modules: versioned loading in each job; keep startup files unchanged](https://rcic.uci.edu/software/modules.html)
+- [RCIC Singularity container guidance](https://rcic.uci.edu/software/user-installed.html)

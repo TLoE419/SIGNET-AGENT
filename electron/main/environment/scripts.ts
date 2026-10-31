@@ -1,4 +1,5 @@
 import type {EnvironmentConfig} from '../../shared/environment/types';
+import {runtimeModuleShell,modulePrelude} from './runtimeModules';
 export interface Inventory {repository:string;revision:string;scripts:{path:string;sha256:string}[];support_files:{path:string;sha256:string}[]}
 export const quote=(s:string)=>"'"+s.replace(/'/g,"'\\''")+"'";
 export function validRemotePath(s:string){return s.length<=2048&&/^\/[A-Za-z0-9_./-]+$/.test(s)&&!s.split('/').includes('..')&&s!=='/'}
@@ -11,8 +12,10 @@ printf 'root=%s\\n' "$root"
 for tool in bash git tar sha256sum timeout python3 setsid sbatch scontrol sinfo squeue; do
  if command -v "$tool" >/dev/null 2>&1; then printf '%s=yes\\n' "$tool"; else printf '%s=no\\n' "$tool"; fi
 done
-executor=$(command -v singularity || command -v apptainer || true)
+${runtimeModuleShell}
+signet_find_runtime
 printf 'executor=%s\\n' "$executor"
+printf 'runtime_module=%s\\n' "$runtime_module"
 partition=${quote(partition)}
 if [ -z "$partition" ] && command -v sinfo >/dev/null 2>&1; then partition=$(sinfo -h -o '%P' 2>/dev/null | sed -n 's/\\*$//p' | head -1); fi
 printf 'partition=%s\\n' "$partition"
@@ -43,6 +46,7 @@ ${sourceCheck(c,i)}
 `;
 }
 export function installImage(c:EnvironmentConfig){return `set -euo pipefail
+${modulePrelude(c.runtimeModule)}
 umask 077
 mkdir -p ${quote(c.root+'/images')}
 [ ! -e ${quote(c.image)} ] || { echo 'Image destination already exists; choose a new root.' >&2; exit 1; }
@@ -55,6 +59,7 @@ ${quote(c.executor)} exec --cleanenv --no-home "$stage/signet.sif" bash -c 'comm
 ln "$stage/signet.sif" ${quote(c.image)}
 `}
 export function verify(c:EnvironmentConfig){return `set -euo pipefail
+${modulePrelude(c.runtimeModule)}
 umask 077
 stage=$(mktemp -d)
 trap 'rm -rf -- "$stage"' EXIT

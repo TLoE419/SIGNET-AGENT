@@ -22,6 +22,7 @@ SIGNET-agent/
 ├── signet_tools.py               # Scientific tools, parameter validation, and isolated job preparation
 ├── signet_inventory.json         # Official code version, classification, and file hashes
 ├── signet_runtime.py             # Local VM connection, packaging, and output collection
+├── runtime_modules.sh            # Shared per-command/job container module initialization
 ├── ssh_transport.py              # Private Electron broker client for SSH command transport
 ├── network_runtime.py            # Network inference submission, queries, cancellation, and result checks
 ├── network_worker.py             # Background control and supervision of owned jobs inside the VM

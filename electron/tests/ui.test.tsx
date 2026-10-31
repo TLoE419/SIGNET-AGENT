@@ -252,7 +252,8 @@ test('status block displays environment initialization while retaining the SSH e
 test('environment installation opens a separate confirmation and never starts on the first click',async()=>{
  const {EnvironmentModal}=await import('../renderer/features/environment/EnvironmentModal');let installs=0;
  const bridge={getSnapshot:async()=>({ok:true}),check:async()=>({ok:true}),install:async()=>{installs++;return {ok:true}},subscribe:()=>()=>{}};
- render(<EnvironmentModal snapshot={{phase:'needs-install',message:'Source missing'}} bridge={bridge} onClose={()=>{}}/>);
+ render(<EnvironmentModal snapshot={{phase:'needs-install',message:'Source missing',config:{root:'/home/user/signet',source:'/home/user/signet/source',image:'/home/user/signet/image.sif',executor:'/opt/apps/singularity/3.9.4/bin/singularity',runtimeModule:'singularity/3.9.4',workRoot:'/home/user/signet/runs',revision:'a'.repeat(40),partition:'standard'}}} bridge={bridge} onClose={()=>{}}/>);
+ assert.ok(screen.getByText('singularity/3.9.4'));
  fireEvent.click(screen.getByRole('button',{name:'Install missing components…'}));assert.equal(installs,0);
  assert.ok(screen.getByRole('dialog',{name:'Install SIGNET environment?'}));
  fireEvent.click(screen.getByRole('button',{name:'Install environment'}));await waitFor(()=>assert.equal(installs,1));

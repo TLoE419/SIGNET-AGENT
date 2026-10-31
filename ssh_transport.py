@@ -6,6 +6,8 @@ per-launch token only to the Python child process it owns.
 import json
 import os
 import re
+import shlex
+from pathlib import Path
 import socket
 import subprocess
 
@@ -62,6 +64,22 @@ def request(action, **values):
     return {**value, 'stdout': stdout, 'stderr': stderr}
 
 
+def runtime_module_prelude(config):
+    """Reload the pinned module inside each command/job, never in shell startup files."""
+    name = config.get('runtimeModule')
+    if name is None:
+        return ''
+    if not isinstance(name, str) or not re.fullmatch(r'(singularity|apptainer)/[0-9][A-Za-z0-9_.+-]*', name):
+        raise OSError('Invalid remote container runtime module.')
+    helpers = Path(__file__).with_name('runtime_modules.sh').read_text()
+    return helpers + "\nif ! signet_load_module " + shlex.quote(name) + "; then echo 'Could not load container runtime module.' >&2; exit 1; fi\n"
+
+
+def with_runtime_module(command, config):
+    prelude = runtime_module_prelude(config)
+    return 'bash -c ' + shlex.quote(prelude + '\nexec bash -c ' + shlex.quote(command)) if prelude else command
+
+
 def environment():
     """Verified environment for the currently connected desktop SSH account."""
     value = request('environment')
@@ -72,6 +90,7 @@ def environment():
             raise OSError('Invalid remote environment path.')
     if not re.fullmatch(r'[A-Za-z0-9_-]{1,80}', config.get('partition', '')):
         raise OSError('Invalid remote scheduler partition.')
+    runtime_module_prelude(config)  # Validate the optional pinned module before any command.
     return config
 
 

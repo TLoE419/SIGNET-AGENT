@@ -11,7 +11,7 @@ export function EnvironmentModal({snapshot,bridge,onClose,diagnostics}:{diagnost
   <p role="status">{environmentLabels[snapshot.phase]}</p><p>{snapshot.message}</p>
   <label>Installation root<input value={root} placeholder="Default: ~/.local/share/signet-agent" disabled={busy} onChange={e=>setRoot(e.target.value)}/></label>
   <label>Slurm partition<input value={partition} placeholder="Use scheduler default" disabled={busy} onChange={e=>setPartition(e.target.value)}/></label>
-  {snapshot.config&&<dl className="ssh-key-details"><dt>Source revision</dt><dd><code>{snapshot.config.revision}</code></dd><dt>Container</dt><dd><code>{snapshot.config.image}</code></dd><dt>Runtime</dt><dd><code>{snapshot.config.executor||'Not found'}</code></dd><dt>Run directory</dt><dd><code>{snapshot.config.workRoot}</code></dd></dl>}
+  {snapshot.config&&<dl className="ssh-key-details"><dt>Source revision</dt><dd><code>{snapshot.config.revision}</code></dd><dt>Container</dt><dd><code>{snapshot.config.image}</code></dd><dt>Runtime</dt><dd><code>{snapshot.config.executor||'Not found'}</code></dd><dt>Runtime module</dt><dd><code>{snapshot.config.runtimeModule||'Not required / not detected'}</code></dd><dt>Run directory</dt><dd><code>{snapshot.config.workRoot}</code></dd></dl>}
   <p>Choose a writable location accessible to your compute jobs. Environment checks do not submit jobs or validate study inputs. Existing installations are never overwritten.</p>
   {error&&<p role="alert">{error}</p>}
   {diagnostics}

@@ -1,5 +1,5 @@
 export type EnvironmentPhase='disconnected'|'checking'|'needs-install'|'blocked'|'installing-source'|'installing-image'|'verifying'|'ready'|'error';
-export interface EnvironmentConfig {root:string;source:string;image:string;executor:string;workRoot:string;revision:string;partition:string}
+export interface EnvironmentConfig {root:string;source:string;image:string;executor:string;runtimeModule?:string;workRoot:string;revision:string;partition:string}
 export interface EnvironmentSnapshot {phase:EnvironmentPhase;message:string;config?:EnvironmentConfig;missing?:string[];checkedAt?:string}
 export interface EnvironmentBridge {
  getSnapshot():Promise<{ok:boolean;value?:EnvironmentSnapshot;error?:string}>;

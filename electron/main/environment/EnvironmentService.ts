@@ -4,6 +4,7 @@ import path from 'node:path';
 import {randomUUID} from 'node:crypto';
 import type {SshConnectionService} from '../ssh/SshConnectionService';
 import type {EnvironmentConfig,EnvironmentSnapshot,EnvironmentPhase} from '../../shared/environment/types';
+import {validRuntimeModule} from './runtimeModules';
 import {probe,sourceCheck,installSource,installImage,verify,validRemotePath,type Inventory} from './scripts';
 
 export class EnvironmentService extends EventEmitter {
@@ -53,7 +54,8 @@ export class EnvironmentService extends EventEmitter {
   const output=await this.command(probe(root,partition,this.inventory.revision),token,'probe');
   const values=Object.fromEntries(output.trim().split('\n').map(line=>{const at=line.indexOf('=');return [line.slice(0,at),line.slice(at+1)]}));
   if(!validRemotePath(values.root||''))throw Error('The remote installation path is unsupported. Choose an absolute path without spaces.');
-  const config:EnvironmentConfig={root:values.root,source:`${values.root}/software/${this.inventory.revision}`,image:`${values.root}/images/signet-0.0.6.sif`,workRoot:`${values.root}/runs`,executor:values.executor,revision:this.inventory.revision,partition:values.partition};
+  if(values.runtime_module&&!validRuntimeModule(values.runtime_module))throw Error('Invalid container runtime module returned by remote check.');
+  const config:EnvironmentConfig={...(values.runtime_module?{runtimeModule:values.runtime_module}:{}),root:values.root,source:`${values.root}/software/${this.inventory.revision}`,image:`${values.root}/images/signet-0.0.6.sif`,workRoot:`${values.root}/runs`,executor:values.executor,revision:this.inventory.revision,partition:values.partition};
   const missing=['bash','tar','sha256sum','timeout','python3','setsid','sbatch','scontrol','sinfo','squeue'].filter(tool=>values[tool]!=='yes');
   if(values.source==='missing'&&values.git!=='yes')missing.push('git');
   if(!validRemotePath(config.executor||''))missing.push('Singularity or Apptainer');

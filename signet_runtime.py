@@ -63,8 +63,11 @@ def ssh_args():
 
 
 def remote(command, **kwargs):
-    from ssh_transport import available, remote as electron_remote
+    from ssh_transport import available, remote as electron_remote, with_runtime_module
     if available():
+        config = desktop_environment()
+        if config:
+            command = with_runtime_module(command, config)
         return electron_remote(command, **kwargs)
     return subprocess.run(ssh_args() + [command], env={
         'PATH': os.environ.get('PATH', '/usr/bin:/bin'), 'HOME': str(Path.home()),
@@ -123,7 +126,8 @@ def bundle(root, settings, remote_root, input_keys=INPUT_KEYS, network=False):
             info = tarfile.TarInfo('runtime.json')
             info.size, info.mode = len(runtime_data), 0o600
             archive.addfile(info, io.BytesIO(runtime_data))
-            wrapper = ('#!/bin/sh\nexec ' + shlex.quote(runtime['executor']) + ' "$@"\n').encode()
+            from ssh_transport import runtime_module_prelude
+            wrapper = ('#!/bin/bash\n' + runtime_module_prelude(runtime) + '\nexec ' + shlex.quote(runtime['executor']) + ' "$@"\n').encode()
             info = tarfile.TarInfo('work/bin/singularity')
             info.size, info.mode = len(wrapper), 0o700
             archive.addfile(info, io.BytesIO(wrapper))
