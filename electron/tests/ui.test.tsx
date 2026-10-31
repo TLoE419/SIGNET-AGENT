@@ -139,11 +139,30 @@ test('SSH key details open separate edit and confirmation dialogs',async()=>{
  assert.equal(screen.queryByRole('dialog',{name:'Delete SSH key?'}),null);
  assert.ok(screen.getByRole('dialog',{name:'SSH key details'}));
  fireEvent.click(screen.getByRole('button',{name:'Delete key'}));
- fireEvent.click(screen.getByRole('button',{name:'Confirm delete'}));
+ // Deletion updates the parent form after its async callback; flush that React commit
+ // before waitFor starts its own async act scope and defers the inspection effect.
+ await act(async()=>{fireEvent.click(screen.getByRole('button',{name:'Confirm delete'}))});
  await waitFor(()=>assert.equal(removed,savedKey.keyId));
  await waitFor(()=>assert.ok((screen.getByRole('button',{name:'Connect'}) as HTMLButtonElement).disabled));
  fireEvent.click(screen.getByRole('radio',{name:'Duo'}));
  assert.equal(screen.queryByRole('region',{name:'SSH key management'}),null);
+});
+
+test('key deletion waits for storage before clearing the connection form',async()=>{
+ let finish!:()=>void;
+ const pending=new Promise<void>(resolve=>{finish=resolve});
+ render(<ConnectionModal open profile={{...profile,auth:{...profile.auth,keyId:savedKey.keyId}}} keys={[savedKey]} status="disconnected" onClose={()=>{}} onOpenKeyRegistration={()=>{}} onRemoveKey={async()=>{await pending}} onInspectKey={new MockSshConnectionPort().inspectPrivateKey} onSave={async()=>{}} onConnect={async()=>{}} onDisconnect={async()=>{}}/>);
+ fill();
+ await waitFor(()=>assert.equal((screen.getByRole('button',{name:'Connect'}) as HTMLButtonElement).disabled,false));
+ fireEvent.click(screen.getByRole('button',{name:'SSH key details'}));
+ fireEvent.click(screen.getByRole('button',{name:'Delete key'}));
+ await act(async()=>{fireEvent.click(screen.getByRole('button',{name:'Confirm delete'}))});
+ assert.ok((screen.getByRole('button',{name:'Deleting…'}) as HTMLButtonElement).disabled);
+ assert.equal((screen.getByLabelText('SSH key') as HTMLSelectElement).value,savedKey.keyId);
+ await act(async()=>{finish();await pending});
+ await waitFor(()=>assert.equal(screen.queryByRole('dialog',{name:'Delete SSH key?'}),null));
+ await waitFor(()=>assert.ok((screen.getByRole('button',{name:'Connect'}) as HTMLButtonElement).disabled));
+ assert.equal((screen.getByLabelText('SSH key') as HTMLSelectElement).value,'');
 });
 
 test('key details show an unlinked account and keep deletion errors in the confirmation dialog',async()=>{
