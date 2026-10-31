@@ -15,7 +15,7 @@ const document={documentElement:{},getElementById(){return toggle;},querySelecto
 }};
 let languageEvents=0;
 const context=vm.createContext({document,window:{dispatchEvent(){languageEvents++;}},Event:class Event{},localStorage:{getItem:k=>saved.get(k),setItem:(k,v)=>saved.set(k,v)}});
-vm.runInContext(fs.readFileSync('web/i18n.js','utf8'),context);
+vm.runInContext(fs.readFileSync('electron/renderer/i18n/index.js','utf8'),context);
 const tr=text=>vm.runInContext(`translateUI(${JSON.stringify(text)})`,context);
 assert.equal(document.documentElement.lang,'en');
 assert.equal(label.textContent,'Chat');
@@ -37,7 +37,7 @@ toggle.click();
 assert.equal(label.textContent,'Chat');
 assert.equal(message.textContent,'原始對話，必須保留。');
 assert.equal(languageEvents,3);
-const html=fs.readFileSync('web/index.html','utf8');
+const html=(fs.readFileSync('electron/renderer/app/App.tsx','utf8').replaceAll('className=', 'class=').replaceAll('htmlFor=', 'for=') + '<script id="initial-chat"></script>');
 for(const match of html.matchAll(/data-i18n(?:-aria|-placeholder|-prompt)?="([^"]+)"/g)){
  assert.notEqual(tr(match[1]),match[1],`Missing English translation: ${match[1]}`);
 }

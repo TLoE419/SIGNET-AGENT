@@ -31,7 +31,7 @@ class ChatUITest(unittest.TestCase):
         self.server.server_close()
         self.thread.join()
 
-    def request(self, path='/', payload=None, headers=None):
+    def request(self, path='/bootstrap', payload=None, headers=None):
         conn = http.client.HTTPConnection('127.0.0.1', self.server.server_port, timeout=3)
         try:
             body = json.dumps(payload) if payload is not None else None
@@ -52,8 +52,8 @@ class ChatUITest(unittest.TestCase):
         self.assertNotIn('__MODEL__', html)
         self.server.model_label = 'Groq / qwen/qwen3.8-27b'
         self.assertIn(self.server.model_label, self.request()[1])
-        for path in ['/chat.css', '/chat.js']:
-            self.assertEqual(self.request(path)[0], 200)
+        for path in ['/', '/chat.css', '/chat.js', '/ssh-ui.js']:
+            self.assertEqual(self.request(path)[0], 404)
         for path in ['/.env', '/../main.py', '/signet_inventory.json']:
             self.assertEqual(self.request(path)[0], 404)
 
@@ -93,22 +93,21 @@ class ChatUITest(unittest.TestCase):
                 types.Part(function_call=types.FunctionCall(name='signet_catalog', args={}))]),
             types.Content(role='user', parts=[types.Part.from_text(text='服務更新續接資料：內部備份')])]
         self.server.events[self.session] = [['工具查詢完成，未執行分析。']]
-        status, page = self.request('/?session=' + self.session)
+        status, page = self.request('/bootstrap?session=' + self.session)
         self.assertEqual(status, 200)
-        data = page.split('id="initial-chat">')[1].split('</script>')[0]
-        initial = json.loads(data)
+        data = page
+        initial = json.loads(data)['initial']
         self.assertEqual(initial['session'], self.session)
         self.assertEqual(len(initial['messages']), 2)
         self.assertIn(unsafe, initial['messages'][1]['text'])
-        self.assertNotIn(unsafe, data)
         self.assertNotIn('PRIVATE-THOUGHT', data)
         self.assertNotIn('工具公開說明', data)
         self.assertNotIn('內部備份', data)
         self.assertEqual(initial['events'], [['工具查詢完成，未執行分析。']])
-        self.assertEqual(self.request('/?session=bad')[0], 404)
+        self.assertEqual(self.request('/bootstrap?session=bad')[0], 404)
 
     def initial_chat(self, page):
-        return json.loads(page.split('id="initial-chat">')[1].split('</script>')[0])
+        return json.loads(page)['initial']
 
     def test_legacy_history_is_restored_and_new_chat_is_explicit(self):
         older = self.session
@@ -120,14 +119,14 @@ class ChatUITest(unittest.TestCase):
             self.assertEqual(initial['session'], latest)
             self.assertEqual(initial['messages'][0]['text'], 'Latest question')
             self.assertEqual({item['session'] for item in initial['sessions']}, {older, latest})
-            fresh = self.initial_chat(self.request('/?new=1')[1])
+            fresh = self.initial_chat(self.request('/bootstrap?new=1')[1])
             self.assertNotIn('session', fresh)
             self.assertNotIn('messages', fresh)
             self.assertEqual(len(fresh['sessions']), 2)
             run.assert_not_called()
         self.server.turn_lock.acquire()
         try:
-            self.assertEqual(self.request('/?session=' + older)[0], 409)
+            self.assertEqual(self.request('/bootstrap?session=' + older)[0], 409)
         finally:
             self.server.turn_lock.release()
 
@@ -137,14 +136,14 @@ class ChatUITest(unittest.TestCase):
             other = 'abcdefab-1234-1234-1234-123456789abc'
             self.server.histories = {self.session: [types.Content(role='user', parts=[types.Part.from_text(text='Saved question')])], other: []}
             self.server.events[self.session] = [['Saved work; do not replay']]
-            self.request('/?session=' + self.session)
+            self.request('/bootstrap?session=' + self.session)
             with chat_ui.ChatServer(('127.0.0.1', 0), self.server.client_factory,
                                     state_file=self.server.state_file) as restored:
                 runner = threading.Thread(target=restored.serve_forever, daemon=True)
                 runner.start()
                 try:
                     conn = http.client.HTTPConnection('127.0.0.1', restored.server_port, timeout=3)
-                    conn.request('GET', '/')
+                    conn.request('GET', '/bootstrap')
                     response = conn.getresponse()
                     self.assertEqual(response.status, 200)
                     initial = self.initial_chat(response.read().decode())

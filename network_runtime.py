@@ -45,9 +45,9 @@ def validate_inputs(settings):
 
 
 def preflight():
-    command = ('scontrol ping | grep -q UP && sinfo -h -p local -o "%t %c %m" && '
+    command = (f'scontrol ping | grep -q UP && sinfo -h -p {vm.partition()} -o "%t %c %m" && '
                'command -v python3 >/dev/null && command -v setsid >/dev/null && '
-               f'test -s {vm.image_path()} && singularity exec --cleanenv --no-home {vm.image_path()} '
+               f'test -s {vm.image_path()} && {vm.container_command()} exec --cleanenv --no-home {vm.image_path()} '
                'Rscript -e \'stopifnot(all(vapply(c("MASS","data.table","dataPreparation",'
                '"parcor","matrixcalc","chron"),requireNamespace,logical(1),quietly=TRUE)));'
                'stopifnot(nzchar(Sys.which("ParaFly")))\'')
@@ -73,19 +73,19 @@ def submit(root, settings):
     if not preflight():
         return {'status': 'unavailable', 'executed': False,
                 'reason': 'Existing VM / local SLURM queue / official image dependencies not ready.'}
-    remote_root = '/tmp/signet-agent-network/' + root.name
+    remote_root = vm.remote_work_root(network=True) + '/' + root.name
     record = {'operation': 'network', 'runtime': 'existing-docker-vm',
               'remote_directory': remote_root, 'container_image': vm.image_path(),
               'status': 'starting', 'executed': 'unknown', 'input_validation': validation,
               'parameters': {key: settings[key] for key in ('nboots', 'ncis', 'cor')},
-              'resources': {'queue': 'local', 'cores': 4, 'memory_gb': 4,
+              'resources': {'queue': vm.partition(), 'cores': 4, 'memory_gb': 4,
                             'job_walltime': '01:00:00', 'controller_timeout_hours': 6},
               'deployment_changes': ['4G scheduler memory request', 'bash submission shell'],
               'reason': 'Use get_network_status; never resubmit this run after an interrupted connection.'}
     # Record intent before any side effect that might start a detached controller.
     save(root, record)
     try:
-        result = vm.remote('umask 077; mkdir -p /tmp/signet-agent-network && mkdir ' + remote_root +
+        result = vm.remote('umask 077; mkdir -p ' + vm.remote_work_root(network=True) + ' && mkdir ' + remote_root +
                            ' && tar xzf - -C ' + remote_root,
                            input=vm.bundle(root, settings, remote_root, INPUT_KEYS, network=True),
                            capture_output=True, timeout=60)
@@ -127,7 +127,7 @@ def verify(root, state):
 
 def status(root, cancel=False):
     record = json.loads((root / 'network.json').read_text())
-    remote_root = '/tmp/signet-agent-network/' + root.name
+    remote_root = vm.remote_work_root(network=True) + '/' + root.name
     if record.get('remote_directory') != remote_root:
         raise ValueError('Recorded runtime directory does not match this run.')
     if record.get('collected'):

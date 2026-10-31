@@ -11,7 +11,7 @@ import unittest
 from unittest.mock import patch
 
 import chat_ui
-from electron.server import serve
+from electron.main.backend.server import serve
 
 
 class DesktopServerTest(unittest.TestCase):

@@ -35,6 +35,7 @@ id_rsa*
 # Local artifacts retained when switching away from the retired desktop branches.
 /desktop/.runtime/
 /desktop/build/
+/electron/build/
 /desktop/evidence/
 
 # HPC3 baseline (Spec 01): env.sh holds account names; raw fixtures stay on HPC3.

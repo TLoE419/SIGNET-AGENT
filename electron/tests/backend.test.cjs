@@ -7,8 +7,8 @@ const path = require('node:path');
 const {spawn} = require('node:child_process');
 const {once} = require('node:events');
 const readline = require('node:readline');
-const {Backend} = require('../backend.cjs');
-const {localURL, navigationAllowed} = require('../policy.cjs');
+const {Backend} = require('../main/backend/backend.cjs');
+const {localURL, navigationAllowed} = require('../main/security/policy.cjs');
 
 // Use node:http so the suite also works on hosts where Node fetch's socket
 // priority tuning is unavailable. Exercise actual HTTP responses, not mocks.
@@ -46,19 +46,20 @@ test('navigation and request policy reject other ports, schemes, credentials and
   assert.equal(navigationAllowed(origin + '/chat', origin), false);
 });
 
-test('owned service serves existing UI, preserves HTTP protections and closes its port', {timeout: 20000}, async t => {
+test('owned API serves bootstrap without frontend assets, preserves protections and closes its port', {timeout: 20000}, async t => {
   const {backend, stateFile} = await fixture(t);
   const origin = await backend.start();
-  const response = await request(origin);
+  const response = await request(origin + '/bootstrap');
   assert.equal(response.status, 200);
   assert.match(response.headers.get('content-security-policy'), /frame-ancestors 'none'/);
   const html = await response.text();
-  assert.match(html, /id="composer"/);
-  assert.match(html, /id="stage6-pane"/);
+  assert.deepEqual(JSON.parse(html).initial,{sessions:[]});
+  assert.equal((await request(origin)).status,404);
+  assert.equal((await request(origin + '/chat.js')).status,404);
   assert.doesNotMatch(html, /__TOKEN__|__MODEL__/);
   assert.equal((await request(origin + '/.env')).status, 404);
   assert.equal((await request(origin + '/chat', {method: 'POST', body: '{}'})).status, 403);
-  const token = html.match(/name="chat-token" content="([^"]+)"/)[1];
+  const token = JSON.parse(html).token;
   assert.equal((await request(origin + '/chat', {method: 'POST', headers: {'Origin': origin, 'X-Chat-Token': token}, body: '{}'})).status, 400);
   await backend.stop();
   await assert.rejects(request(origin));
@@ -78,7 +79,7 @@ test('invalid executable and startup deadline fail without leaving an owned serv
 
 test('Python notices owner death through pipe EOF and releases its listener', {timeout: 20000}, async t => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'signet-owner-test-'));
-  const script = `const {Backend}=require(${JSON.stringify(path.resolve(__dirname, '../backend.cjs'))});
+  const script = `const {Backend}=require(${JSON.stringify(path.resolve(__dirname, '../main/backend/backend.cjs'))});
     const backend=new Backend({stateFile:process.argv[1]});
     backend.start().then(origin=>console.log(JSON.stringify({origin,pid:backend.child.pid})));`;
   const owner = spawn(process.execPath, ['-e', script, path.join(directory, '.chat-state.json')], {stdio: ['ignore', 'pipe', 'inherit']});
@@ -91,7 +92,7 @@ test('Python notices owner death through pipe EOF and releases its listener', {t
   const lines = readline.createInterface({input: owner.stdout});
   const [line] = await once(lines, 'line');
   const data = JSON.parse(line); pid = data.pid;
-  assert.equal((await request(data.origin)).status, 200);
+  assert.equal((await request(data.origin + '/bootstrap')).status, 200);
   const exited = once(owner, 'close'); owner.kill('SIGKILL'); await exited;
   let stopped = false;
   for (let attempt = 0; attempt < 50; attempt++) {

@@ -161,5 +161,17 @@ class NetworkTest(unittest.TestCase):
         self.assertEqual(kill.call_args.args[0],child.pid)
 
 
+class RemoteEnvironmentDirectoryTest(unittest.TestCase):
+    def test_worker_accepts_configured_shared_directory_and_rejects_another_run_root(self):
+        with tempfile.TemporaryDirectory() as directory:
+            work_root = Path(directory) / 'runs'
+            folder = work_root / 'network' / 'run-1'
+            folder.mkdir(parents=True)
+            (folder / 'runtime.json').write_text(json.dumps({'workRoot': str(work_root)}))
+            self.assertTrue(worker.valid_runtime_directory(folder))
+            (folder / 'runtime.json').write_text(json.dumps({'workRoot': str(Path(directory) / 'other')}))
+            self.assertFalse(worker.valid_runtime_directory(folder))
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -131,7 +131,7 @@ class WorkspaceTest(unittest.TestCase):
             response=conn.getresponse();body=response.read();conn.close()
             return response.status,body
         try:
-            self.assertEqual(request('/stage6.js')[0],200)
+            self.assertEqual(request('/stage6.js')[0],404)  # Frontend assets are Electron-owned.
             self.assertEqual(request('/stage6?session='+sid,authenticated=False)[0],403)
             self.assertEqual(request('/stage6/confirm',{'session':sid,'proposal_id':p['id']},False)[0],403)
             self.assertEqual(request('/stage6/confirm',{'session':other,'proposal_id':p['id']})[0],400)

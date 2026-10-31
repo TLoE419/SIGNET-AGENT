@@ -1,0 +1,134 @@
+import {test} from 'node:test';
+import {createRequire} from 'node:module';
+import assert from 'node:assert/strict';
+import {mkdtemp,writeFile,readFile,chmod,mkdir,symlink,rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import path from 'node:path';
+import {EventEmitter} from 'node:events';
+import {utils} from 'ssh2';
+import {inspectPrivateKey,inspectBytes} from '../main/ssh/keys/PrivateKeyInspector';
+import {unlockPrivateKey} from '../main/ssh/keys/PrivateKeyUnlocker';
+import {SshProfileRepository,HostKeyTrustStore,hostIdentity} from '../main/ssh/storage/stores';
+import {SshConnectionService} from '../main/ssh/SshConnectionService';
+import {OpenSshTransport,type RemoteResult,type ShellChannel,type SshTransport} from '../main/ssh/connection/OpenSshTransport';
+import {installSshHandlers} from '../main/ssh/ipc/sshIpcHandlers';
+import {SshFailure} from '../shared/ssh/validation';
+import type {FormInput,HostIdentity,Profile} from '../shared/ssh/types';
+const compiled=createRequire(import.meta.url)('../build/ssh/index.cjs') as typeof import('../main/ssh/index');
+const phrase='test-only-passphrase';
+const encrypted=utils.generateKeyPairSync('ed25519',{passphrase:phrase,cipher:'aes256-ctr',rounds:4}),plain=utils.generateKeyPairSync('ed25519',{}),rsa=utils.generateKeyPairSync('rsa',{bits:2048,passphrase:phrase,cipher:'aes256-ctr',rounds:4}),ec=utils.generateKeyPairSync('ecdsa',{bits:256,passphrase:phrase,cipher:'aes256-ctr',rounds:4});
+const publicBlob=(pub:string)=>Buffer.from(pub.split(' ')[1],'base64');
+async function fixture(t:any){const dir=await mkdtemp(path.join(tmpdir(),'signet-ssh-'));t.after(()=>rm(dir,{recursive:true,force:true}));const key=path.join(dir,'private');await writeFile(key,encrypted.private,{mode:0o600});const input:FormInput={name:'UCI HPC3',host:'hpc3.rcic.uci.edu',port:22,username:'testuser',auth:{method:'private-key',privateKeyPath:key},presetId:'uci-hpc3'};return {dir,key,input}}
+const keyOps={inspect:inspectPrivateKey,unlock:unlockPrivateKey};
+class FakeShell extends EventEmitter implements ShellChannel {stderr=new EventEmitter();writableLength=0;writes:string[]=[];paused=false;write(data:string|Buffer){this.writes.push(data.toString());return true}setWindow(){}pause(){this.paused=true}resume(){this.paused=false}end(){this.destroy()}destroy(){this.emit('close')}}
+class FakeTransport extends EventEmitter implements SshTransport {
+ calls=0;closed=0;execCalls=0;secret='';healthOutput='host=login-test\nuser=testuser\nslurm=yes\n';healthCode=0;shell=new FakeShell();private resolve?:()=>void;private reject?:(error:Error)=>void;
+ connect(secret:string){this.calls++;this.secret=secret;return new Promise<void>((resolve,reject)=>{this.resolve=resolve;this.reject=reject})}
+ succeed(){this.emit('diagnostic',{stage:'session',message:'Persistent PTY login shell opened.'});this.resolve?.()}
+ fail(error=new SshFailure('AUTH_FAILED','Authentication failed.')){this.reject?.(error)}
+ challenge(prompt='Passcode or option (1-2):'){let answer:string[]|undefined;this.emit('challenge',{name:'Duo authentication',instructions:'Choose',prompts:[{prompt,echo:true}],respond:(value:string[])=>answer=value});return()=>answer}
+ async exec(command:string,_input:Buffer,_timeout:number):Promise<RemoteResult>{this.execCalls++;if(command.includes('command -v sbatch'))return{returncode:this.healthCode,signal:null,stdout:Buffer.from(this.healthOutput),stderr:Buffer.alloc(0)};return{returncode:0,signal:null,stdout:Buffer.from('job output'),stderr:Buffer.from('job warning')}}
+ async openShell(){return this.shell}
+ async close(){this.closed++;this.reject?.(new SshFailure('SESSION_CLOSED','Closed.'));this.emit('close')}
+}
+async function setup(t:any,{trusted=true}={}){const f=await fixture(t),repo=new SshProfileRepository(path.join(f.dir,'ssh')),trust=new HostKeyTrustStore(path.join(f.dir,'ssh'));await trust.load();const identity=hostIdentity(f.input.host,22,publicBlob(plain.public));if(trusted)await trust.trust(identity);const transports:FakeTransport[]=[];const service=new SshConnectionService(repo,trust,keyOps,()=>{const transport=new FakeTransport();transports.push(transport);return transport},undefined,async()=>identity);await service.initialize();return {...f,repo,trust,identity,transports,service}}
+async function until(fn:()=>boolean){for(let index=0;index<200;index++){if(fn())return;await new Promise(resolve=>setTimeout(resolve,5))}throw Error('Condition timed out')}
+
+test('legacy profiles and pinned host keys remain readable; known_hosts is owner-private',async t=>{const f=await fixture(t),dir=path.join(f.dir,'ssh');await mkdir(dir,{mode:0o700});const raw={version:1,selectedProfileId:'existing',profiles:[{id:'existing',name:'Saved HPC3',host:f.input.host,port:22,username:'testuser',privateKeyPath:f.key}]},file=path.join(dir,'profiles.json');await writeFile(file,JSON.stringify(raw),{mode:0o600});const pin=hostIdentity(f.input.host,22,publicBlob(plain.public));await writeFile(path.join(dir,'host-trust.json'),JSON.stringify({version:1,hosts:[pin]}),{mode:0o600});const repo=new SshProfileRepository(dir),trust=new HostKeyTrustStore(dir);await trust.load();assert.equal((await repo.list())[0].auth.method,'private-key');const known=await trust.materializeKnownHosts(),text=await readFile(known,'utf8');assert.match(text,/hpc3\.rcic\.uci\.edu ssh-ed25519 /);if(process.platform!=='win32'){const {stat}=await import('node:fs/promises');assert.equal((await stat(known)).mode&0o777,0o600)}});
+test('fingerprint-only legacy trust is enriched only after the scanned key matches',async t=>{const f=await fixture(t),dir=path.join(f.dir,'ssh');await mkdir(dir,{mode:0o700});const identity=hostIdentity(f.input.host,22,publicBlob(plain.public)),{publicKey:_,...legacy}=identity;await writeFile(path.join(dir,'host-trust.json'),JSON.stringify({version:1,hosts:[legacy]}),{mode:0o600});const repo=new SshProfileRepository(dir),trust=new HostKeyTrustStore(dir),transports:FakeTransport[]=[];const service=new SshConnectionService(repo,trust,keyOps,()=>{const transport=new FakeTransport();transports.push(transport);return transport},undefined,async()=>identity);await service.initialize();const profile=await service.saveProfile(f.input),run=service.connect(profile.id,phrase);await until(()=>transports.length===1);transports[0].succeed();await run;assert.ok((await readFile(path.join(dir,'known_hosts'),'utf8')).includes(identity.publicKey!));assert.equal(trust.get(identity.host,identity.port)?.publicKey,identity.publicKey);await service.disconnect(profile.id)});
+test('encrypted key formats unlock locally and invalid envelopes never become credentials',async t=>{const {key,dir}=await fixture(t);for(const value of [encrypted,rsa,ec]){await writeFile(key,value.private);assert.equal((await inspectPrivateKey(key)).status,'encrypted');assert.ok(!(utils.parseKey(await unlockPrivateKey(key,phrase)) instanceof Error))}for(const [value,status] of [[plain.private,'unencrypted'],[plain.public,'invalid'],['garbage','invalid']] as const){await writeFile(key,value);assert.equal((await inspectPrivateKey(key)).status,status)}await symlink(key,path.join(dir,'link'));assert.equal((await inspectPrivateKey(path.join(dir,'link'))).status,'unreadable');assert.equal(inspectBytes(Buffer.from(plain.private)).status,'unencrypted')});
+test('managed and imported key metadata never contains private material or passphrases',async t=>{const f=await fixture(t),store=new compiled.AppManagedKeyStore(path.join(f.dir,'managed'));const generated=await store.generate({label:'Generated',username:'testuser',passphrase:phrase});assert.equal((await inspectPrivateKey(generated.privateKeyPath)).status,'encrypted');const imported=await store.addExternal({label:'Imported',username:'testuser',privateKeyPath:f.key});assert.equal((await store.addExternal({label:'Again',username:'testuser',privateKeyPath:f.key})).keyId,imported.keyId);const raw=await readFile(path.join(f.dir,'managed','keys.json'),'utf8');assert.doesNotMatch(raw,/test-only-passphrase|BEGIN .*PRIVATE KEY/)});
+test('save is offline; empty or wrong secrets never construct a transport',async t=>{const s=await setup(t),profile=await s.service.saveProfile(s.input);assert.equal(s.transports.length,0);await assert.rejects(s.service.connect(profile.id,''),{code:'PASSPHRASE_REQUIRED'});await assert.rejects(s.service.connect(profile.id,'wrong'),{code:'INVALID_PASSPHRASE'});assert.equal(s.transports.length,0);const persisted=await readFile(path.join(s.dir,'ssh','profiles.json'),'utf8');assert.doesNotMatch(persisted,/passphrase|password|connectedAt/)});
+test('unknown hosts require an explicit pinned fingerprint before OpenSSH starts',async t=>{const s=await setup(t,{trusted:false}),profile=await s.service.saveProfile(s.input);await assert.rejects(s.service.connect(profile.id,phrase),{code:'HOST_KEY_UNKNOWN'});assert.equal(s.transports.length,0);const pending=s.service.getSnapshot().pendingHost!;assert.equal(pending.fingerprint,s.identity.fingerprint);await s.service.trustHost(pending);assert.equal(s.trust.check(pending),'match')});
+test('connection becomes ready only after PTY shell and remote health; health is cached',async t=>{const s=await setup(t),profile=await s.service.saveProfile(s.input),run=s.service.connect(profile.id,phrase);await until(()=>s.transports.length===1);const transport=s.transports[0];assert.equal(s.service.getSnapshot().connection?.status,'connecting');transport.succeed();await run;assert.equal(s.service.getSnapshot().connection?.phase,'ready');assert.deepEqual(s.service.getSnapshot().connection?.health?.remote,{hostname:'login-test',username:'testuser',slurm:true});assert.equal(transport.execCalls,1);await s.service.healthCheck(false);assert.equal(transport.execCalls,1);await s.service.healthCheck(true);assert.equal(transport.execCalls,2);await s.service.disconnect(profile.id);assert.equal(transport.closed,1);assert.equal(s.service.getSnapshot().connection?.status,'disconnected')});
+test('identity mismatch and stale command channels retire the owned master',async t=>{for(const [output,code,error] of [['host=login-test\nuser=other\nslurm=yes\n',0,'REMOTE_IDENTITY_MISMATCH'],['',255,'STALE_CONNECTION']] as const){const s=await setup(t),profile=await s.service.saveProfile(s.input),run=s.service.connect(profile.id,phrase);await until(()=>s.transports.length===1);s.transports[0].healthOutput=output;s.transports[0].healthCode=code;s.transports[0].succeed();await assert.rejects(run,{code:error});assert.equal(s.transports[0].closed,1)}});
+test('Duo challenges cross the service boundary without persisting submitted secrets',async t=>{const s=await setup(t),profile=await s.service.saveProfile({...s.input,auth:{method:'duo'}}),run=s.service.connect(profile.id,'account-secret');await until(()=>s.transports.length===1);const received=new Promise<any>(resolve=>s.service.once('challenge',value=>value&&resolve(value))),answer=s.transports[0].challenge(),challenge=await received;s.service.answerAuthChallenge(challenge.sessionId,challenge.challengeId,['2']);assert.deepEqual(answer(),['2']);s.transports[0].succeed();await run;assert.doesNotMatch(JSON.stringify(s.service.getSnapshot()),/account-secret/);await s.service.disconnect(profile.id)});
+test('disconnect cancels a pending PTY login and stale completion cannot reconnect',async t=>{const s=await setup(t),profile=await s.service.saveProfile(s.input),run=s.service.connect(profile.id,phrase);await until(()=>s.transports.length===1);const rejected=assert.rejects(run,{code:'SESSION_CLOSED'});await s.service.disconnect(profile.id);await rejected;s.transports[0].succeed();assert.equal(s.service.getSnapshot().connection?.status,'disconnected')});
+test('IPC rejects untrusted frames and malformed health requests',async t=>{const s=await setup(t),handlers=new Map<string,Function>(),sent:any[]=[];const frame={url:'signet://app/index.html'},wc={mainFrame:frame,send:(...value:any[])=>sent.push(value)},win={isDestroyed:()=>false,webContents:wc},ipc={handle:(name:string,fn:Function)=>handlers.set(name,fn),removeHandler:(name:string)=>handlers.delete(name)},dispose=installSshHandlers(ipc as any,()=>win as any,s.service,async()=>({canceled:true}));const event={sender:wc,senderFrame:frame};assert.equal((await handlers.get('ssh:getSnapshot')!({...event,sender:{}})).ok,false);assert.equal((await handlers.get('ssh:healthCheck')!(event,'yes')).ok,false);assert.equal((await handlers.get('ssh:saveProfile')!(event,{...s.input,password:phrase})).ok,false);assert.ok(![...handlers.keys()].some(value=>/exec|shell|readFile/.test(value)));dispose();assert.equal(handlers.size,0)});
+test('OpenSSH transport owns a foreground ControlMaster PTY and forwards Duo choices',async t=>{let data!:(value:string)=>void,exit!:(event:{exitCode:number;signal?:number})=>void,args:string[]=[],writes:string[]=[],controlReady=false;const fake:any={onData:(fn:typeof data)=>{data=fn;return{dispose(){}}},onExit:(fn:typeof exit)=>{exit=fn;return{dispose(){}}},write:(value:string)=>writes.push(value),resize:()=>{},kill:()=>exit({exitCode:0})};const profile:Profile={id:'p',name:'HPC3',host:'hpc3.rcic.uci.edu',port:22,username:'testuser',auth:{method:'duo'}},transport=new OpenSshTransport(profile,'/tmp/Application Support/known_hosts','/tmp',(_file,argv)=>{args=argv;return fake},async()=>controlReady?0:255);t.after(()=>exit?.({exitCode:0}));const connected=transport.connect('account-secret');await until(()=>!!data);data('(testuser@hpc3) Password: ');assert.equal(writes.at(-1),'account-secret\r');const received=new Promise<any>(resolve=>transport.once('challenge',resolve));data('\n1. Duo Push to device A\n2. Duo Push to device B\nPasscode or option (1-2): ');const challenge=await received;challenge.respond(['2']);assert.equal(writes.at(-1),'2\r');data('\ntestuser@login-i15:~$ ');controlReady=true;await connected;data('Permission denied\nAuthentication failed\nPasscode or option (1-2):');assert.equal(writes.length,2);assert.ok(args.includes('-M'));assert.ok(args.includes('ControlPersist=no'));assert.ok(args.includes('PreferredAuthentications=keyboard-interactive'));assert.ok(args.includes('UserKnownHostsFile="/tmp/Application Support/known_hosts"'));assert.ok(args.includes('-tt'))});
+test('dev terminal attaches to the primary transport instead of creating another login',async t=>{const s=await setup(t),profile=await s.service.saveProfile(s.input),run=s.service.connect(profile.id,phrase);await until(()=>s.transports.length===1);s.transports[0].succeed();await run;const terminal=new compiled.DevTerminal(s.service),events:any[]=[];terminal.on('event',event=>events.push(event));await terminal.open('terminal',80,24);s.transports[0].shell.emit('data',Buffer.from('remote output'));await until(()=>events.some(event=>event.type==='data'));terminal.input('terminal','pwd\r');assert.deepEqual(s.transports[0].shell.writes,['pwd\r']);terminal.close('terminal');assert.equal(s.service.getSnapshot().connection?.status,'connected');terminal.dispose();await s.service.disconnect(profile.id)});
+test('diagnostic history is bounded and disposed with dev IPC',async t=>{const s=await setup(t),handlers=new Map<string,Function>(),frame={url:'http://127.0.0.1:1234/'},wc={mainFrame:frame,send:()=>{}},win={isDestroyed:()=>false,webContents:wc},ipc={handle:(name:string,fn:Function)=>handlers.set(name,fn),removeHandler:(name:string)=>handlers.delete(name)},dev=compiled.installDevTerminal(ipc as any,()=>win as any,s.service,()=>frame.url.slice(0,-1)),event={sender:wc,senderFrame:frame};for(let index=0;index<350;index++)s.service.emit('diagnostic',{id:'attempt',stage:'connect',message:'Starting',time:'test'});const history=(await handlers.get('ssh-dev:history')!(event)).value;assert.equal(history.length,300);dev.dispose();assert.equal(handlers.size,0)});
+test('portable UI boundary keeps native PTY and process APIs in Electron Main',async t=>{const s=await setup(t);await s.service.saveProfile(s.input);const {readdir}=await import('node:fs/promises');for(const file of await readdir(path.resolve(import.meta.dirname,'../renderer/features/ssh'),{recursive:true})){if(!/\.tsx?$/.test(file))continue;const source=await readFile(path.resolve(import.meta.dirname,'../renderer/features/ssh',file),'utf8');assert.doesNotMatch(source,/from ['"](?:electron|node:|ssh2|node-pty)/)}const main=await readFile(path.resolve(import.meta.dirname,'../main/ssh/connection/OpenSshTransport.ts'),'utf8');assert.match(main,/ControlPersist=no/);assert.match(main,/node-pty/)});
+
+test('saved key edits persist and removal preserves private key files',async t=>{
+ const f=await fixture(t),dir=path.join(f.dir,'management'),store=new compiled.AppManagedKeyStore(dir);
+ const key=await store.addExternal({label:'Original',privateKeyPath:f.key});
+ await store.update(key.keyId,{label:'Renamed',username:'newuser'});
+ const reopened=new compiled.AppManagedKeyStore(dir);
+ assert.equal((await reopened.list())[0].label,'Renamed');
+ assert.equal((await reopened.list())[0].username,'newuser');
+ await assert.rejects(()=>reopened.update(key.keyId,{label:'',username:'invalid user'}));
+ await reopened.remove(key.keyId);
+ assert.equal((await reopened.list()).length,0);
+ assert.equal((await inspectPrivateKey(f.key)).status,'encrypted');
+});
+
+test('removing a saved key switches referencing profiles to Duo and preserves selection',async t=>{
+ const f=await fixture(t),repo=new SshProfileRepository(path.join(f.dir,'profiles'));
+ await repo.upsert({...f.input,id:'first',auth:{method:'private-key',privateKeyPath:f.key,keyId:'key-test'}} as Profile);
+ await repo.upsert({...f.input,id:'second'} as Profile);
+ await repo.upsert({...f.input,id:'unrelated',auth:{method:'duo'}} as Profile);
+ await repo.clearKey('key-test',f.key);
+ assert.ok((await repo.list()).every(p=>p.auth.method==='duo'));
+ const raw=JSON.parse(await readFile(path.join(f.dir,'profiles','profiles.json'),'utf8'));
+ assert.equal(raw.selectedProfileId,'unrelated');
+});
+
+test('key storage rejects an imported private key without a passphrase',async t=>{
+ const f=await fixture(t),store=new compiled.AppManagedKeyStore(path.join(f.dir,'reject-plain'));
+ await writeFile(f.key,plain.private,{mode:0o600});
+ await assert.rejects(()=>store.addExternal({label:'Unprotected',privateKeyPath:f.key}),{code:'KEY_UNENCRYPTED'});
+ assert.deepEqual(await store.list(),[]);
+});
+
+test('command stdin errors are contained and cannot turn incomplete uploads into success',async t=>{
+ for(const [errorCode,exitCode] of [['EPIPE',42],['EPIPE',0],['EIO',0]] as const){
+  const f=await fixture(t);let exited!:(event:{exitCode:number;signal?:number})=>void;
+  const fakePty:any={onData:()=>({dispose(){}}),onExit:(fn:typeof exited)=>{exited=fn;return {dispose(){}}},write:()=>{},resize:()=>{},kill:()=>exited({exitCode:0})};
+  const spawnCommand=(()=>{
+   const child:any=new EventEmitter();child.stdout=new EventEmitter();child.stderr=new EventEmitter();child.stdin=new EventEmitter();child.kill=()=>{};
+   child.stdin.end=()=>queueMicrotask(()=>{child.stdin.emit('error',Object.assign(new Error('input pipe closed'),{code:errorCode}));child.stderr.emit('data',Buffer.from('remote upload rejected'));child.emit('close',exitCode,null)});
+   return child;
+  }) as any;
+  const transport=new OpenSshTransport({...f.input,id:'pipe'} as Profile,'/test/known-hosts',f.dir,()=>fakePty,async()=>0,spawnCommand);
+  await transport.connect(phrase);
+  if(errorCode==='EPIPE'&&exitCode!==0){const result=await transport.exec('upload',Buffer.alloc(100),1000);assert.equal(result.returncode,42);assert.match(result.stderr.toString(),/rejected/)}
+  else await assert.rejects(()=>transport.exec('upload',Buffer.alloc(100),1000),{code:'UNKNOWN'});
+  await transport.close();
+ }
+});
+
+test('an authenticated control socket establishes readiness without any shell prompt',async t=>{
+ const f=await fixture(t);let output!:(text:string)=>void,exited!:(event:{exitCode:number})=>void;let probes=0;
+ const fake:any={onData:(fn:typeof output)=>{output=fn;return {dispose(){}}},onExit:(fn:typeof exited)=>{exited=fn;return {dispose(){}}},write:()=>assert.fail('post-login output must not submit credentials'),resize:()=>{},kill:()=>exited({exitCode:0})};
+ const transport=new OpenSshTransport({...f.input,id:'prompt'} as Profile,'/test/known-hosts',f.dir,()=>fake,async()=>{probes++;return 0});
+ await transport.connect(phrase);assert.equal(probes,1);
+ output('Permission denied\nAuthentication failed\nEnter passphrase for key:');
+ assert.ok(await transport.openShell(80,24));await transport.close();
+});
+
+// Port the legacy card's actionable hints through the existing desktop transport.
+test('SSH login failures explain the next action without exposing server text',async t=>{
+ const f=await fixture(t);
+ for(const [output,code,hint] of [
+  ['ssh: Could not resolve hostname invalid.example: nodename nor servname provided','DNS_FAILED','Advanced connection settings'],
+  ['ssh: connect to host example port 22: Connection refused','NETWORK_UNREACHABLE','UCI VPN or campus network'],
+  ['ssh: connect to host example port 22: Operation timed out','CONNECTION_TIMEOUT','Check your network or UCI VPN'],
+  ['Permission denied (keyboard-interactive).','AUTH_FAILED','Check the account password, Duo response, username, or SSH key'],
+  ['REMOTE HOST IDENTIFICATION HAS CHANGED!','HOST_KEY_CHANGED','Connection blocked'],
+ ] as const){
+  await t.test(code,async()=>{
+   let outputReady!:(data:string)=>void,exited!:(event:{exitCode:number})=>void;
+   const fake:any={onData:(fn:typeof outputReady)=>{outputReady=fn;return{dispose(){}}},onExit:(fn:typeof exited)=>{exited=fn;return{dispose(){}}},write:()=>{},resize:()=>{},kill:()=>exited({exitCode:255})};
+   const transport=new OpenSshTransport({...f.input,id:code} as Profile,'/test/known-hosts',f.dir,()=>fake,async()=>255);
+   const rejected=assert.rejects(transport.connect('transient-test-secret'),(error:SshFailure)=>{
+    assert.equal(error.code,code);assert.ok(error.message.includes(hint));assert.doesNotMatch(error.message,/transient-test-secret|server-private-marker/);return true;
+   });
+   await until(()=>!!outputReady);
+   outputReady(output+'\nserver-private-marker\n');
+   exited({exitCode:255});
+   await rejected;
+   await transport.close();
+  });
+ }
+});

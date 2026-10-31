@@ -51,12 +51,12 @@ def save(root, state):
 
 
 def run(root, seconds=21600):
-    jobs, child = {}, None
+    jobs, child, lock = {}, None, None
     state = {'status': 'starting', 'executed': False, 'jobs': jobs, 'started_at': time.time()}
     try:
         # Serialize launchers for the entire analysis, including preprocessing between jobs.
         import fcntl
-        lock = open('/tmp/signet-agent-network.lock', 'a')
+        lock = open(root.parent / '.signet-network.lock', 'a')
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         if command(['squeue', '-h', '-o', '%i']).strip():
             raise RuntimeError('Scheduler is busy; no analysis started')
@@ -68,8 +68,8 @@ def run(root, seconds=21600):
         image = next(value.strip() for key, value in settings.items() if key.strip() == 'sif')
         if not re.fullmatch(r'/[A-Za-z0-9_./-]+', image) or '..' in Path(image).parts:
             raise ValueError('Invalid VM image path.')
-        env = {'PATH': '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
-               'HOME': '/root', 'LANG': 'C', 'SINGULARITY_BIND': str(root) + ',' + str(Path(image).parent),
+        env = {'PATH': str(root / 'work/bin') + ':' + os.environ.get('PATH', '/usr/local/bin:/usr/bin:/bin'),
+               'HOME': str(Path.home()), 'LANG': 'C', 'SINGULARITY_BIND': str(root) + ',' + str(Path(image).parent),
                'OPENBLAS_NUM_THREADS': '1', 'MKL_NUM_THREADS': '1', 'OMP_NUM_THREADS': '1'}
         with open(root / 'stdout.log', 'xb') as out:
             with open(root / 'stderr.log', 'xb') as err:
@@ -114,14 +114,27 @@ def run(root, seconds=21600):
                 raise RuntimeError('Owned scheduler jobs remain active')
         except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
             state.update(status='unknown', reason=str(exc))
+        if lock is not None:
+            lock.close()
         state['ended_at'] = time.time()
         save(root, state)
 
 
+def valid_runtime_directory(folder):
+    valid = bool(re.fullmatch(r'/tmp/signet-agent-network/[A-Za-z0-9][A-Za-z0-9_-]{0,63}', str(folder)))
+    runtime_file = folder / 'runtime.json'
+    if runtime_file.is_file() and not runtime_file.is_symlink():
+        runtime = json.loads(runtime_file.read_text())
+        work_root = runtime.get('workRoot', '')
+        valid = (isinstance(work_root, str) and bool(re.fullmatch(r'/[A-Za-z0-9_./-]+', work_root))
+                 and '..' not in Path(work_root).parts and folder.parent == Path(work_root) / 'network'
+                 and bool(re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,63}', folder.name)))
+    return valid and not folder.is_symlink()
+
+
 if __name__ == '__main__':
     folder = Path(sys.argv[1])
-    if (not re.fullmatch(r'/tmp/signet-agent-network/[A-Za-z0-9][A-Za-z0-9_-]{0,63}', str(folder))
-            or folder.is_symlink()):
+    if not valid_runtime_directory(folder):
         raise SystemExit('Invalid runtime directory')
     for sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, lambda *_: (folder / 'cancel').touch())

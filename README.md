@@ -2,11 +2,11 @@
 
 Use a local chat interface to explore SIGNET's analysis capabilities, inspect files you provide, and run operations through controlled tools. The interface supports English and Traditional Chinese, tool progress, and parameter proposals and comparisons for Stage 6 network results.
 
-**This version includes no study data, example datasets, reference datasets, or precomputed results.** After installation, you can open the web interface. With your own model sign-in configured, you can chat, query the analysis catalog, and list project files. Network visualization and comparison require your own analysis results that have passed the technical output checks; no example graph appears on first launch.
+**This version includes no study data, example datasets, reference datasets, or precomputed results.** After installation, you can open the Electron desktop client. With your own model sign-in configured, you can chat, query the analysis catalog, and list project files. Network visualization and comparison require your own analysis results that have passed the technical output checks; no example graph appears on first launch.
 
 ## Replacing the Former Desktop Workbench
 
-This version replaces the desktop workbench with the local chat research assistant. The retired `desktop/` implementation, former `tools/` setup and execution entry points, desktop architecture documents, and historical validation records have been removed. Use the Python installation and startup steps below; the former desktop `npm start` and `tools/setup-dev.sh` are no longer entry points. An optional new Electron shell is described below.
+This version replaces the desktop workbench with the local chat research assistant. The retired `desktop/` implementation, former `tools/` setup and execution entry points, desktop architecture documents, and historical validation records have been removed. Use the Python installation and startup steps below; the former desktop `npm start` and `tools/setup-dev.sh` are no longer entry points. The current Electron client is the supported UI described below.
 
 This replaces the application entry point and file layout. It does not automatically migrate desktop work data or run records, and scientific analysis still requires a separately prepared environment. The old application and environment tools remain available in the [desktop history](https://github.com/TLoE419/SIGNET-AGENT/tree/cfd64e0ceaeabc6d8aa285285bd991587b8272e0).
 
@@ -21,34 +21,32 @@ If Python is not installed yet or you need to set up Codex CLI, follow the [from
 ```sh
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
-.venv/bin/python chat_ui.py
-```
-
-Open the [local interface](http://127.0.0.1:8880). A page loading successfully does not establish that your model is signed in or that the scientific environment is ready.
-
-Chat uses your own signed-in Codex CLI by default. See the [installation guide](docs/INSTALL.md) for installation, sign-in checks, and other model providers. The CLI version checked for this project is `0.162.1`; other versions need compatible command arguments and structured responses.
-
-## Optional Desktop Window
-
-After the Python setup above, you can open the same interface in Electron:
-
-```sh
 npm ci --prefix electron
 npm start --prefix electron
 ```
 
-Requires Node.js 22.12+ on macOS or Linux. The shell starts its own loopback Python
-service and manages its shutdown; it preserves the existing UI, APIs and analysis
-implementation. Browser startup remains supported. Desktop conversation state is
-separate, while scientific inputs and runs are shared; run scientific work through
-only one interface at a time. See [desktop setup and lifecycle](electron/README.md)
-for model selection, shutdown behavior and tests. No installer is provided yet.
+Electron opens the application and starts its Python API automatically. Requires Node.js 22.12+ on macOS or Linux. Opening the window does not establish model sign-in or scientific readiness.
+
+Chat uses your own signed-in Codex CLI by default. See the [installation guide](docs/INSTALL.md) for installation, sign-in checks, and other model providers. The CLI version checked for this project is `0.162.1`; other versions need compatible command arguments and structured responses.
+
+## Desktop client and independent Python backend
+
+`electron/renderer/` is the only frontend source. Electron builds and serves the
+renderer; Python continues to own chat, model providers, tools and scientific APIs.
+The desktop client manages Python startup/shutdown and the SSH connection.
+See [desktop setup and lifecycle](electron/README.md).
+
+For backend-only development, run `.venv/bin/python chat_ui.py --port 8880`.
+This starts an API, not a browser interface. `GET /bootstrap` supplies initial
+conversation state; `/chat` and `/stage6` retain their existing request contracts.
+Standalone Python tools and tests remain available. Existing desktop state and
+scientific inputs/results are not moved or rewritten by the frontend migration.
 
 ## Capabilities and Prerequisites
 
 | Level | Prerequisites | Behavior |
 |---|---|---|
-| Open the interface | Python dependencies | Displays the chat page and guidance without calling a model |
+| Open the interface | Python dependencies and Electron/Node.js setup | Displays the chat page and guidance without calling a model |
 | Natural-language interaction | Your own model sign-in or key | Answers questions, queries the tool catalog, and lists project files; this does not establish that an analysis ran |
 | Prepare scientific operations | Pinned official source and your own inputs | Creates an isolated working directory and checks prerequisites |
 | Run scientific analysis | The corresponding scientific dependencies, VM, or scheduler | Runs within each tool's limits and retains logs; completion does not establish biological validity |

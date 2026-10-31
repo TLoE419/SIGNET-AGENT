@@ -21,10 +21,33 @@ def host_project():
 
 
 def image_path():
-    value = os.environ.get('SIGNET_CONTAINER_IMAGE') or IMAGE
+    config = desktop_environment()
+    value = config['image'] if config else os.environ.get('SIGNET_CONTAINER_IMAGE') or IMAGE
     if not re.fullmatch(r'/[A-Za-z0-9_./-]+', value) or '..' in Path(value).parts:
         raise ValueError('SIGNET_CONTAINER_IMAGE must be an absolute VM path using letters, digits, _, ., / or -.')
     return value
+
+
+def desktop_environment():
+    from ssh_transport import available, environment
+    return environment() if available() else None
+
+
+def container_command():
+    config = desktop_environment()
+    return config['executor'] if config else 'singularity'
+
+
+def partition():
+    config = desktop_environment()
+    return config['partition'] if config else 'local'
+
+
+def remote_work_root(network=False):
+    config = desktop_environment()
+    if config:
+        return config['workRoot'] + ('/network' if network else '/cis')
+    return '/tmp/signet-agent-network' if network else '/tmp/signet-agent'
 
 
 def ssh_args():
@@ -40,6 +63,12 @@ def ssh_args():
 
 
 def remote(command, **kwargs):
+    from ssh_transport import available, remote as electron_remote, with_runtime_module
+    if available():
+        config = desktop_environment()
+        if config:
+            command = with_runtime_module(command, config)
+        return electron_remote(command, **kwargs)
     return subprocess.run(ssh_args() + [command], env={
         'PATH': os.environ.get('PATH', '/usr/bin:/bin'), 'HOME': str(Path.home()),
         'LANG': 'C'}, **kwargs)
@@ -47,7 +76,7 @@ def remote(command, **kwargs):
 
 def preflight():
     command = (f'test -s {image_path()} && command -v timeout >/dev/null && '
-               f'singularity exec --cleanenv --no-home {image_path()} sh -c ' + shlex.quote(
+               f'{container_command()} exec --cleanenv --no-home {image_path()} sh -c ' + shlex.quote(
                    'test "$(uname -s)" = Linux && command -v Rscript && '
                    'command -v ParaFly && command -v getopt && '
                    'Rscript -e \'stopifnot(requireNamespace("data.table", quietly=TRUE))\''))
@@ -63,6 +92,9 @@ def bundle(root, settings, remote_root, input_keys=INPUT_KEYS, network=False):
     buffer = io.BytesIO()
     work = root / 'work'
     config = (work / 'config.ini').read_text()
+    runtime = desktop_environment()
+    if runtime:
+        config = re.sub(r'^queue\s*=.*$', 'queue=' + runtime['partition'], config, flags=re.MULTILINE)
     replacements = {str(work): remote_root + '/work'}
     for index, key in enumerate(input_keys):
         replacements[settings[key]] = f'{remote_root}/inputs/{index}'
@@ -89,6 +121,16 @@ def bundle(root, settings, remote_root, input_keys=INPUT_KEYS, network=False):
                 info.size, info.mode = len(data), path.stat().st_mode & 0o777
                 archive.addfile(info, io.BytesIO(data))
             archive.add(Path(__file__).with_name('network_worker.py'), arcname='network_worker.py')
+        if runtime:
+            runtime_data = json.dumps(runtime).encode()
+            info = tarfile.TarInfo('runtime.json')
+            info.size, info.mode = len(runtime_data), 0o600
+            archive.addfile(info, io.BytesIO(runtime_data))
+            from ssh_transport import runtime_module_prelude
+            wrapper = ('#!/bin/bash\n' + runtime_module_prelude(runtime) + '\nexec ' + shlex.quote(runtime['executor']) + ' "$@"\n').encode()
+            info = tarfile.TarInfo('work/bin/singularity')
+            info.size, info.mode = len(wrapper), 0o700
+            archive.addfile(info, io.BytesIO(wrapper))
         data = config.encode()
         info = tarfile.TarInfo('work/config.ini')
         info.size = len(data)
@@ -126,7 +168,7 @@ def restore_outputs(root, data):
 
 
 def execute_cis(root, settings, seconds=1800):
-    remote_root = '/tmp/signet-agent/' + root.name
+    remote_root = remote_work_root() + '/' + root.name
     plan = {'operation': 'cis_eqtl', 'runtime': 'existing-docker-vm',
             'remote_directory': remote_root, 'container_image': image_path(),
             'settings_file': str(root / 'work/config.ini')}
@@ -139,7 +181,7 @@ def execute_cis(root, settings, seconds=1800):
     record = root / 'cis_eqtl.json'
     outpath, errpath = root / 'logs/cis_eqtl.stdout', root / 'logs/cis_eqtl.stderr'
     try:
-        upload = remote('umask 077; mkdir -p /tmp/signet-agent && mkdir ' + remote_root +
+        upload = remote('umask 077; mkdir -p ' + remote_work_root() + ' && mkdir ' + remote_root +
                         ' && tar xzf - -C ' + remote_root,
                         input=bundle(root, settings, remote_root), capture_output=True, timeout=60)
         if upload.returncode:
@@ -147,7 +189,7 @@ def execute_cis(root, settings, seconds=1800):
                     'reason': 'Could not create a fresh remote run; no analysis was started.'}
         # A VM-side timeout also stops workers if the local connection disappears.
         command = (f'cd {remote_root}/work && mkdir -p tmp data res/resc && '
-                   f'timeout -k 5 {seconds}s singularity exec --cleanenv --no-home '
+                   f'timeout -k 5 {seconds}s {container_command()} exec --cleanenv --no-home '
                    '--env OPENBLAS_NUM_THREADS=1,OMP_NUM_THREADS=1,MKL_NUM_THREADS=1 '
                    f'--bind {remote_root}:{remote_root} {image_path()} bash ./signet -c')
         record.write_text(json.dumps({'status': 'starting', 'executed': False, **plan}) + '\n')

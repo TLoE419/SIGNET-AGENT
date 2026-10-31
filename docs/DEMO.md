@@ -4,7 +4,7 @@ This guide replaces the live demonstration script that depended on specific hist
 
 ## Basic Demonstration
 
-1. Follow the [installation guide](INSTALL.md), start the service, and open the [chat page](http://127.0.0.1:8880). Confirm that model sign-in or a key is configured.
+1. Follow the [installation guide](INSTALL.md), start Electron with `npm start --prefix electron`. Confirm that model sign-in or a key is configured.
 2. Select English and enter: "Describe the analyses currently available and the data each requires. Do not run anything yet." Expect only an explanation of capabilities and input requirements.
 3. Enter: "Check which data files and run records are in the current project. Do not run an analysis." A clean download has no data or historical results; the assistant should report the files actually present.
 4. Enter: "Open the Stage 6 workspace and query its current status only. Do not change parameters or run anything." The right-hand workspace should report that no verified baseline is available, without displaying a fabricated example graph.

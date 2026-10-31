@@ -44,7 +44,7 @@ python3 -m venv .venv
 .venv/bin/python -m pip check
 ```
 
-The last command should report `No broken requirements found.` The project pins direct dependency versions; transitive dependencies are resolved by the package installer, so this is not a complete lock of every installed package. Frontend files are bundled. Node.js and a web build tool are not needed to run the chat demo.
+The last command should report `No broken requirements found.` The project pins direct dependency versions; transitive dependencies are resolved by the package installer, so this is not a complete lock of every installed package. The desktop frontend requires Node.js 22.12+ and npm. Python remains independently usable for backend development.
 
 ## 4. Set up a model provider
 
@@ -79,28 +79,26 @@ Add the key to the matching `GROQ_API_KEY` or `GEMINI_API_KEY` line in `.env`. K
 From the project root, start the default Codex provider:
 
 ```sh
-.venv/bin/python chat_ui.py
+npm ci --prefix electron
+npm start --prefix electron
 ```
 
-Open [http://127.0.0.1:8880](http://127.0.0.1:8880). The page should load. Send a short question to check the model connection, then follow the [no-data demonstration](DEMO.md). A loaded page alone does not confirm model sign-in or scientific readiness. The first launch has no study data, completed results, or example network graph.
+Electron opens the desktop client and starts its Python API. Send a short question to check model sign-in, then follow the [no-data demonstration](DEMO.md).
 
 If you chose Groq or Gemini, start the selected provider instead:
 
 ```sh
-.venv/bin/python chat_ui.py --provider groq
+npm start --prefix electron -- --provider groq
 ```
 
 ```sh
-.venv/bin/python chat_ui.py --provider gemini
+npm start --prefix electron -- --provider gemini
 ```
 
-If port 8880 is already in use, start on another port and open the matching address:
-
-```sh
-.venv/bin/python chat_ui.py --port 8881
-```
-
-Press Ctrl+C in the terminal to stop the chat service. It listens only on `127.0.0.1`. Chat messages and the information needed by tools are sent to the model provider you selected; local hosting does not mean model requests run offline. Closing the browser tab does not cancel a tool that has already started.
+Electron chooses an available local API port automatically. Closing the app
+waits for active work. For backend-only development, run
+`.venv/bin/python chat_ui.py --port 8881`; this serves APIs, not a browser UI.
+Model requests still use the selected provider's network service.
 
 ## Troubleshooting
 
@@ -111,8 +109,8 @@ Press Ctrl+C in the terminal to stop the chat service. It listens only on `127.0
 | `pip install` fails | Check network access, confirm the terminal is in the project root, and retry the install command. Do not use `sudo pip`. |
 | `codex` is not found | Complete the official CLI installation, open a new terminal, and run `codex --version`. |
 | Model sign-in fails | Run `codex login status` and complete sign-in again, or switch to a provider with a valid key in `.env`. |
-| The page opens but chat fails | Check the selected provider's sign-in or key and inspect the terminal where `chat_ui.py` is running. |
-| Port 8880 is busy | Use `--port 8881` and open `http://127.0.0.1:8881`. |
+| The page opens but chat fails | Check the selected provider's sign-in or key and inspect the terminal where Electron was launched. |
+| Port 8880 is busy | Electron uses an available port; standalone API development can use `--port 8881`. |
 
 ## Scientific analysis requires a separate setup
 

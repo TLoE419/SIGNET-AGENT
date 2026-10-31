@@ -4,7 +4,7 @@ This guide describes the scientific setup and the six-stage SIGNET workflow supp
 
 ## Read This Before Installing
 
-The current repository does **not** provide a fully reproducible, from-zero scientific environment installation. It can install the audited SIGNET source and check individual tool prerequisites, but it does not build or download the Linux VM, VM disk, container image, or study/reference data. The VM startup script only starts a pre-existing recovery environment.
+The current repository does **not** provide a fully reproducible, from-zero scientific environment installation. Electron can prepare audited SIGNET source and pull the official container after confirmation on an already configured SSH host. It does not install the host container runtime, scheduler, VM, or study/reference data. Target-cluster container retrieval still requires validation; the automated environment flow is tested against a localhost SSH mock. The VM startup script only starts a pre-existing recovery environment.
 
 There is also a host/runtime split:
 
@@ -48,7 +48,7 @@ Use the installation instructions and licenses from the maintainers of each prog
 
 ### Existing Linux VM for Stages 4–6
 
-On macOS, the application host needs an SSH client and connects to an already running VM on `127.0.0.1:2226` by default. The runtime directory defaults to `.dependencies/scientific-runtime` and must contain the user's VM SSH key and strict `known_hosts` file. Inside the VM, the configured image must exist at `/work/evidence/signet-0.0.6.sif` unless `SIGNET_CONTAINER_IMAGE` is changed. The VM host needs SSH server access, `timeout`, Singularity, and the existing SLURM local partition. Stage 5 also checks for `scontrol`, `sinfo`, Python 3, `setsid`, at least four idle cores, and 4 GB available memory. The image must provide Linux, Bash, R, ParaFly, and the R packages required by the pinned scripts.
+For standalone Python development on macOS, the application host needs an SSH client and connects to an already running VM on `127.0.0.1:2226` by default. The runtime directory defaults to `.dependencies/scientific-runtime` and must contain the user's VM SSH key and strict `known_hosts` file. In Electron mode, use the desktop SSH control to select the host, port, username and encrypted key; Electron owns that connection and the Python runtime uses it through a private local broker. Inside the selected remote environment, the configured image must exist at `/work/evidence/signet-0.0.6.sif` unless `SIGNET_CONTAINER_IMAGE` is changed. The remote host needs `timeout`, Singularity, and the existing SLURM local partition. Stage 5 also checks for `scontrol`, `sinfo`, Python 3, `setsid`, at least four idle cores, and 4 GB available memory. The image must provide Linux, Bash, R, ParaFly, and the R packages required by the pinned scripts.
 
 Stage 5 submits to the VM's local SLURM partition. Stage 6 runs the official exports there and contacts online STRING annotation services. Stage 5 has fixed runtime settings in the current execution entry point: 4 cores, 4 GB memory, one hour, and three markers per gene. The Stage 5 and Stage 6 prepare tools only create plans; they do not execute the analysis.
 
