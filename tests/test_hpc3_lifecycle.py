@@ -17,13 +17,12 @@ class PopupLifecycleTest(unittest.TestCase):
     def exercise_stop(self, cancel):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            ready, stopped = root / 'ready', root / 'stopped'
+            ready = root / 'ready'
             # A real subprocess and descendant stand in for ssh and its native dialog.
-            child = ('import signal,time,pathlib,sys; '
-                     'signal.signal(signal.SIGTERM,lambda *_:(pathlib.Path(sys.argv[1]).write_text("stopped"),sys.exit(0))); '
-                     'pathlib.Path(sys.argv[2]).write_text("ready"); time.sleep(30)')
+            child = ('import os,time,pathlib,sys; '
+                     'pathlib.Path(sys.argv[1]).write_text(str(os.getpid())); time.sleep(30)')
             parent = ('import subprocess,sys,time; '
-                      'p=subprocess.Popen([sys.executable,"-c",sys.argv[1],sys.argv[2],sys.argv[3]]); '
+                      'subprocess.Popen([sys.executable,"-c",sys.argv[1],sys.argv[2]]); '
                       'time.sleep(30)')
             event = threading.Event()
             processes = []
@@ -46,16 +45,23 @@ class PopupLifecycleTest(unittest.TestCase):
             try:
                 with patch.object(ssh.subprocess, 'Popen', start):
                     code, message = ssh.popup_login(
-                        [sys.executable, '-c', parent, child, str(stopped), str(ready)],
+                        [sys.executable, '-c', parent, child, str(ready)],
                         dict(os.environ), event, 5 if cancel else 1)
                 self.assertEqual(code, ssh.CANCELLED)
                 self.assertIn('cancelled' if cancel else 'timed out', message)
                 self.assertIsNotNone(processes[0].poll())
-                deadline = time.monotonic() + 2
-                while not stopped.exists() and time.monotonic() < deadline:
-                    time.sleep(0.01)
                 self.assertTrue(ready.exists(), 'child did not reach the simulated dialog')
-                self.assertTrue(stopped.exists(), 'dialog descendant did not receive termination')
+                child_pid = ready.read_text().strip()
+                # SIGKILL may arrive before a Python signal handler can run. Inspect
+                # actual process state instead of depending on a handler's marker file.
+                deadline = time.monotonic() + 2
+                while True:
+                    state = subprocess.run(['ps', '-p', child_pid, '-o', 'stat='],
+                                           capture_output=True, text=True).stdout.strip()
+                    if not state or state.startswith('Z'):
+                        break
+                    self.assertLess(time.monotonic(), deadline, 'dialog descendant is still running')
+                    time.sleep(0.01)
             finally:
                 event.set()
                 if thread:
