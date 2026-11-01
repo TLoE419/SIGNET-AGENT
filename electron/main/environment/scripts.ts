@@ -81,6 +81,10 @@ stage=$(mktemp -d)
 trap 'rm -rf -- "$stage"' EXIT
 cp -R ${quote(c.source)} "$stage/source"
 # Only initialize the disposable copy; never replace an installed user configuration.
+if [ ! -d "$stage/source" ] || [ -L "$stage/source" ]; then
+ echo 'SIGNET verification source must be a copied directory, not a symlink.' >&2
+ exit 1
+fi
 test ! -L "$stage/source/config.ini" || { echo 'config.ini must not be a symlink.' >&2; exit 1; }
 if [ ! -e "$stage/source/config.ini" ]; then
  if [ -L "$stage/source/config.ini.default" ] || [ ! -f "$stage/source/config.ini.default" ] || [ ! -r "$stage/source/config.ini.default" ] || [ ! -s "$stage/source/config.ini.default" ]; then

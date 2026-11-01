@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,mkdir,writeFile,readFile,rm,access,symlink} from 'node:fs/promises';
+import {mkdtemp,mkdir,writeFile,readFile,rm,access,symlink,rename} from 'node:fs/promises';
 import {spawnSync} from 'node:child_process';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
@@ -61,4 +61,10 @@ for(const output of ['', 'unexpected settings'])test(`upstream exit zero with ${
 test('a configuration symlink is rejected without writing outside the disposable copy',async t=>{
  const f=await fixture(t),outside=path.join(f.root,'untouched.ini');await symlink(outside,f.config);
  const result=f.run();assert.notEqual(result.status,0);await assert.rejects(access(outside));
+});
+test('a symlinked source cannot redirect config initialization into the installed source',async t=>{
+ const f=await fixture(t),installed=path.join(f.root,'installed-source');
+ await rename(f.source,installed);await symlink(installed,f.source);
+ const result=f.run();assert.notEqual(result.status,0);assert.match(result.stderr,/copied directory/);
+ await assert.rejects(access(path.join(installed,'config.ini')));
 });
