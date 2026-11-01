@@ -139,8 +139,11 @@ async function launch({provider, visible = true, userData, stateFile, startupMs,
   if (quitting) return;
   const isolated = session.fromPartition('signet-shell');
   // Electron owns UI assets; Python remains an independently testable API service.
-  isolated.protocol.handle('http',request=>createRendererHandler({origin,devMode,
-    fetch:(input,options)=>isolated.fetch(input,options)})(request));
+  let rendererHandler,rendererOrigin;
+  isolated.protocol.handle('http',request=>{
+    if(rendererOrigin!==origin){rendererOrigin=origin;rendererHandler=createRendererHandler({origin,devMode,fetch:(input,options)=>isolated.fetch(input,options)})}
+    return rendererHandler(request);
+  });
   isolated.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
   isolated.setPermissionCheckHandler(() => false);
   isolated.webRequest.onBeforeRequest((details, callback) => callback({cancel: !localURL(details.url, origin)}));

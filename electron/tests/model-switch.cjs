@@ -14,14 +14,21 @@ async function until(predicate){for(let i=0;i<200;i++){if(await predicate())retu
 app.on('will-quit',()=>{clearTimeout(deadline);rmSync(temporary,{recursive:true,force:true})});
 launch({provider:'codex',visible:true,userData:temporary,stateFile}).then(async value=>{
  running=value;const w=value.window;
+ async function workflowCheck(){
+  const result=await w.webContents.executeJavaScript(`fetch('/hpc/check',{method:'POST',body:'{}',headers:{'Content-Type':'application/json','X-Chat-Token':document.querySelector('meta[name="chat-token"]').content}}).then(async r=>({status:r.status,body:await r.json()}))`);
+  assert.equal(result.status,200);assert.equal(result.body.status,'unavailable');assert.match(result.body.reason,/Prepare.*environment/);
+ }
+ await workflowCheck();
  const initial=w.webContents.getURL();
  const save=await w.webContents.executeJavaScript(`window.signetDesktop.model.saveGeminiKey('AIza'+'x'.repeat(35))`);
  assert.equal(save.ok,true);
  await until(async()=>w.webContents.getURL()!==initial&&await w.webContents.executeJavaScript(`!!document.querySelector('#workflow') && document.querySelector('meta[name="model-label"]').content.toLowerCase().includes('gemini')`).catch(()=>false));
+ await workflowCheck();
  const gemini=w.webContents.getURL();
  assert.equal(await w.webContents.executeJavaScript(`document.querySelectorAll('#chat-list .chat-link').length`),1);
  assert.equal((await w.webContents.executeJavaScript(`window.signetDesktop.environment.getSnapshot()`)).value.phase,'disconnected');
  assert.equal(verifications,1);
+ const invalidChat=await w.webContents.executeJavaScript(`fetch('/chat',{method:'POST',body:'{}',headers:{'Content-Type':'application/json','X-Chat-Token':document.querySelector('meta[name="chat-token"]').content}}).then(r=>r.status)`);assert.equal(invalidChat,400);
  const clear=await w.webContents.executeJavaScript(`window.signetDesktop.model.clearGeminiKey()`);assert.equal(clear.ok,true);
  await until(async()=>w.webContents.getURL()!==gemini&&await w.webContents.executeJavaScript(`!!document.querySelector('#workflow') && document.querySelector('meta[name="model-label"]').content.toLowerCase().includes('codex')`).catch(()=>false));
  assert.equal(await w.webContents.executeJavaScript(`document.querySelectorAll('#chat-list .chat-link').length`),1);

@@ -14,15 +14,29 @@ function headers(type,devMode){return {'Content-Type':type+'; charset=utf-8','Ca
  'Content-Security-Policy':`default-src 'self'; script-src 'self'; style-src 'self'${devMode?" 'unsafe-inline'":''}; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`};}
 /** Serve only the renderer build allowlist. All API requests retain their HTTP origin. */
 function createRendererHandler({origin,fetch,devMode=false,directory=path.join(__dirname,'../../build/renderer')}){
+ let pageToken;
  return async request=>{
   if(!localURL(request.url,origin))return new Response('Forbidden',{status:403});
   const url=new URL(request.url);
-  if(request.method!=='GET'||(url.pathname!=='/'&&!assets.has(url.pathname)))return fetch(request,{bypassCustomProtocolHandlers:true});
+  if(request.method!=='GET'||(url.pathname!=='/'&&!assets.has(url.pathname))){
+   if(!['GET','HEAD'].includes(request.method)){
+    const suppliedOrigin=request.headers.get('Origin');
+    if(suppliedOrigin&&suppliedOrigin!==origin)return new Response('Forbidden',{status:403});
+    // Electron protocol Requests omit Chromium's Origin. Restore it only for this page's token.
+    if(!suppliedOrigin){
+     if(!pageToken||request.headers.get('X-Chat-Token')!==pageToken)return new Response('Forbidden',{status:403});
+     const forwardedHeaders=new Headers(request.headers);forwardedHeaders.set('Origin',origin);
+     request=new Request(request,{headers:forwardedHeaders,duplex:'half'});
+    }
+   }
+   return fetch(request,{bypassCustomProtocolHandlers:true});
+  }
   try{
    if(url.pathname==='/'){
     const reply=await fetch(origin+'/bootstrap'+url.search,{bypassCustomProtocolHandlers:true});
     if(!reply.ok)return reply;
     const {token,model,initial}=await reply.json();
+    pageToken=token;
     const template=await readFile(path.join(directory,'index.html'),'utf8');
     const values={__TOKEN__:escapeHtml(token),__MODEL__:escapeHtml(model),__INITIAL_CHAT__:JSON.stringify(initial).replace(/</g,'\\u003c')};
     return new Response(template.replace(/__TOKEN__|__MODEL__|__INITIAL_CHAT__/g,key=>values[key]),{headers:headers('text/html',devMode)});

@@ -31,3 +31,18 @@ test('bootstrap conflicts remain visible and unknown files are never read from d
  assert.equal((await handler(new Request(origin+'/'))).status,409);
  assert.equal((await handler(new Request(origin+'/.env'))).status,404);
 });
+
+test('native POST restores Origin only with the bootstrapped page token and rejects foreign Origin',async()=>{
+ const seen=[];
+ const handler=createRendererHandler({origin,fetch:async input=>{
+  if(typeof input==='string')return Response.json({token:'owned-token',model:'fixture',initial:{}});
+  seen.push(input);return new Response('ok');
+ }});
+ await handler(new Request(origin+'/'));
+ const request=()=>new Request(origin+'/hpc/check',{method:'POST',headers:{'X-Chat-Token':'owned-token'},body:'{}'});
+ assert.equal((await handler(request())).status,200);
+ assert.equal(seen[0].headers.get('Origin'),origin);assert.equal(await seen[0].text(),'{}');
+ assert.equal((await handler(new Request(origin+'/hpc/check',{method:'POST',body:'{}'}))).status,403);
+ assert.equal((await handler(new Request(origin+'/hpc/check',{method:'POST',headers:{Origin:'https://foreign.example','X-Chat-Token':'owned-token'},body:'{}'}))).status,403);
+ assert.equal(seen.length,1);
+});
