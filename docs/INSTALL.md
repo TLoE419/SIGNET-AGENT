@@ -97,7 +97,7 @@ npm start --prefix electron -- --provider gemini
 
 Electron chooses an available local API port automatically. Closing the app
 waits for active work. For backend-only development, run
-`.venv/bin/python chat_ui.py --port 8881`; this serves APIs, not a browser UI.
+`.venv/bin/python -m agent.app.chat_ui --port 8881`; this serves APIs, not a browser UI.
 Model requests still use the selected provider's network service.
 
 ## Troubleshooting
@@ -116,4 +116,18 @@ Model requests still use the selected provider's network service.
 
 The steps above install and run the chat interface; they do not prepare the scientific analysis environment. For the scientific software, VM, data, and stage-by-stage prerequisites, read the [scientific setup guide](SCIENTIFIC_SETUP.md). This repository does not include study or reference datasets, VM disks, or container images, and it does not provide a from-scratch scientific-environment installer. The repository has not been verified to run all six scientific stages from a clean machine.
 
-For terminal chat instead of the web page, run `.venv/bin/python main.py` from the project root.
+For terminal chat instead of the web page, run `.venv/bin/python -m agent.core.conversation` from the project root.
+
+### Desktop model and workflow controls
+
+After launching Electron, configure SSH and open **Remote environment** to check
+or install the pinned source and container. Installation requires its own
+confirmation. Open **Workflow** to check reference inputs; individual download
+and conversion buttons ask before submitting work to the configured Slurm partition.
+The desktop environment settings are authoritative: `SIGNET_HPC_WORKSPACE` does
+not override them. This preserves the root already selected for your SSH account.
+
+The Gemini panel accepts your own key, verifies it with Google, and stores it
+only when OS key-store encryption is available. Switching models waits for active
+Python work, restarts the backend, and restores conversation history. You can keep
+using the signed-in Codex CLI without adding a Gemini key.

@@ -71,7 +71,7 @@ def runtime_module_prelude(config):
         return ''
     if not isinstance(name, str) or not re.fullmatch(r'(singularity|apptainer)/[0-9][A-Za-z0-9_.+-]*', name):
         raise OSError('Invalid remote container runtime module.')
-    helpers = Path(__file__).with_name('runtime_modules.sh').read_text()
+    helpers = (Path(__file__).resolve().parents[2] / 'runtime_modules.sh').read_text()
     return helpers + "\nif ! signet_load_module " + shlex.quote(name) + "; then echo 'Could not load container runtime module.' >&2; exit 1; fi\n"
 
 

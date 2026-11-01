@@ -83,12 +83,12 @@ function setup(initial={}) {
 }
 
 (async()=>{
-  const app=setup();await new Promise(setImmediate);
+  const app=setup({sessions:[{session:'saved',title:'Saved'}]});await new Promise(setImmediate);
   const pending=vm.runInContext('send("Describe the tools without running analysis.")',app.context);
   await new Promise(setImmediate);
-  assert.equal(app.ids.get('saved-chats').disabled,true);
-  app.ids.get('saved-chats').value='saved';
-  app.ids.get('saved-chats').events.change();
+  const savedLink=app.ids.get('chat-list').children[0];
+  assert.equal(savedLink.disabled,true);
+  savedLink.events.click();
   assert.equal(app.navigation.length,0,'history must not navigate away during an active turn');
   assert.equal(app.visible(app.ids.get('activity')),true,'ordinary chat progress must be visible without a Stage 6 baseline');
   assert.equal(app.visible(app.ids.get('state')),true,'live status must have no hidden ancestor');
@@ -102,7 +102,7 @@ function setup(initial={}) {
     assert.equal(app.visible(app.ids.get('activity')),true,'visualization tabs must not hide chat activity');
   }
   app.finish();await pending;
-  assert.equal(app.ids.get('saved-chats').disabled,false);
+  assert.equal(savedLink.disabled,false);
   assert.equal(app.visible(app.ids.get('activity')),true,'finished tool records remain accessible');
   assert.equal(app.ids.get('state').textContent,'回合結束');
   app.ids.get('chat-progress').open=false;
@@ -118,13 +118,14 @@ function setup(initial={}) {
   restored.ids.get('chat-progress').open=true;
   assert.equal(restored.visible(restored.ids.get('activity')),true);
   assert.match(restored.ids.get('activity').textContent,/Saved tool result/);
-  const selector=restored.ids.get('saved-chats');
-  assert.equal(selector.value,'saved-session');
-  assert.equal(selector.children.at(-1).textContent,'<script>literal title</script>');
-  selector.value='other-session';selector.events.change();
+  const links=restored.ids.get('chat-list').children;
+  assert.equal(links.length,2);
+  assert.equal(links[0].attributes['aria-current'],'page','the open conversation is marked');
+  assert.equal(links[1].textContent,'<script>literal title</script>','titles stay literal text');
+  links[0].events.click();
+  assert.equal(restored.navigation.length,0,'the open conversation is not reloaded');
+  links[1].events.click();
   assert.equal(restored.navigation.at(-1),'/?session=other-session');
-  selector.value='';selector.events.change();
-  assert.equal(restored.navigation.at(-1),'/?new=1');
   restored.ids.get('new-chat').events.click();
   assert.equal(restored.navigation.at(-1),'/?new=1');
   const failed=setup();await new Promise(setImmediate);failed.context.failRequest=true;

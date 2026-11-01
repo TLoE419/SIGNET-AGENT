@@ -4,7 +4,7 @@ import unittest
 from unittest.mock import patch
 
 from google.genai import types
-import main
+import agent.core.conversation as main
 
 
 def response(text=None, calls=None):
@@ -171,7 +171,7 @@ class CliTest(unittest.TestCase):
         from pathlib import Path
         import runpy
         client,requests=client_for(response('受控回覆'))
-        with patch('sys.argv',['main.py',*arguments]), patch.dict(os.environ,{'GEMINI_API_KEY':'fake-cli-test-key'},clear=True), patch('dotenv.load_dotenv') as dotenv, patch('google.genai.Client',return_value=contextlib.nullcontext(client)), patch('codex_provider.CodexClient',return_value=contextlib.nullcontext(client)) as codex, patch('builtins.input',side_effect=answers), patch('sys.stdout',new_callable=io.StringIO) as stdout:
+        with patch('sys.argv',['main.py',*arguments]), patch.dict(os.environ,{'GEMINI_API_KEY':'fake-cli-test-key'},clear=True), patch('dotenv.load_dotenv') as dotenv, patch('google.genai.Client',return_value=contextlib.nullcontext(client)), patch('agent.providers.codex_client.CodexClient',return_value=contextlib.nullcontext(client)) as codex, patch('builtins.input',side_effect=answers), patch('sys.stdout',new_callable=io.StringIO) as stdout:
             runpy.run_path(str(Path(main.__file__)),run_name='__main__')
             dotenv.assert_called_once()
             if '--provider' not in arguments:

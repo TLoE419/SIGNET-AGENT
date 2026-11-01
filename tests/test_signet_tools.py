@@ -10,8 +10,8 @@ from unittest.mock import patch
 
 from google import genai
 from google.genai import types
-import main
-import signet_tools as st
+import agent.core.conversation as main
+import agent.tools.signet as st
 
 
 class FakeProcess:

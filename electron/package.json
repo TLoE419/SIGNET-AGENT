@@ -7,7 +7,7 @@
   "scripts": {
     "postinstall": "node scripts/prepare-node-pty.cjs",
     "start": "electron .",
-    "test": "npm run typecheck && node --test tests/*.test.cjs && node --import tsx --test tests/ssh.test.ts tests/environment.test.ts tests/runtime-modules.test.ts && node --import tsx --test tests/ui.test.tsx",
+    "test": "npm run typecheck && node --test tests/*.test.cjs && node --import tsx --test tests/ssh.test.ts tests/environment.test.ts tests/environment-verify.test.ts tests/runtime-modules.test.ts && node --import tsx --test tests/ui.test.tsx tests/model-ui.test.tsx",
     "test:smoke": "electron tests/smoke.cjs",
     "test:startup": "electron tests/startup.cjs",
     "build": "node scripts/build.mjs",
@@ -18,7 +18,8 @@
     "pretest:startup": "npm run build",
     "dev": "npm run build && electron . --dev",
     "test:dev": "npm run build && electron tests/dev-terminal.cjs",
-    "test:environment": "npm run build && electron tests/environment.cjs"
+    "test:environment": "npm run build && electron tests/environment.cjs",
+    "test:model-switch": "npm run build && electron tests/model-switch.cjs"
   },
   "engines": {
     "node": ">=22.12.0"

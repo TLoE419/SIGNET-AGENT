@@ -1,7 +1,8 @@
 'use strict';
-const {app, BrowserWindow, dialog, session, Menu, ipcMain, shell} = require('electron');
+const {app, BrowserWindow, dialog, session, Menu, ipcMain, shell, safeStorage} = require('electron');
 const path = require('node:path');
 const os = require('node:os');
+const {GeminiKeyStore, ModelController, installModelHandlers} = require('../model/index.cjs');
 const {randomBytes} = require('node:crypto');
 const {Backend} = require('../backend/backend.cjs');
 const {createRendererHandler} = require('../renderer/protocol.cjs');
@@ -9,14 +10,14 @@ const {localURL, navigationAllowed} = require('../security/policy.cjs');
 const {SshConnectionService, SshProfileRepository, HostKeyTrustStore, AppManagedKeyStore, installSshHandlers, installDevTerminal, EnvironmentService, installEnvironmentHandlers} = require('../../build/ssh/index.cjs');
 const {SshBroker} = require('../ssh/ipc/broker.cjs');
 
-async function launch({provider = 'codex', visible = true, userData, stateFile, startupMs, devMode = false} = {}) {
-  if (process.platform === 'win32') throw Error('This desktop launcher currently supports macOS and Linux. Windows desktop support is not available yet.');
+async function launch({provider, visible = true, userData, stateFile, startupMs, devMode = false} = {}) {
+  if (process.platform === 'win32') throw Error('This desktop launcher currently supports macOS and Linux. Use the browser launcher on other platforms.');
   app.setName('SIGNET Research Assistant');
   app.setPath('userData', userData || path.join(app.getPath('appData'), 'SIGNET Research Assistant'));
   if (!app.requestSingleInstanceLock()) { app.quit(); return; }
   devMode = devMode === true && !app.isPackaged;
   let devTerminal;
-  let window, origin, quitting = false, finished = false, disposeSsh, disposeEnvironment;
+  let window, origin, quitting = false, finished = false, disposeSsh, disposeModel, disposeEnvironment, switching;
   const sshToken = randomBytes(32).toString('base64url');
   // macOS limits Unix socket paths to roughly 100 bytes. /tmp is the stable,
   // short alias for its much longer per-user temporary directory.
@@ -26,8 +27,49 @@ async function launch({provider = 'codex', visible = true, userData, stateFile, 
   const sshService = new SshConnectionService(new SshProfileRepository(sshDirectory), new HostKeyTrustStore(sshDirectory), undefined, undefined, new AppManagedKeyStore(sshDirectory));
   const environment=new EnvironmentService(sshService,require('../../../signet_inventory.json'),path.join(app.getPath('userData'),'environment','settings.json'));
   const sshBroker = new SshBroker({socketPath: sshSocket, token: sshToken, service: sshService, environment});
-  const backend = new Backend({provider, startupMs, stateFile: stateFile || path.join(app.getPath('userData'), 'state', '.chat-state.json'),
-    sshBroker: {path: sshSocket, token: sshToken}});
+  const modelStore = new GeminiKeyStore(path.join(app.getPath('userData'), 'model'), safeStorage);
+  // The Python service reads the provider and key only at startup, so a model change replaces it.
+  let backend, activeProvider, activeKey;
+  const createBackend = (nextProvider, key) => new Backend({provider: nextProvider, startupMs,
+    stateFile: stateFile || path.join(app.getPath('userData'), 'state', '.chat-state.json'),
+    sshBroker: {path: sshSocket, token: sshToken}, env: key ? {GEMINI_API_KEY: key} : {}});
+  function watch(owned) {
+    owned.on('closed', async () => {
+      if (quitting || owned.stopping) return;
+      window?.hide();
+      await dialog.showMessageBox({type: 'error', title: 'SIGNET service stopped',
+        message: 'The Python service exited unexpectedly.',
+        detail: 'Restart SIGNET and inspect recorded work status before retrying. No tools were automatically replayed.'});
+      await quit();
+    });
+  }
+  async function startBackend(nextProvider, key) {
+    backend = createBackend(nextProvider, key);
+    origin = await backend.start();
+    activeProvider = nextProvider;
+    activeKey = key;
+    watch(backend);
+  }
+  function switchProvider(nextProvider, key) {
+    if (switching || quitting) return switching;
+    switching = (async () => {
+      const previous = {provider: activeProvider, key: activeKey};
+      // stop() lets an active chat turn finish and checkpoint before the service is replaced.
+      await backend.stop();
+      if (quitting) return;
+      try { await startBackend(nextProvider, key); }
+      catch (error) {
+        if (quitting) return;
+        await dialog.showMessageBox({type: 'error', title: 'Could not switch model', message: error.message,
+          detail: 'SIGNET restarted with the previous model.'});
+        try { await startBackend(previous.provider, previous.key); }
+        catch { void quit(); return; }
+      }
+      if (!quitting && window && !window.isDestroyed()) await window.loadURL(origin + '/');
+    })().finally(() => { switching = undefined; });
+    return switching;
+  }
+  const modelController = new ModelController({store: modelStore, getProvider: () => activeProvider, switchProvider});
   app.on('second-instance', () => { if (window) { if (window.isMinimized()) window.restore(); window.show(); window.focus(); } });
   app.on('before-quit', event => {
     if (finished) return;
@@ -39,7 +81,8 @@ async function launch({provider = 'codex', visible = true, userData, stateFile, 
     if (quitting) return;
     quitting = true;
     window?.hide();
-    const closing = backend.stop();
+    await switching?.catch(() => {});
+    const closing = backend ? backend.stop() : Promise.resolve();
     let closed = false;
     void closing.then(() => { closed = true; });
     while (!closed) {
@@ -59,6 +102,7 @@ async function launch({provider = 'codex', visible = true, userData, stateFile, 
     disposeEnvironment?.();
     environment.dispose();
     disposeSsh?.();
+    disposeModel?.();
     finished = true;
     app.quit();
   }
@@ -79,8 +123,12 @@ async function launch({provider = 'codex', visible = true, userData, stateFile, 
       const choice = await dialog.showOpenDialog(window, {title:'Select an encrypted OpenSSH private key', properties:['openFile']});
       return choice.canceled || !choice.filePaths[0] ? {canceled:true} : {canceled:false,path:choice.filePaths[0],name:path.basename(choice.filePaths[0])};
     }, () => origin);
-    origin = await backend.start();
     disposeEnvironment=installEnvironmentHandlers(ipcMain,()=>window,environment,()=>origin);
+    disposeModel = installModelHandlers(ipcMain, () => window, modelController, () => origin);
+    // A saved Gemini key selects Gemini unless --provider was given explicitly.
+    const savedKey = await modelStore.load().catch(() => null);
+    const startProvider = provider || (savedKey ? 'gemini' : 'codex');
+    await startBackend(startProvider, startProvider === 'gemini' ? savedKey : null);
     if(devMode)devTerminal=installDevTerminal(ipcMain,()=>window,sshService,()=>origin);
   }
   catch (error) {
@@ -89,18 +137,13 @@ async function launch({provider = 'codex', visible = true, userData, stateFile, 
     return;
   }
   if (quitting) return;
-  backend.on('closed', async () => {
-    if (quitting || backend.stopping) return;
-    window?.hide();
-    await dialog.showMessageBox({type: 'error', title: 'SIGNET service stopped',
-      message: 'The Python service exited unexpectedly.',
-      detail: 'Restart SIGNET and inspect recorded work status before retrying. No tools were automatically replayed.'});
-    await quit();
-  });
   const isolated = session.fromPartition('signet-shell');
   // Electron owns UI assets; Python remains an independently testable API service.
-  isolated.protocol.handle('http',createRendererHandler({origin,devMode,
-    fetch:(input,options)=>isolated.fetch(input,options)}));
+  let rendererHandler,rendererOrigin;
+  isolated.protocol.handle('http',request=>{
+    if(rendererOrigin!==origin){rendererOrigin=origin;rendererHandler=createRendererHandler({origin,devMode,fetch:(input,options)=>isolated.fetch(input,options)})}
+    return rendererHandler(request);
+  });
   isolated.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
   isolated.setPermissionCheckHandler(() => false);
   isolated.webRequest.onBeforeRequest((details, callback) => callback({cancel: !localURL(details.url, origin)}));
@@ -116,7 +159,8 @@ async function launch({provider = 'codex', visible = true, userData, stateFile, 
   window.on('close', event => { if (!finished) { event.preventDefault(); void quit(); } });
   window.webContents.setWindowOpenHandler(({url}) => {
     if (localURL(window.webContents.mainFrame.url, origin) &&
-        ['https://rcic.uci.edu/account/login.html', 'https://rcic.uci.edu/account/generate-ssh-keys.html'].includes(url)) {
+        ['https://rcic.uci.edu/account/login.html', 'https://rcic.uci.edu/account/generate-ssh-keys.html',
+          'https://aistudio.google.com/app/apikey'].includes(url)) {
       void shell.openExternal(url);
     }
     return {action:'deny'};
@@ -142,7 +186,8 @@ async function launch({provider = 'codex', visible = true, userData, stateFile, 
 
 function providerFromArgs(argv) {
   const index = argv.indexOf('--provider');
-  const provider = index < 0 ? 'codex' : argv[index + 1];
+  if (index < 0) return undefined;
+  const provider = argv[index + 1];
   if (!['codex', 'gemini', 'groq'].includes(provider)) throw Error('Use --provider codex, gemini or groq.');
   return provider;
 }

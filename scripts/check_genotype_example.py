@@ -10,8 +10,8 @@ import tarfile
 import time
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-import signet_tools as st
-import signet_runtime as vm
+import agent.tools.signet as st
+import agent.runtime.remote as vm
 
 
 def run(dataset, run_id, seconds):

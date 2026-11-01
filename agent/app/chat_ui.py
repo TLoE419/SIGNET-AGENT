@@ -13,12 +13,14 @@ from urllib.parse import urlsplit, parse_qs
 from dotenv import load_dotenv
 from google.genai import types
 
-from main import MODEL, run_conversation
-from model_timing import ModelRequestTiming
-from llm_providers import PROVIDERS, create_provider_adapter
-from stage6_workspace import Workspace, CHAT_CONTEXT
+from agent.core.conversation import MODEL, run_conversation
+from agent.core.model_timing import ModelRequestTiming
+from agent.paths import PROJECT_ROOT
+from agent.providers import PROVIDERS, create_provider_adapter
+from agent.stage6.workspace import Workspace, CHAT_CONTEXT
+from agent.tools.ui import UI_CHANNEL
 
-ROOT = Path(__file__).resolve().parent
+ROOT = PROJECT_ROOT
 
 
 class ChatServer(ThreadingHTTPServer):
@@ -148,6 +150,8 @@ class ChatHandler(BaseHTTPRequestHandler):
             return self._error(403, '請從本機聊天頁面送出。')
         if self.path.startswith('/stage6/'):
             return self.stage6_post()
+        if self.path.startswith('/hpc/'):
+            return self.hpc_post()
         if self.path != '/chat':
             return self._error(404, '找不到此操作。')
         try:
@@ -196,11 +200,14 @@ class ChatHandler(BaseHTTPRequestHandler):
                 timing = ModelRequestTiming()
                 with self.server.client_factory(timing) as client:
                     context_token = CHAT_CONTEXT.set((self.server.stage6, session))
+                    # Panel requests from show_panel go straight to this page as they happen.
+                    ui_token = UI_CHANNEL.set(lambda request: emit('ui', request))
                     try:
                         answer = run_conversation(client, text.strip(), history,
                                               progress=lambda message: emit('progress', message), http_timing=timing,
                                                   language=language)
                     finally:
+                        UI_CHANNEL.reset(ui_token)
                         CHAT_CONTEXT.reset(context_token)
                 emit('workspace', self.server.stage6.view(session))
                 emit('answer', answer)
@@ -219,6 +226,29 @@ class ChatHandler(BaseHTTPRequestHandler):
         self._headers(status, 'application/json; charset=utf-8', len(data))
         self.wfile.write(data)
 
+    def hpc_post(self):
+        """Workflow-panel buttons call one HPC3 tool directly; the click is the user's approval."""
+        from agent.tools import hpc as hpc_tools
+        actions = {'/hpc/check': hpc_tools.check_hpc_environment,
+                   '/hpc/workspace': hpc_tools.create_hpc_workspace,
+                   '/hpc/signet': hpc_tools.install_signet_source,
+                   '/hpc/container': hpc_tools.download_signet_container,
+                   '/hpc/prepare': hpc_tools.prepare_imputation_reference,
+                   **{f'/hpc/reference/{key}': (lambda key=key: hpc_tools.download_reference_file(key))
+                      for key in ('ref', 'gmap', 'gtf', 'clinical')}}
+        action = actions.get(self.path)
+        if action is None:
+            return self._error(404, '找不到此操作。')
+        try:
+            size = int(self.headers.get('Content-Length', '0') or 0)
+        except ValueError:
+            size = -1
+        if not 0 <= size <= 1024:
+            return self._error(400, 'Invalid request length.')
+        self.connection.settimeout(10)
+        self.rfile.read(size)  # The body carries no parameters; each path is one fixed action.
+        return self.json_response(action())
+
     def stage6_get(self, url):
         query = parse_qs(url.query)
         session = query.get('session', [''])[0]
@@ -230,8 +260,8 @@ class ChatHandler(BaseHTTPRequestHandler):
                     return self._error(403, 'Workspace token required.')
                 return self.json_response(self.server.stage6.view(session))
             if url.path == '/stage6/file':
-                import signet_tools as st
-                from stage6_workspace import load_run
+                import agent.tools.signet as st
+                from agent.stage6.workspace import load_run
                 run = query.get('run', [''])[0]
                 name = query.get('name', [''])[0]
                 if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*', name):
@@ -298,7 +328,7 @@ def create_server(provider='codex', port=8880, state_file=ROOT / '.chat-state.js
         raise ValueError('Unsupported model provider.')
     load_dotenv(ROOT / '.env')
     configured = create_provider_adapter(provider, gemini_model=MODEL)
-    from signet_tools import source_path
+    from agent.tools.signet import source_path
     for message in configured.startup_messages:
         print(message, flush=True)
     if not source_path().is_dir():

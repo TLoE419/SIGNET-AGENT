@@ -237,7 +237,7 @@ work through separate processes (the turn lock is per process).
 - Frontend sources now live in `electron/renderer/`; generated assets are in
   `electron/build/renderer/` (not tracked). Run `npm ci --prefix electron`, then
   `npm start --prefix electron`.
-- `python chat_ui.py` still starts a standalone API. `/bootstrap` returns JSON with
+- `python -m agent.app.chat_ui` still starts a standalone API. `/bootstrap` returns JSON with
   `token`, `model`, and `initial`; it replaces the former HTML bootstrap response.
   `/chat`, `/stage6`, and file downloads retain their contracts and protections.
 - No stored-data migration is required. Preserve existing state files when

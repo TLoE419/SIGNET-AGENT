@@ -9,8 +9,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-import signet_tools as st
-import signet_runtime as runtime
+import agent.tools.signet as st
+import agent.runtime.remote as runtime
 from scripts import setup_source
 
 

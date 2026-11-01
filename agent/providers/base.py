@@ -3,7 +3,7 @@ from abc import ABC, abstractmethod
 from contextlib import AbstractContextManager
 from typing import Any
 
-from model_timing import ModelRequestTiming
+from agent.core.model_timing import ModelRequestTiming
 
 
 class ProviderAdapter(ABC):

@@ -36,7 +36,7 @@ renderer; Python continues to own chat, model providers, tools and scientific AP
 The desktop client manages Python startup/shutdown and the SSH connection.
 See [desktop setup and lifecycle](electron/README.md).
 
-For backend-only development, run `.venv/bin/python chat_ui.py --port 8880`.
+For backend-only development, run `.venv/bin/python -m agent.app.chat_ui --port 8880`.
 This starts an API, not a browser interface. `GET /bootstrap` supplies initial
 conversation state; `/chat` and `/stage6` retain their existing request contracts.
 Standalone Python tools and tests remain available. Existing desktop state and
@@ -52,7 +52,7 @@ scientific inputs/results are not moved or rewritten by the frontend migration.
 | Run scientific analysis | The corresponding scientific dependencies, VM, or scheduler | Runs within each tool's limits and retains logs; completion does not establish biological validity |
 | Compare Stage 6 results | Your own technically verified results and scientific environment | Proposes changes, starts a separate run after your confirmation, and compares results |
 
-There are **23 SIGNET tools and 2 general file tools, for a total of 25 model tools**. See [signet_inventory.json](signet_inventory.json) for the complete scientific-source inventory. Scientific code is pinned to the [official SIGNET commit](https://github.com/signet4grn/SIGNET/tree/bed55b3e121de0edf5fd43da683dc59850ff82d3); the assistant does not execute arbitrary scripts.
+There are **23 SIGNET tools, 2 general file tools, 7 HPC3 setup tools and 1 page control, for a total of 33 model tools**. See [signet_inventory.json](signet_inventory.json) for the complete scientific-source inventory. Scientific code is pinned to the [official SIGNET commit](https://github.com/signet4grn/SIGNET/tree/bed55b3e121de0edf5fd43da683dc59850ff82d3); the assistant does not execute arbitrary scripts.
 
 ## Usage and Data
 
@@ -91,3 +91,22 @@ See the [file tree](docs/FILE_TREE.md) for file responsibilities and [third-part
 - **Codex CLI:** the default model command-line tool; users sign in with their own accounts.
 - **Git:** the version-control tool used to obtain the pinned official source.
 - **Node.js:** the runtime used for frontend checks and network-output verification.
+
+## Integrated desktop setup
+
+The desktop header contains the existing SSH/environment controls and a Gemini
+settings panel. Gemini keys entered there are verified with Google and encrypted
+with the operating system key store. Saving or removing an active key restarts
+the owned Python service after active work finishes; saved conversations remain.
+Do not enter private research data unless your chosen provider is appropriate.
+
+Open **Workflow**, then **Remote environment** to prepare the shared installation.
+The same verified root, source revision, container runtime module and Slurm
+partition are used by analysis and reference preparation. The workflow never
+creates a second installation under `/pub`. Reference downloads and example
+reference conversion require confirmation and run as remote Slurm jobs. Their
+logs and state live in `<installation-root>/.signet-agent/steps`; raw reference
+files live in `<installation-root>/refdata`. Existing paths and data are not migrated.
+The preprocessing and results stages in this panel are placeholders; the existing
+analysis tools and Stage 6 workspace retain their own readiness requirements.
+A passing setup check is not evidence of a biologically valid analysis.

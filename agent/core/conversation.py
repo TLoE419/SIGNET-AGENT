@@ -8,10 +8,12 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import errors, types
 
-from tools import list_files, read_file, GENERAL_TOOLS
-from model_timing import ModelRequestTiming
-from context_budget import ContextBudgetError
-from signet_tools import SIGNET_TOOLS, dispatch_tool
+from agent.tools.general import list_files, read_file
+from agent.core.model_timing import ModelRequestTiming
+from agent.core.context_budget import ContextBudgetError
+from agent.paths import PROJECT_ROOT
+from agent.tools.registry import ALL_TOOLS
+from agent.tools.signet import dispatch_tool
 
 MODEL = "gemini-3.8-flash"
 MAX_TOOL_ROUNDS = 4
@@ -19,7 +21,7 @@ MAX_CALLS_PER_ROUND = 8
 
 # Inspect tool requests before executing them in our own code.
 config = types.GenerateContentConfig(
-    tools=[*GENERAL_TOOLS, *SIGNET_TOOLS],
+    tools=ALL_TOOLS,
     automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
     system_instruction=(
         "You are a Traditional Chinese assistant for this local SIGNET project. "
@@ -52,6 +54,11 @@ config = types.GenerateContentConfig(
         "or of empty/placeholder files; never claim file contents were checked from a path listing. "
         "An empty operations list means no recorded operations, not proof nothing ever ran. "
         "Use get_signet_settings for existing run settings and recorded states. "
+        "For HPC3 readiness or setup progress, call check_hpc_environment. Each HPC3 setup tool "
+        "(create_hpc_workspace, install_signet_source, download_signet_container, download_reference_file, "
+        "prepare_imputation_reference) "
+        "does one step; call only "
+        "the steps the user's own message asks for or agrees to. An assistant suggestion is not approval. "
         "Discover available context before requesting exact paths or run IDs. "
         "Inputs must be in project data/ or runs/. Create isolated runs with configure_signet. "
         "Never invent inputs, cohort or scientific parameters, silently adopt defaults as research "
@@ -280,7 +287,7 @@ def run_conversation(client, text: str, history=None, progress=None, http_timing
         tool_results = []
         interrupted = False
         for index, call in enumerate(calls, 1):
-            tool_name = call.name if call.name in {fn.__name__ for fn in [*GENERAL_TOOLS,*SIGNET_TOOLS]} else '未知工具'
+            tool_name = call.name if call.name in {fn.__name__ for fn in ALL_TOOLS} else '未知工具'
             tool_started = None
             if interrupted:
                 result = {"status": "skipped", "executed": False, "reason": "Earlier tool was interrupted or raised an unexpected error."}
@@ -366,7 +373,7 @@ if __name__ == "__main__":
     parser.add_argument('--provider', choices=('codex', 'gemini', 'groq'), default='codex', help='模型來源，預設使用已登入的 Codex 命令列。')
     parser.add_argument('prompt', nargs='*', help='單次自然語言需求；不必指定工具名。')
     args = parser.parse_args()
-    load_dotenv(Path(__file__).with_name(".env"))
+    load_dotenv(PROJECT_ROOT / ".env")
     # Read credentials from the environment rather than storing them in source.
     api_key = None
     if args.provider != 'codex':
@@ -377,11 +384,11 @@ if __name__ == "__main__":
     prompt = " ".join(args.prompt).strip()
     http_timing = ModelRequestTiming()
     if args.provider == 'codex':
-        from codex_provider import CodexClient
+        from agent.providers.codex_client import CodexClient
         client_context = CodexClient(timing=http_timing)
         _progress('Codex 命令列：使用既有登入與模型設定；SIGNET 操作仍由受控工具執行。')
     elif args.provider == 'groq':
-        from groq_provider import GroqClient
+        from agent.providers.groq_client import GroqClient
         client_context = GroqClient(api_key, timing=http_timing)
         _progress('Groq：正常請求立即送出；只有收到 429 才等待 30 秒重送，不重跑已完成工具。Ctrl+C 可中斷等待。')
     else:

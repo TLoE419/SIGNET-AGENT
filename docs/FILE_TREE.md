@@ -11,23 +11,35 @@ SIGNET-agent/
 ├── .gitignore                    # Excludes all data, credentials, records, and local dependencies
 ├── README.md                     # Project overview, scope, and quick start
 ├── requirements.txt              # Pins four direct dependency versions
-├── chat_ui.py                    # Independent local API service, conversation storage, and workspace API
-├── llm_providers/                # Factory dispatch and isolated Codex, Gemini and Groq adapters
-├── main.py                       # Conversation flow, public progress, and controlled tool calls
-├── codex_provider.py             # Uses the downloader's own signed-in model CLI
-├── groq_provider.py              # Groq connection, tool format, and rate-limit waits
-├── context_budget.py             # Input length and compression of repeated tool evidence
-├── model_timing.py               # Model request and transport timing
-├── tools.py                      # Restricted file listing and paginated text reading
-├── signet_tools.py               # Scientific tools, parameter validation, and isolated job preparation
+├── runtime_modules.sh           # Shared versioned container-module initialization
 ├── signet_inventory.json         # Official code version, classification, and file hashes
-├── signet_runtime.py             # Local VM connection, packaging, and output collection
-├── runtime_modules.sh            # Shared per-command/job container module initialization
-├── ssh_transport.py              # Private Electron broker client for SSH command transport
-├── network_runtime.py            # Network inference submission, queries, cancellation, and result checks
-├── network_worker.py             # Background control and supervision of owned jobs inside the VM
-├── visualization_runtime.py      # Stage 6 plotting and input/output checks
-├── stage6_workspace.py           # Parameter proposals, human confirmation, history, and comparison
+├── agent/                        # All Python code, one package
+│   ├── paths.py                  # The single definition of the project root (data/, runs/, .env, assets/)
+│   ├── app/
+│   │   └── chat_ui.py            # Loopback API, conversation storage, and workspace API
+│   ├── core/
+│   │   ├── conversation.py       # Conversation flow, public progress, controlled tool calls; terminal chat entry point
+│   │   ├── context_budget.py     # Input length and compression of repeated tool evidence
+│   │   └── model_timing.py       # Model request and transport timing
+│   ├── providers/                # Factory dispatch and isolated Codex, Gemini and Groq adapters
+│   │   ├── codex_client.py       # Uses the downloader's own signed-in model CLI
+│   │   └── groq_client.py        # Groq connection, tool format, and rate-limit waits
+│   ├── tools/
+│   │   ├── general.py            # Restricted file listing and paginated text reading
+│   │   ├── registry.py           # Every model-callable tool; also the dispatch allow-list
+│   │   ├── hpc.py                # HPC3 readiness check, shared environment boundary, reference preparation, setup logs
+│   │   └── signet.py             # Scientific tools, parameter validation, and isolated job preparation
+│   ├── runtime/
+│   │   ├── hpc.py                # HPC3 workspace layout, read-only checks, background setup steps
+│   │   ├── jobs/
+│   │   │   └── prepare_reference.py  # Runs on HPC3: detects ref/gmap formats and converts them for one study
+│   │   ├── remote.py             # Remote connection, packaging, and output collection
+│   │   ├── ssh_transport.py      # Private Electron broker client for SSH command transport
+│   │   ├── network.py            # Network inference submission, queries, cancellation, and result checks
+│   │   ├── network_worker.py     # Uploaded on its own; supervises owned jobs on the remote host
+│   │   └── visualization.py      # Stage 6 plotting and input/output checks
+│   └── stage6/
+│       └── workspace.py          # Parameter proposals, human confirmation, history, and comparison
 ├── assets/
 │   └── tokenizers/
 │       ├── qwen3.8-27b.json       # About 12.8 MB of tokenizer data; no study data or model weights
@@ -54,11 +66,13 @@ SIGNET-agent/
 │   │   ├── security/             # Navigation and owned-origin policy
 │   │   ├── renderer/             # Asset serving and API forwarding
 │   │   ├── ssh/                  # Native transport, keys, trust, IPC and broker
+│   │   ├── model/                # Encrypted Gemini key storage and model switching
+│   │   ├── environment/          # Single remote environment authority and module initialization
 │   │   └── devtools/             # Developer terminal service
 │   ├── preload/                  # Restricted desktop API bridge
 │   ├── renderer/
 │   │   ├── app/                  # React root and application shell
-│   │   ├── features/             # chat/, stage6/, ssh/, devtools/
+│   │   ├── features/             # chat/, stage6/, ssh/, model/, environment/, devtools/
 │   │   ├── components/           # Shared dialogs, actions and icons
 │   │   ├── styles/               # Colors, spacing and interface styles
 │   │   ├── i18n/                 # English / Traditional Chinese

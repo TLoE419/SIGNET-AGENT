@@ -3,9 +3,9 @@ from pathlib import Path
 import unittest
 from unittest.mock import patch
 
-import main
-import tools
-import signet_tools as st
+import agent.core.conversation as main
+import agent.tools.general as tools
+import agent.tools.signet as st
 
 
 class ReadFileTest(unittest.TestCase):

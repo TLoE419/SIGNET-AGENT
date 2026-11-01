@@ -10,7 +10,7 @@ const {launch}=require('../main/app/main.cjs');
 const {HostKeyTrustStore}=require('../build/ssh/index.cjs');
 const inventory=require('../../signet_inventory.json');
 const directory=mkdtempSync(path.join(os.tmpdir(),'signet-environment-local-'));
-let running,server,source=false,image=false,failImage=true,connections=0;
+let running,server,source=false,image=false,failImage=true,failVerification=true,connections=0;
 const commands=[];
 const deadline=setTimeout(()=>{console.error('Local environment smoke timeout');app.exit(1)},45000);
 app.on('will-quit',()=>{clearTimeout(deadline);server?.close();rmSync(directory,{recursive:true,force:true})});
@@ -31,6 +31,7 @@ async function until(check){for(let i=0;i<200;i++){if(await check())return;await
      if(script.includes("printf 'home="))out=`home=/home/testuser\nroot=/home/testuser/mock-signet\n${['bash','git','tar','sha256sum','timeout','python3','setsid','sbatch','scontrol','sinfo','squeue'].map(t=>t+'=yes').join('\n')}\nexecutor=/usr/bin/apptainer\npartition=mock\nwritable=yes\nsource=${source?'exists':'missing'}\nimage=${image?'exists':'missing'}\n`;
      else if(script.includes('git -C'))source=true;
      else if(script.includes(' pull ')){if(failImage){err='MOCK: container download failed for retry test\n';code=1}else image=true}
+     else if(script.includes('Rscript -e')&&failVerification){err='MOCK: SIGNET settings verification failed: config.ini unreadable\n';code=1}
      setTimeout(()=>{if(out)stream.write(out);if(err)stream.stderr.write(err);stream.exit(code);stream.end()},80);
     });
    });
@@ -59,6 +60,11 @@ async function until(check){for(let i=0;i<200;i++){if(await check())return;await
  failImage=false;await click('Check environment');
  await until(()=>js(`document.querySelector('.ssh-environment-status')?.dataset.phase==='needs-install'`));
  await click('Install missing components…');await click('Install environment');
+ await until(()=>js(`document.querySelector('.ssh-environment-status')?.dataset.phase==='error'`));
+ await until(()=>js(`document.querySelector('.ssh-environment-modal').textContent.includes('runtime-verification failed')`));
+ assert.equal((await js('window.signetDesktop.environment.getSnapshot()')).value.phase,'error');
+ assert.equal((await js('window.signetDesktop.ssh.getSnapshot()')).value.connection.status,'connected');
+ failVerification=false;await click('Check environment');
  await until(()=>js(`document.querySelector('.ssh-environment-status')?.dataset.phase==='ready'`));
  assert.equal(await js(`document.querySelector('.ssh-collapse').getAttribute('aria-expanded')`),'false');
  await new Promise(r=>setTimeout(r,300));
@@ -74,8 +80,8 @@ async function until(check){for(let i=0;i<200;i++){if(await check())return;await
  assert.ok(commands.some(s=>s.includes(inventory.revision)));assert.equal(connections,1,'initialization reuses one local SSH connection');
  const config=await js('window.signetDesktop.environment.getSnapshot()');assert.equal(config.value.config.partition,'mock');
  const {promisify}=require('node:util'),execFile=promisify(require('node:child_process').execFile),broker=running.backend.options.sshBroker;
- const python=await execFile(running.backend.options.python,['-c','import json, ssh_transport; print(json.dumps(ssh_transport.environment()))'],{cwd:path.resolve(__dirname,'../..'),env:{...process.env,SIGNET_SSH_BROKER:broker.path,SIGNET_SSH_BROKER_TOKEN:broker.token},timeout:10000});
+ const python=await execFile(running.backend.options.python,['-c','import json; from agent.runtime import ssh_transport; print(json.dumps(ssh_transport.environment()))'],{cwd:path.resolve(__dirname,'../..'),env:{...process.env,SIGNET_SSH_BROKER:broker.path,SIGNET_SSH_BROKER_TOKEN:broker.token},timeout:10000});
  assert.equal(JSON.parse(python.stdout).image,config.value.config.image);assert.equal(JSON.parse(python.stdout).partition,'mock');
  writeFileSync(path.join(os.tmpdir(),'signet-environment-local.png'),(await window.webContents.capturePage()).toPNG());
- await running.quit();console.log('PASS: localhost SSH mock; automatic check, install confirmation, status progress, dev logs, failure/retry and ready');
+ await running.quit();console.log('PASS: localhost SSH mock; automatic check, install confirmation, download and settings failures stay blocked, retry reaches ready');
 })().catch(async error=>{console.error(error);await running?.backend.forceStop();app.exit(1)});

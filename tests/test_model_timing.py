@@ -5,8 +5,8 @@ from unittest.mock import patch
 import httpx
 from google import genai
 from google.genai import errors, types
-import main
-from model_timing import ModelRequestTiming
+import agent.core.conversation as main
+from agent.core.model_timing import ModelRequestTiming
 
 
 class ModelTimingTest(unittest.TestCase):

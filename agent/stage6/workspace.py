@@ -10,8 +10,8 @@ import shutil
 import threading
 import time
 
-import signet_tools as st
-from visualization_runtime import validate_inputs
+import agent.tools.signet as st
+from agent.runtime.visualization import validate_inputs
 
 CHAT_CONTEXT = ContextVar('stage6_chat_context', default=None)
 

@@ -39,7 +39,7 @@ app.once('browser-window-created', (_event, window) => {
       const snapshot = () => window.webContents.executeJavaScript(`({
         initial: JSON.parse(document.querySelector('#initial-chat').textContent),
         text: document.querySelector('#messages').textContent,
-        choices: document.querySelector('#saved-chats').options.length,
+        choices: document.querySelectorAll('#chat-list .chat-link').length,
         welcome: !!document.querySelector('#welcome')
       })`);
       const navigate = async script => {
@@ -50,9 +50,8 @@ app.once('browser-window-created', (_event, window) => {
       let page = await snapshot();
       assert.equal(page.initial.session, latest);
       assert.match(page.text, /Saved conversation 31/);
-      assert.equal(page.choices, 33);
-      await navigate(`document.querySelector('#saved-chats').value=${JSON.stringify(oldest)};
-        document.querySelector('#saved-chats').dispatchEvent(new Event('change')); true`);
+      assert.equal(page.choices, 32);
+      await navigate(`document.querySelector('#chat-list [data-session=${JSON.stringify(oldest)}]').click(); true`);
       page = await snapshot();
       assert.equal(page.initial.session, oldest);
       assert.match(page.text, /Saved conversation 0/);
@@ -60,7 +59,7 @@ app.once('browser-window-created', (_event, window) => {
       page = await snapshot();
       assert.equal(page.welcome, true);
       assert.equal(page.initial.session, undefined);
-      assert.equal(page.choices, 33);
+      assert.equal(page.choices, 32);
       const loaded = once(window.webContents, 'did-finish-load');
       await window.loadURL(new URL('/', window.webContents.getURL()).href);
       await loaded;

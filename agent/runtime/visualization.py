@@ -8,7 +8,7 @@ from pathlib import Path
 import subprocess
 import tarfile
 
-import signet_runtime as vm
+import agent.runtime.remote as vm
 
 INPUT_KEYS = ('Afreq', 'coef', 'vis.genepos')
 PACKAGES = ('igraph', 'dnet', 'visNetwork', 'STRINGdb', 'TFutils', 'shiny',
