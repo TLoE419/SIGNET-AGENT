@@ -24,7 +24,7 @@ def markers(**values):
 
 READY = dict(user='tester', host='login-i15', workspace_path='/pub/tester/signet-agent', workspace='yes',
              workspace_writable='yes', sbatch='yes', apptainer='apptainer version 1.4.5', signet='yes',
-             signet_head=REVISION, signet_modified='0', file_container='3221225472', file_ref='1048576',
+             signet_revision=REVISION, signet_integrity='verified', file_container='3221225472', file_ref='1048576',
              file_gmap='2048', file_gtf='1500000000', file_clinical='512', file_prepare='4096')
 
 
@@ -33,7 +33,7 @@ class Remote:
 
     def __init__(self, stdout, code=0):
         self.available = patch.object(hpc.ssh_transport, 'available', return_value=True)
-        self.environment = patch.object(hpc.ssh_transport, 'environment', return_value={'root':'/pub/tester/signet-agent','source':'/pub/tester/signet-agent/software/pinned','image':'/pub/tester/signet-agent/images/signet.sif','executor':'/usr/bin/singularity','workRoot':'/pub/tester/signet-agent/runs','partition':'free'})
+        self.environment = patch.object(hpc.ssh_transport, 'environment', return_value={'root':'/pub/tester/signet-agent','source':'/pub/tester/signet-agent/software/pinned','image':'/pub/tester/signet-agent/images/signet.sif','executor':'/usr/bin/singularity','workRoot':'/pub/tester/signet-agent/runs','partition':'free','revision':REVISION})
         self.remote = patch.object(hpc.ssh_transport, 'remote', return_value=completed(stdout, code))
 
     def __enter__(self):
@@ -79,6 +79,8 @@ class CheckTest(unittest.TestCase):
         self.assertIn('3.0 GB', self.item(result, 'container')['detail'])
         self.assertEqual(remote.call_args.args, ('bash -s',))
         script = remote.call_args.kwargs['input'].decode()
+        self.assertIn('sha256sum -c', script)
+        self.assertNotIn('git -C', script)
         for reads_content in ('cat ', 'less ', 'grep ', 'sed ', 'awk ', 'tail '):
             self.assertNotIn(reads_content, script)
 
@@ -92,9 +94,9 @@ class CheckTest(unittest.TestCase):
                                                'imputation_reference'])
         self.assertEqual(self.item(result, 'workspace')['status'], 'missing')
 
-    def test_wrong_commit_modified_source_and_empty_files_are_problems(self):
-        for change, item in [({'signet_head': 'a' * 40}, 'signet_source'), ({'signet_modified': '3'}, 'signet_source'),
-                             ({'signet': 'not_git'}, 'signet_source'), ({'file_gtf': 'empty'}, 'reference_gtf'),
+    def test_wrong_revision_modified_source_and_empty_files_are_problems(self):
+        for change, item in [({'signet_revision': 'a' * 40}, 'signet_source'), ({'signet_integrity': 'mismatch'}, 'signet_source'),
+                             ({'signet': 'invalid'}, 'signet_source'), ({'file_gtf': 'empty'}, 'reference_gtf'),
                              ({'workspace_writable': 'no'}, 'workspace'), ({'apptainer': 'no'}, 'apptainer')]:
             with self.subTest(change=change):
                 result, _ = self.check(markers(**{**READY, **change}))

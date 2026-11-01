@@ -13,8 +13,9 @@ def check_hpc_environment() -> dict:
 
     Use it when the user asks whether they are ready, what is missing, or how a
     setup step is progressing. Requires the app's SSH connection to HPC3. Reports
-    only existence, file sizes, the SIGNET git version and the app's own setup
-    states; it never reads file contents and never changes anything on HPC3.
+    existence, file sizes, hashes of the pinned source files and the app's own setup
+    states. Reads only audited source files for hashing, returns no file contents
+    or research data, and never changes anything on HPC3.
     Items whose status is not "ok" still need preparation; "in_progress" means a
     setup step is still running in the background.
     """

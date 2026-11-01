@@ -2,8 +2,8 @@
 
 The desktop EnvironmentService owns the verified workspace, pinned source,
 container executor and scheduler partition. Reference jobs reuse that configuration. Checks report only
-existence, file sizes, the SIGNET git version and the app's own step states;
-no workspace file contents are read.
+existence, file sizes, hashes of the pinned source files and the app's own step states.
+Source contents are hashed without being returned; research data is not read.
 
 Each setup step returns as soon as it has started: light steps run as a
 detached process on the login node; downloads run as Slurm jobs, because login
@@ -11,14 +11,17 @@ nodes must not download large files and compute nodes can reach the internet. St
 missing and never overwrites existing files.
 """
 from contextvars import ContextVar
+import json
 import os
 from pathlib import Path
 import re
 import subprocess
 
 from agent.runtime import ssh_transport
+from agent.paths import PROJECT_ROOT
 
 _CONFIG = ContextVar('hpc_config', default=None)
+SOURCE_INVENTORY = json.loads((PROJECT_ROOT / 'signet_inventory.json').read_text())
 
 SIGNET_DIRECTORY = 'signet'
 CONTAINER = 'containers/signet.sif'
@@ -122,6 +125,12 @@ def _checked_files():
 
 
 def _check_script(root):
+    config = _CONFIG.get()
+    if config is not None and config.get('revision') != SOURCE_INVENTORY['revision']:
+        raise ValueError('Desktop source revision does not match the audited inventory; recheck the remote environment.')
+    # Match EnvironmentService.sourceCheck: the installed archive has no Git metadata.
+    source_hashes = ''.join(f"{item['sha256']}  {item['path']}\n"
+                            for item in SOURCE_INVENTORY['scripts'] + SOURCE_INVENTORY['support_files'])
     files = ' '.join(f'{key}:{path}' for key, path in _checked_files().items())
     return _prelude(root) + f'''
 say user "$(id -un)"
@@ -132,12 +141,17 @@ if command -v sbatch >/dev/null 2>&1; then say sbatch yes; else say sbatch no; f
 if "$E" --version >/dev/null 2>&1; then
   say apptainer "$("$E" --version 2>/dev/null | head -n 1)"
 else say apptainer no; fi
-if [ -d "$S/.git" ]; then
+if [ ! -e "$S" ]; then say signet no
+elif [ ! -d "$S" ] || [ -L "$S" ]; then say signet invalid
+else
   say signet yes
-  say signet_head "$(git -C "$S" rev-parse HEAD 2>/dev/null)"
-  say signet_modified "$(git -C "$S" status --porcelain --untracked-files=no 2>/dev/null | wc -l | tr -d ' ')"
-elif [ -e "$S" ]; then say signet not_git
-else say signet no; fi
+  if (cd "$S" && sha256sum -c - >/dev/null 2>&1 <<'SIGNET_SOURCE_HASHES'
+{source_hashes}SIGNET_SOURCE_HASHES
+  ); then
+    say signet_integrity verified
+    say signet_revision {SOURCE_INVENTORY['revision']}
+  else say signet_integrity mismatch; fi
+fi
 for item in {files}; do
   key="${{item%%:*}}"; rel="${{item#*:}}"
   if [ "$key" = container ]; then rel="$I"; else rel="$W/$rel"; fi
@@ -322,15 +336,11 @@ def _checks(values, revision):
         'module load apptainer failed.' if apptainer == 'no' else apptainer)
     signet = values.get('signet', 'no')
     if signet == 'no':
-        add('signet_source', *(_step_status(values, 'signet') or ('missing', 'SIGNET has not been cloned into the workspace.')))
-    elif signet == 'not_git':
-        add('signet_source', 'problem', 'The signet folder exists but is not a git checkout; its version cannot be verified.')
-    elif values.get('signet_head') != revision:
-        add('signet_source', 'problem', f"SIGNET is at commit {values.get('signet_head') or 'unknown'}, not the pinned {revision}.")
-    elif values.get('signet_modified') != '0':
-        add('signet_source', 'problem', f"{values.get('signet_modified')} SIGNET files were modified after checkout; results would not match the pinned version.")
+        add('signet_source', *(_step_status(values, 'signet') or ('missing', 'SIGNET has not been installed in the remote environment.')))
+    elif signet != 'yes' or values.get('signet_integrity') != 'verified' or values.get('signet_revision') != revision:
+        add('signet_source', 'problem', f'Audited source verification failed for revision {revision[:12]}; files may be missing or modified. Recheck Remote environment.')
     else:
-        add('signet_source', 'ok', f'Pinned commit {revision[:12]}, unmodified.')
+        add('signet_source', 'ok', f'Audited script and support-file hashes match pinned revision {revision[:12]}.')
     for key, path in _checked_files().items():
         value = values.get(f'file_{key}', 'no')
         item = {'container': 'container', 'prepare': 'imputation_reference'}.get(key, f'reference_{key}')
@@ -386,8 +396,8 @@ def check_environment(revision):
     missing = [check['item'] for check in checks if check['status'] != 'ok']
     return {'status': 'ok', 'executed': False, 'read_only': True, 'ready': not missing,
             'workspace': values.get('workspace_path'), 'checks': checks, 'not_ready': missing,
-            'evidence_scope': 'Existence, file sizes, the SIGNET git version and the app\'s own setup states only. '
-                              'No file contents were read and nothing on HPC3 was changed. '
+            'evidence_scope': 'Existence, file sizes, audited source hashes and the app\'s own setup states only. '
+                              'Only pinned source files were read for hashing; no contents or research data were returned and nothing on HPC3 was changed. '
                               'Readiness here does not establish scientific validity.'}
 
 
