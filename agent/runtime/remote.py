@@ -8,7 +8,9 @@ import re
 import subprocess
 import tarfile
 
-PROJECT = Path(__file__).resolve().parent
+from agent.paths import PROJECT_ROOT
+
+PROJECT = PROJECT_ROOT
 HOST_PROJECT = PROJECT / '.dependencies/scientific-runtime'
 IMAGE = '/work/evidence/signet-0.0.6.sif'
 INPUT_KEYS = ('matched.gexp', 'matched.gexp.withpc', 'matched.geno',
@@ -29,7 +31,7 @@ def image_path():
 
 
 def desktop_environment():
-    from ssh_transport import available, environment
+    from agent.runtime.ssh_transport import available, environment
     return environment() if available() else None
 
 
@@ -63,7 +65,7 @@ def ssh_args():
 
 
 def remote(command, **kwargs):
-    from ssh_transport import available, remote as electron_remote, with_runtime_module
+    from agent.runtime.ssh_transport import available, remote as electron_remote, with_runtime_module
     if available():
         config = desktop_environment()
         if config:
@@ -106,7 +108,7 @@ def bundle(root, settings, remote_root, input_keys=INPUT_KEYS, network=False):
             archive.add(work / 'script', arcname='work/script')
         else:
             # Only deployment copies change: the official statistical scripts stay pinned.
-            from signet_tools import INVENTORY
+            from agent.tools.signet import INVENTORY
             selected = [item['path'] for item in INVENTORY['scripts'] if item['path'].startswith('script/')]
             selected += [item['path'] for item in INVENTORY['support_files']
                          if item['path'].startswith('script/network/template.sub')]
@@ -126,7 +128,7 @@ def bundle(root, settings, remote_root, input_keys=INPUT_KEYS, network=False):
             info = tarfile.TarInfo('runtime.json')
             info.size, info.mode = len(runtime_data), 0o600
             archive.addfile(info, io.BytesIO(runtime_data))
-            from ssh_transport import runtime_module_prelude
+            from agent.runtime.ssh_transport import runtime_module_prelude
             wrapper = ('#!/bin/bash\n' + runtime_module_prelude(runtime) + '\nexec ' + shlex.quote(runtime['executor']) + ' "$@"\n').encode()
             info = tarfile.TarInfo('work/bin/singularity')
             info.size, info.mode = len(wrapper), 0o700

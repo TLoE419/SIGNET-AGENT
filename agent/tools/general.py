@@ -1,7 +1,9 @@
 import os
 from pathlib import Path
 
-PROJECT = Path(__file__).resolve().parent
+from agent.paths import PROJECT_ROOT
+
+PROJECT = PROJECT_ROOT
 EXCLUDED_DIRECTORIES = {'venv', 'node_modules', '__pycache__'}
 MAX_READ_BYTES = 32 * 1024 * 1024
 MAX_READ_CHARS = 16000

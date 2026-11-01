@@ -57,3 +57,5 @@ jobs:
         run: npm run test:dev --prefix electron
       - name: Test remote initialization with localhost SSH mock
         run: npm run test:environment --prefix electron
+      - name: Test native model switching without external model calls
+        run: npm run test:model-switch --prefix electron

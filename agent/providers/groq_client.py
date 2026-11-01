@@ -9,8 +9,8 @@ from types import SimpleNamespace
 
 import httpx
 from google.genai import errors, types
-from tools import PROJECT
-from context_budget import compact_evidence, check_budget, ContextBudgetError
+from agent.tools.general import PROJECT
+from agent.core.context_budget import compact_evidence, check_budget, ContextBudgetError
 
 GROQ_MODEL = 'qwen/qwen3.8-27b'
 

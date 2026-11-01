@@ -7,8 +7,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-import signet_tools as st
-import visualization_runtime as vr
+import agent.tools.signet as st
+import agent.runtime.visualization as vr
 
 
 class VisualizationTest(unittest.TestCase):

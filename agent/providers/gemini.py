@@ -2,7 +2,7 @@
 from contextlib import AbstractContextManager
 from typing import Any
 
-from model_timing import ModelRequestTiming
+from agent.core.model_timing import ModelRequestTiming
 from .base import ProviderAdapter
 from .settings import required_key
 

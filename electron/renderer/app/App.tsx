@@ -1,3 +1,4 @@
+import {ModelControls} from '../features/model/ModelControls';
 import {SshControls} from '../features/ssh/SshControls';
 
 // Stable shell. Chat and graph controllers own their dynamic DOM regions.
@@ -8,18 +9,44 @@ export function App({model}:{model:string}){
     <button id="new-chat" className="new-chat"><span data-i18n="＋ 開始新對話">+ New chat</span></button>
     <div className="nav-label"><span data-i18n="工作空間">WORKSPACE</span></div>
     <div className="nav-item active"><span>◉</span> <span data-i18n="研究助手">Research assistant</span> <span className="nav-dot"></span></div>
+    <button id="s6-open" className="nav-item nav-button" type="button" aria-controls="stage6-pane" aria-expanded="false" hidden><span id="s6-open-label">Network visualization</span></button>
+    <div id="chat-list-label" className="nav-label" data-i18n="聊天紀錄">CHATS</div>
+    <nav id="chat-list" className="chat-list" aria-label="Saved conversations" data-i18n-aria="已存對話"></nav>
     <div className="environment"><span className="local-dot"></span> <span data-i18n="本機工作階段">Local session</span><small>{model}</small></div>
     <button id="language-toggle" type="button" aria-label="Switch to Traditional Chinese">繁體中文</button>
   </aside>
   <main>
-    <div className="ssh-topbar ssh-ui-root" id="ssh-root"><SshControls/></div>
+    <div className="ssh-topbar ssh-ui-root" id="ssh-root"><SshControls/><ModelControls bridge={(window as any).signetDesktop.model}/></div>
     <div className="workspace chat-only">
       <section className="chat-pane" aria-label="Chat" data-i18n-aria="聊天">
-        <div className="pane-title"><h2><span data-i18n="對話">Chat</span></h2><span><span data-i18n="你與 SIGNET 助手">You and SIGNET</span></span><button id="s6-open" type="button" aria-controls="stage6-pane" aria-expanded="false" hidden>Show visualization</button></div>
-        <div className="conversation-controls">
-          <label htmlFor="saved-chats" data-i18n="已存對話">Saved conversations</label>
-          <select id="saved-chats" aria-label="Saved conversations" data-i18n-aria="已存對話"><option value="" data-i18n="＋ 開始新對話">+ New chat</option></select>
-        </div>
+
+        <details id="workflow" className="workflow">
+          <summary><span data-i18n="分析流程">Workflow</span><span id="workflow-summary" className="workflow-summary" data-i18n="展開以檢查 HPC3 環境">Open to check HPC3</span></summary>
+          <ol className="workflow-stages">
+            <li className="workflow-stage" data-stage="environment">
+              <details id="workflow-environment" open>
+                <summary className="workflow-stage-head"><span className="workflow-step">1</span><strong data-i18n="準備環境">Prepare environment</strong><span id="workflow-environment-status" className="workflow-note"></span></summary>
+                <div className="workflow-stage-body">
+                  <div className="workflow-stage-actions"><button type="button" onClick={()=>window.dispatchEvent(new Event('open-environment'))}>Remote environment</button><button id="workflow-check" type="button" data-i18n="重新檢查">Check again</button></div>
+                  <ul id="workflow-items" className="workflow-items"></ul>
+                  <p id="workflow-message" className="workflow-message" role="status" hidden={true}></p>
+                </div>
+              </details>
+            </li>
+            <li className="workflow-stage locked" data-stage="preprocess">
+              <details>
+                <summary className="workflow-stage-head"><span className="workflow-step">2</span><strong data-i18n="資料前處理">Data preprocessing</strong></summary>
+                <p className="workflow-stage-body workflow-note" >Not implemented in this version</p>
+              </details>
+            </li>
+            <li className="workflow-stage locked" data-stage="results">
+              <details>
+                <summary className="workflow-stage-head"><span className="workflow-step">3</span><strong data-i18n="分析與結果">Analysis and results</strong></summary>
+                <p className="workflow-stage-body workflow-note" >Not implemented in this version</p>
+              </details>
+            </li>
+          </ol>
+        </details>
         <div id="messages" className="messages" role="log" aria-label="Conversation" data-i18n-aria="對話紀錄" aria-live="polite">
           <div id="welcome" className="welcome"><span className="welcome-mark">✳</span><h2><span data-i18n="今天想探索什麼？">What would you like to explore?</span></h2><p><span data-i18n="從一個研究問題開始。<br>聊天下方可查看執行過程，右側可比較網路結果。">Start with a research question.<br/>See chat activity below and compare networks on the right.</span></p><p><span data-i18n="此版本未附資料或分析結果。聊天需登入模型；科學分析另需來源、資料與執行環境。">No data or analysis results are bundled. Chat requires model sign-in; scientific analysis also requires source code, data and a configured runtime.</span></p><div className="suggestions"><button data-prompt="Introduce the available analyses and the data each requires. Do not run any analyses yet." data-i18n-prompt="先介紹目前可以做的分析，以及各自需要哪些資料，暫時不要執行分析。"><span data-i18n="了解分析能力">Explore analyses</span> <span>↗</span></button><button data-prompt="Review this project’s data files and existing run records. Do not run any analyses yet." data-i18n-prompt="幫我查看目前專案有哪些資料檔案，以及已有工作的記錄狀態，暫時不要執行分析。"><span data-i18n="檢查目前資料與工作">Review data and runs</span> <span>↗</span></button></div></div>
         </div>

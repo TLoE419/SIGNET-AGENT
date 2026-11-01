@@ -1,0 +1,37 @@
+/* Collapsible workflow above the conversation; follows chat.css tokens. */
+.workflow{margin:12px 18px 0;border:1px solid var(--line);border-radius:10px;background:var(--paper)}
+.workflow>summary{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px 14px;cursor:pointer;font-weight:600;list-style:none}
+.workflow>summary::-webkit-details-marker{display:none}
+.workflow>summary::before{content:'▸';color:var(--muted);margin-right:-4px;transition:transform .15s}
+.workflow[open]>summary::before{transform:rotate(90deg)}
+.workflow>summary>:first-of-type{flex:1}
+.workflow-summary{font-size:11px;font-weight:400;color:var(--muted)}
+.workflow-stages{list-style:none;margin:0;padding:0 14px 14px;display:grid;gap:10px;max-height:min(52vh,520px);overflow:auto}
+.workflow-stage{border:1px solid var(--line);border-radius:8px;padding:0;background:#fbfcfa}
+.workflow-stage.locked{opacity:.6}
+.workflow-stage-head{display:flex;align-items:center;gap:10px;padding:10px 12px;cursor:pointer;list-style:none}
+.workflow-stage-head::-webkit-details-marker{display:none}
+.workflow-stage-head::after{content:'▸';color:var(--muted);transition:transform .15s}
+details[open]>.workflow-stage-head::after{transform:rotate(90deg)}
+.workflow-stage-head strong{flex:1;font-size:13px}
+.workflow-stage-body{margin:0;padding:0 12px 12px}
+.workflow-stage-actions{display:flex;justify-content:flex-end}
+.workflow-step{display:grid;place-items:center;width:22px;height:22px;border-radius:50%;background:var(--soft);color:var(--accent);font-size:12px;font-weight:700;flex-shrink:0}
+.workflow-note{font-size:11px;color:var(--muted)}
+.workflow button{border:1px solid var(--accent);border-radius:6px;background:#fff;color:var(--accent);padding:4px 10px;font-size:12px}
+.workflow button:not(:disabled):hover{background:var(--soft)}
+.workflow button:disabled{cursor:default;border-color:var(--line);color:var(--muted)}
+.workflow-items{list-style:none;margin:10px 0 0;padding:0;display:grid;gap:6px}
+.workflow-item{display:flex;align-items:center;gap:10px;padding:7px 8px;border-radius:6px;background:#fff;border:1px solid var(--line)}
+.workflow-item-text{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.workflow-item-label{font-size:12px}
+.workflow-item-detail{font-size:10px;color:var(--muted);overflow-wrap:anywhere}
+.workflow-badge{flex:0 0 64px;text-align:center;font-size:10px;padding:2px 0;border-radius:10px;background:#eef1ec;color:var(--muted)}
+.workflow-item[data-status=ok] .workflow-badge{background:#dcfce7;color:#047857}
+.workflow-item[data-status=missing] .workflow-badge{background:#fef3c7;color:#92400e}
+.workflow-item[data-status=problem] .workflow-badge{background:#fee2e2;color:#b91c1c}
+.workflow-item[data-status=in_progress] .workflow-badge{background:#dbeafe;color:#1d4ed8}
+.workflow-message{margin:10px 0 0;font-size:11px;color:var(--muted)}
+.workflow-message.warning{color:#92400e}
+.workflow-message.error{color:#b91c1c}
+@media(max-width:600px){.workflow{margin:10px 12px 0}.workflow-badge{flex-basis:52px}}

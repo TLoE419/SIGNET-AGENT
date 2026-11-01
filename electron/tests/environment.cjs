@@ -74,7 +74,7 @@ async function until(check){for(let i=0;i<200;i++){if(await check())return;await
  assert.ok(commands.some(s=>s.includes(inventory.revision)));assert.equal(connections,1,'initialization reuses one local SSH connection');
  const config=await js('window.signetDesktop.environment.getSnapshot()');assert.equal(config.value.config.partition,'mock');
  const {promisify}=require('node:util'),execFile=promisify(require('node:child_process').execFile),broker=running.backend.options.sshBroker;
- const python=await execFile(running.backend.options.python,['-c','import json, ssh_transport; print(json.dumps(ssh_transport.environment()))'],{cwd:path.resolve(__dirname,'../..'),env:{...process.env,SIGNET_SSH_BROKER:broker.path,SIGNET_SSH_BROKER_TOKEN:broker.token},timeout:10000});
+ const python=await execFile(running.backend.options.python,['-c','import json; from agent.runtime import ssh_transport; print(json.dumps(ssh_transport.environment()))'],{cwd:path.resolve(__dirname,'../..'),env:{...process.env,SIGNET_SSH_BROKER:broker.path,SIGNET_SSH_BROKER_TOKEN:broker.token},timeout:10000});
  assert.equal(JSON.parse(python.stdout).image,config.value.config.image);assert.equal(JSON.parse(python.stdout).partition,'mock');
  writeFileSync(path.join(os.tmpdir(),'signet-environment-local.png'),(await window.webContents.capturePage()).toPNG());
  await running.quit();console.log('PASS: localhost SSH mock; automatic check, install confirmation, status progress, dev logs, failure/retry and ready');
