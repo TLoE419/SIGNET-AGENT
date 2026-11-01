@@ -18,6 +18,8 @@ launch({provider:'codex',visible:true,userData:temporary,stateFile}).then(async 
   const result=await w.webContents.executeJavaScript(`fetch('/hpc/check',{method:'POST',body:'{}',headers:{'Content-Type':'application/json','X-Chat-Token':document.querySelector('meta[name="chat-token"]').content}}).then(async r=>({status:r.status,body:await r.json()}))`);
   assert.equal(result.status,200);assert.equal(result.body.status,'unavailable');assert.match(result.body.reason,/Prepare.*environment/);
  }
+ const modelFits=await w.webContents.executeJavaScript(`(()=>{const card=document.querySelector('.model-status-block').getBoundingClientRect();const led=document.querySelector('.model-status-block .ssh-indicator').getBoundingClientRect();return led.right<=card.right&&led.left>=card.left})()`);
+ assert.equal(modelFits,true,'model indicator remains inside its card');
  await workflowCheck();
  const initial=w.webContents.getURL();
  const save=await w.webContents.executeJavaScript(`window.signetDesktop.model.saveGeminiKey('AIza'+'x'.repeat(35))`);
