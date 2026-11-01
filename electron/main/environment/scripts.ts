@@ -58,13 +58,42 @@ ${quote(c.executor)} exec --cleanenv --no-home "$stage/signet.sif" bash -c 'comm
 # Hard-link publication refuses any existing target; stage is on the same filesystem.
 ln "$stage/signet.sif" ${quote(c.image)}
 `}
-export function verify(c:EnvironmentConfig){return `set -euo pipefail
+export function verify(c:EnvironmentConfig){
+ const settingsCheck=`set -euo pipefail
+command -v Rscript >/dev/null
+command -v ParaFly >/dev/null
+command -v getopt >/dev/null
+Rscript -e 'stopifnot(requireNamespace("data.table",quietly=TRUE))'
+cd "$1/source"
+test -f config.ini && test -r config.ini && test -s config.ini
+# Upstream signet exits zero even when its settings reader fails; verify the actual output.
+expected=$(sed '/^[[:space:]]*$/d' config.ini)
+actual=$(bash ./signet -s | sed '/^[[:space:]]*$/d')
+if [ -z "$expected" ] || [ "$actual" != "$expected" ]; then
+ echo 'SIGNET settings verification failed: output does not match config.ini.' >&2
+ exit 1
+fi
+printf '%s\\n' "$actual"`;
+ return `set -euo pipefail
 ${modulePrelude(c.runtimeModule)}
 umask 077
 stage=$(mktemp -d)
 trap 'rm -rf -- "$stage"' EXIT
 cp -R ${quote(c.source)} "$stage/source"
-${quote(c.executor)} exec --cleanenv --no-home --bind "$stage:$stage" ${quote(c.image)} bash -c ${quote(`command -v Rscript >/dev/null && command -v ParaFly >/dev/null && command -v getopt >/dev/null && Rscript -e 'stopifnot(requireNamespace("data.table",quietly=TRUE))' && cd "$1/source" && bash ./signet -s`)} -- "$stage"
+# Only initialize the disposable copy; never replace an installed user configuration.
+test ! -L "$stage/source/config.ini" || { echo 'config.ini must not be a symlink.' >&2; exit 1; }
+if [ ! -e "$stage/source/config.ini" ]; then
+ if [ -L "$stage/source/config.ini.default" ] || [ ! -f "$stage/source/config.ini.default" ] || [ ! -r "$stage/source/config.ini.default" ] || [ ! -s "$stage/source/config.ini.default" ]; then
+  echo 'Cannot initialize config.ini: config.ini.default is missing, empty or unreadable.' >&2
+  exit 1
+ fi
+ cp "$stage/source/config.ini.default" "$stage/source/config.ini"
+fi
+if [ ! -f "$stage/source/config.ini" ] || [ ! -r "$stage/source/config.ini" ] || [ ! -s "$stage/source/config.ini" ]; then
+ echo 'config.ini is missing, empty or unreadable.' >&2
+ exit 1
+fi
+${quote(c.executor)} exec --cleanenv --no-home --bind "$stage:$stage" ${quote(c.image)} bash -c ${quote(settingsCheck)} -- "$stage"
 # Validate the configured queue, without submitting scientific work.
 sinfo -h -p ${quote(c.partition)} -o '%P' | grep -q .
 mkdir -p ${quote(c.workRoot)}

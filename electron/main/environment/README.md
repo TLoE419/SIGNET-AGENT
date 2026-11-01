@@ -16,7 +16,13 @@ there is no destructive repair operation.
 
 Verification runs SIGNET settings in a disposable source copy, checks R/data.table,
 ParaFly/getopt and partition visibility, and creates the isolated run parent. It
-does not submit jobs, guarantee scheduler allocation, or validate study inputs.
+initializes a missing `config.ini` from `config.ini.default` in that copy only;
+an existing configuration is preserved. Missing/empty configurations and unsafe
+configuration links fail verification. Because upstream SIGNET can exit zero
+after a failed settings read, verification compares its nonblank output with the
+copied configuration instead of trusting the exit status alone. Failures keep the
+environment out of the ready state and do not persist a successful check.
+It does not submit jobs, guarantee scheduler allocation, or validate study inputs.
 Additional stage-specific checks remain in Python. Runtime/module tools must be
 available to noninteractive SSH commands; this module does not install cluster
 software or load site-specific modules automatically.

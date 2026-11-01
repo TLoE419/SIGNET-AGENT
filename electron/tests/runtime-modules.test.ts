@@ -42,6 +42,7 @@ test('probe loads an available versioned module instead of reporting the install
 });
 test('image installation and verification reload the module in separate fresh shells',async t=>{
  const f=await fixture(t);await mkdir(f.config.source);await writeFile(path.join(f.config.source,'signet'),'fixture');
+ await writeFile(path.join(f.config.source,'config.ini.default'),'[basic]\ncohort = TCGA\n');
  await writeFile(path.join(f.bin,'sinfo'),'#!/bin/sh\necho standard\n',{mode:0o700});
  const installed=f.run(installImage(f.config));assert.equal(installed.status,0,installed.stderr);assert.equal(await readFile(f.config.image,'utf8'),'image');
  const verified=f.run(verify(f.config));assert.equal(verified.status,0,verified.stderr);

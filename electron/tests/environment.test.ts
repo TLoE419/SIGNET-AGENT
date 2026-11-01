@@ -31,6 +31,14 @@ test('checks require confirmation before downloading, install verifies then pers
 });
 test('missing Slurm blocks environment setup without disconnecting SSH',async t=>{const {ssh,service}=await fixture(t);ssh.slurm=false;assert.equal((await service.check()).phase,'blocked');assert.equal(ssh.connected,true);await assert.rejects(()=>service.install())});
 test('failures stay actionable, never become ready and can be retried',async t=>{const {ssh,service}=await fixture(t);await service.check();ssh.failStep=' pull ';await assert.rejects(()=>service.install());assert.equal(service.getSnapshot().phase,'error');assert.equal(ssh.connected,true);ssh.failStep='';assert.equal((await service.check()).phase,'needs-install');assert.equal((await service.install()).phase,'ready')});
+test('runtime verification failure never persists a ready configuration',async t=>{
+ const {ssh,service,file}=await fixture(t);ssh.source=true;ssh.image=true;ssh.failStep='Rscript -e';
+ const phases:string[]=[];service.on('snapshot',value=>phases.push(value.phase));
+ await assert.rejects(()=>service.check(),/runtime-verification failed/);
+ assert.equal(service.getSnapshot().phase,'error');assert.equal(phases.includes('ready'),false);
+ await assert.rejects(readFile(file));
+ ssh.failStep='';assert.equal((await service.check()).phase,'ready');
+});
 test('connection changes discard stale environment results',async t=>{
  const {ssh,service}=await fixture(t);let release!:()=>void;ssh.pause=()=>new Promise<void>(r=>{release=r});ssh.emit('snapshot');
  assert.equal(service.getSnapshot().phase,'checking');ssh.connected=false;ssh.emit('snapshot');release();await new Promise(r=>setTimeout(r,0));assert.equal(service.getSnapshot().phase,'disconnected');
