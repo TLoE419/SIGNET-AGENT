@@ -37,6 +37,7 @@ SIGNET-agent/
 │   │   ├── ssh_transport.py      # Private Electron broker client for SSH command transport
 │   │   ├── network.py            # Network inference submission, queries, cancellation, and result checks
 │   │   ├── network_worker.py     # Uploaded on its own; supervises owned jobs on the remote host
+│   │   ├── signet_jobs.py        # One SIGNET step (e.g. signet -t) as a Slurm job: submit, status, cancel, logs, output checks
 │   │   └── visualization.py      # Stage 6 plotting and input/output checks
 │   └── stage6/
 │       └── workspace.py          # Parameter proposals, human confirmation, history, and comparison
@@ -108,6 +109,7 @@ SIGNET-agent/
     ├── test_network_runtime.py # Scheduling, cancellation, and the actual verifier
     ├── test_portability.py     # Portable paths, source installation, and configuration protection
     ├── test_read_file.py       # Text-reading boundaries and pagination
+    ├── test_signet_jobs.py     # SIGNET step jobs against a fake HPC3 folder and fake Slurm commands
     ├── test_signet_runtime.py  # VM packaging, collection, and unknown status
     ├── test_ssh_transport.py   # Electron broker protocol and runtime transport selection
     ├── test_signet_tools.py    # Source, tools, and execution restrictions
