@@ -13,6 +13,7 @@ from urllib.parse import urlsplit, parse_qs
 from dotenv import load_dotenv
 from google.genai import types
 
+from agent.app import signet_api
 from agent.core.conversation import MODEL, run_conversation
 from agent.core.model_timing import ModelRequestTiming
 from agent.paths import PROJECT_ROOT
@@ -108,6 +109,11 @@ class ChatHandler(BaseHTTPRequestHandler):
         if not self._local_request():
             return self._error(403, '僅允許本機介面。')
         url = urlsplit(self.path)
+        if url.path.startswith('/signet/'):
+            # Responses name the user's runs and HPC3 paths, so reads need the page token too.
+            if not secrets.compare_digest(self.headers.get('X-Chat-Token', ''), self.server.token):
+                return self._error(403, 'Page token required.')
+            return signet_api.handle(self, 'GET', url)
         if url.path in ('/stage6', '/stage6/file'):
             return self.stage6_get(url)
         if url.path != '/bootstrap':
@@ -143,11 +149,26 @@ class ChatHandler(BaseHTTPRequestHandler):
         self._headers(200, 'application/json; charset=utf-8', len(body))
         self.wfile.write(body)
 
-    def do_POST(self):
+    def _app_request(self):
+        """A state-changing request from this app's page: local Host, the app's Origin and the page token."""
         origin = f'http://127.0.0.1:{self.server.server_port}'
-        if (not self._local_request() or self.headers.get('Origin') != origin
-                or not secrets.compare_digest(self.headers.get('X-Chat-Token', ''), self.server.token)):
+        return (self._local_request() and self.headers.get('Origin') == origin
+                and secrets.compare_digest(self.headers.get('X-Chat-Token', ''), self.server.token))
+
+    def do_PATCH(self):
+        # Only the SIGNET API uses PATCH (changing a run's settings).
+        if not self._app_request():
             return self._error(403, '請從本機聊天頁面送出。')
+        url = urlsplit(self.path)
+        if not url.path.startswith('/signet/'):
+            return self._error(404, '找不到此操作。')
+        return signet_api.handle(self, 'PATCH', url)
+
+    def do_POST(self):
+        if not self._app_request():
+            return self._error(403, '請從本機聊天頁面送出。')
+        if self.path.startswith('/signet/'):
+            return signet_api.handle(self, 'POST', urlsplit(self.path))
         if self.path.startswith('/stage6/'):
             return self.stage6_post()
         if self.path.startswith('/hpc/'):

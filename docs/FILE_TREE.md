@@ -16,7 +16,8 @@ SIGNET-agent/
 ├── agent/                        # All Python code, one package
 │   ├── paths.py                  # The single definition of the project root (data/, runs/, .env, assets/)
 │   ├── app/
-│   │   └── chat_ui.py            # Loopback API, conversation storage, and workspace API
+│   │   ├── chat_ui.py            # Loopback API, conversation storage, and workspace API
+│   │   └── signet_api.py         # /signet/* routes: runs, settings (-s), and HPC3 step jobs; no business logic
 │   ├── core/
 │   │   ├── conversation.py       # Conversation flow, public progress, controlled tool calls; terminal chat entry point
 │   │   ├── context_budget.py     # Input length and compression of repeated tool evidence
@@ -109,6 +110,7 @@ SIGNET-agent/
     ├── test_network_runtime.py # Scheduling, cancellation, and the actual verifier
     ├── test_portability.py     # Portable paths, source installation, and configuration protection
     ├── test_read_file.py       # Text-reading boundaries and pagination
+    ├── test_signet_api.py      # /signet/* token, Origin and Host checks, status codes and JSON shapes
     ├── test_signet_jobs.py     # SIGNET step jobs against a fake HPC3 folder and fake Slurm commands
     ├── test_signet_runtime.py  # VM packaging, collection, and unknown status
     ├── test_ssh_transport.py   # Electron broker protocol and runtime transport selection

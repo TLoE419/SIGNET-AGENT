@@ -1,0 +1,158 @@
+"""Route tests for /signet/* (agent/app/signet_api.py) through a real ChatServer on a free port.
+
+HPC3 is the same fake as in test_signet_jobs.py: a temporary folder plus
+stand-in Slurm commands, reached through a patched SSH transport. These tests
+check what only the HTTP layer adds: token/Origin/Host checks on every route,
+status codes, error codes and JSON shapes.
+"""
+from contextlib import contextmanager
+import http.client
+import json
+import threading
+import unittest
+from unittest.mock import patch
+
+import agent.app.chat_ui as chat_ui
+import agent.runtime.ssh_transport as ssh_transport
+import test_signet_jobs
+
+
+class SignetApiTest(unittest.TestCase):
+    # Reuse the fake HPC3 folder, fake Slurm and the run "step_test" from the service tests.
+    setUp_hpc = test_signet_jobs.StepsTest.setUp
+    remote = test_signet_jobs.StepsTest.remote
+    slurm = test_signet_jobs.StepsTest.slurm
+    finish_job = test_signet_jobs.StepsTest.finish_job
+
+    def setUp(self):
+        self.setUp_hpc()
+
+        @contextmanager
+        def factory(timing):
+            yield None
+
+        self.server = chat_ui.ChatServer(('127.0.0.1', 0), factory)
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        self.origin = f'http://127.0.0.1:{self.server.server_port}'
+        self.addCleanup(self.thread.join)
+        self.addCleanup(self.server.server_close)
+        self.addCleanup(self.server.shutdown)
+
+    def call(self, method, path, body=None, headers=None):
+        """Send one request as the app page would (token + Origin) unless headers are given."""
+        if headers is None:
+            headers = {'X-Chat-Token': self.server.token, 'Origin': self.origin, 'Content-Type': 'application/json'}
+        data = body if isinstance(body, (str, bytes)) or body is None else json.dumps(body)
+        conn = http.client.HTTPConnection('127.0.0.1', self.server.server_port, timeout=20)
+        try:
+            conn.request(method, path, body=data, headers=headers)
+            result = conn.getresponse()
+            text = result.read().decode()
+            return result.status, json.loads(text) if text.startswith('{') else text
+        finally:
+            conn.close()
+
+    def submit(self, run_id='step_test'):
+        return self.call('POST', f'/signet/runs/{run_id}/steps/expression', {'inputs': self.inputs})
+
+    def test_every_route_needs_the_page_token_and_writes_need_the_origin(self):
+        routes = [('GET', '/signet/catalog'), ('GET', '/signet/runs'), ('POST', '/signet/runs'),
+                  ('GET', '/signet/runs/step_test'), ('PATCH', '/signet/runs/step_test/settings'),
+                  ('POST', '/signet/runs/step_test/steps/expression'), ('GET', '/signet/runs/step_test/steps/expression'),
+                  ('POST', '/signet/runs/step_test/steps/expression/cancel'),
+                  ('GET', '/signet/runs/step_test/steps/expression/log')]
+        for method, path in routes:
+            self.assertEqual(self.call(method, path, '{}', {'Origin': self.origin})[0], 403, path)
+            self.assertEqual(self.call(method, path, '{}', {'X-Chat-Token': 'wrong', 'Origin': self.origin})[0], 403, path)
+            self.assertEqual(self.call(method, path, '{}', {'X-Chat-Token': self.server.token, 'Origin': self.origin,
+                                                            'Host': 'evil.example:80'})[0], 403, path)
+            if method != 'GET':
+                self.assertEqual(self.call(method, path, '{}', {'X-Chat-Token': self.server.token})[0], 403, path)
+        self.assertEqual(self.calls, [])
+        self.assertFalse((self.root / 'steps').exists())
+
+    def test_catalog_and_unknown_routes_and_methods(self):
+        status, value = self.call('GET', '/signet/catalog')
+        self.assertEqual((status, value['steps'][0]['name']), (200, 'expression'))
+        self.assertEqual(self.call('GET', '/signet/nothing')[1]['code'], 'not_found')
+        self.assertEqual(self.call('POST', '/signet/catalog', {})[0], 405)
+        self.assertEqual(self.call('GET', '/signet/runs/step_test/settings')[0], 405)
+        self.assertEqual(self.call('GET', '/signet/catalog?x=1')[0], 400)
+        self.assertEqual(self.call('PATCH', '/chat', {})[0], 404)
+
+    def test_create_list_and_read_runs(self):
+        status, value = self.call('POST', '/signet/runs', {'run_id': 'luad_t1', 'cohort': 'TCGA'})
+        self.assertEqual((status, value['run_id'], value['settings']['cohort']), (201, 'luad_t1', 'TCGA'))
+        self.assertEqual(self.call('POST', '/signet/runs', {'run_id': 'luad_t1'})[1]['code'], 'conflict')
+        for bad in ({'run_id': '../x'}, {'run_id': 'ok', 'cohort': 'mouse'}, {'cohort': 'TCGA'},
+                    {'run_id': 'ok', 'extra': 1}, '[1]', 'not json'):
+            status, value = self.call('POST', '/signet/runs', bad)
+            self.assertEqual((status, value['code']), (400, 'invalid_request'), bad)
+        status, value = self.call('GET', '/signet/runs')
+        self.assertEqual(status, 200)
+        self.assertEqual({item['run_id'] for item in value['runs']}, {'step_test', 'luad_t1'})
+        status, value = self.call('GET', '/signet/runs/luad_t1')
+        self.assertEqual((status, value['cohort'], value['steps']), (200, 'TCGA', {}))
+        self.assertEqual(self.call('GET', '/signet/runs/missing')[0], 404)
+
+    def test_settings_patch_is_whitelisted(self):
+        status, value = self.call('PATCH', '/signet/runs/step_test/settings', {'values': {'restrict.tcga': 1}})
+        self.assertEqual((status, value['settings']['restrict.tcga']), (200, '1'))
+        for bad in ({'values': {'forcerm': 'T'}}, {'values': {'restrict.tcga': 30}}, {'restrict.tcga': 1}, {}):
+            self.assertEqual(self.call('PATCH', '/signet/runs/step_test/settings', bad)[0], 400, bad)
+        self.assertEqual(self.call('PATCH', '/signet/runs/missing/settings', {'values': {'restrict.tcga': 1}})[0], 404)
+
+    def test_step_lifecycle_submit_status_log_and_finished_cancel(self):
+        status, value = self.submit()
+        self.assertEqual((status, value['state'], value['job_id']), (202, 'submitted', '12345'))
+        self.assertEqual(self.submit()[1]['code'], 'conflict')
+        self.assertEqual(self.call('PATCH', '/signet/runs/step_test/settings', {'values': {'restrict.tcga': 2}})[0], 409)
+        self.slurm(squeue='RUNNING')
+        status, value = self.call('GET', '/signet/runs/step_test/steps/expression?refresh=1')
+        self.assertEqual((status, value['state']), (200, 'running'))
+        (self.remote_dir / 'steps/expression.out').write_text('one\ntwo\nthree\n')
+        status, value = self.call('GET', '/signet/runs/step_test/steps/expression/log?lines=2')
+        self.assertEqual((status, value), (200, {'lines': ['two', 'three'], 'truncated': True}))
+        self.finish_job()
+        status, value = self.call('GET', '/signet/runs/step_test/steps/expression?refresh=1')
+        self.assertEqual((status, value['state']), (200, 'completed'))
+        self.assertEqual(self.call('GET', '/signet/runs/step_test')[1]['steps']['expression']['state'], 'completed')
+        self.assertEqual(self.call('POST', '/signet/runs/step_test/steps/expression/cancel')[0], 409)
+
+    def test_cancel_running_step(self):
+        self.submit()
+        self.slurm(squeue='RUNNING', name='signet-expression-step_test')
+        status, value = self.call('POST', '/signet/runs/step_test/steps/expression/cancel', {})
+        self.assertEqual((status, value['state']), (200, 'cancelled'))
+        self.assertEqual(self.call('POST', '/signet/runs/step_test/steps/expression/cancel', {'force': True})[0], 400)
+
+    def test_unexpected_error_still_gets_a_json_reply(self):
+        (self.project / 'runs/broken').mkdir()
+        (self.project / 'runs/broken/manifest.json').write_text('{not json')
+        with patch('sys.stderr'):
+            status, value = self.call('GET', '/signet/runs')
+        self.assertEqual((status, value['code']), (500, 'internal_error'))
+        self.assertNotIn('JSONDecodeError', value['error'])
+
+    def test_step_errors_map_to_status_codes(self):
+        self.assertEqual(self.call('POST', '/signet/runs/step_test/steps/expression', {'inputs': {'gexp.file': '/etc/passwd'}})[0], 400)
+        self.assertEqual(self.call('POST', '/signet/runs/step_test/steps/expression', {})[0], 400)
+        self.assertEqual(self.call('POST', '/signet/runs/step_test/steps/network', {'inputs': self.inputs})[0], 404)
+        self.assertEqual(self.call('GET', '/signet/runs/step_test/steps/expression')[0], 404)
+        for query in ('refresh=2', 'stream=out&stream=err', 'other=1'):
+            self.assertEqual(self.call('GET', f'/signet/runs/step_test/steps/expression?{query}')[0], 400, query)
+        with patch.object(ssh_transport, 'available', return_value=False):
+            status, value = self.submit()
+            self.assertEqual((status, value['code']), (412, 'not_ready'))
+        self.lose_connection_on = 'tar xzf'
+        status, value = self.submit()
+        self.assertEqual((status, value['code']), (502, 'remote_failed'))
+        self.lose_connection_on = None
+        self.submit()
+        for query in ('lines=0', 'lines=201', 'lines=abc', 'stream=all'):
+            self.assertEqual(self.call('GET', f'/signet/runs/step_test/steps/expression/log?{query}')[0], 400, query)
+
+
+if __name__ == '__main__':
+    unittest.main()
