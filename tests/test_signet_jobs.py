@@ -10,6 +10,7 @@ from pathlib import Path
 import stat
 import subprocess
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -18,9 +19,10 @@ import agent.runtime.signet_jobs as steps
 import agent.tools.signet as st
 
 FAKE_SLURM = {
-    'sbatch': 'printf "%s\\n" "$@" > "$FAKE/sbatch_args"; echo 12345',
-    'squeue': 'case "$*" in *%j*) cat "$FAKE/name" 2>/dev/null;; *) cat "$FAKE/squeue" 2>/dev/null;; esac; true',
-    'sacct': 'cat "$FAKE/sacct" 2>/dev/null; true',
+    'sbatch': 'printf "%s\\n" "$@" > "$FAKE/sbatch_args"; cat "$FAKE/sbatch_reply" 2>/dev/null || echo 12345',
+    'squeue': ('case "$*" in *%j*) cat "$FAKE/name";; *%i*) cat "$FAKE/queued_id";; *) cat "$FAKE/squeue";; '
+               'esac 2>/dev/null; true'),
+    'sacct': 'case "$*" in *--name=*) cat "$FAKE/sacct_id";; *) cat "$FAKE/sacct";; esac 2>/dev/null; true',
     'scancel': 'printf "%s\\n" "$@" > "$FAKE/scancel"',
 }
 OUTPUTS = steps.STEPS['expression'].required
@@ -227,6 +229,53 @@ class StepsTest(unittest.TestCase):
         self.slurm(squeue='RUNNING')
         record = steps.status('step_test', 'expression', refresh=True)
         self.assertEqual((record['state'], record['job_id']), ('running', '777'))
+
+    def test_simultaneous_status_checks_download_results_once(self):
+        steps.submit('step_test', 'expression', self.inputs)
+        self.finish_job()
+        states = []
+        threads = [threading.Thread(target=lambda: states.append(
+            steps.status('step_test', 'expression', refresh=True)['state'])) for _ in range(3)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        self.assertEqual(states, ['completed'] * 3)
+        self.assertEqual(sum('tar czf' in call for call in self.calls), 1)
+        self.assertEqual(steps.run_steps('step_test'), {'expression': 'completed'})
+
+    def test_results_already_downloaded_complete_instead_of_staying_validating(self):
+        steps.submit('step_test', 'expression', self.inputs)
+        self.finish_job()
+        for relative in OUTPUTS:   # as if an earlier check had already copied them here
+            (self.root / 'work' / relative).write_text('data\n')
+        record = steps.status('step_test', 'expression', refresh=True)
+        self.assertEqual(record['state'], 'completed')
+        self.assertEqual(sorted(record['outputs']), sorted('work/' + path for path in OUTPUTS))
+
+    def test_sbatch_reply_with_cluster_name_keeps_only_the_job_id(self):
+        (self.fake / 'sbatch_reply').write_text('4242;hpc3\n')
+        record = steps.submit('step_test', 'expression', self.inputs)
+        self.assertEqual((record['state'], record['job_id']), ('submitted', '4242'))
+        self.assertEqual((self.remote_dir / 'steps/expression.job').read_text(), '4242\n')
+
+    def test_unknown_submit_is_found_by_job_name_or_ends_as_failed(self):
+        self.lose_connection_on = 'sbatch --parsable'
+        steps.submit('step_test', 'expression', self.inputs)
+        self.lose_connection_on = None
+        self.slurm(queued_id='888', squeue='PENDING')
+        record = steps.status('step_test', 'expression', refresh=True)
+        self.assertEqual((record['state'], record['job_id']), ('pending', '888'))
+        st.configure_signet('never_queued')
+        self.remote_dir = self.hpc / 'ws/work/runs/never_queued'
+        self.lose_connection_on = 'sbatch --parsable'
+        steps.submit('never_queued', 'expression', self.inputs)
+        self.lose_connection_on = None
+        self.slurm(queued_id='', squeue='', sacct='', sacct_id='')
+        record = steps.status('never_queued', 'expression', refresh=True)
+        self.assertEqual(record['state'], 'failed')
+        self.assertIn('never started', record['reason'])
+        self.assertEqual(steps.update_settings('never_queued', {'restrict.tcga': 3})['restrict.tcga'], '3')
 
     def test_settings_whitelist_and_lock_while_active(self):
         self.assertEqual(steps.update_settings('step_test', {'restrict.tcga': 1})['restrict.tcga'], '1')

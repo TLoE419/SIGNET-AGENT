@@ -19,8 +19,13 @@ logs contain no known failure line. The login node only runs light commands
 (mkdir, tar, sbatch, squeue, sacct, scancel, tail); SIGNET itself runs inside
 the container in the Slurm job. Each step may be attempted once per run; a
 retry uses a new run, as for local steps.
+
+The HTTP server is multi-threaded, so submit/status/cancel of the same run and
+step run one at a time (see _one_at_a_time); otherwise two status checks of a
+finished job could both download the results and leave the record stuck.
 """
 from dataclasses import dataclass
+import functools
 import json
 import os
 from pathlib import Path
@@ -28,6 +33,7 @@ import re
 import secrets
 import shlex
 import subprocess
+import threading
 import time
 
 from agent.runtime import ssh_transport
@@ -136,6 +142,26 @@ def _now():
     return time.strftime('%Y-%m-%dT%H:%M:%S%z')
 
 
+_LOCKS = {}
+_LOCKS_GUARD = threading.Lock()
+
+
+def _one_at_a_time(function):
+    """Run submit/status/cancel for one (run, step) one call at a time in this process.
+
+    Without this, a UI timer and a manual refresh arriving together could both
+    see a finished job, both download its results, and the slower one would save
+    a stale record. Reentrant, because cancel() ends by calling status().
+    """
+    @functools.wraps(function)
+    def wrapper(run_id, name, *args, **kwargs):
+        with _LOCKS_GUARD:
+            lock = _LOCKS.setdefault((run_id, name), threading.RLock())
+        with lock:
+            return function(run_id, name, *args, **kwargs)
+    return wrapper
+
+
 def _active_step(root):
     for path in sorted((root / 'steps').glob('*.json')) if (root / 'steps').is_dir() else ():
         record = json.loads(path.read_text())
@@ -164,7 +190,7 @@ def update_settings(run_id, values):
         if key not in rules:
             raise StepError('invalid_request', f'{key} cannot be changed here.')
         checked[key] = _setting(key, rules[key], value)
-    if _active_step(root):
+    if _active_step(root) or (root / '.active').exists():
         raise StepError('conflict', 'A step of this run is still active; wait for it to finish.')
     signet._update(root, checked)
     return signet._settings(root)
@@ -313,6 +339,7 @@ if [ -e "$D/steps/{name}.job" ]; then say conflict submitted; exit 6; fi
 cat > "$D/steps/{name}.sbatch" <<'SIGNET_JOB'
 {job}SIGNET_JOB
 job="$({sbatch} 2>"$D/steps/{name}.sbatch.err")" || {{ say sbatch_failed "$(head -c 300 "$D/steps/{name}.sbatch.err")"; exit 7; }}
+job="${{job%%;*}}"   # --parsable prints "<id>;<cluster>" on multi-cluster setups
 printf '%s\\n' "$job" > "$D/steps/{name}.job"
 say job "$job"
 '''
@@ -320,6 +347,7 @@ say job "$job"
 
 # ---------- the four operations ----------
 
+@_one_at_a_time
 def submit(run_id, name, inputs, resources=None):
     """Submit one step of a run as a Slurm job and return its record (state "submitted" with job_id)."""
     step = _step(name)
@@ -377,11 +405,15 @@ def _status_script(record, step):
     q = shlex.quote
     directory, name = record['remote_dir'], record['step']
     job = record.get('job_id')
+    job_name = f'signet-{name}-{record["run_id"]}'
     outputs = ''.join(f'[ -s {q(directory + "/work/" + path)} ] && say output_{i} yes\n'
                       for i, path in enumerate(step.required))
     pattern = '|'.join(re.escape(p) for p in FAILURE_PATTERNS)
     return _say() + f'''D={q(directory)}
 j={q(job) if job else '"$(head -n 1 "$D/steps/' + name + '.job" 2>/dev/null)"'}
+# No ID recorded (connection lost around sbatch): look for this step's own job name, ours only.
+if [ -z "$j" ]; then j="$(squeue -h -u "$(id -un)" -n {q(job_name)} -o %i 2>/dev/null | head -n 1)"; fi
+if [ -z "$j" ]; then j="$(sacct -n -X -P --name={q(job_name)} -S now-7days -o JobID 2>/dev/null | tail -n 1)"; fi
 say job "$j"
 if [ -n "$j" ]; then
   say squeue "$(squeue -h -j "$j" -o %T 2>/dev/null)"
@@ -393,6 +425,7 @@ true
 '''
 
 
+@_one_at_a_time
 def status(run_id, name, refresh=False):
     """Current state of a submitted step; asks Slurm at most every 15 s unless refresh is true."""
     step = _step(name)
@@ -428,7 +461,9 @@ def status(run_id, name, refresh=False):
     elif slurm == 'COMPLETED' or 'done' in values:
         _finish(root, record, step, values.get('done', ''), missing, hints)
     elif not record.get('job_id'):
-        _change(record, 'unknown', reason='No job was recorded on HPC3; nothing seems to have been submitted.')
+        # No ID file, and Slurm knows no job with this step's name: sbatch never ran.
+        _change(record, 'failed', finished_at=_now(),
+                reason='No Slurm job was found for this step on HPC3, so it never started. Create a new run to try again.')
     elif time.time() - record.get('first_seen_missing', time.time()) > 300:
         _change(record, 'unknown', reason='Slurm has no record of this job; inspect the run folder on HPC3.')
     else:
@@ -455,12 +490,18 @@ def _finish(root, record, step, done, missing, hints):
             raise OSError('tar failed')
         record['outputs'] = vm.restore_outputs(root, result.stdout)
     except (OSError, ValueError) as error:
-        record['reason'] = f'Results are ready on HPC3 but could not be downloaded yet ({error}); check status again.'
-        return
+        local = [root / 'work' / path for path in step.required]
+        if not all(path.is_file() and path.stat().st_size for path in local):
+            record['reason'] = f'Results are ready on HPC3 but could not be downloaded yet ({error}); check status again.'
+            return
+        # An earlier check already downloaded them (restore_outputs never overwrites).
+        folder = root / step.download
+        record['outputs'] = sorted(str(p.relative_to(root)) for p in folder.rglob('*') if p.is_file())
     _change(record, 'completed', finished_at=_now(), missing_outputs=[], failure_hints=[],
             reason='Outputs present and logs clean. This is not scientific validation; review the results.')
 
 
+@_one_at_a_time
 def cancel(run_id, name):
     """Cancel the step's own Slurm job (checked by job name). Finished steps cannot be cancelled."""
     _step(name)
