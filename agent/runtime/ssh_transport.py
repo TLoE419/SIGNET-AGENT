@@ -80,17 +80,29 @@ def with_runtime_module(command, config):
     return 'bash -c ' + shlex.quote(prelude + '\nexec bash -c ' + shlex.quote(command)) if prelude else command
 
 
-def environment():
-    """Verified environment for the currently connected desktop SSH account."""
-    value = request('environment')
-    config = json.loads(value['stdout'])
-    for key in ('root', 'source', 'image', 'executor', 'workRoot'):
+def _validated(config, paths, partition_pattern):
+    for key in paths:
         candidate = config.get(key)
         if not isinstance(candidate, str) or not re.fullmatch(r'/[A-Za-z0-9_./-]+', candidate) or '..' in candidate.split('/'):
             raise OSError('Invalid remote environment path.')
-    if not re.fullmatch(r'[A-Za-z0-9_-]{1,80}', config.get('partition', '')):
+    if not re.fullmatch(partition_pattern, config.get('partition', '')):
         raise OSError('Invalid remote scheduler partition.')
     runtime_module_prelude(config)  # Validate the optional pinned module before any command.
+    return config
+
+
+def environment():
+    """Verified environment for the currently connected desktop SSH account."""
+    return _validated(json.loads(request('environment')['stdout']),
+                      ('root', 'source', 'image', 'executor', 'workRoot'), r'[A-Za-z0-9_-]{1,80}')
+
+
+def setup_environment():
+    """Configured paths for setup work, available before verification; executor and partition may still be empty."""
+    config = _validated(json.loads(request('setup-environment')['stdout']),
+                        ('root', 'source', 'image', 'workRoot'), r'[A-Za-z0-9_-]{0,80}')
+    if not isinstance(config.get('executor', ''), str) or not re.fullmatch(r'(/[A-Za-z0-9_./-]+)?', config.get('executor', '')):
+        raise OSError('Invalid remote environment path.')
     return config
 
 

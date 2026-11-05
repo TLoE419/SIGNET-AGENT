@@ -104,6 +104,18 @@ class EnvironmentContractTest(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(result.stdout, b'input\x00binary')
 
+    def test_setup_environment_accepts_an_unverified_config_but_not_unsafe_paths(self):
+        draft = {'root': '/pub/u/signet-agent', 'source': '/pub/u/signet-agent/software/r', 'image': '/pub/u/signet-agent/images/s.sif',
+                 'workRoot': '/pub/u/signet-agent/runs', 'executor': '', 'partition': ''}
+        reply = lambda config: {'stdout': __import__('json').dumps(config).encode()}
+        with patch.object(ssh_transport, 'request', return_value=reply(draft)) as request:
+            self.assertEqual(ssh_transport.setup_environment()['root'], draft['root'])
+        request.assert_called_once_with('setup-environment')
+        for unsafe in ({'root': '/pub/../etc'}, {'executor': 'rm -rf'}, {'partition': 'a;b'}):
+            with self.subTest(unsafe=unsafe), patch.object(ssh_transport, 'request', return_value=reply({**draft, **unsafe})):
+                with self.assertRaises(OSError):
+                    ssh_transport.setup_environment()
+
     def test_environment_rejects_unsafe_paths_and_propagates_not_ready(self):
         config = self.config()
         config['workRoot'] = '/home/user/../other'

@@ -5,7 +5,7 @@ import {randomUUID} from 'node:crypto';
 import type {SshConnectionService} from '../ssh/SshConnectionService';
 import type {EnvironmentConfig,EnvironmentSnapshot,EnvironmentPhase} from '../../shared/environment/types';
 import {validRuntimeModule} from './runtimeModules';
-import {probe,sourceCheck,installSource,installImage,verify,validRemotePath,type Inventory} from './scripts';
+import {probe,sourceCheck,installSource,verify,validRemotePath,type Inventory} from './scripts';
 
 export class EnvironmentService extends EventEmitter {
  private snapshot:EnvironmentSnapshot={phase:'disconnected',message:'Connect SSH to prepare the remote environment.'};
@@ -75,10 +75,10 @@ export class EnvironmentService extends EventEmitter {
  install(){
   if(this.running)return Promise.reject(Error('An environment operation is already running.'));
   if(this.snapshot.phase!=='needs-install'||!this.snapshot.config)return Promise.reject(Error('Check the remote environment before installing.'));
-  const c=structuredClone(this.snapshot.config),missing=this.snapshot.missing||[];
+  if(!this.snapshot.missing?.includes('SIGNET source'))return Promise.reject(Error('SIGNET source is already installed. Download the container from the Workflow panel.'));
+  const c=structuredClone(this.snapshot.config);
   return this.run(async token=>{
-   if(missing.includes('SIGNET source')){this.set('installing-source','Downloading and verifying the pinned SIGNET source.');await this.command(installSource(c,this.inventory),token,'install-source',600000)}
-   if(missing.includes('SIGNET container')){this.set('installing-image','Downloading SIGNET container 0.0.6. This may take several minutes.');await this.command(installImage(c),token,'install-image',1800000)}
+   this.set('installing-source','Downloading and verifying the pinned SIGNET source.');await this.command(installSource(c,this.inventory),token,'install-source',600000);
    await this.inspect(c.root,c.partition,token);
   });
  }

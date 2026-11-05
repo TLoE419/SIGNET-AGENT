@@ -2,15 +2,17 @@
 
 `EnvironmentService` observes each successful SSH session. Automatic checks probe
 capabilities and look for the pinned SIGNET source/image under the configured
-root (default `$HOME/.local/share/signet-agent`). SSH identity verification remains
+root (default `/pub/<user>/signet-agent` when writable, otherwise
+`$HOME/.local/share/signet-agent`). SSH identity verification remains
 independent: missing Slurm or software blocks environment readiness, not SSH login.
 
 The user chooses a writable root accessible to compute jobs and a Slurm partition.
-When missing software is detected, `EnvironmentModal` opens a separate installation
-confirmation. Source installation fetches the inventory commit and archives only
-its audited scripts/support files plus licenses, verifying SHA-256 hashes. Container
-installation pulls official `library://jiang548/signet/signet:0.0.6`, tests basic tools,
-and publishes the image without replacing an existing file. No study data or shell
+Missing components are offered in the Workflow panel, each with its own confirmation.
+Source installation fetches the inventory commit and archives only
+its audited scripts/support files plus licenses, verifying SHA-256 hashes. The
+container is downloaded by a Slurm job (`agent/runtime/hpc.py`), not on the login node,
+and is published only after its size and checksum match, without replacing an existing
+file; the next check then verifies it. No study data or shell
 startup files are changed. Existing invalid installations require another root;
 there is no destructive repair operation.
 
@@ -38,7 +40,8 @@ recording transitions, duration, exit code and bounded stderr. The status block
 shows the current phase and opens setup details; the endpoint line remains visible.
 
 The authenticated Python broker exposes `environment` only when verification is
-ready. Python uses its image, executor, work root and partition; it continues to
+ready; `setup-environment` returns the configured paths earlier, for read-only checks
+and reference downloads that do not use the container. Python uses its image, executor, work root and partition; it continues to
 upload audited per-run scripts and inputs. Workflow checks rehash the scripts and
 support files using the same `signet_inventory.json` manifest. An archive needs no
 `.git` directory; missing or modified audited files and revision mismatches still
