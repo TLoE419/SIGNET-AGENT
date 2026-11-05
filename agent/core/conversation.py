@@ -4,6 +4,7 @@ import re
 import time
 from pathlib import Path
 
+import httpx
 from dotenv import load_dotenv
 from google import genai
 from google.genai import errors, types
@@ -16,6 +17,7 @@ from agent.tools.registry import ALL_TOOLS
 from agent.tools.signet import dispatch_tool
 
 MODEL = "gemini-3.8-flash"
+FALLBACK_MODEL = "gemini-3.5-flash-lite"
 MAX_TOOL_ROUNDS = 4
 MAX_CALLS_PER_ROUND = 8
 
@@ -210,6 +212,7 @@ def run_conversation(client, text: str, history=None, progress=None, http_timing
     contents.append(types.Content(role="user", parts=[types.Part.from_text(text=text)]))
     completed_tools = 0
     repairing_answer = False
+    fallback_notice = ""
     conversation_config = config
     if language in ('en', 'zh-Hant'):
         instruction = config.system_instruction.replace('Traditional Chinese assistant', 'research assistant')
@@ -233,38 +236,55 @@ def run_conversation(client, text: str, history=None, progress=None, http_timing
                 ' Your previous response contained only decision metadata. Now answer the original '
                 'user question directly using the available tool results. Do not output 決策摘要, '
                 '選擇原因, 資訊依據 or 尚缺資訊. No tool calls; no repeated operations.'})
-        report(f"模型請求 {round_number+1}/{MAX_TOOL_ROUNDS+1}：模型={model_name}；訊息數={len(contents)}；可用工具={len(request_config.tools)}；等待回覆。")
-        started = time.monotonic()
-        response = None
         cli_transport = getattr(client, 'transport', None) == 'cli'
-        if http_timing is not None:
-            if cli_transport:
-                http_timing.report = report
-            else:
-                http_timing.begin(report)
-        try:
-            response = client.models.generate_content(model=model_name, contents=contents, config=request_config)
-        except KeyboardInterrupt:
-            report("已中斷等待模型；此回合未收到可執行的工具呼叫。")
-            return "已中斷等待模型；" + recovery
-        except ContextBudgetError as exc:
-            report('輸入超過安全預算；未送出模型請求，未刪除使用者條件或工具證據。')
-            return str(exc)
-        except Exception as exc:
-            elapsed = time.monotonic() - started
-            report(f"模型請求 {round_number+1} 失敗（{elapsed:.2f} 秒）；尚未執行此回合提出的任何工具。")
-            next_step = recovery
-            if isinstance(exc, errors.APIError) and exc.code == 413:
-                next_step = '完整對話與工具結果仍保留；請縮小問題範圍或開啟新對話，原樣輸入「繼續」無法縮短請求。'
-            return _model_error(exc, contents, round_number+1, elapsed, completed_tools, model_name) + next_step
-        finally:
-            if http_timing is not None and not cli_transport:
-                http_timing.finish(response)
+        # Retry only the failed model request; the outer tool loop and history stay intact.
+        for model_attempt in range(2):
+            report(f"模型請求 {round_number+1}/{MAX_TOOL_ROUNDS+1}：模型={model_name}；訊息數={len(contents)}；可用工具={len(request_config.tools)}；等待回覆。")
+            started = time.monotonic()
+            response = None
+            if http_timing is not None:
+                if cli_transport:
+                    http_timing.report = report
+                else:
+                    http_timing.begin(report)
+            try:
+                response = client.models.generate_content(model=model_name, contents=contents, config=request_config)
+            except KeyboardInterrupt:
+                report("已中斷等待模型；此回合未收到可執行的工具呼叫。")
+                return fallback_notice + "已中斷等待模型；" + recovery
+            except ContextBudgetError as exc:
+                report('輸入超過安全預算；未送出模型請求，未刪除使用者條件或工具證據。')
+                return fallback_notice + str(exc)
+            except Exception as exc:
+                elapsed = time.monotonic() - started
+                report(f"模型請求 {round_number+1} 失敗（{elapsed:.2f} 秒）；尚未執行此回合提出的任何工具。")
+                service_failure = (isinstance(exc, errors.APIError) and
+                                   type(exc.code) is int and exc.code in (500, 502, 503, 504))
+                if (model_attempt == 0 and model_name == MODEL and not cli_transport and
+                        (service_failure or isinstance(exc, httpx.TimeoutException))):
+                    reason = f'HTTP {exc.code}' if service_failure else type(exc).__name__
+                    fallback_notice = (
+                        f'**Model fallback:** `{MODEL}` is unavailable ({reason}); this turn uses '
+                        f'`{FALLBACK_MODEL}`. Completed tools will not be rerun.\n\n'
+                        if language == 'en' else
+                        f'**模型降級：** `{MODEL}` 暫時無法使用（{reason}），本次需求改用 '
+                        f'`{FALLBACK_MODEL}`。已完成的工具不會重跑。\n\n')
+                    report(fallback_notice.strip())
+                    model_name = FALLBACK_MODEL
+                    continue
+                next_step = recovery
+                if isinstance(exc, errors.APIError) and exc.code == 413:
+                    next_step = '完整對話與工具結果仍保留；請縮小問題範圍或開啟新對話，原樣輸入「繼續」無法縮短請求。'
+                return fallback_notice + _model_error(exc, contents, round_number+1, elapsed, completed_tools, model_name) + next_step
+            finally:
+                if http_timing is not None and not cli_transport:
+                    http_timing.finish(response)
+            break
         calls = response.function_calls or []
         report(f"模型已回覆（{time.monotonic()-started:.2f} 秒）；提出 {len(calls)} 個工具呼叫。")
         content = response.candidates[0].content if response.candidates else None
         if not content:
-            return "模型未回傳完整內容；這一輪的操作未執行。" + recovery
+            return fallback_notice + "模型未回傳完整內容；這一輪的操作未執行。" + recovery
         if not calls:
             answer = _answer_without_summary(response.text)
             if not answer:
@@ -273,16 +293,16 @@ def run_conversation(client, text: str, history=None, progress=None, http_timing
                     repairing_answer = True
                     continue
                 report('模型補答後仍未產生有效回答。')
-                return '模型未產生有效回答；已完成的工具結果仍保留。'
+                return fallback_notice + '模型未產生有效回答；已完成的工具結果仍保留。'
             report("模型完成文字回答。")
             contents.append(content)
-            return answer
+            return fallback_notice + answer
         if repairing_answer:
-            return '模型補答時未遵守純文字要求；此次提出的工具未執行。'
+            return fallback_notice + '模型補答時未遵守純文字要求；此次提出的工具未執行。'
         if round_number == MAX_TOOL_ROUNDS:
-            return "已達工具呼叫輪數上限；最後一輪提出的操作未執行。" + recovery
+            return fallback_notice + "已達工具呼叫輪數上限；最後一輪提出的操作未執行。" + recovery
         if len(calls) > MAX_CALLS_PER_ROUND:
-            return "單輪工具呼叫超過上限；這一輪的操作未執行。" + recovery
+            return fallback_notice + "單輪工具呼叫超過上限；這一輪的操作未執行。" + recovery
         _report_decision_summary(content, report)
         tool_results = []
         interrupted = False
@@ -329,7 +349,7 @@ def run_conversation(client, text: str, history=None, progress=None, http_timing
         completed_tools += len(tool_results)
         report(f"已將 {len(tool_results)} 個工具結果加入對話，接著請求模型整理或選擇工具。")
         if interrupted:
-            return "工具已中斷或發生非預期錯誤；目前操作是否執行完成仍未知，後續操作未執行。請先核對工作狀態。" + recovery
+            return fallback_notice + "工具已中斷或發生非預期錯誤；目前操作是否執行完成仍未知，後續操作未執行。請先核對工作狀態。" + recovery
     raise AssertionError("Unreachable tool loop state")
 
 

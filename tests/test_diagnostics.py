@@ -9,7 +9,7 @@ from test_chat import client_for, response
 class DiagnosticsTest(unittest.TestCase):
     def test_service_failure_exposes_status_without_exposing_credentials(self):
         error=errors.ServerError(503,{'error':{'code':503,'status':'UNAVAILABLE','message':'Service temporarily overloaded. api_key=fake-private-key'}})
-        client,_=client_for(error)
+        client,_=client_for(error,error)
         with patch.dict('os.environ',{'GEMINI_API_KEY':'fake-private-key'}):
             result=main.run_conversation(client,'研究需求',[])
         self.assertIn('503',result)
@@ -21,7 +21,7 @@ class DiagnosticsTest(unittest.TestCase):
     def test_progress_distinguishes_model_request_tool_and_followup_failure(self):
         call=types.FunctionCall(id='c1',name='get_signet_settings',args={'run_id':'private-run'})
         error=errors.ServerError(500,{'error':{'status':'INTERNAL','message':'Internal service error'}})
-        client,_=client_for(response(calls=[call]),error)
+        client,_=client_for(response(calls=[call]),error,error)
         events=[]
         with patch.object(main,'dispatch_tool',return_value={'status':'ok','settings':{'value':'private-scientific-data'}}):
             result=main.run_conversation(client,'研究需求',[],progress=events.append)
@@ -38,7 +38,7 @@ class DiagnosticsTest(unittest.TestCase):
         for code,hint in [(400,'請求格式'),(401,'金鑰權限'),(403,'金鑰權限'),(404,'模型名稱'),(429,'配額'),(500,'服務端')]:
             with self.subTest(code=code):
                 error=errors.APIError(code,{'error':{'status':'TEST_STATUS','message':'Provider explanation'}})
-                client,_=client_for(error)
+                client,_=client_for(error,error)
                 result=main.run_conversation(client,'request',[])
                 self.assertIn(str(code),result)
                 self.assertIn(hint,result)
@@ -50,7 +50,7 @@ class DiagnosticsTest(unittest.TestCase):
                 name='get_signet_settings',response={'settings':{'value':'private-scientific-data'}}))])]
         error=errors.ServerError(503,{'error':{'status':'UNAVAILABLE','message':
             'busy private-run-id private-scientific-data sensitive question bearer private-token key=unloaded-key \x1b[31m'}})
-        client,_=client_for(error)
+        client,_=client_for(error,error)
         result=main.run_conversation(client,'sensitive question',history)
         for hidden in ['private-run-id','private-scientific-data','sensitive question','private-token','unloaded-key','\x1b']:
             self.assertNotIn(hidden,result)

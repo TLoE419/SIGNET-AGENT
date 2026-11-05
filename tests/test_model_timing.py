@@ -109,7 +109,7 @@ class ModelTimingTest(unittest.TestCase):
     def test_conversation_reports_transport_timings_on_api_failure(self):
         timing=ModelRequestTiming()
         events=[]
-        with self.sdk_request(timing,[503])[0] as client:
+        with self.sdk_request(timing,[503,503])[0] as client:
             result=main.run_conversation(client,'controlled prompt',[],progress=events.append,http_timing=timing)
         self.assertIn('503',result)
         self.assertFalse(timing.active)

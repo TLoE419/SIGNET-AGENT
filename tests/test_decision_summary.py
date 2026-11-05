@@ -107,7 +107,8 @@ class DecisionSummaryTest(unittest.TestCase):
         self.assertNotIn('\x1b',joined)
 
     def test_first_request_failure_cannot_produce_a_decision_summary(self):
-        client,_=client_for(errors.ServerError(503,{'error':{'status':'UNAVAILABLE','message':'Service busy'}}))
+        error=errors.ServerError(503,{'error':{'status':'UNAVAILABLE','message':'Service busy'}})
+        client,_=client_for(error,error)
         events=[]
         with patch.object(main,'dispatch_tool') as dispatch:
             result=main.run_conversation(client,'前處理',[],progress=events.append)
