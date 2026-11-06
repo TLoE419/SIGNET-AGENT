@@ -29,7 +29,7 @@ CONTAINER = 'images/signet-0.0.6.sif'
 CONTAINER_URL = ('https://drive.usercontent.google.com/download'
                  '?id=1ZiNC3jwu9g2vHuRBLTjpz6i02xZl1ELE&export=download&confirm=t')
 CONTAINER_BYTES = 6383458834
-CONTAINER_SHA256 = None  # Downloads stay disabled until the provided file's checksum is pinned here.
+CONTAINER_SHA256 = 'de28f224f3da41b17ff08a03d0f04b1d5c033b2afbad18ed448b646b2feda277'
 CONTAINER_RESOURCES = ('--partition=free', '--cpus-per-task=1', '--mem=2G', '--time=02:00:00')
 WORKSPACE_FOLDERS = ('refdata', 'runs')
 # Public Phase 2 (TCGA, GRCh38) inputs shared by every analysis. Only the raw
