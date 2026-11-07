@@ -23,10 +23,14 @@ class HpcFilesTest(unittest.TestCase):
         self.bin = self.base / 'bin'
         self.bin.mkdir()
         self.sbatch_log = self.base / 'sbatch.log'
-        self.tool('sbatch', f'#!/bin/sh\nprintf "%s %s %s\\n" "$SIGNET_SELECTED_KEY" "$SIGNET_SELECTED" "$*" >> "{self.sbatch_log}"\necho 99\n')
+        self.tool('sbatch', f'#!/bin/sh\nprintf "%s %s\\n" "$SIGNET_SELECTED" "$*" >> "{self.sbatch_log}"\necho 99\n')
         self.tool('squeue', '#!/bin/sh\nexit 0\n')
+        self.tool('runtime', '#!/bin/sh\nexit 0\n')
         self.config = {'root': str(self.root), 'source': f'{self.root}/software/{REVISION}', 'image': f'{self.root}/images/s.sif',
-                       'workRoot': f'{self.root}/runs', 'executor': '', 'partition': 'lab_queue', 'revision': REVISION}
+                       'workRoot': f'{self.root}/runs', 'executor': str(self.bin / 'runtime'), 'partition': 'lab_queue', 'revision': REVISION}
+        image = Path(self.config['image'])
+        image.parent.mkdir(parents=True)
+        image.write_text('image')
         self.scripts = []
         # Treat the test directory as shared storage, even when CI creates it under /tmp.
         # The node-local rejection test supplies its own blocked directory.
@@ -52,6 +56,17 @@ class HpcFilesTest(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text)
         return str(path)
+
+    def verification(self, key):
+        state = self.root / '.signet-agent' / 'steps'
+        identifier = (state / f'selected-{key}.check').read_text().split('\t', 1)[0]
+        return state / f'selected-{key}-{identifier}'
+
+    def finish_verification(self, path, check):
+        subprocess.run(['bash', str(check.parent / 'selected.sbatch')], check=True, env={
+            **os.environ, 'E': self.config['executor'], 'I': self.config['image'],
+            'SIGNET_SELECTED_CHECK': str(check), 'SIGNET_SELECTED': path,
+        })
 
     def test_listing_hides_dotfiles_and_marks_names_scripts_cannot_handle(self):
         self.file('good.gtf')
@@ -137,7 +152,8 @@ class HpcFilesTest(unittest.TestCase):
         self.assertEqual((result['status'], result['path'], result['access_check_started']), ('ok', real, True))
         self.assertEqual((self.root / 'refdata' / 'selected.tsv').read_text(), f'gtf\t{real}\n')
         submitted = self.sbatch_log.read_text()
-        self.assertIn(f'gtf {real}', submitted)
+        self.assertIn(real, submitted)
+        self.assertIn(str(self.verification('gtf') / 'slurm.log'), submitted)
         self.assertIn('--partition=lab_queue', submitted)
 
     def test_a_link_into_an_unsupported_name_is_refused(self):
@@ -155,29 +171,21 @@ class HpcFilesTest(unittest.TestCase):
     def test_compute_check_reports_failure_for_an_unreadable_file(self):
         path = self.file('c.gtf', COLLAPSED)
         hpc_files.select('gtf', path)
-        job = (self.root / '.signet-agent' / 'steps' / 'selected.sbatch')
-        state = self.root / '.signet-agent' / 'steps'
-        env = {**os.environ, 'D': str(state), 'E': '', 'I': self.config['image'], 'SIGNET_SELECTED_KEY': 'gtf'}
-        subprocess.run(['bash', str(job)], env={**env, 'SIGNET_SELECTED': path}, check=True)
-        self.assertEqual((state / 'selected-gtf.status').read_text(), 'ok\n')
-        subprocess.run(['bash', str(job)], env={**env, 'SIGNET_SELECTED': str(self.base / 'gone')}, check=True)
-        self.assertEqual((state / 'selected-gtf.status').read_text(), 'failed\n')
+        check = self.verification('gtf')
+        self.finish_verification(path, check)
+        self.assertEqual(self.check()['reference_gtf']['status'], 'ok')
+        self.finish_verification(str(self.base / 'gone'), check)
+        self.assertEqual(self.check()['reference_gtf']['status'], 'problem')
 
     def test_compute_check_reads_through_the_container_with_a_read_only_bind(self):
         path = self.file('c.gtf', COLLAPSED)
         hpc_files.select('gtf', path)
-        image = Path(self.config['image'])
-        image.parent.mkdir(parents=True)
-        image.write_text('image')
         record = self.base / 'exec.log'
         self.tool('runtime', f'#!/bin/sh\necho "$*" > "{record}"\nexit 0\n')
-        state = self.root / '.signet-agent' / 'steps'
-        subprocess.run(['bash', str(state / 'selected.sbatch')], check=True,
-                       env={**os.environ, 'D': str(state), 'E': str(self.bin / 'runtime'), 'I': str(image),
-                            'SIGNET_SELECTED_KEY': 'gtf', 'SIGNET_SELECTED': path})
+        self.finish_verification(path, self.verification('gtf'))
         folder = os.path.dirname(path)
         self.assertIn(f'--bind {folder}:{folder}:ro', record.read_text())
-        self.assertEqual((state / 'selected-gtf.status').read_text(), 'ok\n')
+        self.assertEqual(self.check()['reference_gtf']['status'], 'ok')
 
     def check(self):
         result = check_hpc_environment()
@@ -189,16 +197,44 @@ class HpcFilesTest(unittest.TestCase):
         hpc_files.select('gtf', path)
         item = self.check()['reference_gtf']
         self.assertEqual(item['status'], 'problem')
-        state = self.root / '.signet-agent' / 'steps'
-        (state / 'selected-gtf.status').write_text('ok\n')
+        verification = self.verification('gtf')
+        self.finish_verification(path, verification)
         item = self.check()['reference_gtf']
         self.assertEqual(item['status'], 'ok')
         self.assertIn('Selected file', item['detail'])
         self.assertNotIn('private-study-name', json.dumps(check_hpc_environment()))
-        (state / 'selected-gtf.status').write_text('failed\n')
+        self.tool('runtime', '#!/bin/sh\nexit 1\n')
+        self.finish_verification(path, verification)
         self.assertEqual(self.check()['reference_gtf']['status'], 'problem')
         Path(path).unlink()
         self.assertIn('missing', self.check()['reference_gtf']['detail'])
+
+    def test_previous_job_cannot_verify_the_new_selection(self):
+        first = self.file('first.gtf', COLLAPSED)
+        second = self.file('second.gtf', COLLAPSED)
+        hpc_files.select('gtf', first)
+        previous = self.verification('gtf')
+        hpc_files.select('gtf', second)
+        current = self.verification('gtf')
+        self.tool('squeue', '#!/bin/sh\necho PENDING\n')
+        self.finish_verification(first, previous)
+        self.assertEqual(self.check()['reference_gtf']['status'], 'in_progress')
+        self.finish_verification(second, current)
+        self.assertEqual(self.check()['reference_gtf']['status'], 'ok')
+
+    def test_selection_requires_a_fresh_check_with_the_current_container(self):
+        path = self.file('selected.gtf', COLLAPSED)
+        image = Path(self.config['image'])
+        image.unlink()
+        self.assertFalse(hpc_files.select('gtf', path)['access_check_started'])
+        self.assertIn('Install the container', self.check()['reference_gtf']['detail'])
+        image.write_text('new image')
+        self.assertIn('Select this file again', self.check()['reference_gtf']['detail'])
+        self.assertTrue(hpc_files.select('gtf', path)['access_check_started'])
+        self.finish_verification(path, self.verification('gtf'))
+        self.assertEqual(self.check()['reference_gtf']['status'], 'ok')
+        image.write_text('different image')
+        self.assertIn('Select this file again', self.check()['reference_gtf']['detail'])
 
     def test_running_compute_check_shows_in_progress(self):
         hpc_files.select('gtf', self.file('c.gtf', COLLAPSED))
@@ -215,9 +251,27 @@ class HpcFilesTest(unittest.TestCase):
         (source / 'example' / 'geno').mkdir(parents=True)
         (source / 'example' / 'geno' / 'example.ped').write_text('x')
         (source / 'example' / 'geno' / 'example.map').write_text('x')
+        self.assertEqual(hpc.start_step('prepare')['outcome'], 'needs_verified_selection')
+        self.finish_verification(ref, self.verification('ref'))
+        self.finish_verification(gmap, self.verification('gmap'))
         self.tool('sbatch', f'#!/bin/sh\nprintf "%s %s\\n" "$SIGNET_REF" "$SIGNET_GMAP" > "{self.sbatch_log}"\necho 7\n')
         self.assertEqual(hpc.start_step('prepare')['outcome'], 'started')
         self.assertEqual(self.sbatch_log.read_text(), f'{ref} {gmap}\n')
+
+    def test_preparation_log_does_not_expose_selected_path_from_an_old_failure(self):
+        state = self.root / '.signet-agent' / 'steps'
+        state.mkdir(parents=True)
+        path = self.file('private-reference.vcf')
+        log = state / 'prepare.log'
+        summary = json.dumps({'status': 'ok', 'matched_markers': 12,
+                              'scope': 'Counts only. The original study files were not changed.'})
+        failure = json.dumps({'status': 'failed', 'error': f'File missing: {path}'})
+        log.write_text(f'{summary}\n{failure}\n')
+        result = hpc.read_log('prepare')
+        self.assertNotIn(path, json.dumps(result))
+        self.assertIn('did not report success', result['lines'][0])
+        log.write_text(summary + '\n')
+        self.assertEqual(hpc.read_log('prepare')['lines'], [summary])
 
     def test_changing_ref_retires_the_old_conversion_and_keeps_it(self):
         out = self.root / hpc.PREPARED

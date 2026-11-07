@@ -142,7 +142,7 @@ def format_problem(key, path):
 '''
 
 _SELECTIONS = r'''
-import subprocess, time
+import shutil, subprocess, time, uuid
 TABLE = os.path.join(os.environ['W'], 'refdata', 'selected.tsv')
 STATE = os.environ['D']
 def read_table():
@@ -160,6 +160,15 @@ def write_table(table):
         stream.writelines(key + '\t' + path + '\n' for key, path in sorted(table.items()))
     os.replace(TABLE + '.partial', TABLE)
 def forget_access(key):
+    marker = os.path.join(STATE, 'selected-' + key + '.check')
+    try:
+        with open(marker) as stream:
+            identifier = stream.read().partition('\t')[0]
+        os.unlink(marker)
+        if re.fullmatch(r'[a-f0-9]{32}', identifier):
+            shutil.rmtree(os.path.join(STATE, 'selected-' + key + '-' + identifier), ignore_errors=True)
+    except FileNotFoundError:
+        pass
     for suffix in ('status', 'job', 'log'):
         try:
             os.unlink(os.path.join(STATE, 'selected-' + key + '.' + suffix))
@@ -184,16 +193,19 @@ def _select_script(root, key, path):
     """Check one file, record it, and submit a small job that proves compute nodes and the container can read it."""
     prelude = ssh_transport.runtime_module_prelude(hpc._CONFIG.get() or {})
     job = f'''#!/bin/bash
+check="$SIGNET_SELECTED_CHECK"
+[ -d "$check" ] || exit 0
 result=failed
-if [ -r "$SIGNET_SELECTED" ] && head -c 1 "$SIGNET_SELECTED" > /dev/null; then
-  if [ -n "$E" ] && [ -s "$I" ]; then
-    {prelude}
-    folder="$(dirname "$SIGNET_SELECTED")"
-    if "$E" exec --cleanenv --no-home --bind "$folder:$folder:ro" "$I" test -r "$SIGNET_SELECTED"; then result=ok; fi
-  else result=ok; fi
+{hpc._IMAGE_SIGNATURE}
+signature="$(image_signature)"
+if [ -n "$signature" ] && [ -n "$E" ] && [ -r "$SIGNET_SELECTED" ] &&
+   head -c 1 "$SIGNET_SELECTED" > /dev/null; then
+  {prelude}
+  folder="$(dirname "$SIGNET_SELECTED")"
+  if "$E" exec --cleanenv --no-home --bind "$folder:$folder:ro" "$I" test -r "$SIGNET_SELECTED" &&
+     [ "$(image_signature)" = "$signature" ]; then result=ok; fi
 fi
-printf '%s\\n' "$result" > "$D/selected-$SIGNET_SELECTED_KEY.status.partial"
-mv "$D/selected-$SIGNET_SELECTED_KEY.status.partial" "$D/selected-$SIGNET_SELECTED_KEY.status"
+printf '%s\\t%s\\n' "$result" "$signature" > "$check/status.partial" && mv "$check/status.partial" "$check/status"
 '''
     body = _FORMAT_CHECKS + _SELECTIONS + f'''
 PREPARED = {hpc.PREPARED!r}
@@ -223,14 +235,25 @@ if result is None:
     table[key] = real
     write_table(table)
     forget_access(key)
-    done = subprocess.run(['sbatch', '--parsable', '--job-name=signet-file-check', {', '.join(repr(item) for item in ACCESS_RESOURCES)},
-                           '--output=' + os.path.join(STATE, 'selected-' + key + '.log'), os.path.join(STATE, 'selected.sbatch')],
-                          capture_output=True, text=True, env={{**os.environ, 'SIGNET_SELECTED': real, 'SIGNET_SELECTED_KEY': key}})
-    job = done.stdout.strip().split(';')[0]
-    if done.returncode == 0 and job:
-        with open(os.path.join(STATE, 'selected-' + key + '.job'), 'w') as stream:
-            stream.write(job + '\\n')
-    result = {{'status': 'ok', 'path': real, 'size': os.path.getsize(real), 'access_check_started': bool(job and done.returncode == 0)}}
+    started = False
+    image = os.environ['I']
+    if os.environ['E'] and os.path.isfile(image) and os.path.getsize(image) > 0:
+        identifier = uuid.uuid4().hex
+        check = os.path.join(STATE, 'selected-' + key + '-' + identifier)
+        os.mkdir(check, 0o700)
+        marker = os.path.join(STATE, 'selected-' + key + '.check')
+        with open(marker + '.partial', 'w') as stream:
+            stream.write(identifier + '\\t' + real + '\\n')
+        os.replace(marker + '.partial', marker)
+        done = subprocess.run(['sbatch', '--parsable', '--job-name=signet-file-check', {', '.join(repr(item) for item in ACCESS_RESOURCES)},
+                               '--output=' + os.path.join(check, 'slurm.log'), os.path.join(STATE, 'selected.sbatch')],
+                              capture_output=True, text=True, env={{**os.environ, 'SIGNET_SELECTED': real, 'SIGNET_SELECTED_CHECK': check}})
+        job = done.stdout.strip().split(';')[0]
+        started = done.returncode == 0 and job.isdigit()
+        if started:
+            with open(os.path.join(check, 'job'), 'w') as stream:
+                stream.write(job + '\\n')
+    result = {{'status': 'ok', 'path': real, 'size': os.path.getsize(real), 'access_check_started': started}}
 '''
     return hpc._prelude(root) + hpc._step_lock('selected') + f'''cat > "$D/selected.sbatch" <<'SIGNET_JOB'
 {job}SIGNET_JOB

@@ -71,6 +71,12 @@ STATE_DIRECTORY = '$HOME/.signet-agent/steps'
 LOG_LINES = 20
 _SEGMENT = r'(?:[A-Za-z0-9._-]+|\$USER)'
 _MARKER = '@@'
+_IMAGE_SIGNATURE = '''
+image_signature() {
+  [ -s "$I" ] || return 1
+  stat -L -c '%i:%s:%Y' "$I" 2>/dev/null || stat -L -f '%i:%z:%m' "$I"
+}
+'''
 
 
 def workspace():
@@ -112,6 +118,24 @@ selected_of() {{
   [ -f "$W/refdata/selected.tsv" ] || return 0
   while IFS=$'\t' read -r key path; do if [ "$key" = "$1" ]; then found="$path"; fi; done < "$W/refdata/selected.tsv"
   printf %s "$found"
+}}
+{_IMAGE_SIGNATURE}
+selected_access() {{
+  local key="$1" path="$2" id checked_path signature access
+  [ -n "$E" ] && signature="$(image_signature)" || {{ printf needs_container; return; }}
+  if ! IFS=$'\t' read -r id checked_path 2>/dev/null < "$D/selected-$key.check" ||
+     [[ ! "$id" =~ ^[a-f0-9]{{32}}$ ]] || [ "$checked_path" != "$path" ]; then
+    printf unverified
+    return
+  fi
+  local check="$D/selected-$key-$id" checked_image job
+  if IFS=$'\t' read -r access checked_image 2>/dev/null < "$check/status"; then
+    if [ "$signature" = "$checked_image" ]; then printf '%s' "$access"; else printf unverified; fi
+  elif read -r job 2>/dev/null < "$check/job" && [ -n "$(squeue -h -j "$job" -o %T 2>/dev/null)" ]; then
+    printf pending
+  else
+    printf unknown
+  fi
 }}
 say workspace_path "$W"
 '''
@@ -174,9 +198,7 @@ for item in {files}; do
   chosen="$(selected_of "$key")"
   if [ -n "$chosen" ]; then
     rel="$chosen"; say "selected_$key" yes
-    if [ -s "$D/selected-$key.status" ]; then read -r access < "$D/selected-$key.status"; say "access_$key" "$access"
-    elif [ -s "$D/selected-$key.job" ] && read -r job < "$D/selected-$key.job" && [ -n "$(squeue -h -j "$job" -o %T 2>/dev/null)" ]; then say "access_$key" pending
-    else say "access_$key" unknown; fi
+    say "access_$key" "$(selected_access "$key" "$chosen")"
   fi
   if [ -s "$rel" ]; then say "file_$key" "$(stat -c %s "$rel" 2>/dev/null || stat -f %z "$rel")"
   elif [ -e "$rel" ]; then say "file_$key" empty
@@ -267,10 +289,10 @@ echo "Saved $TARGET ($size bytes, sha256 $digest)"
 '''
 
 
-def _step_lock(step):
+def _step_lock(step, busy_step=None):
     """Serialize concurrent panel/model requests without replacing another job's state."""
     return f'''mkdir -p "$D"
-if ! mkdir "$D/{step}.lock" 2>/dev/null; then say {step} in_progress; exit 0; fi
+if ! mkdir "$D/{step}.lock" 2>/dev/null; then say {busy_step or step} in_progress; exit 0; fi
 trap 'rmdir "$D/{step}.lock"' EXIT
 '''
 
@@ -350,10 +372,10 @@ set -euo pipefail
 python3 "$D/prepare_reference.py" --study-ped "{study}.ped" --study-map "{study}.map" \\
   --reference "$SIGNET_REF" --genetic-map "$SIGNET_GMAP" --out "$W/{PREPARED}"
 '''
-    return _prelude(root) + _step_lock('prepare') + f'''
+    return _prelude(root) + _step_lock('selected', busy_step='prepare') + f'''
 # A file chosen on HPC3 takes the place of the downloaded one; sbatch passes these on to the job.
-SIGNET_REF="$(selected_of ref)"; SIGNET_REF="${{SIGNET_REF:-$W/{REFERENCE_FILES['ref']}}}"
-SIGNET_GMAP="$(selected_of gmap)"; SIGNET_GMAP="${{SIGNET_GMAP:-$W/{REFERENCE_FILES['gmap']}}}"
+chosen_ref="$(selected_of ref)"; SIGNET_REF="${{chosen_ref:-$W/{REFERENCE_FILES['ref']}}}"
+chosen_gmap="$(selected_of gmap)"; SIGNET_GMAP="${{chosen_gmap:-$W/{REFERENCE_FILES['gmap']}}}"
 export SIGNET_REF SIGNET_GMAP
 running=""
 if [ -s "$D/prepare.job" ]; then read -r job < "$D/prepare.job"; running="$(squeue -h -j "$job" -o %T 2>/dev/null)"; fi
@@ -362,6 +384,9 @@ elif [ -s "$W/{PREPARED}/summary.json" ]; then say prepare existing
 elif [ ! -s "{study}.ped" ] || [ ! -s "{study}.map" ]; then say prepare needs_signet
 elif [ ! -s "$SIGNET_REF" ]; then say prepare needs_ref
 elif [ ! -s "$SIGNET_GMAP" ]; then say prepare needs_gmap
+elif {{ [ -n "$chosen_ref" ] && [ "$(selected_access ref "$chosen_ref")" != ok ]; }} ||
+     {{ [ -n "$chosen_gmap" ] && [ "$(selected_access gmap "$chosen_gmap")" != ok ]; }}; then
+  say prepare needs_verified_selection
 else
   mkdir -p "$D" && chmod 700 "$D"
   cat > "$D/prepare_reference.py" <<'SIGNET_PY'
@@ -430,11 +455,15 @@ def _selected_status(size, access):
     if size in ('no', 'empty'):
         return 'problem', 'The selected file is missing or empty; choose it again.'
     if access == 'ok':
-        return 'ok', f'Selected file ({_size(size)}); readable from compute nodes.'
+        return 'ok', f'Selected file ({_size(size)}); readable from compute nodes and the container.'
     if access == 'pending':
         return 'in_progress', f'Selected file ({_size(size)}); checking that compute nodes can read it.'
     if access == 'failed':
         return 'problem', 'Compute nodes or the container could not read the selected file; choose another location.'
+    if access == 'needs_container':
+        return 'problem', 'Install the container, then select this file again to verify access.'
+    if access == 'unverified':
+        return 'problem', 'Select this file again to verify access with the current container.'
     return 'problem', 'The compute-node check for the selected file did not finish; choose the file again.'
 
 
@@ -543,6 +572,7 @@ _OUTCOMES = {
     'needs_signet': 'Install SIGNET first; the example study data comes with it.',
     'needs_container': 'Download the SIGNET container first; this step runs inside it.',
     'needs_ref': 'Download the ref file first.',
+    'needs_verified_selection': 'Verify the selected reference files with the current container before converting.',
     'needs_gmap': 'Download the gmap file first.',
     'failed': 'Could not start this step; nothing was changed.',
 }
@@ -586,5 +616,23 @@ def read_log(step):
         return error
     if values['log_exists'] != 'yes':
         return {'status': 'ok', 'executed': False, 'step': step, 'lines': [], 'detail': 'This step has not run yet.'}
-    return {'status': 'ok', 'executed': False, 'step': step, 'lines': values.get('lines', []),
+    lines = values.get('lines', [])
+    if step == 'prepare':
+        # Old and new error logs can contain selected paths or input data in exceptions.
+        lines = _preparation_log_summary(lines)
+    return {'status': 'ok', 'executed': False, 'step': step, 'lines': lines,
             'evidence_scope': f'Last {LOG_LINES} lines of the app-generated setup log only; never research data.'}
+
+
+def _preparation_log_summary(lines):
+    last_line = next((line for line in reversed(lines) if line.strip()), '')
+    if not last_line:
+        return []
+    try:
+        summary = json.loads(last_line)
+    except ValueError:
+        summary = None
+    if (isinstance(summary, dict) and summary.get('status') == 'ok' and
+            summary.get('scope') == 'Counts only. The original study files were not changed.'):
+        return [last_line]
+    return ['Reference preparation did not report success. Check the selected inputs and the remote job log.']
