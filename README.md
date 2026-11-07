@@ -27,6 +27,8 @@ npm start --prefix electron
 
 Electron opens the application and starts its Python API automatically. Requires Node.js 22.12+ on macOS or Linux. Opening the window does not establish model sign-in or scientific readiness.
 
+When Gemini is selected, chat starts with `gemini-3.8-flash`. On HTTP 500, 502, 503, 504 or a transport timeout, the failed model request is sent once to `gemini-3.5-flash-lite` with the same conversation and tool results. The activity log and answer identify the fallback; completed tools are not replayed. The rest of that turn stays on Flash-Lite, while each new user turn starts with 3.8 again. Authentication, request-format, model-name and quota errors do not trigger fallback. If Flash-Lite also fails, the turn stops and preserves existing results.
+
 Chat uses your own signed-in Codex CLI by default. See the [installation guide](docs/INSTALL.md) for installation, sign-in checks, and other model providers. The CLI version checked for this project is `0.162.1`; other versions need compatible command arguments and structured responses.
 
 ## Desktop client and independent Python backend
@@ -100,7 +102,7 @@ with the operating system key store. Saving or removing an active key restarts
 the owned Python service after active work finishes; saved conversations remain.
 Do not enter private research data unless your chosen provider is appropriate.
 
-Open **Workflow**, then **Remote environment** to prepare the shared installation.
+Open **Workflow** to prepare the shared installation; **HPC3 settings** changes its root and partition.
 The same verified root, source revision, container runtime module and Slurm
 partition are used by analysis and reference preparation. The workflow never
 creates a second installation under `/pub`. Reference downloads and example

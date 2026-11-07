@@ -319,8 +319,26 @@ and root launcher files; no stored data or wire protocol changed.
 ## Remote environment setup
 
 After SSH connects, the status block shows environment checks and installation
-progress. Click its environment row to choose a shared installation root/partition,
-review missing prerequisites, confirm installation, or retry a failed check.
+progress. The **Workflow** panel lists what is ready or missing, even before the
+environment is verified, and offers the SIGNET install and container download.
+**HPC3 settings** (or the status block's environment row) chooses the installation
+root and partition. The default root is `/pub/<user>/signet-agent` when that folder
+is writable, otherwise `~/.local/share/signet-agent`.
+
+The GTF download produces `refdata/gencode.v22.genes.gtf`, because `signet -t` finds
+0 genes in the full GENCODE file: its gene rows have no `transcript_type`. A Slurm job
+runs the pinned, checksum-verified GTEx `collapse_annotation.py` inside the container,
+so the container must exist first. The full file stays at
+`refdata/gencode.v22.annotation.gtf`.
+
+Each reference row can also **Choose on HPC3**, which opens a file window over the
+same SSH connection. Choosing checks the format from the file's first lines, records
+the path in `<root>/refdata/selected.tsv` without copying the file, and submits a small
+job that proves compute nodes and the container can read it. Readiness checks and the
+reference conversion then use that path. Paths stay on the window's own routes
+(`agent/runtime/hpc_files.py`): they are not model tools and the assistant sees only
+that a selected file is ready. Jobs that run SIGNET must also accept and bind these
+paths; `selected.tsv` holds one `key<TAB>path` per line.
 SSH stays connected when the scientific environment is unavailable. In development
 mode, the setup dialog and developer panel show step diagnostics.
 See [environment setup](main/environment/README.md) for behavior and limitations.

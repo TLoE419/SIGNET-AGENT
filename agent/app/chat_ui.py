@@ -249,6 +249,8 @@ class ChatHandler(BaseHTTPRequestHandler):
 
     def hpc_post(self):
         """Workflow-panel buttons call one HPC3 tool directly; the click is the user's approval."""
+        if self.path.startswith('/hpc/files/'):
+            return self.hpc_files_post()
         from agent.tools import hpc as hpc_tools
         actions = {'/hpc/check': hpc_tools.check_hpc_environment,
                    '/hpc/workspace': hpc_tools.create_hpc_workspace,
@@ -268,6 +270,31 @@ class ChatHandler(BaseHTTPRequestHandler):
             return self._error(400, 'Invalid request length.')
         self.connection.settimeout(10)
         self.rfile.read(size)  # The body carries no parameters; each path is one fixed action.
+        return self.json_response(action())
+
+    def hpc_files_post(self):
+        """The desktop file window. Paths stay on this route and never join the conversation."""
+        from agent.runtime import hpc_files
+        try:
+            size = int(self.headers.get('Content-Length', '0') or 0)
+        except ValueError:
+            size = -1
+        if not 0 <= size <= 4096:
+            return self._error(400, 'Invalid request length.')
+        self.connection.settimeout(10)
+        try:
+            body = json.loads(self.rfile.read(size) or b'{}')
+        except ValueError:
+            body = None
+        if not isinstance(body, dict):
+            return self._error(400, 'Invalid request.')
+        actions = {'/hpc/files/shortcuts': hpc_files.shortcuts, '/hpc/files/selected': hpc_files.selected,
+                   '/hpc/files/list': lambda: hpc_files.list_folder(body.get('path')),
+                   '/hpc/files/select': lambda: hpc_files.select(body.get('key'), body.get('path')),
+                   '/hpc/files/clear': lambda: hpc_files.clear(body.get('key'))}
+        action = actions.get(self.path)
+        if action is None:
+            return self._error(404, '找不到此操作。')
         return self.json_response(action())
 
     def stage6_get(self, url):

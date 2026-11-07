@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import agent.app.chat_ui as chat_ui
 from test_chat import client_for, response
-from google.genai import types
+from google.genai import errors, types
 
 
 class ChatUITest(unittest.TestCase):
@@ -66,6 +66,22 @@ class ChatUITest(unittest.TestCase):
         self.assertEqual(events[-1]['type'], 'done')
         self.post('繼續')
         self.assertEqual(len(self.requests[1]), 3)
+
+    def test_gemini_fallback_is_visible_in_stream_and_saved_activity(self):
+        error = errors.ServerError(503, {'error': {'status': 'UNAVAILABLE', 'message': 'busy'}})
+        self.client, self.requests = client_for(error, response('降級回答。'))
+        with patch('agent.core.conversation.dispatch_tool') as dispatch:
+            status, body = self.post()
+            dispatch.assert_not_called()
+        self.assertEqual(status, 200)
+        events = [json.loads(line) for line in body.splitlines()]
+        answer = next(event['text'] for event in events if event['type'] == 'answer')
+        self.assertIn('gemini-3.5-flash-lite', answer)
+        self.assertIn('降級回答。', answer)
+        self.assertTrue(any(event['type'] == 'progress' and 'Model fallback' in event['text'] for event in events))
+        self.assertTrue(any('Model fallback' in event for event in self.server.events[self.session][0]))
+        self.assertEqual(len(self.requests), 2)
+        self.assertEqual(len(self.server.histories[self.session]), 2)
 
     def test_sessions_are_isolated(self):
         self.post('第一個研究')

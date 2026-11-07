@@ -1,4 +1,5 @@
 import json
+import hashlib
 import os
 from pathlib import Path
 import subprocess
@@ -17,8 +18,21 @@ FAKE_CURL = '''#!/bin/bash
 [ -z "${FAKE_FAIL:-}" ] || { echo "curl: (6) Could not resolve host" >&2; exit 6; }
 out=""; url=""
 while [ $# -gt 0 ]; do case "$1" in -o) out="$2"; shift;; --retry) shift;; -*) ;; *) url="$1";; esac; shift; done
-case "$url" in *genetic_maps*) src=maps.tar.gz;; *gencode*) src=gtf.gz;; *api.gdc*) src=clinical.tsv;; *) src=kg.vcf.gz;; esac
+case "$url" in *collapse_annotation*) src=collapse.py;; *genetic_maps*) src=maps.tar.gz;; *gencode*) src=gtf.gz;; *api.gdc*) src=clinical.tsv;; *) src=kg.vcf.gz;; esac
 if [ -n "$out" ]; then cp "$FIXTURES/$src" "$out"; else cat "$FIXTURES/$src"; fi
+'''
+# Stands in for the container: reports its modules, records pip, and "collapses" the GTF.
+FAKE_RUNTIME = r'''#!/bin/bash
+echo "$*" >> "$FAKE/runtime.calls"
+case "$*" in
+  *"import numpy"*) [ -z "${FAKE_NO_BX:-}" ]; exit;;
+  *"pip install"*) exit 0;;
+  *collapse_annotation.py*)
+    for last in "$@"; do full="$output"; output="$last"; done
+    [ "$(wc -l < "$full")" -gt 0 ] || exit 1
+    if [ -n "${FAKE_NOT_COLLAPSED:-}" ]; then cp "$full" "$output"; else
+      printf 'chr1\tHAVANA\tgene\t1\t2\t.\t+\t.\tgene_id "A"; transcript_type "protein_coding";\n' > "$output"; fi;;
+esac
 '''
 # Runs the submitted job right away, like a job that finished before the next check.
 FAKE_SBATCH = '''#!/bin/bash
@@ -32,7 +46,8 @@ mkdir maps
 printf 'pos\tchr\tcM\n55550\t1\t0\n' | gzip > maps/chr1.b38.gmap.gz
 printf 'x' | gzip > maps/chr2.b38.gmap.gz
 tar -czf maps.tar.gz -C maps chr1.b38.gmap.gz chr2.b38.gmap.gz
-printf 'chr1\tHAVANA\tgene\n' | gzip > gtf.gz
+printf 'chr1\tHAVANA\tgene\t1\t2\t.\t+\t.\tgene_id "A"; gene_type "protein_coding";\n' | gzip > gtf.gz
+printf 'print("official tool")\n' > collapse.py
 printf '##fileformat=VCFv4.2\n' | gzip > kg.vcf.gz
 printf 'demographic.race\tid\tsubmitter_id\r\nwhite\tabc\tTCGA-44-3918\r\n' > clinical.tsv
 '''
@@ -84,11 +99,18 @@ class ReferenceScriptTest(unittest.TestCase):
         subprocess.run(['bash', '-c', FIXTURES], cwd=fixtures, check=True)
         bin_dir = base / 'bin'
         bin_dir.mkdir()
-        for name, text in (('curl', FAKE_CURL), ('sbatch', FAKE_SBATCH), ('squeue', '#!/bin/bash\n')):
+        for name, text in (('curl', FAKE_CURL), ('sbatch', FAKE_SBATCH), ('squeue', '#!/bin/bash\n'), ('apptainer', FAKE_RUNTIME)):
             (bin_dir / name).write_text(text)
             (bin_dir / name).chmod(0o755)
         self.env = {**os.environ, 'PATH': f'{bin_dir}:{os.environ["PATH"]}', 'FAKE': str(base),
                     'FIXTURES': str(fixtures), 'HOME': str(self.home)}
+        image = self.root / hpc.CONTAINER
+        image.parent.mkdir(parents=True)
+        image.write_text('image')
+        digest = hashlib.sha256((fixtures / 'collapse.py').read_bytes()).hexdigest()
+        pinned = patch.dict(hpc._FETCH, {'gtf': hpc._FETCH['gtf'].replace(hpc.COLLAPSE_SHA256, digest)})
+        pinned.start()
+        self.addCleanup(pinned.stop)
 
     def tearDown(self):
         self.folder.cleanup()
@@ -111,10 +133,11 @@ class ReferenceScriptTest(unittest.TestCase):
                 self.assertTrue(target.is_file(), (self.home / f'.signet-agent/steps/{key}.log').read_text())
                 self.assertFalse(Path(f'{target}.partial').exists())
                 self.assertEqual(self.download(key)[key], 'existing')
-        self.assertEqual(self.root.stat().st_mode & 0o777, 0o700)
+        self.assertEqual((self.root / 'refdata').stat().st_mode & 0o777, 0o700)
         self.assertEqual((self.root / 'refdata/clinical.tsv').read_bytes(),
                          b'race\tid\tsubmitter_id\nwhite\tabc\tTCGA-44-3918\n', 'CRLF removed and race column renamed')
-        self.assertEqual((self.root / 'refdata/gencode.v22.annotation.gtf').read_text(), 'chr1\tHAVANA\tgene\n')
+        self.assertIn('transcript_type', (self.root / hpc.REFERENCES['gtf']['path']).read_text())
+        self.assertIn('gene_type', (self.root / hpc.FULL_GTF).read_text(), 'the full GTF is kept')
         gmap = subprocess.run(['gunzip', '-c', str(self.root / 'refdata/gmap/chr1.b38.gmap.gz')],
                               capture_output=True, text=True).stdout
         self.assertEqual(gmap, 'pos\tchr\tcM\n55550\t1\t0\n', 'only chromosome 1 is taken from the archive')
@@ -126,6 +149,45 @@ class ReferenceScriptTest(unittest.TestCase):
         checks = hpc._checks(self.run_script(hpc._check_script), REVISION)
         self.assertEqual({c['item']: c['status'] for c in checks if c['item'].startswith('reference_')},
                          dict.fromkeys(('reference_ref', 'reference_gmap', 'reference_gtf', 'reference_clinical'), 'ok'))
+
+    def test_gtf_job_uses_the_official_tool_in_the_container_and_reuses_the_full_file(self):
+        full = self.root / hpc.FULL_GTF
+        full.parent.mkdir(parents=True)
+        full.write_text('chr1\tHAVANA\tgene\t1\t2\t.\t+\t.\tgene_id "A"; gene_type "x";\n')
+        before = full.stat().st_mtime_ns
+        self.assertEqual(self.download('gtf')['gtf'], 'started')
+        self.assertEqual(full.stat().st_mtime_ns, before, 'an existing full GTF is not downloaded again')
+        calls = (self.base / 'runtime.calls').read_text()
+        self.assertIn('collapse_annotation.py', calls)
+        self.assertIn(f'--bind {self.root}:{self.root}', calls)
+        self.assertNotIn('pip install', calls, 'the image already has the tool dependencies')
+        self.assertIn('--mem=16G', (self.base / 'sbatch.calls').read_text())
+
+    def test_gtf_job_adds_the_missing_dependency_beside_the_workspace(self):
+        self.download('gtf', FAKE_NO_BX='1')
+        calls = (self.base / 'runtime.calls').read_text()
+        self.assertIn(f'pip install --quiet --no-deps --target {self.root}/refdata/.tools/python bx-python', calls)
+        self.assertTrue((self.root / hpc.REFERENCES['gtf']['path']).is_file())
+
+    def test_gtf_is_never_published_if_gene_rows_lack_transcript_type(self):
+        self.download('gtf', FAKE_NOT_COLLAPSED='1')
+        self.assertFalse((self.root / hpc.REFERENCES['gtf']['path']).exists())
+        self.assertFalse(Path(f"{self.root / hpc.REFERENCES['gtf']['path']}.partial").exists())
+        log = self.run_script(lambda _root: hpc._log_script('gtf'))
+        self.assertTrue(any('no gene rows with transcript_type' in line for line in log['lines']))
+
+    def test_gtf_refuses_a_tampered_tool(self):
+        with patch.dict(hpc._FETCH, {'gtf': hpc._FETCH['gtf'].replace('digest" != "', 'digest" != "0')}):
+            self.download('gtf')
+        self.assertFalse((self.root / hpc.REFERENCES['gtf']['path']).exists())
+        self.assertFalse((self.root / 'refdata/.tools/collapse_annotation.py').exists())
+        self.assertFalse((self.base / 'runtime.calls').exists(), 'an unverified tool never runs')
+
+    def test_gtf_waits_for_the_container(self):
+        (self.root / hpc.CONTAINER).unlink()
+        result = self.download('gtf')
+        self.assertEqual(result['gtf'], 'needs_container')
+        self.assertFalse((self.base / 'sbatch.calls').exists())
 
     def test_failed_download_leaves_no_file_and_explains_itself(self):
         self.assertEqual(self.download('gtf', FAKE_FAIL='1')['gtf'], 'started')

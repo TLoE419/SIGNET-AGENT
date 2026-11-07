@@ -32,6 +32,7 @@ SIGNET-agent/
 │   │   └── signet.py             # Scientific tools, parameter validation, and isolated job preparation
 │   ├── runtime/
 │   │   ├── hpc.py                # HPC3 workspace layout, read-only checks, background setup steps
+│   │   ├── hpc_files.py          # Desktop file window: browse HPC3 and choose reference files (not a model tool)
 │   │   ├── jobs/
 │   │   │   └── prepare_reference.py  # Runs on HPC3: detects ref/gmap formats and converts them for one study
 │   │   ├── remote.py             # Remote connection, packaging, and output collection
@@ -74,7 +75,7 @@ SIGNET-agent/
 │   ├── preload/                  # Restricted desktop API bridge
 │   ├── renderer/
 │   │   ├── app/                  # React root and application shell
-│   │   ├── features/             # chat/, stage6/, ssh/, model/, environment/, devtools/
+│   │   ├── features/             # chat/, stage6/, ssh/, model/, environment/, remote-files/, devtools/
 │   │   ├── components/           # Shared dialogs, actions and icons
 │   │   ├── styles/               # Colors, spacing and interface styles
 │   │   ├── i18n/                 # English / Traditional Chinese

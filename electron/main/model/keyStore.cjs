@@ -3,14 +3,15 @@ const {mkdir, open, readFile, rename, unlink, lstat, chmod} = require('node:fs/p
 const path = require('node:path');
 const {randomUUID} = require('node:crypto');
 
-const KEY_PATTERN = /^[A-Za-z0-9_-]{20,200}$/;
+// Authorization keys are longer opaque tokens; Google verifies their validity.
+const INVALID_KEY_CHARACTER = /[^A-Za-z0-9._~+\/=-]/;
 
 class ModelKeyError extends Error {
   constructor(code, message) { super(message); this.code = code; }
 }
 
 function validGeminiKey(value) {
-  return typeof value === 'string' && KEY_PATTERN.test(value);
+  return typeof value === 'string' && value.length >= 20 && value.length <= 8192 && !INVALID_KEY_CHARACTER.test(value);
 }
 
 /** Gemini API key encrypted by the OS keychain; plaintext never reaches disk or the renderer. */

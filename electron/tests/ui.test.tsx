@@ -245,18 +245,41 @@ test('status block displays environment initialization while retaining the SSH e
  const view=render(<SshStatusBlock name="Key" host="user@host:22" status="connected" environment={{phase:'checking',message:'Probing remote tools'}} onEnvironment={()=>opened++} onEdit={()=>{}} onToggle={()=>{}}/>);
  assert.ok(screen.getByText('user@host:22'));assert.ok(screen.getByText(environmentLabels.checking));
  fireEvent.click(screen.getByRole('button',{name:'SIGNET environment: '+environmentLabels.checking}));assert.equal(opened,1);
- view.rerender(<SshStatusBlock name="Key" host="user@host:22" status="connected" environment={{phase:'installing-image',message:'Downloading container'}} onEdit={()=>{}} onToggle={()=>{}}/>);
- assert.ok(screen.getByText('Downloading container…'));assert.ok(screen.getByText('user@host:22'));
+ view.rerender(<SshStatusBlock name="Key" host="user@host:22" status="connected" environment={{phase:'installing-source',message:'Installing source'}} onEdit={()=>{}} onToggle={()=>{}}/>);
+ assert.ok(screen.getByText('Installing SIGNET…'));assert.ok(screen.getByText('user@host:22'));
 });
 
-test('environment installation opens a separate confirmation and never starts on the first click',async()=>{
- const {EnvironmentModal}=await import('../renderer/features/environment/EnvironmentModal');let installs=0;
- const bridge={getSnapshot:async()=>({ok:true}),check:async()=>({ok:true}),install:async()=>{installs++;return {ok:true}},subscribe:()=>()=>{}};
+test('HPC3 settings only chooses and checks the location; installing belongs to the workflow panel',async()=>{
+ const {EnvironmentModal}=await import('../renderer/features/environment/EnvironmentModal');let checks:string[][]=[];
+ const bridge={getSnapshot:async()=>({ok:true}),check:async(root?:string,partition?:string)=>{checks.push([root||'',partition||'']);return {ok:true}},install:async()=>{throw Error('settings must not install')},subscribe:()=>()=>{}};
  render(<EnvironmentModal snapshot={{phase:'needs-install',message:'Source missing',config:{root:'/home/user/signet',source:'/home/user/signet/source',image:'/home/user/signet/image.sif',executor:'/opt/apps/singularity/3.9.4/bin/singularity',runtimeModule:'singularity/3.9.4',workRoot:'/home/user/signet/runs',revision:'a'.repeat(40),partition:'standard'}}} bridge={bridge} onClose={()=>{}}/>);
- assert.ok(screen.getByText('singularity/3.9.4'));
- fireEvent.click(screen.getByRole('button',{name:'Install missing components…'}));assert.equal(installs,0);
- assert.ok(screen.getByRole('dialog',{name:'Install SIGNET environment?'}));
- fireEvent.click(screen.getByRole('button',{name:'Install environment'}));await waitFor(()=>assert.equal(installs,1));
+ assert.ok(screen.getByRole('dialog',{name:'HPC3 settings'}));assert.ok(screen.getByText('singularity/3.9.4'));
+ assert.equal(screen.queryByRole('button',{name:/Install/}),null);
+ fireEvent.click(screen.getByRole('button',{name:'Check environment'}));await waitFor(()=>assert.equal(checks.length,1));
+});
+
+test('the file window browses, refuses unsupported names and keeps format errors visible',async()=>{
+ const {RemoteFilesModal}=await import('../renderer/features/remote-files/RemoteFilesModal');
+ const previous=globalThis.fetch,calls:[string,any][]=[];let selected=0;
+ const replies:Record<string,(body:any)=>object>={
+  '/hpc/files/shortcuts':()=>({status:'ok',shortcuts:[{label:'Home',path:'/home/u'},{label:'Personal (/pub)',path:'/pub/u'},{label:'Lab: genome',path:'/dfs7/genome'}]}),
+  '/hpc/files/list':body=>({status:'ok',kind:'folder',path:body.path,entries:body.path==='/dfs7/genome'?[{name:'refs',path:'/dfs7/genome/refs',kind:'folder',size:0,supported:true}]:[{name:'g.gtf',path:body.path+'/g.gtf',kind:'file',size:2048,supported:true},{name:'bad name.gtf',path:body.path+'/bad name.gtf',kind:'file',size:1,supported:false}]}),
+  '/hpc/files/select':body=>body.path.endsWith('g.gtf')&&!selected++?{status:'invalid',error:'This GTF is not collapsed.'}:{status:'ok'},
+ };
+ globalThis.fetch=(async(url:string,init:any)=>{const body=JSON.parse(init.body);calls.push([url,body]);return {ok:true,json:async()=>replies[url](body)}}) as any;
+ let done=0;
+ try{
+  render(<RemoteFilesModal target={{key:'gtf',label:'Gene annotation',current:''}} onClose={()=>{}} onSelected={()=>done++}/>);
+  await waitFor(()=>assert.ok(screen.getByRole('button',{name:/g\.gtf/})));
+  assert.deepEqual(calls[1],['/hpc/files/list',{path:'/pub/u'}],'starts in the personal space');
+  assert.equal((screen.getByRole('button',{name:/bad name/}) as HTMLButtonElement).disabled,true);
+  fireEvent.click(screen.getByRole('button',{name:'Lab: genome'}));await waitFor(()=>assert.ok(screen.getByRole('button',{name:'refs/'})));
+  fireEvent.click(screen.getByRole('button',{name:'refs/'}));await waitFor(()=>assert.ok(screen.getByRole('button',{name:/g\.gtf/})));
+  fireEvent.click(screen.getByRole('button',{name:/g\.gtf/}));fireEvent.click(screen.getByRole('button',{name:'Use this file'}));
+  await waitFor(()=>assert.ok(screen.getByRole('alert').textContent?.includes('not collapsed')));assert.equal(done,0);
+  fireEvent.click(screen.getByRole('button',{name:'Use this file'}));await waitFor(()=>assert.equal(done,1));
+  assert.deepEqual(calls.at(-1),['/hpc/files/select',{key:'gtf',path:'/dfs7/genome/refs/g.gtf'}]);
+ }finally{globalThis.fetch=previous}
 });
 
 test('SSH icon collapses manually and reapplies defaults on status changes',()=>{
