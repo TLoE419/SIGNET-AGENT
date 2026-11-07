@@ -6,7 +6,7 @@ text itself. Callers pick a step from STEPS and pass validated values only.
 
 Flow for one step of one local run (runs/<run_id>):
   submit()  upload the run's audited scripts and config.ini to
-            <workRoot>/runs/<run_id>, write steps/<step>.sbatch and sbatch it;
+            <workRoot>/<run_id>, write steps/<step>.sbatch and sbatch it;
             returns at once with the Slurm job ID.
   status()  ask squeue/sacct (cached 15 s); when the job ends, check its
             outputs and logs, then download the results into the local run.
@@ -269,8 +269,24 @@ def _say():
     return f"umask 077\nsay() {{ printf '{_MARKER}%s\\t%s\\n' \"$1\" \"$2\"; }}\n"
 
 
-def _remote_dir(config, run_id):
-    return config['workRoot'] + '/runs/' + run_id
+# Other features keep their own folders directly under workRoot (remote.py: cis/, network/);
+# runs/ holds the runs uploaded before 2026-11-07.
+RESERVED_RUN_IDS = ('cis', 'network', 'runs')
+
+
+def _remote_dir(config, root, run_id):
+    """The run's HPC3 folder: <workRoot>/<run_id>.
+
+    Runs uploaded before 2026-11-07 live in <workRoot>/runs/<run_id>; such a run keeps
+    using that folder, so its later steps sit next to its earlier ones.
+    """
+    if run_id in RESERVED_RUN_IDS:
+        raise StepError('invalid_request', f'run_id {run_id!r} is reserved on HPC3; choose another name.')
+    legacy = config['workRoot'] + '/runs/' + run_id
+    owner = root / 'steps' / 'remote.owner'
+    if owner.is_file() and json.loads(owner.read_text()).get('remote_dir') == legacy:
+        return legacy
+    return config['workRoot'] + '/' + run_id
 
 
 def _job_script(config, run_id, name, step, directory, binds):
@@ -361,7 +377,7 @@ def submit(run_id, name, inputs, resources=None):
     if active:
         raise StepError('conflict', f'Step {active} of this run is still active.')
     config = _environment()
-    directory = _remote_dir(config, run_id)
+    directory = _remote_dir(config, root, run_id)
     checked = _inputs(step, inputs, (config['root'] + '/refdata', config['source'] + '/example', directory))
     try:
         fd = os.open(root / '.active', os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)

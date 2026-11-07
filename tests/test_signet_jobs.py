@@ -5,6 +5,7 @@ run against a temporary folder that plays HPC3. Small stand-ins for sbatch,
 squeue, sacct and scancel read and write files in that folder; no network,
 Slurm or container is needed.
 """
+import json
 import os
 from pathlib import Path
 import stat
@@ -47,7 +48,7 @@ class StepsTest(unittest.TestCase):
         self.config = {'root': str(self.hpc / 'ws'), 'source': str(self.hpc / 'ws/signet'),
                        'image': str(self.hpc / 'signet.sif'), 'executor': 'apptainer',
                        'workRoot': str(self.hpc / 'ws/work'), 'partition': 'standard'}
-        self.remote_dir = self.hpc / 'ws/work/runs/step_test'
+        self.remote_dir = self.hpc / 'ws/work/step_test'
         self.calls = []
         self.lose_connection_on = None
         patches = [patch.object(st, 'PROJECT', self.project),
@@ -151,6 +152,24 @@ class StepsTest(unittest.TestCase):
         self.assertEqual(self.code_of(steps.submit, 'step_test', 'expression', self.inputs), 'conflict')
         self.assertFalse((self.remote_dir / 'work').exists())
 
+    def test_run_folder_is_workroot_slash_run_id_and_old_runs_keep_their_folder(self):
+        self.assertEqual(steps.submit('step_test', 'expression', self.inputs)['remote_dir'], str(self.remote_dir))
+        legacy = self.hpc / 'ws/work/runs/old_run'
+        st.configure_signet('old_run', cohort='TCGA')
+        (self.project / 'runs/old_run/steps').mkdir()
+        (self.project / 'runs/old_run/steps/remote.owner').write_text(json.dumps({'remote_dir': str(legacy), 'token': 'tok'}))
+        legacy.mkdir(parents=True)
+        (legacy / '.owner').write_text('tok\n')
+        self.assertEqual(steps.submit('old_run', 'expression', self.inputs)['remote_dir'], str(legacy))
+        self.assertTrue((legacy / 'steps/expression.sbatch').is_file())
+        self.assertFalse((self.hpc / 'ws/work/old_run').exists())
+
+    def test_run_ids_used_by_other_hpc3_folders_are_refused(self):
+        for run_id in ('cis', 'network', 'runs'):
+            st.configure_signet(run_id, cohort='TCGA')
+            self.assertEqual(self.code_of(steps.submit, run_id, 'expression', self.inputs), 'invalid_request', run_id)
+        self.assertEqual(self.calls, [])
+
     def test_not_connected_is_not_ready(self):
         with patch.object(ssh_transport, 'available', return_value=False):
             self.assertEqual(self.code_of(steps.submit, 'step_test', 'expression', self.inputs), 'not_ready')
@@ -185,7 +204,7 @@ class StepsTest(unittest.TestCase):
         for index, (job, key, expected) in enumerate(cases):
             run_id = f'fail_{index}'
             st.configure_signet(run_id)
-            self.remote_dir = self.hpc / 'ws/work/runs' / run_id
+            self.remote_dir = self.hpc / 'ws/work' / run_id
             steps.submit(run_id, 'expression', self.inputs)
             self.finish_job(**job)
             record = steps.status(run_id, 'expression', refresh=True)
@@ -210,7 +229,7 @@ class StepsTest(unittest.TestCase):
         self.assertEqual((self.fake / 'scancel').read_text().split(), ['12345'])
         self.assertEqual(self.code_of(steps.cancel, 'step_test', 'expression'), 'conflict')
         st.configure_signet('other_job')
-        self.remote_dir = self.hpc / 'ws/work/runs/other_job'
+        self.remote_dir = self.hpc / 'ws/work/other_job'
         steps.submit('other_job', 'expression', self.inputs)
         (self.fake / 'scancel').unlink()
         self.slurm(name='someone-elses-job', squeue='', sacct='RUNNING')
@@ -267,7 +286,7 @@ class StepsTest(unittest.TestCase):
         record = steps.status('step_test', 'expression', refresh=True)
         self.assertEqual((record['state'], record['job_id']), ('pending', '888'))
         st.configure_signet('never_queued')
-        self.remote_dir = self.hpc / 'ws/work/runs/never_queued'
+        self.remote_dir = self.hpc / 'ws/work/never_queued'
         self.lose_connection_on = 'sbatch --parsable'
         steps.submit('never_queued', 'expression', self.inputs)
         self.lose_connection_on = None
