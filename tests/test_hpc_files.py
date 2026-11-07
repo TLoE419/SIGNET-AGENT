@@ -233,7 +233,10 @@ class HpcFilesTest(unittest.TestCase):
         self.assertTrue(hpc_files.select('gtf', path)['access_check_started'])
         self.finish_verification(path, self.verification('gtf'))
         self.assertEqual(self.check()['reference_gtf']['status'], 'ok')
-        image.write_text('different image')
+        original = image.stat()
+        image.write_text('bad image')
+        os.utime(image, ns=(original.st_atime_ns, original.st_mtime_ns))
+        self.assertEqual(image.stat().st_size, original.st_size)
         self.assertIn('Select this file again', self.check()['reference_gtf']['detail'])
 
     def test_running_compute_check_shows_in_progress(self):

@@ -74,7 +74,16 @@ _MARKER = '@@'
 _IMAGE_SIGNATURE = '''
 image_signature() {
   [ -s "$I" ] || return 1
-  stat -L -c '%i:%s:%Y' "$I" 2>/dev/null || stat -L -f '%i:%z:%m' "$I"
+  python3 - "$I" <<'SIGNET_IMAGE_STAT'
+import os
+import sys
+
+try:
+    image = os.stat(sys.argv[1])
+except OSError:
+    sys.exit(1)
+print(image.st_ino, image.st_size, image.st_mtime_ns, image.st_ctime_ns, sep=':')
+SIGNET_IMAGE_STAT
 }
 '''
 
