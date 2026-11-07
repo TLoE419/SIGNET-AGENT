@@ -28,7 +28,10 @@ class HpcFilesTest(unittest.TestCase):
         self.config = {'root': str(self.root), 'source': f'{self.root}/software/{REVISION}', 'image': f'{self.root}/images/s.sif',
                        'workRoot': f'{self.root}/runs', 'executor': '', 'partition': 'lab_queue', 'revision': REVISION}
         self.scripts = []
+        # Treat the test directory as shared storage, even when CI creates it under /tmp.
+        # The node-local rejection test supplies its own blocked directory.
         for patcher in (patch.object(ssh_transport, 'available', return_value=True),
+                        patch.object(hpc_files, '_UNREADABLE_ON_COMPUTE', (str(self.base / 'node-local'),)),
                         patch.object(ssh_transport, 'setup_environment', side_effect=lambda: self.config),
                         patch.object(ssh_transport, 'remote', side_effect=self.run_remote)):
             patcher.start()
