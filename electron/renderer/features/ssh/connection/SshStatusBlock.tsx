@@ -19,7 +19,7 @@ const labels={unconfigured:'Not configured',disconnected:'Disconnected',connecte
 /** Host-app composition: only actions are injected; no connection logic or fake state cycling. */
 const phases:Partial<Record<ConnectionPhase,string>>={'opening-transport':'Opening SSH transport…',authenticating:'Waiting for authentication…','opening-session':'Opening login session…','verifying-remote':'Verifying HPC3 and Slurm…',ready:'Connected'};
 export function SshStatusBlock({name,host,status,error,phase,busy,onEdit,onToggle,environment,onEnvironment}:Props){
- const environmentLoading=!!environment&&['checking','installing-source','installing-image','verifying'].includes(environment.phase);
+ const environmentLoading=!!environment&&['checking','installing-source','verifying'].includes(environment.phase);
  const stateKey=`${status}:${phase||''}:${environment?.phase||''}`;
  const [manual,setManual]=useState<{key:string;expanded:boolean}|null>(null),detailsId=useId();
  useEffect(()=>setManual(null),[stateKey]);

@@ -27,7 +27,7 @@ export function App({model}:{model:string}){
               <details id="workflow-environment" open>
                 <summary className="workflow-stage-head"><span className="workflow-step">1</span><strong data-i18n="準備環境">Prepare environment</strong><span id="workflow-environment-status" className="workflow-note"></span></summary>
                 <div className="workflow-stage-body">
-                  <div className="workflow-stage-actions"><button type="button" onClick={()=>window.dispatchEvent(new Event('open-environment'))}>Remote environment</button><button id="workflow-check" type="button" data-i18n="重新檢查">Check again</button></div>
+                  <div className="workflow-stage-actions"><button type="button" onClick={()=>window.dispatchEvent(new Event('open-environment'))} data-i18n="HPC3 設定">HPC3 settings</button><button id="workflow-check" type="button" data-i18n="重新檢查">Check again</button></div>
                   <ul id="workflow-items" className="workflow-items"></ul>
                   <p id="workflow-message" className="workflow-message" role="status" hidden={true}></p>
                 </div>

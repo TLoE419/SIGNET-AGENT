@@ -100,7 +100,7 @@ with the operating system key store. Saving or removing an active key restarts
 the owned Python service after active work finishes; saved conversations remain.
 Do not enter private research data unless your chosen provider is appropriate.
 
-Open **Workflow**, then **Remote environment** to prepare the shared installation.
+Open **Workflow** to prepare the shared installation; **HPC3 settings** changes its root and partition.
 The same verified root, source revision, container runtime module and Slurm
 partition are used by analysis and reference preparation. The workflow never
 creates a second installation under `/pub`. Reference downloads and example

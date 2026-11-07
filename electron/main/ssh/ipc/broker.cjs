@@ -80,6 +80,13 @@ class SshBroker {
       if(!value||value.phase!=='ready')throw Error('Prepare the SIGNET environment in Electron before running scientific work.');
       return {returncode:0,stdout:Buffer.from(JSON.stringify(value.config)),stderr:Buffer.alloc(0)};
     }
+    // Setup checks and reference downloads need the configured paths before the container exists.
+    // Scientific work keeps using the 'environment' action above, which requires verification.
+    if(request.action==='setup-environment'&&input.length===0&&request.inputLength===0){
+      const value=this.environment?.getSnapshot();
+      if(!value?.config)throw Error(value?.message||'Check the remote environment first.');
+      return {returncode:0,stdout:Buffer.from(JSON.stringify(value.config)),stderr:Buffer.alloc(0)};
+    }
     if (request.action !== 'exec' || input.length !== request.inputLength) throw Error('Unsupported SSH broker action.');
     const result = await this.service.exec(request.command, input, request.timeoutMs);
     return result;

@@ -23,22 +23,27 @@ def check_hpc_environment() -> dict:
 
 
 def create_hpc_workspace() -> dict:
-    """Explain how to prepare the configured workspace through the desktop Remote environment panel. No separate workspace is created."""
+    """Explain how to prepare the configured workspace through the desktop HPC3 settings. No separate workspace is created."""
     return hpc.start_step('workspace')
 
 
 def install_signet_source() -> dict:
-    """Direct the user to Remote environment for the shared pinned source installation. Never clone a second source tree."""
+    """Direct the user to the Install button on the SIGNET row of the Workflow panel. Never clone a second source tree."""
     return hpc.start_step('signet', INVENTORY['repository'], REVISION)
 
 
 def download_signet_container() -> dict:
-    """Direct the user to Remote environment for the shared container installation. Never start another container download."""
+    """Submit a Slurm job that downloads the SIGNET container into the configured environment. Call only when the user's own message asks for it or agrees to it.
+
+    Publishes the image only after its size and checksum match, never replaces an
+    existing image and never starts a second download. Returns immediately with
+    the job ID; use check_hpc_environment later.
+    """
     return hpc.start_step('container')
 
 
 def download_reference_file(file: str) -> dict:
-    """Submit a Slurm job that downloads one public Phase 2 reference file into the HPC3 workspace: "ref" (1000 Genomes GRCh38 chr1 genotypes, about 950 MB), "gmap" (GRCh38 genetic map), "gtf" (GENCODE v22 gene annotation) or "clinical" (TCGA-LUAD race by case). Call only for the files the user's own message asks for or agrees to.
+    """Submit a Slurm job that downloads one public Phase 2 reference file into the HPC3 workspace: "ref" (1000 Genomes GRCh38 chr1 genotypes, about 950 MB), "gmap" (GRCh38 genetic map), "gtf" (GENCODE v22 gene annotation, collapsed for signet -t; needs the container) or "clinical" (TCGA-LUAD race by case). Call only for the files the user's own message asks for or agrees to.
 
     Downloads only the raw file from a fixed source and records its URL, size
     and checksum in refdata/SOURCES.tsv; matching ref and gmap to a study

@@ -13,17 +13,22 @@
   const items = [
     {id: 'hpc', label: 'HPC3 環境', parts: ['connection', 'workspace', 'slurm', 'apptainer'],
      hint: '請用右上角的 SSH 面板連線。'},
-    {id: 'signet_source', label: 'SIGNET 程式碼'},
-    {id: 'container', label: 'SIGNET 容器'},
-    {id: 'reference_ref', label: '參考面板（ref）', button: '下載', action: 'reference/ref'},
-    {id: 'reference_gmap', label: '遺傳圖譜（gmap）', button: '下載', action: 'reference/gmap'},
-    {id: 'reference_gtf', label: '基因註解（gtf）', button: '下載', action: 'reference/gtf'},
-    {id: 'reference_clinical', label: '臨床資料（clinical）', button: '下載', action: 'reference/clinical'},
+    {id: 'signet_source', label: 'SIGNET 程式碼', button: '安裝', install: true},
+    {id: 'container', label: 'SIGNET 容器', button: '下載', action: 'container'},
+    {id: 'reference_ref', label: '參考面板（ref）', button: '下載', action: 'reference/ref', file: 'ref'},
+    {id: 'reference_gmap', label: '遺傳圖譜（gmap）', button: '下載', action: 'reference/gmap', file: 'gmap'},
+    {id: 'reference_gtf', label: '基因註解（gtf）', button: '下載', action: 'reference/gtf', file: 'gtf'},
+    {id: 'reference_clinical', label: '臨床資料（clinical）', button: '下載', action: 'reference/clinical', file: 'clinical'},
     {id: 'imputation_reference', label: '補值參考檔（ref、gmap 轉檔）', button: '轉檔', action: 'prepare'},
   ];
   const statusText = {ok: '已就緒', missing: '缺少', problem: '有問題', in_progress: '進行中', unknown: '未檢查'};
   const severity = ['ok', 'in_progress', 'missing', 'problem'];
+  const bridge = window.signetDesktop.environment;
+  const inProgress = ['checking', 'installing-source', 'verifying'];
   let busy = false, checked = false, latest = null, generation = 0;
+  let environment = {phase: 'disconnected', message: ''};
+  // Paths of files chosen on HPC3. They come from their own route and never reach the assistant.
+  let selections = {};
   const token = () => document.querySelector('meta[name="chat-token"]').content;
 
   function element(tag, className, source) {
@@ -39,8 +44,8 @@
     if (source) uiText(notice, source);
   }
 
-  async function call(path) {
-    const response = await fetch(path, {method: 'POST', body: '{}',
+  async function call(path, body = {}) {
+    const response = await fetch(path, {method: 'POST', body: JSON.stringify(body),
       headers: {'Content-Type': 'application/json', 'X-Chat-Token': token()}});
     const value = await response.json();
     if (!response.ok) throw new Error(value.error || '本機服務拒絕請求。');
@@ -50,16 +55,31 @@
   function actionButton(item) {
     const button = element('button', 'workflow-action', item.button);
     button.type = 'button';
-    if (busy || item.unavailable || !item.action) {
+    if (busy || item.unavailable || !(item.action || item.install) || inProgress.includes(environment.phase)) {
       button.disabled = true;
       if (item.unavailable) {
         button.dataset.i18nTitle = item.unavailable;
         button.title = translateUI(item.unavailable);
       }
     } else {
-      button.addEventListener('click', () => run(item));
+      button.addEventListener('click', () => item.install ? install(item) : run(item));
     }
     return button;
+  }
+
+  function fileButtons(item, status) {
+    const disabled = busy || inProgress.includes(environment.phase);
+    const button = (source, click) => {
+      const el = element('button', 'workflow-action', source);
+      el.type = 'button';
+      el.disabled = disabled;
+      el.addEventListener('click', click);
+      return el;
+    };
+    const buttons = [button('選擇 HPC 檔案', () => window.dispatchEvent(new CustomEvent('open-remote-files', {detail: {
+      key: item.file, label: translateUI(item.label), current: selections[item.file] || ''}})))];
+    if (selections[item.file]) buttons.push(button('改用預設', () => useDefault(item)));
+    return status === 'in_progress' ? [] : buttons;
   }
 
   // A folded row reports the worst part; its detail lists only the parts that need attention.
@@ -87,12 +107,14 @@
       text.append(element('span', 'workflow-item-label', item.label));
       // Backend details are technical evidence (paths, sizes, commits) and stay untranslated.
       if (check?.detail) text.append(Object.assign(element('span', 'workflow-item-detail'), {textContent: check.detail}));
+      if (item.file && selections[item.file]) text.append(Object.assign(element('span', 'workflow-item-detail workflow-item-path'), {textContent: selections[item.file]}));
       else if (status === 'unknown' && item.hint) text.append(element('span', 'workflow-item-detail', item.hint));
       row.append(element('span', 'workflow-badge', statusText[status] || status), text);
-      if (item.button && ['missing', 'problem'].includes(status)) row.append(actionButton(item));
+      if (item.button && !selections[item.file] && (status === 'missing' || (status === 'problem' && !item.install))) row.append(actionButton(item));
+      if (item.file && latest) row.append(...fileButtons(item, status));
       return row;
     }));
-    checkButton.disabled = busy;
+    checkButton.disabled = busy || inProgress.includes(environment.phase);
     if (latest) {
       const ready = rows.filter(row => row.check?.status === 'ok').length;
       uiText(summary, `準備環境 ${ready}/${items.length} 項就緒`);
@@ -100,7 +122,11 @@
     }
   }
 
-  async function check() {
+  // Failures of the environment itself stay visible beside the per-item results.
+  const environmentProblem = () => ['blocked', 'error'].includes(environment.phase) ? environment.message : '';
+
+  // Reads each item's state from HPC3. Works before the environment is verified, so it can show what is missing.
+  async function inspect() {
     if (busy) return;
     busy = true;
     render();
@@ -112,18 +138,44 @@
       checked = true;
       if (result.status !== 'ok') {
         latest = null;
-        uiText(summary, '尚未連線 HPC3');
+        uiText(summary, environment.phase === 'disconnected' ? '尚未連線 HPC3' : result.status === 'not_ready' ? '環境尚未就緒' : '目前無法檢查 HPC3。');
         say(result.reason || result.error || '目前無法檢查 HPC3。', 'warning');
         return;
       }
       latest = result;
+      const chosen = await call('/hpc/files/selected').catch(() => ({}));
+      if (current !== generation) return;
+      selections = chosen.selected || {};
       const running = result.checks.some(item => item.status === 'in_progress');
-      say(result.ready ? '環境已準備好。' : running ? '有步驟正在背景執行，稍後再按「重新檢查」。' : '');
+      const problem = environmentProblem();
+      if (problem) say(problem, 'warning');
+      else say(result.ready ? '環境已準備好。' : running ? '有步驟正在背景執行，稍後再按「重新檢查」。' : '');
     } catch (error) {
       if (current === generation) say(error.message, 'error');
     } finally {
       if (current === generation) {busy = false; render();}
     }
+  }
+
+  async function useDefault(item) {
+    if (busy || !window.confirm('Stop using the selected ' + translateUI(item.label) + '? The file itself is not changed.')) return;
+    const result = await call('/hpc/files/clear', {key: item.file}).catch(error => ({error: error.message}));
+    if (result.status === 'ok') void inspect();
+    else say(result.error || result.reason || '目前無法檢查 HPC3。', 'error');
+  }
+
+  // The one check button: the desktop re-checks the environment, and each settled result refreshes the rows.
+  async function refresh() {
+    if (busy || inProgress.includes(environment.phase)) return;
+    const result = await bridge.check(environment.config?.root || '', environment.config?.partition || '');
+    if (!result.ok) say(result.error || '目前無法檢查 HPC3。', 'error');
+  }
+
+  async function install(item) {
+    if (busy || !window.confirm('Install ' + translateUI(item.label) + '? This downloads the pinned source into your configured remote workspace.')) return;
+    say('正在安裝 SIGNET…');
+    const result = await bridge.install();
+    if (!result.ok) say(result.error || '目前無法檢查 HPC3。', 'error');
   }
 
   async function run(item) {
@@ -143,10 +195,12 @@
       if (current === generation) {busy = false; render();}
     }
     // Background steps need a moment before their state is visible.
-    setTimeout(check, 3000);
+    setTimeout(inspect, 3000);
   }
 
-  window.signetDesktop.environment.subscribe(state => {
+  function observe(state) {
+    environment = state;
+    selections = {};
     generation++;
     busy = false;
     checked = false;
@@ -155,14 +209,18 @@
     stageStatus.textContent = '';
     say(state.message || '');
     render();
-    if (state.phase === 'ready' && panel.open) void check();
-  });
-  checkButton.addEventListener('click', check);
+    if (state.phase !== 'disconnected' && !inProgress.includes(state.phase) && panel.open) void inspect();
+  }
+  bridge.subscribe(observe);
+  // A reloaded page joins a connection that is already open.
+  void bridge.getSnapshot().then(result => {if (result.ok && result.value && result.value.phase !== 'disconnected') observe(result.value);});
+  checkButton.addEventListener('click', refresh);
+  window.addEventListener('remote-file-selected', () => { void inspect(); });
   // The assistant can open or collapse this panel through show_panel.
   window.addEventListener('panel-request', event => {
     if (event.detail?.panel === 'workflow') panel.open = Boolean(event.detail.visible);
   });
-  panel.addEventListener('toggle', () => { if (panel.open && !checked) check(); });
+  panel.addEventListener('toggle', () => { if (panel.open && !checked) inspect(); });
   window.addEventListener('languagechange', () => list.querySelectorAll('[data-i18n-title]').forEach(el => {
     el.title = translateUI(el.dataset.i18nTitle);
   }));

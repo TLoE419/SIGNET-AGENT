@@ -7,7 +7,8 @@ export function checksums(i:Inventory){return [...i.scripts,...i.support_files].
 export function sourceCheck(c:EnvironmentConfig,i:Inventory){return `(cd ${quote(c.source)} && sha256sum --check --status <<'SIGNET_HASHES'\n${checksums(i)}SIGNET_HASHES\n)`}
 export function probe(root:string,partition:string,revision:string){return `set -eu
 printf 'home=%s\\n' "$HOME"
-root=${root?quote(root):'"$HOME/.local/share/signet-agent"'}
+${root?`root=${quote(root)}`:`signet_user=$(id -un)
+if [ -d "/pub/$signet_user" ] && [ -w "/pub/$signet_user" ]; then root="/pub/$signet_user/signet-agent"; else root="$HOME/.local/share/signet-agent"; fi`}
 printf 'root=%s\\n' "$root"
 for tool in bash git tar sha256sum timeout python3 setsid sbatch scontrol sinfo squeue; do
  if command -v "$tool" >/dev/null 2>&1; then printf '%s=yes\\n' "$tool"; else printf '%s=no\\n' "$tool"; fi
@@ -45,19 +46,6 @@ mv -T -n "$stage/source" ${quote(c.source)}
 ${sourceCheck(c,i)}
 `;
 }
-export function installImage(c:EnvironmentConfig){return `set -euo pipefail
-${modulePrelude(c.runtimeModule)}
-umask 077
-mkdir -p ${quote(c.root+'/images')}
-[ ! -e ${quote(c.image)} ] || { echo 'Image destination already exists; choose a new root.' >&2; exit 1; }
-stage=$(mktemp -d ${quote(c.root+'/images/.install-XXXXXX')})
-trap 'rm -rf -- "$stage"' EXIT
-${quote(c.executor)} pull "$stage/signet.sif" library://jiang548/signet/signet:0.0.6
-${quote(c.executor)} exec --cleanenv --no-home "$stage/signet.sif" bash -c 'command -v Rscript >/dev/null && command -v ParaFly >/dev/null && command -v getopt >/dev/null'
-[ ! -e ${quote(c.image)} ]
-# Hard-link publication refuses any existing target; stage is on the same filesystem.
-ln "$stage/signet.sif" ${quote(c.image)}
-`}
 export function verify(c:EnvironmentConfig){
  const settingsCheck=`set -euo pipefail
 command -v Rscript >/dev/null

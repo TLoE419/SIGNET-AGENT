@@ -33,7 +33,7 @@ class Remote:
 
     def __init__(self, stdout, code=0):
         self.available = patch.object(hpc.ssh_transport, 'available', return_value=True)
-        self.environment = patch.object(hpc.ssh_transport, 'environment', return_value={'root':'/pub/tester/signet-agent','source':'/pub/tester/signet-agent/software/pinned','image':'/pub/tester/signet-agent/images/signet.sif','executor':'/usr/bin/singularity','workRoot':'/pub/tester/signet-agent/runs','partition':'free','revision':REVISION})
+        self.environment = patch.object(hpc.ssh_transport, 'setup_environment', return_value={'root':'/pub/tester/signet-agent','source':'/pub/tester/signet-agent/software/pinned','image':'/pub/tester/signet-agent/images/signet.sif','executor':'/usr/bin/singularity','workRoot':'/pub/tester/signet-agent/runs','partition':'free','revision':REVISION})
         self.remote = patch.object(hpc.ssh_transport, 'remote', return_value=completed(stdout, code))
 
     def __enter__(self):
@@ -68,6 +68,22 @@ class CheckTest(unittest.TestCase):
             result = check_hpc_environment()
         self.assertEqual(result['status'], 'unavailable')
         self.assertIn('SSH panel', result['reason'])
+
+    def test_ssh_without_a_configured_environment_is_not_called_unreachable(self):
+        error = hpc.ssh_transport.SshRemoteError('Checking remote paths.')
+        with patch.object(hpc.ssh_transport, 'available', return_value=True), \
+                patch.object(hpc.ssh_transport, 'setup_environment', side_effect=error), \
+                patch.object(hpc.ssh_transport, 'remote') as remote:
+            result = check_hpc_environment()
+        self.assertEqual((result['status'], result['reason']), ('not_ready', 'Checking remote paths.'))
+        self.assertNotIn('not reachable', result['reason'])
+        remote.assert_not_called()
+
+    def test_missing_container_is_reported_instead_of_blocking_the_check(self):
+        result, _ = self.check(markers(**{**READY, 'file_container': 'no'}))
+        self.assertEqual(result['status'], 'ok')
+        self.assertEqual(result['not_ready'], ['container'])
+        self.assertIn('images/signet-0.0.6.sif', self.item(result, 'container')['detail'])
 
     def test_ready_environment_reports_every_item_ok_and_read_only(self):
         result, remote = self.check('Welcome banner\n' + markers(**READY))
@@ -122,13 +138,50 @@ class CheckTest(unittest.TestCase):
 
 
 class StepToolTest(unittest.TestCase):
-    def test_installation_is_owned_by_the_existing_desktop_environment(self):
+    def test_source_installation_stays_with_the_desktop_environment(self):
         with patch.object(hpc.ssh_transport, 'remote') as remote:
-            for tool in (create_hpc_workspace, install_signet_source, download_signet_container):
+            for tool in (create_hpc_workspace, install_signet_source):
                 result = tool()
                 self.assertEqual((result['status'], result['executed']), ('blocked', False))
-                self.assertIn('Remote environment', result['reason'])
+                self.assertIn('Workflow panel', result['reason'])
         remote.assert_not_called()
+
+    def test_container_download_is_refused_until_its_checksum_is_pinned(self):
+        with patch.object(hpc, 'CONTAINER_SHA256', None), patch.object(hpc.ssh_transport, 'remote') as remote:
+            result = download_signet_container()
+        self.assertEqual((result['status'], result['executed']), ('blocked', False))
+        self.assertIn('checksum', result['reason'])
+        remote.assert_not_called()
+
+    def test_container_download_is_a_verified_slurm_job(self):
+        with patch.object(hpc, 'CONTAINER_SHA256', 'a' * 64), \
+                Remote(markers(workspace_path='/pub/tester/signet-agent', container='started', container_job='42')) as remote:
+            result = download_signet_container()
+        self.assertEqual((result['status'], result['executed'], result['job_id']), ('ok', True, '42'))
+        script = remote.call_args.kwargs['input'].decode()
+        self.assertIn('sbatch --parsable --job-name=signet-container', script)
+        for expected in (hpc.CONTAINER_URL, str(hpc.CONTAINER_BYTES), 'a' * 64, 'ln "$PARTIAL" "$I"'):
+            self.assertIn(expected, script)
+        self.assertNotIn('library://', script)
+        self.assertNotIn('pull', script.split('SIGNET_JOB')[1])
+
+    def test_container_job_never_publishes_a_wrong_file(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(hpc, 'CONTAINER_SHA256', 'a' * 64):
+            image = Path(directory, 'images', 'signet.sif')
+            bin_dir = Path(directory, 'bin')
+            bin_dir.mkdir()
+            # A stand-in for an HTML quota page returned instead of the image.
+            curl = bin_dir / 'curl'
+            curl.write_text('#!/bin/sh\nwhile [ "$1" != "-o" ]; do shift; done\nprintf "<html>" > "$2"\n')
+            curl.chmod(0o700)
+            stat = bin_dir / 'stat'
+            stat.write_text('#!/bin/sh\nwc -c < "$3" | tr -d " "\n')
+            stat.chmod(0o700)
+            done = subprocess.run(['bash', '-c', hpc._container_job()], capture_output=True, text=True,
+                                  env={**os.environ, 'I': str(image), 'PATH': f"{bin_dir}:{os.environ['PATH']}"})
+            self.assertEqual(done.returncode, 1)
+            self.assertIn('expected', done.stderr)
+            self.assertEqual(list(image.parent.iterdir()), [])
 
 
 if __name__ == '__main__':

@@ -4,7 +4,7 @@ import {mkdtemp,mkdir,writeFile,readFile,rm,rename} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
-import {probe,installImage,verify} from '../main/environment/scripts';
+import {probe,verify} from '../main/environment/scripts';
 import type {EnvironmentConfig} from '../shared/environment/types';
 async function fixture(t:any){
  const root=await mkdtemp(path.join(tmpdir(),'signet-modules-'));t.after(()=>rm(root,{recursive:true,force:true}));
@@ -40,13 +40,12 @@ test('probe loads an available versioned module instead of reporting the install
  assert.equal(found.executor,f.config.executor);assert.equal(found.runtime_module,'singularity/3.9.4');
  assert.equal((await readFile(f.log,'utf8')).trim(),'singularity/3.9.4');
 });
-test('image installation and verification reload the module in separate fresh shells',async t=>{
+test('verification reloads the module in a fresh shell',async t=>{
  const f=await fixture(t);await mkdir(f.config.source);await writeFile(path.join(f.config.source,'signet'),'fixture');
  await writeFile(path.join(f.config.source,'config.ini.default'),'[basic]\ncohort = TCGA\n');
  await writeFile(path.join(f.bin,'sinfo'),'#!/bin/sh\necho standard\n',{mode:0o700});
- const installed=f.run(installImage(f.config));assert.equal(installed.status,0,installed.stderr);assert.equal(await readFile(f.config.image,'utf8'),'image');
  const verified=f.run(verify(f.config));assert.equal(verified.status,0,verified.stderr);
- assert.deepEqual((await readFile(f.log,'utf8')).trim().split('\n'),['singularity/3.9.4','singularity/3.9.4']);
+ assert.deepEqual((await readFile(f.log,'utf8')).trim().split('\n'),['singularity/3.9.4']);
 });
 test('missing or unloadable modules keep the runtime unresolved',async t=>{
  const f=await fixture(t);
@@ -62,7 +61,7 @@ test('an already available runtime needs no module operation',async t=>{
  assert.equal(values(result.stdout).runtime_module,'');await assert.rejects(readFile(f.log));
 });
 test('invalid module names cannot become generated shell code',async t=>{
- const f=await fixture(t);assert.throws(()=>installImage({...f.config,runtimeModule:'singularity/3.9.4; touch /tmp/unsafe'}),/module/i);
+ const f=await fixture(t);assert.throws(()=>verify({...f.config,runtimeModule:'singularity/3.9.4; touch /tmp/unsafe'}),/module/i);
 });
 
 test('Apptainer versioned modules are discovered when Singularity is unavailable',async t=>{

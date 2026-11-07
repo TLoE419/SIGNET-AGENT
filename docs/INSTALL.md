@@ -120,10 +120,10 @@ For terminal chat instead of the web page, run `.venv/bin/python -m agent.core.c
 
 ### Desktop model and workflow controls
 
-After launching Electron, configure SSH and open **Remote environment** to check
-or install the pinned source and container. Installation requires its own
-confirmation. Open **Workflow** to check reference inputs; individual download
-and conversion buttons ask before submitting work to the configured Slurm partition.
+After launching Electron, configure SSH and open **Workflow** to check the pinned
+source, container and reference inputs. Individual install, download and conversion
+buttons ask first; downloads run as jobs on the configured Slurm partition. Use
+**HPC3 settings** to change the installation root or partition.
 The desktop environment settings are authoritative: `SIGNET_HPC_WORKSPACE` does
 not override them. This preserves the root already selected for your SSH account.
 

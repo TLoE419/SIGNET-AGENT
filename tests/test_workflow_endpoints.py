@@ -65,6 +65,18 @@ class WorkflowEndpointTest(unittest.TestCase):
             tool.assert_called_once_with(key)
         self.assertEqual(self.post('/hpc/reference/secrets')[0], 404)
 
+    def test_file_window_routes_pass_their_values_and_need_the_token(self):
+        from agent.runtime import hpc_files
+        with patch.object(hpc_files, 'select', return_value={'status': 'ok'}) as select:
+            self.assertEqual(self.post('/hpc/files/select', '{"key":"gtf"}', headers={'Origin': self.origin})[0], 403)
+            select.assert_not_called()
+            status, _ = self.post('/hpc/files/select', json.dumps({'key': 'gtf', 'path': '/pub/u/a.gtf'}))
+        self.assertEqual(status, 200)
+        select.assert_called_once_with('gtf', '/pub/u/a.gtf')
+        self.assertEqual(self.post('/hpc/files/unknown')[0], 404)
+        self.assertEqual(self.post('/hpc/files/list', 'not json')[0], 400)
+        self.assertEqual(self.post('/hpc/files/list', '{"path":"' + 'a' * 5000 + '"}')[0], 400)
+
     def test_unknown_actions_and_oversized_bodies_are_rejected(self):
         self.assertEqual(self.post('/hpc/read_file')[0], 404)
         self.assertEqual(self.post('/hpc/check', body='x' * 2048)[0], 400)
