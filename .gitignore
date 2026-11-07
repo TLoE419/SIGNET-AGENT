@@ -24,7 +24,7 @@ data/
 /vm/
 /results/
 /analyses/
-node_modules/
+node_modules
 *.pyc
 *.log
 *.pem
