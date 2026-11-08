@@ -178,3 +178,34 @@ test('initial slow verification retries and resumes without authenticating again
  assert.equal(s.service.getSnapshot().connection?.phase,'ready');
  await s.service.disconnect(profile.id);
 });
+
+test('modal retry keeps the retained master and profile mutations require disconnect',async t=>{
+ const s=await setup(t),profile=await s.service.saveProfile({...s.input,auth:{method:'duo'}});
+ const run=s.service.connect(profile.id,'account-secret');
+ await until(()=>s.transports.length===1);
+ const transport=s.transports[0],exec=transport.exec.bind(transport);
+ transport.exec=async()=>{throw new SshFailure('CONNECTION_TIMEOUT','delayed')};
+ transport.succeed();await assert.rejects(run,{code:'REMOTE_SLOW'});
+ const saved=await s.service.saveProfile({...s.input,auth:{method:'duo'},id:profile.id});
+ assert.equal(saved.id,profile.id);
+ assert.equal(s.service.getSnapshot().connection?.phase,'slow');
+ await assert.rejects(s.service.saveProfile({...s.input,name:'Changed',auth:{method:'duo'}}),{code:'INVALID_PROFILE'});
+ await assert.rejects(s.service.selectProfile(profile.id),{code:'INVALID_PROFILE'});
+ transport.exec=exec;
+ await s.service.connect(saved.id,'');
+ assert.equal(s.transports.length,1);assert.equal(transport.calls,1);
+ await s.service.disconnect(profile.id);
+ assert.equal(transport.closed,1);
+ await s.service.saveProfile({...s.input,name:'Changed',auth:{method:'duo'}});
+});
+
+test('disconnect closes a master retained after initial slow verification',async t=>{
+ const s=await setup(t),profile=await s.service.saveProfile(s.input),run=s.service.connect(profile.id,phrase);
+ await until(()=>s.transports.length===1);
+ const transport=s.transports[0];
+ transport.exec=async()=>{throw new SshFailure('CONNECTION_TIMEOUT','delayed')};
+ transport.succeed();await assert.rejects(run,{code:'REMOTE_SLOW'});
+ await s.service.disconnect(profile.id);
+ assert.equal(transport.closed,1);
+ assert.equal(s.service.getSnapshot().connection?.status,'disconnected');
+});

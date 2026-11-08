@@ -312,3 +312,13 @@ test('a slow connected session keeps the switch on and displays its retry guidan
  assert.equal(screen.getByRole('switch',{name:'SSH connection enabled'}).getAttribute('aria-checked'),'true');
  assert.ok(screen.getByText('HPC3 is responding slowly. Retry without signing in again.'));
 });
+
+test('retained Duo login retries verification without a password field',async()=>{
+ const requests:Array<string[]>=[];
+ render(<AccountLoginPrompt open resume username="testuser" onLogin={async(user,password)=>{requests.push([user,password])}}
+  onClose={()=>{}} onComplete={()=>{}} onAnswer={async()=>{}} onTrust={async()=>{}}/>);
+ assert.equal(screen.queryByLabelText('UCInetID password'),null);
+ assert.equal((screen.getByLabelText('UCInetID / username') as HTMLInputElement).disabled,true);
+ fireEvent.click(screen.getByRole('button',{name:'Retry verification'}));
+ await waitFor(()=>assert.deepEqual(requests,[['testuser','']]));
+});
