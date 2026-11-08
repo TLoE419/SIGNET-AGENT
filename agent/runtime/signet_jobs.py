@@ -1,8 +1,15 @@
-"""Run single SIGNET steps (e.g. `signet -t`) on HPC3 as Slurm jobs, over the app's SSH connection.
+"""Run single SIGNET steps on HPC3 as Slurm jobs, over the app's SSH connection.
+
+Steps so far: "expression" (`signet -t`) and "genotype" (`signet -g`), both TCGA.
 
 This is the one place that decides what a step may do. The local HTTP API
 (agent/app) and any future AI tool call these functions; neither builds shell
 text itself. Callers pick a step from STEPS and pass validated values only.
+
+Inputs are HPC3 paths below a few allowed folders. Most are single files. Some
+(the genotype step's ref and gmap) are per-chromosome prefixes: SIGNET reads
+<prefix><N>.gen / <prefix><N>.map for each chromosome N it processes, so
+submit() checks each of those files before anything is queued.
 
 Flow for one step of one local run (runs/<run_id>):
   submit()  upload the run's audited scripts and config.ini to
@@ -24,7 +31,7 @@ The HTTP server is multi-threaded, so submit/status/cancel of the same run and
 step run one at a time (see _one_at_a_time); otherwise two status checks of a
 finished job could both download the results and leave the record stuck.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import functools
 import json
 import os
@@ -71,6 +78,10 @@ class Step:
     resources: dict      # default Slurm request
     limits: dict         # allowed range for each resource override
     description: str
+    # Inputs that are per-chromosome prefixes, not files: key -> suffix. SIGNET reads
+    # <prefix><N><suffix> for each chromosome N it processes (see _chromosomes).
+    prefixes: dict = field(default_factory=dict)
+    failures: tuple = ()  # extra log lines, specific to this step, that mean it failed
 
 
 STEPS = {
@@ -84,13 +95,28 @@ STEPS = {
         resources={'cpus': 4, 'mem_gb': 16, 'hours': 2},
         limits={'cpus': (1, 16), 'mem_gb': (1, 64), 'hours': (0.25, 12)},
         description='TCGA expression preprocessing (signet -t): normalize read counts and find gene positions.'),
+    'genotype': Step(
+        flag='-g', cohort='TCGA', inputs=('ped.file', 'map.file', 'ref', 'gmap'),
+        # script/geno_prep/imputation.sh runs IMPUTE2 with -g_ref <ref><N>.gen and -m <gmap><N>.map.
+        prefixes={'ref': '.gen', 'gmap': '.map'},
+        settings={'restrict.tcga.geno': 'chromosome', 'mind': 'fraction', 'geno': 'fraction',
+                  'hwe': 'fraction', 'int': 'interval'},
+        # Written by script/geno_prep/combine_geno.sh with the resg.tcga prefix res/resg/signet.
+        required=('res/resg/signet_Geno', 'res/resg/signet_Genotype.sampleID'),
+        download='work/res/resg',
+        # IMPUTE2 runs one chunk per core (ParaFly -CPU ncore_local); each chunk needs a few GB.
+        resources={'cpus': 8, 'mem_gb': 32, 'hours': 4},
+        limits={'cpus': (1, 32), 'mem_gb': (1, 128), 'hours': (0.25, 24)},
+        # check_ped.sh and imputation.sh print these, then stop with kill -10; signet still exits 0.
+        failures=('No SNP listed in your chromosome input', 'Some of the jobs are incomplete'),
+        description='TCGA genotype preprocessing (signet -g): PLINK quality control, then IMPUTE2 imputation.'),
 }
 
 
 def catalog():
     """Describe every step so a form can be built without hard-coding: inputs, settings, resources, outputs."""
     return {'steps': [{'name': name, 'flag': step.flag, 'cohort': step.cohort, 'description': step.description,
-                       'inputs': list(step.inputs), 'settings': step.settings,
+                       'inputs': list(step.inputs), 'prefix_inputs': step.prefixes, 'settings': step.settings,
                        'resources': step.resources, 'limits': {k: list(v) for k, v in step.limits.items()},
                        'required_outputs': list(step.required)} for name, step in STEPS.items()],
             'input_roots': ['<workspace>/refdata', '<signet source>/example', '<this run on HPC3>'],
@@ -197,12 +223,22 @@ def update_settings(run_id, values):
 
 
 def _setting(key, rule, value):
+    """Check one setting value against its rule and return it as config.ini text."""
+    number = isinstance(value, (int, float)) and not isinstance(value, bool)
     if rule == 'chromosome':
         if value == 'no':
             return 'no'
         if isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 22:
             return str(value)
         raise StepError('invalid_request', f'{key} must be "no" or a chromosome from 1 to 22.')
+    if rule == 'fraction':   # PLINK cutoffs: --mind, --geno, --hwe
+        if number and 0 <= value <= 1:
+            return str(value)
+        raise StepError('invalid_request', f'{key} must be a number from 0 to 1.')
+    if rule == 'interval':   # IMPUTE2 chunk length in base pairs
+        if isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 100_000_000:
+            return str(value)
+        raise StepError('invalid_request', f'{key} must be a whole number of base pairs from 1 to 100000000.')
     raise StepError('invalid_request', f'No rule for {key}.')
 
 
@@ -238,6 +274,29 @@ def _inputs(step, values, allowed):
             raise StepError('invalid_request', f'{key} must be inside ' + ', '.join(allowed) + '.')
         checked[key] = (value, root)
     return checked
+
+
+def _chromosome_key(step):
+    return next((key for key, rule in step.settings.items() if rule == 'chromosome'), 'the chromosome setting')
+
+
+def _chromosomes(step, settings):
+    """Chromosomes the step will read: the one its chromosome setting names, else 1..nchr."""
+    for key, rule in step.settings.items():
+        if rule == 'chromosome' and settings.get(key, 'no') != 'no':
+            return [int(settings[key])]
+    return list(range(1, int(settings.get('nchr', '22')) + 1))
+
+
+def _files(step, checked, settings):
+    """Every HPC3 file the step reads, as (key, path, root); a prefix input expands to one file per chromosome."""
+    files = []
+    for key, (path, root) in checked.items():
+        if key in step.prefixes:
+            files += [(key, f'{path}{n}{step.prefixes[key]}', root) for n in _chromosomes(step, settings)]
+        else:
+            files.append((key, path, root))
+    return files
 
 
 # ---------- HPC3 access ----------
@@ -338,13 +397,16 @@ def _upload(root, directory, token):
         raise StepError('remote_failed', 'Could not upload the run to HPC3; nothing was submitted.')
 
 
-def _submit_script(config, run_id, name, step, directory, inputs, resources):
+def _submit_script(config, run_id, name, step, directory, files, resources):
+    """Login-node script: check every input file, write the job script, sbatch it and record the job ID."""
     q = shlex.quote
-    binds = sorted({root for _, root in inputs.values() if root != directory})
+    binds = sorted({root for _, _, root in files if root != directory})
+    # A file must be a real, non-empty file at exactly this path: no link may lead elsewhere.
     checks = ''.join(
         f'r="$(readlink -f -- {q(root)})"; f="$(readlink -f -- {q(path)})"\n'
-        f'if [ "$f" != "$r/{path[len(root) + 1:]}" ] || [ ! -f "$f" ] || [ ! -s "$f" ]; then say missing_input {q(key)}; exit 4; fi\n'
-        for key, (path, root) in inputs.items())
+        f'if [ "$f" != "$r/{path[len(root) + 1:]}" ] || [ ! -f "$f" ] || [ ! -s "$f" ]; then '
+        f'say missing_input {q(key)}; say missing_file {q(path)}; exit 4; fi\n'
+        for key, path, root in files)
     job = _job_script(config, run_id, name, step, directory, binds)
     sbatch = (f'sbatch --parsable --partition={config["partition"]} --cpus-per-task={resources["cpus"]} '
               f'--mem={resources["mem_gb"]}G --time={resources["time"]} "$D/steps/{name}.sbatch"')
@@ -395,7 +457,8 @@ def submit(run_id, name, inputs, resources=None):
             # Record intent before sbatch: a lost connection from here on may have started a job.
             _change(record, 'submitting')
             _save(root, record)
-            code, values, _ = _shell(_submit_script(config, run_id, name, step, directory, checked, request))
+            files = _files(step, checked, signet._settings(root))
+            code, values, _ = _shell(_submit_script(config, run_id, name, step, directory, files, request))
         except OSError as error:
             if record.get('state') != 'submitting':
                 raise StepError('remote_failed', 'HPC3 connection failed before anything was submitted.') from error
@@ -407,7 +470,10 @@ def submit(run_id, name, inputs, resources=None):
         # Nothing was queued, so forget the attempt and let the user fix the cause and retry.
         _record_path(root, name).unlink(missing_ok=True)
         if 'missing_input' in values:
-            raise StepError('invalid_request', f'{values["missing_input"]} is missing, empty, or reached through a link on HPC3.')
+            key = values['missing_input']
+            hint = (f' (looked for {values.get("missing_file")}; set {_chromosome_key(step)} to the chromosome you have'
+                    ' files for)') if key in step.prefixes else ''
+            raise StepError('invalid_request', f'{key} is missing, empty, or reached through a link on HPC3{hint}.')
         if 'not_ready' in values:
             raise StepError('not_ready', f'HPC3 is not ready: {values["not_ready"]} is missing. Check the remote environment.')
         if 'conflict' in values:
@@ -424,7 +490,7 @@ def _status_script(record, step):
     job_name = f'signet-{name}-{record["run_id"]}'
     outputs = ''.join(f'[ -s {q(directory + "/work/" + path)} ] && say output_{i} yes\n'
                       for i, path in enumerate(step.required))
-    pattern = '|'.join(re.escape(p) for p in FAILURE_PATTERNS)
+    pattern = '|'.join(re.escape(p) for p in FAILURE_PATTERNS + step.failures)
     return _say() + f'''D={q(directory)}
 j={q(job) if job else '"$(head -n 1 "$D/steps/' + name + '.job" 2>/dev/null)"'}
 # No ID recorded (connection lost around sbatch): look for this step's own job name, ours only.

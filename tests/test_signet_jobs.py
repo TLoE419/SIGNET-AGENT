@@ -4,6 +4,10 @@ The SSH transport is replaced by a local bash, so the real login-node scripts
 run against a temporary folder that plays HPC3. Small stand-ins for sbatch,
 squeue, sacct and scancel read and write files in that folder; no network,
 Slurm or container is needed.
+
+Most tests use the expression step (signet -t). The genotype tests (signet -g) at
+the end cover what is new there: per-chromosome prefix inputs (ref, gmap),
+the PLINK/IMPUTE2 settings, and failure lines specific to -g.
 """
 import json
 import os
@@ -303,6 +307,100 @@ class StepsTest(unittest.TestCase):
             self.assertEqual(self.code_of(steps.update_settings, 'step_test', bad), 'invalid_request', bad)
         steps.submit('step_test', 'expression', self.inputs)
         self.assertEqual(self.code_of(steps.update_settings, 'step_test', {'restrict.tcga': 2}), 'conflict')
+
+    # ---------- genotype (signet -g) ----------
+
+    def genotype_inputs(self, chromosomes=(1,)):
+        """Files laid out like refdata/prepared/example after the imputation-reference conversion."""
+        prepared = self.hpc / 'ws/refdata/prepared/example'
+        for folder in ('ref', 'gmap'):
+            (prepared / folder).mkdir(parents=True, exist_ok=True)
+        for n in chromosomes:
+            (prepared / f'ref/chr{n}.gen').write_text('1 rs1 100 A G 1 0 0\n')
+            (prepared / f'gmap/chr{n}.map').write_text('position COMBINED_rate(cM/Mb) Genetic_Map(cM)\n')
+        (prepared / 'study.ped').write_text('S1 S1 0 0 0 -9 A G\n')
+        (prepared / 'study.map').write_text('1\trs1\t0\t100\n')
+        return {'ped.file': str(prepared / 'study.ped'), 'map.file': str(prepared / 'study.map'),
+                'ref': str(prepared / 'ref/chr'), 'gmap': str(prepared / 'gmap/chr')}
+
+    def test_catalog_describes_genotype_prefix_inputs_and_settings(self):
+        step = next(s for s in steps.catalog()['steps'] if s['name'] == 'genotype')
+        self.assertEqual((step['flag'], step['cohort']), ('-g', 'TCGA'))
+        self.assertEqual(step['inputs'], ['ped.file', 'map.file', 'ref', 'gmap'])
+        self.assertEqual(step['prefix_inputs'], {'ref': '.gen', 'gmap': '.map'})
+        self.assertEqual(step['required_outputs'], ['res/resg/signet_Geno', 'res/resg/signet_Genotype.sampleID'])
+
+    def test_genotype_on_one_chromosome_checks_its_files_and_queues_signet_g(self):
+        inputs = self.genotype_inputs()
+        steps.update_settings('step_test', {'restrict.tcga.geno': 1})
+        record = steps.submit('step_test', 'genotype', inputs)
+        self.assertEqual(record['state'], 'submitted')
+        args = (self.fake / 'sbatch_args').read_text().split()
+        self.assertEqual(args[2:5], ['--cpus-per-task=8', '--mem=32G', '--time=04:00:00'])
+        text = (self.remote_dir / 'steps/genotype.sbatch').read_text()
+        self.assertIn('bash ./signet -g < /dev/null', text)
+        self.assertIn(f'{self.hpc}/ws/refdata:{self.hpc}/ws/refdata:ro', text)
+        config = (self.remote_dir / 'work/config.ini').read_text()
+        self.assertIn(f'ref = {inputs["ref"]}', config)       # the prefix, as SIGNET expects it
+        self.assertIn(f'gmap = {inputs["gmap"]}', config)
+        self.assertIn('restrict.tcga.geno = 1', config)
+        self.assertIn(f'resg.tcga = {self.remote_dir}/work/res/resg/signet', config)
+
+    def test_genotype_on_all_chromosomes_needs_every_chromosome_file(self):
+        inputs = self.genotype_inputs(chromosomes=(1,))
+        with self.assertRaises(steps.StepError) as caught:
+            steps.submit('step_test', 'genotype', inputs)
+        self.assertEqual(caught.exception.code, 'invalid_request')
+        self.assertIn('chr2.gen', str(caught.exception))
+        self.assertIn('restrict.tcga.geno', str(caught.exception))
+        self.assertFalse((self.fake / 'sbatch_args').exists())
+        self.genotype_inputs(chromosomes=range(1, 23))
+        self.assertEqual(steps.submit('step_test', 'genotype', inputs)['state'], 'submitted')
+
+    def test_genotype_prefix_reached_through_a_link_is_refused(self):
+        inputs = self.genotype_inputs()
+        steps.update_settings('step_test', {'restrict.tcga.geno': 1})
+        gen = Path(inputs['ref'] + '1.gen')
+        gen.unlink()
+        gen.symlink_to(self.hpc / 'signet.sif')
+        self.assertEqual(self.code_of(steps.submit, 'step_test', 'genotype', inputs), 'invalid_request')
+        self.assertFalse((self.fake / 'sbatch_args').exists())
+
+    def test_genotype_log_lines_from_signet_scripts_mean_failure(self):
+        inputs = self.genotype_inputs()
+        steps.update_settings('step_test', {'restrict.tcga.geno': 1})
+        steps.submit('step_test', 'genotype', inputs)
+        for relative in steps.STEPS['genotype'].required:
+            path = self.remote_dir / 'work' / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('data\n')
+        (self.remote_dir / 'steps/genotype.out').write_text(
+            'Warning: Some of the jobs are incomplete! There could be a memeory allocation issue.\n')
+        (self.remote_dir / 'steps/genotype.done').write_text('0 2026-11-08T10:00:00\n')
+        self.slurm(squeue='', sacct='COMPLETED')
+        record = steps.status('step_test', 'genotype', refresh=True)
+        self.assertEqual(record['state'], 'failed')
+        self.assertIn('Some of the jobs are incomplete', record['failure_hints'][0])
+
+    def test_genotype_completed_downloads_resg(self):
+        steps.update_settings('step_test', {'restrict.tcga.geno': 1})
+        steps.submit('step_test', 'genotype', self.genotype_inputs())
+        for relative in steps.STEPS['genotype'].required:
+            path = self.remote_dir / 'work' / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('data\n')
+        (self.remote_dir / 'steps/genotype.done').write_text('0 2026-11-08T10:00:00\n')
+        self.slurm(squeue='', sacct='COMPLETED')
+        self.assertEqual(steps.status('step_test', 'genotype', refresh=True)['state'], 'completed')
+        self.assertEqual((self.root / 'work/res/resg/signet_Geno').read_text(), 'data\n')
+
+    def test_genotype_settings_rules(self):
+        values = {'restrict.tcga.geno': 1, 'mind': 0.05, 'geno': 0, 'hwe': 0.0001, 'int': 3000000}
+        settings = steps.update_settings('step_test', values)
+        self.assertEqual([settings[k] for k in values], ['1', '0.05', '0', '0.0001', '3000000'])
+        for bad in ({'mind': 1.5}, {'hwe': '0.01'}, {'geno': True}, {'int': 0}, {'int': 2.5},
+                    {'restrict.tcga.geno': 23}):
+            self.assertEqual(self.code_of(steps.update_settings, 'step_test', bad), 'invalid_request', bad)
 
     def test_read_log_returns_last_lines_with_limits(self):
         steps.submit('step_test', 'expression', self.inputs)
