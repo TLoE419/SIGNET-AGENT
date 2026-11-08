@@ -305,3 +305,10 @@ test('SSH icon collapses manually and reapplies defaults on status changes',()=>
  view.rerender(<SshStatusBlock {...props} status="error"/>);
  assert.ok(screen.getByRole('switch'));
 });
+
+test('a slow connected session keeps the switch on and displays its retry guidance',()=>{
+ render(<SshStatusBlock name="HPC3" host="test-host" status="connected" phase="slow"
+  environment={{phase:'ready',message:'Verified'}} onEdit={()=>{}} onToggle={()=>{}}/>);
+ assert.equal(screen.getByRole('switch',{name:'SSH connection enabled'}).getAttribute('aria-checked'),'true');
+ assert.ok(screen.getByText('HPC3 is responding slowly. Retry without signing in again.'));
+});

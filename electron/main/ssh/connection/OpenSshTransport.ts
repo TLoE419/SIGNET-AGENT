@@ -15,7 +15,7 @@ export interface ShellChannel extends EventEmitter {
 }
 export interface SshTransport extends EventEmitter {
  connect(secret:string):Promise<void>;exec(command:string,input:Buffer,timeoutMs:number):Promise<RemoteResult>;
- openShell(cols:number,rows:number):Promise<ShellChannel>;close():Promise<void>;
+ openShell(cols:number,rows:number):Promise<ShellChannel>;close():Promise<void>;isAlive?():Promise<boolean>;
 }
 type ReadinessProbe=()=>Promise<number>;
 type PtyFactory=(file:string,args:string[],options:pty.IPtyForkOptions)=>pty.IPty;
@@ -112,6 +112,7 @@ export class OpenSshTransport extends EventEmitter implements SshTransport {
    const timer=setTimeout(()=>{child.kill('SIGTERM');done(new SshFailure('CONNECTION_TIMEOUT','The remote command timed out.'))},timeoutMs);if(input.length)child.stdin.end(input);else child.stdin.end();
   });
  }
+ async isAlive(){return !!this.process && !this.closing && await this.control('check')===0}
  private control(action:'check'|'exit',timeoutMs=3000){return new Promise<number>(resolve=>{const child=spawnChild('/usr/bin/ssh',['-S',this.controlPath,'-O',action,'-p',String(this.profile.port),'--',`${this.profile.username}@${this.profile.host}`],{stdio:'ignore'}),timer=setTimeout(()=>{child.kill('SIGTERM');resolve(255)},timeoutMs);child.on('error',()=>{clearTimeout(timer);resolve(255)});child.on('close',code=>{clearTimeout(timer);resolve(Number.isInteger(code)?code!:255)})})}
  async close(){
   if(this.closing)return this.exit||Promise.resolve();this.closing=true;this.challengeOpen=false;this.secret='';for(const shell of [...this.shells])shell.destroy();

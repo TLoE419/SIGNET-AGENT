@@ -25,7 +25,7 @@ export function SshControls(){
  async function refreshKeys(){setKeys(await onboarding.listKeys())}
  function credentialRequest(e:unknown){const code=(e as {code?:string}).code;if(code==='PASSPHRASE_REQUIRED'){setUnlock(true);return}if(code==='PASSWORD_REQUIRED'){setAccount(true);return}throw e}
  async function connect(input:FormInput){setDraft(null);if(input.auth.method==='duo'){await ssh.save(input);setOpen(false);setAccount(true);return}try{await ssh.connect(input)}catch(e){credentialRequest(e)}}
- async function toggle(){if(liveStatus==='connected'||liveStatus==='connecting'){await ssh.disconnect();return}if(!p){setOpen(true);return}if(p.auth.method==='duo'){setAccount(true);return}try{await ssh.connectSaved()}catch(e){credentialRequest(e)}}
+ async function toggle(){if(connection?.phase==='slow'&&liveStatus==='error'){await ssh.connectSaved();return}if(liveStatus==='connected'||liveStatus==='connecting'){await ssh.disconnect();return}if(!p){setOpen(true);return}if(p.auth.method==='duo'){setAccount(true);return}try{await ssh.connectSaved()}catch(e){credentialRequest(e)}}
  const connection=ssh.snapshot.connection,identity=connectionIdentity(p,keys);
  return <>{devTerminal&&<DevTerminalPanel onConnect={()=>setOpen(true)} diagnostics={diagnostics} bridge={devTerminal} connected={liveStatus==='connected'} status={liveStatus}/>}<SshStatusBlock environment={environment} onEnvironment={()=>setEnvironmentOpen(true)} name={identity.name} host={identity.endpoint} status={status} phase={connection?.phase} error={ssh.error||connection?.error} busy={ssh.busy} onEdit={()=>setOpen(true)} onToggle={()=>void toggle().catch(()=>{})}/>
  <RemoteFilesHost/>
