@@ -7,14 +7,14 @@ import {ModeIcon} from '../../../components/ModeIcon';
 import {HostTrust} from '../auth/LoginSteps';
 import {KeyDetailsModal} from '../keys/KeyDetailsModal';
 export interface ConnectionModalProps {
- diagnostics?:ReactNode;open:boolean;profile:FormInput|null;keys:KeyMetadata[];status:Status|'unconfigured';busy?:boolean;error?:SshError|null;
+ retained?:boolean;onRetry?:()=>Promise<void>;diagnostics?:ReactNode;open:boolean;profile:FormInput|null;keys:KeyMetadata[];status:Status|'unconfigured';busy?:boolean;error?:SshError|null;
  onInspectKey:(path:string)=>Promise<Inspection>;onSave:(input:FormInput)=>Promise<void>;onConnect:(input:FormInput)=>Promise<void>;
  onDisconnect:()=>Promise<void>;onCheck?:()=>Promise<void>;onClose:()=>void;onOpenKeyRegistration:(draft:FormInput)=>void;onUpdateKey?:(id:string,input:{label:string;username?:string})=>Promise<void>;onRemoveKey?:(id:string)=>Promise<void>;pendingHost?:HostIdentity;onTrustHost?:()=>Promise<void>;health?:ConnectionHealth;
 }
 export function ConnectionModal(p:ConnectionModalProps){
  const [form,setForm]=useState<FormInput>(p.profile||uciHpc3Preset),[inspection,setInspection]=useState<Inspection|null>(null),[error,setError]=useState(''),[working,setWorking]=useState(false);
  const lock=useRef(false),generation=useRef(0);
- const active=['connected','connecting','disconnecting'].includes(p.status),disabled=working||p.busy||active;
+ const active=p.retained||['connected','connecting','disconnecting'].includes(p.status),disabled=working||p.busy||active;
  const legacy=p.profile?.auth.method==='private-key'&&!p.profile.auth.keyId?p.profile:null;
  const [keyDetails,setKeyDetails]=useState(false);
  const selectedKey=p.keys.find(k=>k.keyId===form.auth.keyId);
@@ -35,7 +35,7 @@ export function ConnectionModal(p:ConnectionModalProps){
    <label>UCInetID / username<input aria-label="UCInetID / username" required autoComplete="username" value={form.username} maxLength={128} onChange={e=>setForm({...form,username:e.target.value})}/></label>
    <details className="ssh-advanced"><summary>Advanced connection settings</summary><label>Host<input required value={form.host} onChange={e=>setForm({...form,host:e.target.value})}/></label><label>Port<input required type="number" min="1" max="65535" value={form.port} onChange={e=>setForm({...form,port:Number(e.target.value)})}/></label></details>
   </fieldset>{p.health&&<section aria-label="HPC3 connection health"><strong>Last verified {new Date(p.health.checkedAt).toLocaleTimeString()}</strong><ul>{p.health.steps.map(step=><li key={step.name}>{step.ok?'✓':'×'} {step.detail}</li>)}</ul></section>}{(error||p.error)&&<p role="alert">{error||p.error?.message}</p>}<HostTrust identity={p.pendingHost} onTrust={p.onTrustHost}/>
-  {p.diagnostics}<DialogActions>{active?<><button type="button" className="ssh-danger" disabled={p.status==='disconnecting'} onClick={()=>void p.onDisconnect().catch(e=>setError(e.message))}>{p.status==='connecting'?'Cancel connection':'Disconnect'}</button>{p.status==='connected'&&p.onCheck&&<button type="button" disabled={working||p.busy} onClick={()=>{setWorking(true);setError('');void p.onCheck!().catch(e=>setError(e.message)).finally(()=>setWorking(false))}}>{working?'Checking…':'Check again'}</button>}</>:<><button type="button" disabled={!!disabled||(form.auth.method==='private-key'&&inspection?.status!=='encrypted')} onClick={()=>void submit(false)}>Save</button><button type="submit" className="ssh-primary" disabled={!!disabled||(form.auth.method==='private-key'&&inspection?.status!=='encrypted')}>Connect</button></>}</DialogActions>
+  {p.diagnostics}<DialogActions>{active?<><button type="button" className="ssh-danger" disabled={p.status==='disconnecting'} onClick={()=>void p.onDisconnect().catch(e=>setError(e.message))}>{p.status==='connecting'?'Cancel connection':'Disconnect'}</button>{p.retained&&p.status==='error'&&p.onRetry&&<button type="button" disabled={working||p.busy} onClick={()=>{setWorking(true);setError('');void p.onRetry!().catch(e=>setError(e.message)).finally(()=>setWorking(false))}}>Retry verification</button>}{p.status==='connected'&&p.onCheck&&<button type="button" disabled={working||p.busy} onClick={()=>{setWorking(true);setError('');void p.onCheck!().catch(e=>setError(e.message)).finally(()=>setWorking(false))}}>{working?'Checking…':'Check again'}</button>}</>:<><button type="button" disabled={!!disabled||(form.auth.method==='private-key'&&inspection?.status!=='encrypted')} onClick={()=>void submit(false)}>Save</button><button type="submit" className="ssh-primary" disabled={!!disabled||(form.auth.method==='private-key'&&inspection?.status!=='encrypted')}>Connect</button></>}</DialogActions>
  </form></Modal>
  {p.open&&keyDetails&&selectedKey&&<KeyDetailsModal key={selectedKey.keyId} keyInfo={selectedKey} onClose={()=>setKeyDetails(false)} onUpdate={p.onUpdateKey} onRemove={p.onRemoveKey?async id=>{await p.onRemoveKey!(id);setForm(current=>({...current,auth:{method:'private-key',privateKeyPath:''}}))}:undefined} onAccountChanged={username=>{if(username)setForm(current=>({...current,username}))}}/>}
  </>;

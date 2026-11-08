@@ -338,3 +338,17 @@ test('saving an unchanged retained profile keeps the retry phase in the renderer
  await act(async()=>{fireEvent.click(screen.getByText('Save retained'))});
  assert.ok(screen.getByText('slow'));
 });
+
+test('retained initial login offers explicit retry and disconnect before profile edits',async()=>{
+ let retries=0,disconnects=0;
+ render(<ConnectionModal open retained profile={profile} keys={[]} status="error"
+  onRetry={async()=>{retries++}} onDisconnect={async()=>{disconnects++}} onClose={()=>{}}
+  onOpenKeyRegistration={()=>{}} onInspectKey={new MockSshConnectionPort().inspectPrivateKey}
+  onSave={async()=>{}} onConnect={async()=>{}}/>);
+ assert.equal(screen.getByLabelText('UCInetID / username').matches(':disabled'),true);
+ assert.equal(screen.queryByRole('button',{name:'Save'}),null);
+ fireEvent.click(screen.getByRole('button',{name:'Retry verification'}));
+ await waitFor(()=>assert.equal(retries,1));
+ fireEvent.click(screen.getByRole('button',{name:'Disconnect'}));
+ await waitFor(()=>assert.equal(disconnects,1));
+});
