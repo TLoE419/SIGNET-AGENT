@@ -22,6 +22,7 @@ async function fixture(t:any){const dir=await mkdtemp(path.join(tmpdir(),'signet
 const keyOps={inspect:inspectPrivateKey,unlock:unlockPrivateKey};
 class FakeShell extends EventEmitter implements ShellChannel {stderr=new EventEmitter();writableLength=0;writes:string[]=[];paused=false;write(data:string|Buffer){this.writes.push(data.toString());return true}setWindow(){}pause(){this.paused=true}resume(){this.paused=false}end(){this.destroy()}destroy(){this.emit('close')}}
 class FakeTransport extends EventEmitter implements SshTransport {
+ alive=true;async isAlive(){return this.alive}
  calls=0;closed=0;execCalls=0;secret='';healthOutput='host=login-test\nuser=testuser\nslurm=yes\n';healthCode=0;shell=new FakeShell();private resolve?:()=>void;private reject?:(error:Error)=>void;
  connect(secret:string){this.calls++;this.secret=secret;return new Promise<void>((resolve,reject)=>{this.resolve=resolve;this.reject=reject})}
  succeed(){this.emit('diagnostic',{stage:'session',message:'Persistent PTY login shell opened.'});this.resolve?.()}
@@ -131,4 +132,80 @@ test('SSH login failures explain the next action without exposing server text',a
    await transport.close();
   });
  }
+});
+
+
+test('slow health preserves a live master and successful work refreshes health',async t=>{
+ const s=await setup(t),profile=await s.service.saveProfile(s.input);
+ const connected=s.service.connect(profile.id,phrase);
+ await until(()=>s.transports.length===1);
+ const transport=s.transports[0];transport.succeed();await connected;
+ const original=transport.exec.bind(transport);
+ let checks=0;
+ transport.exec=async(command,input,timeout)=>{
+  if(command.includes('command -v sbatch')){checks++;assert.equal(timeout,25000);throw new SshFailure('CONNECTION_TIMEOUT','delayed')}
+  return original(command,input,timeout);
+ };
+ await s.service.healthCheck(true);
+ assert.equal(s.service.getSnapshot().connection?.phase,'slow');
+ assert.equal(transport.closed,0);
+ await s.service.exec('true',Buffer.alloc(0));
+ assert.equal(s.service.getSnapshot().connection?.phase,'ready');
+ await s.service.healthCheck(false);assert.equal(checks,1);
+ transport.alive=false;
+ await assert.rejects(s.service.healthCheck(true),{code:'STALE_CONNECTION'});
+ assert.equal(transport.closed,1);
+});
+
+test('initial slow verification retries and resumes without authenticating again',async t=>{
+ const s=await setup(t),profile=await s.service.saveProfile(s.input);
+ const connected=s.service.connect(profile.id,phrase);
+ await until(()=>s.transports.length===1);
+ const transport=s.transports[0],original=transport.exec.bind(transport);
+ let checks=0;
+ transport.exec=async(command,input,timeout)=>{
+  assert.equal(timeout,45000);checks++;
+  throw new SshFailure('CONNECTION_TIMEOUT','delayed');
+ };
+ transport.succeed();
+ await assert.rejects(connected,{code:'REMOTE_SLOW'});
+ assert.equal(checks,2);assert.equal(transport.closed,0);
+ assert.equal(s.service.getSnapshot().connection?.phase,'slow');
+ transport.exec=original;
+ await s.service.connect(profile.id,'');
+ assert.equal(transport.calls,1);
+ assert.equal(s.transports.length,1);
+ assert.equal(s.service.getSnapshot().connection?.phase,'ready');
+ await s.service.disconnect(profile.id);
+});
+
+test('modal retry keeps the retained master and profile mutations require disconnect',async t=>{
+ const s=await setup(t),profile=await s.service.saveProfile({...s.input,auth:{method:'duo'}});
+ const run=s.service.connect(profile.id,'account-secret');
+ await until(()=>s.transports.length===1);
+ const transport=s.transports[0],exec=transport.exec.bind(transport);
+ transport.exec=async()=>{throw new SshFailure('CONNECTION_TIMEOUT','delayed')};
+ transport.succeed();await assert.rejects(run,{code:'REMOTE_SLOW'});
+ const saved=await s.service.saveProfile({...s.input,auth:{method:'duo'},id:profile.id});
+ assert.equal(saved.id,profile.id);
+ assert.equal(s.service.getSnapshot().connection?.phase,'slow');
+ await assert.rejects(s.service.saveProfile({...s.input,name:'Changed',auth:{method:'duo'}}),{code:'INVALID_PROFILE'});
+ await assert.rejects(s.service.selectProfile(profile.id),{code:'INVALID_PROFILE'});
+ transport.exec=exec;
+ await s.service.connect(saved.id,'');
+ assert.equal(s.transports.length,1);assert.equal(transport.calls,1);
+ await s.service.disconnect(profile.id);
+ assert.equal(transport.closed,1);
+ await s.service.saveProfile({...s.input,name:'Changed',auth:{method:'duo'}});
+});
+
+test('disconnect closes a master retained after initial slow verification',async t=>{
+ const s=await setup(t),profile=await s.service.saveProfile(s.input),run=s.service.connect(profile.id,phrase);
+ await until(()=>s.transports.length===1);
+ const transport=s.transports[0];
+ transport.exec=async()=>{throw new SshFailure('CONNECTION_TIMEOUT','delayed')};
+ transport.succeed();await assert.rejects(run,{code:'REMOTE_SLOW'});
+ await s.service.disconnect(profile.id);
+ assert.equal(transport.closed,1);
+ assert.equal(s.service.getSnapshot().connection?.status,'disconnected');
 });

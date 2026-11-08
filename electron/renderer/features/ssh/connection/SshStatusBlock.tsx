@@ -17,16 +17,16 @@ interface Props {
 }
 const labels={unconfigured:'Not configured',disconnected:'Disconnected',connected:'Connected',connecting:'Connecting…',disconnecting:'Disconnecting…',error:'Error'};
 /** Host-app composition: only actions are injected; no connection logic or fake state cycling. */
-const phases:Partial<Record<ConnectionPhase,string>>={'opening-transport':'Opening SSH transport…',authenticating:'Waiting for authentication…','opening-session':'Opening login session…','verifying-remote':'Verifying HPC3 and Slurm…',ready:'Connected'};
+const phases:Partial<Record<ConnectionPhase,string>>={'opening-transport':'Opening SSH transport…',authenticating:'Waiting for authentication…','opening-session':'Opening login session…','verifying-remote':'Verifying HPC3 and Slurm…',slow:'HPC3 is responding slowly. Retry without signing in again.',ready:'Connected'};
 export function SshStatusBlock({name,host,status,error,phase,busy,onEdit,onToggle,environment,onEnvironment}:Props){
  const environmentLoading=!!environment&&['checking','installing-source','verifying'].includes(environment.phase);
  const stateKey=`${status}:${phase||''}:${environment?.phase||''}`;
  const [manual,setManual]=useState<{key:string;expanded:boolean}|null>(null),detailsId=useId();
  useEffect(()=>setManual(null),[stateKey]);
- const expanded=manual?.key===stateKey?manual.expanded:status!=='connected'||environmentLoading;
+ const expanded=manual?.key===stateKey?manual.expanded:status!=='connected'||phase==='slow'||environmentLoading;
  const pending=status==='connecting'||status==='disconnecting';
  const progress=phase&&phases[phase];
- const description=error?.message||(pending?(status==='connecting'?(progress||'Establishing SSH connection…'):'Closing SSH connection…'):labels[status]);
+ const description=error?.message||(pending?(status==='connecting'?(progress||'Establishing SSH connection…'):'Closing SSH connection…'):(phase==='slow'?phases.slow:labels[status]));
  return <section className="ssh-status-block" data-status={status} aria-label="SSH connection" data-expanded={expanded}>
   {pending&&<svg className="ssh-status-outline" aria-hidden="true"><rect x="1" y="1" width="calc(100% - 2px)" height="calc(100% - 2px)" rx="13"/></svg>}
   <button type="button" className="ssh-collapse" onClick={()=>setManual({key:stateKey,expanded:!expanded})} aria-expanded={expanded} aria-controls={detailsId} aria-label={expanded?'Collapse SSH connection':'Expand SSH connection'} title={`${name} — ${host}\n${description}${environment?' · '+environmentLabels[environment.phase]:''}`}>
@@ -34,7 +34,7 @@ export function SshStatusBlock({name,host,status,error,phase,busy,onEdit,onToggl
   </button>
   <div className="ssh-status-details" id={detailsId} inert={!expanded} aria-hidden={!expanded}>
   <button type="button" className="ssh-identity" onClick={onEdit} aria-label={`Edit SSH connection: ${name}`} title={`${name} — ${host}\n${description}`}>
-   <span className="ssh-status-copy"><span className="ssh-status-heading"><strong>{name}</strong><span className="ssh-protocol">SSH</span>{!(status==='connected'&&environment)&&<span className="ssh-state-text">{labels[status]}</span>}</span><span className="ssh-status-subtitle" title={host}>{host}</span></span>
+   <span className="ssh-status-copy"><span className="ssh-status-heading"><strong>{name}</strong><span className="ssh-protocol">SSH</span>{(!(status==='connected'&&environment)||phase==='slow')&&<span className="ssh-state-text">{phase==='slow'?phases.slow:labels[status]}</span>}</span><span className="ssh-status-subtitle" title={host}>{host}</span></span>
   </button>
   {status==='connected'&&environment&&<button type="button" className="ssh-environment-status" data-phase={environment.phase} onClick={onEnvironment} title={environment.message} aria-label={`SIGNET environment: ${environmentLabels[environment.phase]}`}><span aria-hidden="true" className="ssh-environment-dot"/><span role="status">{environmentLabels[environment.phase]}</span><span aria-hidden="true">›</span></button>}
   </div>
