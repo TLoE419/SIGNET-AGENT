@@ -322,3 +322,19 @@ test('retained Duo login retries verification without a password field',async()=
  fireEvent.click(screen.getByRole('button',{name:'Retry verification'}));
  await waitFor(()=>assert.deepEqual(requests,[['testuser','']]));
 });
+
+test('saving an unchanged retained profile keeps the retry phase in the renderer',async()=>{
+ const port=new MockSshConnectionPort();
+ await port.saveProfile(profile);
+ port.initialize=async()=>({selectedProfile:profile,connection:{profileId:profile.id,status:'error' as const,phase:'slow' as const}});
+ port.saveProfile=async()=>profile;
+ function SaveRetained(){
+  const ssh=useSshConnection(port);
+  return <><span>{ssh.snapshot.connection?.phase||'no phase'}</span>
+   <button onClick={()=>void ssh.save(profile)}>Save retained</button></>;
+ }
+ await act(async()=>{render(<SaveRetained/>)});
+ assert.ok(screen.getByText('slow'));
+ await act(async()=>{fireEvent.click(screen.getByText('Save retained'))});
+ assert.ok(screen.getByText('slow'));
+});
