@@ -13,8 +13,10 @@ def main(argv=None):
         command.add_argument('--cohort', choices=COHORTS, required=True)
         command.add_argument('--job-id')
         command.add_argument('--exit-code', type=int)
-    pairing = commands.add_parser('check-pairing')
-    pairing.add_argument('--run-dir', type=Path, required=True)
+    pairing_command = commands.add_parser('check-pairing')
+    pairing_command.add_argument('--run-dir', type=Path, required=True)
+    pairing_command.add_argument('--genotype-build', choices=('GRCh37', 'GRCh38'))
+    pairing_command.add_argument('--expression-build', choices=('GRCh37', 'GRCh38'))
     args = parser.parse_args(argv)
 
     try:
@@ -22,15 +24,22 @@ def main(argv=None):
             publish(args.run_dir, args.command, args.cohort,
                     job_id=args.job_id, exit_code=args.exit_code)
         else:
-            cohorts = []
-            for step in STEPS:
-                with qc_path(args.run_dir, step).open('rb') as stream:
-                    cohorts.append(read_summary(stream, step)['cohort'])
-            if cohorts[0] != cohorts[1]:
-                raise ValueError('Genotype and expression QC belong to different cohorts.')
-            publish(args.run_dir, 'pairing', cohorts[0])
+            publish_pairing(args)
     except (OSError, ValueError) as error:
         parser.error(str(error))
+
+
+def publish_pairing(args):
+    summaries = {}
+    for step in STEPS:
+        with qc_path(args.run_dir, step).open('rb') as stream:
+            summaries[step] = read_summary(stream, step)
+
+    cohort = summaries['genotype']['cohort']
+    if cohort != summaries['expression']['cohort']:
+        raise ValueError('Genotype and expression QC belong to different cohorts.')
+    publish(args.run_dir, 'pairing', cohort, upstream=summaries.values(),
+            genotype_build=args.genotype_build, expression_build=args.expression_build)
 
 
 if __name__ == '__main__':

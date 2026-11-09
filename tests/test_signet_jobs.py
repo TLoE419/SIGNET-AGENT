@@ -49,7 +49,7 @@ class StepsTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         qc = json.loads((self.remote_dir / 'steps/expression-qc.json').read_text())
         self.assertEqual(qc['execution'], {'job_id': '12345', 'exit_code': 7})
-        self.assertEqual(qc['qc_status'], 'not_evaluated')
+        self.assertEqual(qc['qc_status'], 'blocked')
         self.assertTrue((self.remote_dir / 'steps/expression.done').read_text().startswith('7 '))
 
     def setUp(self):

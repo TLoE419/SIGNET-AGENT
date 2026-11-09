@@ -64,7 +64,7 @@ class SignetApiTest(unittest.TestCase):
         signet_qc.publish(self.remote_dir, 'expression', 'TCGA', job_id='12345', exit_code=0)
         before = len(self.calls)
         status, qc = self.call('GET', path)
-        self.assertEqual((status, qc['qc_status']), (200, 'not_evaluated'))
+        self.assertEqual((status, qc['qc_status']), (200, 'blocked'))
         self.assertEqual(qc['execution'], {'job_id': '12345', 'exit_code': 0})
         self.assertEqual(len(self.calls), before + 1)
         self.assertIn('head -c', self.calls[-1])
