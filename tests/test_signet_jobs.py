@@ -10,6 +10,7 @@ the end cover what is new there: per-chromosome prefix inputs (ref, gmap),
 the PLINK/IMPUTE2 settings, and failure lines specific to -g.
 """
 import json
+from concurrent.futures import ThreadPoolExecutor
 import os
 from pathlib import Path
 import stat
@@ -267,6 +268,32 @@ class StepsTest(unittest.TestCase):
         self.assertEqual(sum('tar czf' in call for call in self.calls), 1)
         self.assertEqual(steps.run_steps('step_test'), {'expression': 'completed'})
 
+    def test_unknown_submission_survives_scheduler_outage_and_recovers(self):
+        for commands in (('squeue',), ('sacct',), ('squeue', 'sacct')):
+            with self.subTest(commands=commands):
+                run_id = 'outage_' + '_'.join(commands)
+                st.configure_signet(run_id)
+                self.remote_dir = self.hpc / 'ws/work' / run_id
+                self.lose_connection_on = 'sbatch --parsable'
+                steps.submit(run_id, 'expression', self.inputs)
+                self.lose_connection_on = None
+                self.slurm(queued_id='', sacct_id='', squeue='', sacct='')
+                for name in commands:
+                    (self.fake / 'bin' / name).write_text('#!/bin/bash\nexit 1\n')
+                try:
+                    record = steps.status(run_id, 'expression', refresh=True)
+                    self.assertEqual(record['state'], 'unknown')
+                    self.assertEqual(self.code_of(steps.submit, run_id, 'expression', self.inputs), 'conflict')
+                    self.assertEqual(self.code_of(steps.update_settings, run_id, {'restrict.tcga': 1}), 'conflict')
+                finally:
+                    for name in commands:
+                        (self.fake / 'bin' / name).write_text('#!/bin/bash\n' + FAKE_SLURM[name] + '\n')
+                self.slurm(queued_id='888', squeue='RUNNING')
+                record = steps.status(run_id, 'expression', refresh=True)
+                self.assertEqual((record['state'], record['job_id']), ('running', '888'))
+                self.finish_job()
+                self.assertEqual(steps.status(run_id, 'expression', refresh=True)['state'], 'completed')
+
     def test_results_already_downloaded_complete_instead_of_staying_validating(self):
         steps.submit('step_test', 'expression', self.inputs)
         self.finish_job()
@@ -282,7 +309,7 @@ class StepsTest(unittest.TestCase):
         self.assertEqual((record['state'], record['job_id']), ('submitted', '4242'))
         self.assertEqual((self.remote_dir / 'steps/expression.job').read_text(), '4242\n')
 
-    def test_unknown_submit_is_found_by_job_name_or_ends_as_failed(self):
+    def test_unknown_submit_waits_for_delayed_scheduler_records(self):
         self.lose_connection_on = 'sbatch --parsable'
         steps.submit('step_test', 'expression', self.inputs)
         self.lose_connection_on = None
@@ -296,9 +323,12 @@ class StepsTest(unittest.TestCase):
         self.lose_connection_on = None
         self.slurm(queued_id='', squeue='', sacct='', sacct_id='')
         record = steps.status('never_queued', 'expression', refresh=True)
-        self.assertEqual(record['state'], 'failed')
-        self.assertIn('never started', record['reason'])
-        self.assertEqual(steps.update_settings('never_queued', {'restrict.tcga': 3})['restrict.tcga'], '3')
+        self.assertEqual(record['state'], 'unknown')
+        self.assertNotIn('finished_at', record)
+        self.assertEqual(self.code_of(steps.update_settings, 'never_queued', {'restrict.tcga': 3}), 'conflict')
+        self.slurm(sacct_id='999', sacct='RUNNING')
+        record = steps.status('never_queued', 'expression', refresh=True)
+        self.assertEqual((record['state'], record['job_id']), ('running', '999'))
 
     def test_settings_whitelist_and_lock_while_active(self):
         self.assertEqual(steps.update_settings('step_test', {'restrict.tcga': 1})['restrict.tcga'], '1')
@@ -307,6 +337,64 @@ class StepsTest(unittest.TestCase):
             self.assertEqual(self.code_of(steps.update_settings, 'step_test', bad), 'invalid_request', bad)
         steps.submit('step_test', 'expression', self.inputs)
         self.assertEqual(self.code_of(steps.update_settings, 'step_test', {'restrict.tcga': 2}), 'conflict')
+
+    def test_submission_waits_for_settings_write_and_uploads_the_accepted_settings(self):
+        config = self.root / 'work/config.ini'
+        writing, release, submitting, submitted = (threading.Event() for _ in range(4))
+        write_text = Path.write_text
+
+        def blocked_write(path, data, *args, **kwargs):
+            if path == config and 'restrict.tcga = 1\n' in data and not release.is_set():
+                writing.set()
+                if not release.wait(10):
+                    raise TimeoutError('Settings write was not released.')
+            return write_text(path, data, *args, **kwargs)
+
+        def submit():
+            submitting.set()
+            try:
+                return steps.submit('step_test', 'expression', self.inputs)
+            finally:
+                submitted.set()
+
+        with patch.object(Path, 'write_text', new=blocked_write), ThreadPoolExecutor(max_workers=2) as pool:
+            settings = pool.submit(steps.update_settings, 'step_test', {'restrict.tcga': 1})
+            try:
+                self.assertTrue(writing.wait(5))
+                submission = pool.submit(submit)
+                self.assertTrue(submitting.wait(5))
+                self.assertFalse(submitted.wait(0.5), 'Submission raced ahead of the accepted settings write.')
+            finally:
+                release.set()
+            self.assertEqual(settings.result(timeout=5)['restrict.tcga'], '1')
+            self.assertEqual(submission.result(timeout=5)['state'], 'submitted')
+        remote = (self.remote_dir / 'work/config.ini').read_text()
+        self.assertIn('restrict.tcga = 1\n', remote)
+        self.assertEqual(st.get_signet_settings('step_test')['settings']['restrict.tcga'], '1')
+
+    def test_settings_update_during_submission_is_rejected_without_changing_the_job(self):
+        uploading, release = threading.Event(), threading.Event()
+
+        def blocked_remote(command, **kwargs):
+            if 'tar xzf' in command:
+                uploading.set()
+                if not release.wait(10):
+                    raise TimeoutError('Upload was not released.')
+            return self.remote(command, **kwargs)
+
+        with patch.object(ssh_transport, 'remote', side_effect=blocked_remote), ThreadPoolExecutor(max_workers=2) as pool:
+            submission = pool.submit(steps.submit, 'step_test', 'expression', self.inputs)
+            try:
+                self.assertTrue(uploading.wait(5))
+                settings = pool.submit(steps.update_settings, 'step_test', {'restrict.tcga': 1})
+            finally:
+                release.set()
+            self.assertEqual(submission.result(timeout=5)['state'], 'submitted')
+            with self.assertRaises(steps.StepError) as caught:
+                settings.result(timeout=5)
+            self.assertEqual(caught.exception.code, 'conflict')
+        self.assertEqual(st.get_signet_settings('step_test')['settings']['restrict.tcga'], 'no')
+        self.assertIn('restrict.tcga = no\n', (self.remote_dir / 'work/config.ini').read_text())
 
     # ---------- genotype (signet -g) ----------
 

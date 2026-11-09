@@ -127,6 +127,28 @@ class SignetApiTest(unittest.TestCase):
         self.assertEqual((status, value['state']), (200, 'cancelled'))
         self.assertEqual(self.call('POST', '/signet/runs/step_test/steps/expression/cancel', {'force': True})[0], 400)
 
+    def test_scheduler_outage_keeps_unknown_submission_recoverable_over_http(self):
+        self.lose_connection_on = 'sbatch --parsable'
+        status, value = self.submit()
+        self.assertEqual((status, value['state']), (202, 'unknown'))
+        self.lose_connection_on = None
+        for name in ('squeue', 'sacct'):
+            (self.fake / 'bin' / name).write_text('#!/bin/bash\nexit 1\n')
+        path = '/signet/runs/step_test/steps/expression'
+        status, value = self.call('GET', path + '?refresh=1')
+        self.assertEqual((status, value['state']), (200, 'unknown'))
+        self.assertEqual(self.submit()[0], 409)
+        self.assertEqual(self.call('PATCH', '/signet/runs/step_test/settings',
+                                   {'values': {'restrict.tcga': 1}})[0], 409)
+        for name in ('squeue', 'sacct'):
+            (self.fake / 'bin' / name).write_text('#!/bin/bash\n' + test_signet_jobs.FAKE_SLURM[name] + '\n')
+        self.slurm(queued_id='888', squeue='RUNNING')
+        status, value = self.call('GET', path + '?refresh=1')
+        self.assertEqual((status, value['state'], value['job_id']), (200, 'running', '888'))
+        self.finish_job()
+        status, value = self.call('GET', path + '?refresh=1')
+        self.assertEqual((status, value['state']), (200, 'completed'))
+
     def test_unexpected_error_still_gets_a_json_reply(self):
         (self.project / 'runs/broken').mkdir()
         (self.project / 'runs/broken/manifest.json').write_text('{not json')

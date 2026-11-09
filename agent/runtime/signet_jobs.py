@@ -27,9 +27,9 @@ logs contain no known failure line. The login node only runs light commands
 the container in the Slurm job. Each step may be attempted once per run; a
 retry uses a new run, as for local steps.
 
-The HTTP server is multi-threaded, so submit/status/cancel of the same run and
-step run one at a time (see _one_at_a_time); otherwise two status checks of a
-finished job could both download the results and leave the record stuck.
+The HTTP server is multi-threaded, so settings/submit/status/cancel of the same
+run execute one at a time (see _one_at_a_time); settings must not change while
+submission reads them, and simultaneous status checks must not download twice.
 """
 from dataclasses import dataclass, field
 import functools
@@ -173,18 +173,18 @@ _LOCKS_GUARD = threading.Lock()
 
 
 def _one_at_a_time(function):
-    """Run submit/status/cancel for one (run, step) one call at a time in this process.
+    """Serialize settings and step operations for one run in this process.
 
     Without this, a UI timer and a manual refresh arriving together could both
     see a finished job, both download its results, and the slower one would save
     a stale record. Reentrant, because cancel() ends by calling status().
     """
     @functools.wraps(function)
-    def wrapper(run_id, name, *args, **kwargs):
+    def wrapper(run_id, *args, **kwargs):
         with _LOCKS_GUARD:
-            lock = _LOCKS.setdefault((run_id, name), threading.RLock())
+            lock = _LOCKS.setdefault(run_id, threading.RLock())
         with lock:
-            return function(run_id, name, *args, **kwargs)
+            return function(run_id, *args, **kwargs)
     return wrapper
 
 
@@ -205,6 +205,7 @@ def run_steps(run_id):
     return {path.stem: json.loads(path.read_text()).get('state') for path in sorted(folder.glob('*.json'))}
 
 
+@_one_at_a_time
 def update_settings(run_id, values):
     """Change whitelisted config.ini settings of a local run (signet -s). Refused while a step is active."""
     root = _root(run_id)
@@ -543,9 +544,9 @@ def status(run_id, name, refresh=False):
     elif slurm == 'COMPLETED' or 'done' in values:
         _finish(root, record, step, values.get('done', ''), missing, hints)
     elif not record.get('job_id'):
-        # No ID file, and Slurm knows no job with this step's name: sbatch never ran.
-        _change(record, 'failed', finished_at=_now(),
-                reason='No Slurm job was found for this step on HPC3, so it never started. Create a new run to try again.')
+        # Empty lookups can mean scheduler failure or accounting delay, not an unsubmitted job.
+        _change(record, 'unknown',
+                reason='No Slurm job ID could be confirmed yet; check status again or inspect the run folder on HPC3. Do not resubmit.')
     elif time.time() - record.get('first_seen_missing', time.time()) > 300:
         _change(record, 'unknown', reason='Slurm has no record of this job; inspect the run folder on HPC3.')
     else:
