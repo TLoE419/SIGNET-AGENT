@@ -248,6 +248,12 @@ def get_log(handler, url, run_id, step):
     return 200, jobs.read_log(run_id, step, query.get('stream', 'out'), int(lines))
 
 
+def get_qc(handler, url, run_id, step):
+    """GET /signet/runs/{run_id}/steps/{step}/qc."""
+    _query(url, ())
+    return 200, jobs.read_qc(run_id, step)
+
+
 # Each path pattern maps HTTP methods to the function above that serves it.
 ROUTES = [
     (re.compile(r'/signet/catalog'), {'GET': get_catalog}),
@@ -257,6 +263,7 @@ ROUTES = [
     (re.compile(rf'/signet/runs/{_RUN}/steps/{_STEP}'), {'GET': get_step, 'POST': submit_step}),
     (re.compile(rf'/signet/runs/{_RUN}/steps/{_STEP}/cancel'), {'POST': cancel_step}),
     (re.compile(rf'/signet/runs/{_RUN}/steps/{_STEP}/log'), {'GET': get_log}),
+    (re.compile(rf'/signet/runs/{_RUN}/steps/{_STEP}/qc'), {'GET': get_qc}),
 ]
 
 

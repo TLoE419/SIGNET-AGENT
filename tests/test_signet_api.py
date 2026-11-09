@@ -14,6 +14,7 @@ from unittest.mock import patch
 
 import agent.app.chat_ui as chat_ui
 import agent.runtime.ssh_transport as ssh_transport
+from agent.runtime.jobs import signet_qc
 import test_signet_jobs
 
 
@@ -55,6 +56,18 @@ class SignetApiTest(unittest.TestCase):
 
     def submit(self, run_id='step_test'):
         return self.call('POST', f'/signet/runs/{run_id}/steps/expression', {'inputs': self.inputs})
+
+    def test_qc_read_does_not_refresh_the_job(self):
+        self.assertEqual(self.submit()[0], 202)
+        path = '/signet/runs/step_test/steps/expression/qc'
+        self.assertEqual(self.call('GET', path)[0], 404)
+        signet_qc.publish(self.remote_dir, 'expression', 'TCGA', job_id='12345', exit_code=0)
+        before = len(self.calls)
+        status, qc = self.call('GET', path)
+        self.assertEqual((status, qc['qc_status']), (200, 'not_evaluated'))
+        self.assertEqual(qc['execution'], {'job_id': '12345', 'exit_code': 0})
+        self.assertEqual(len(self.calls), before + 1)
+        self.assertIn('head -c', self.calls[-1])
 
     def test_every_route_needs_the_page_token_and_writes_need_the_origin(self):
         routes = [('GET', '/signet/catalog'), ('GET', '/signet/runs'), ('POST', '/signet/runs'),

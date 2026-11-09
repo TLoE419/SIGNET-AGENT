@@ -89,7 +89,7 @@ def preflight():
         return False
 
 
-def bundle(root, settings, remote_root, input_keys=INPUT_KEYS, network=False):
+def bundle(root, settings, remote_root, input_keys=INPUT_KEYS, network=False, include_step_qc=False):
     """Send audited scripts and six validated inputs, never the project or credentials."""
     buffer = io.BytesIO()
     work = root / 'work'
@@ -123,6 +123,10 @@ def bundle(root, settings, remote_root, input_keys=INPUT_KEYS, network=False):
                 info.size, info.mode = len(data), path.stat().st_mode & 0o777
                 archive.addfile(info, io.BytesIO(data))
             archive.add(Path(__file__).with_name('network_worker.py'), arcname='network_worker.py')
+        if include_step_qc:
+            qc_package = Path(__file__).parent / 'jobs' / 'signet_qc'
+            for module in sorted(qc_package.glob('*.py')):
+                archive.add(module, arcname=f'steps/signet_qc/{module.name}')
         if runtime:
             runtime_data = json.dumps(runtime).encode()
             info = tarfile.TarInfo('runtime.json')

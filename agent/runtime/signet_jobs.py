@@ -33,6 +33,7 @@ finished job could both download the results and leave the record stuck.
 """
 from dataclasses import dataclass, field
 import functools
+import io
 import json
 import os
 from pathlib import Path
@@ -44,6 +45,7 @@ import threading
 import time
 
 from agent.runtime import ssh_transport
+from agent.runtime.jobs import signet_qc
 import agent.runtime.remote as vm
 import agent.tools.signet as signet
 
@@ -364,6 +366,8 @@ sed -i -e 's/^forcerm *=.*/forcerm = T/' -e "s/^ncore_local *=.*/ncore_local = $
 {q(config['executor'])} exec --cleanenv --no-home --bind {q(bind)} {q(config['image'])} bash ./signet {step.flag} < /dev/null
 rc=$?
 echo "[SIGNET-AGENT] END step={name} exit=$rc ts=$(date -Iseconds)"
+(cd {q(directory + '/steps')} && python3 -B -m signet_qc {q(name)} --run-dir {q(directory)} --cohort {q(step.cohort)} --job-id "$SLURM_JOB_ID" --exit-code "$rc") ||
+  echo "[SIGNET-AGENT] Could not publish QC summary" >&2
 printf '%s %s\\n' "$rc" "$(date -Iseconds)" > {q(directory + '/steps/' + name + '.done')}
 '''
 
@@ -389,7 +393,8 @@ def _upload(root, directory, token):
                'if [ -d "$D" ]; then [ "$(cat "$D/.owner" 2>/dev/null)" = "$T" ] || exit 3; '
                'else mkdir -p "$(dirname "$D")" && mkdir "$D" && printf \'%s\\n\' "$T" > "$D/.owner" || exit 4; fi; '
                'mkdir -p "$D/steps" && tar xzf - -C "$D"')
-    result = ssh_transport.remote(command, input=vm.bundle(root, signet._settings(root), directory, input_keys=()),
+    result = ssh_transport.remote(command, input=vm.bundle(root, signet._settings(root), directory,
+                                                          input_keys=(), include_step_qc=True),
                                   capture_output=True, timeout=120)
     if result.returncode == 3:
         raise StepError('conflict', f'{directory} already exists on HPC3 and belongs to another run; use a new run_id.')
@@ -608,6 +613,28 @@ def cancel(run_id, name):
         _change(record, 'cancelled', finished_at=_now(), reason='Cancelled by the user.')
         return _save(root, record)
     return status(run_id, name, refresh=True)   # it already left the queue; report how it ended
+
+
+def read_qc(run_id, name):
+    """Read the QC artifact directly, without refreshing scheduler state."""
+    _step(name)
+    record = _load(_root(run_id), name)
+    _environment()
+    path = shlex.quote(str(signet_qc.qc_path(Path(record['remote_dir']), name)))
+    try:
+        result = ssh_transport.remote(
+            f'[ -f {path} ] && [ ! -L {path} ] || exit 3; head -c {signet_qc.MAX_BYTES + 1} -- {path}',
+            capture_output=True, timeout=30)
+    except OSError as error:
+        raise StepError('remote_failed', 'Could not reach HPC3.') from error
+    if result.returncode == 3:
+        raise StepError('not_found', 'This step has not published a QC file.')
+    if result.returncode:
+        raise StepError('remote_failed', 'Could not read the QC file on HPC3.')
+    try:
+        return signet_qc.read_summary(io.BytesIO(result.stdout), name)
+    except ValueError as error:
+        raise StepError('remote_failed', 'The QC file on HPC3 is invalid.') from error
 
 
 def read_log(run_id, name, stream='out', lines=50):

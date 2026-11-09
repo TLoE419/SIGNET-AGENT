@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 import stat
 import subprocess
+import sys
 import tempfile
 import threading
 import unittest
@@ -34,6 +35,23 @@ OUTPUTS = steps.STEPS['expression'].required
 
 
 class StepsTest(unittest.TestCase):
+    def test_batch_publishes_qc_even_when_signet_exits_nonzero(self):
+        steps.submit('step_test', 'expression', self.inputs)
+        for name, body in {'apptainer': 'exit 7', 'sed': 'exit 0',
+                           'python3': f'exec "{sys.executable}" "$@"'}.items():
+            path = self.fake / 'bin' / name
+            path.write_text('#!/bin/bash\n' + body + '\n')
+            path.chmod(0o700)
+        job = self.remote_dir / 'steps/expression.sbatch'
+        result = subprocess.run(['bash', str(job)], capture_output=True,
+                                env={**os.environ, 'PATH': f'{self.fake}/bin:{os.environ["PATH"]}',
+                                     'SLURM_JOB_ID': '12345'})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        qc = json.loads((self.remote_dir / 'steps/expression-qc.json').read_text())
+        self.assertEqual(qc['execution'], {'job_id': '12345', 'exit_code': 7})
+        self.assertEqual(qc['qc_status'], 'not_evaluated')
+        self.assertTrue((self.remote_dir / 'steps/expression.done').read_text().startswith('7 '))
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         base = Path(self.temp.name).resolve()
