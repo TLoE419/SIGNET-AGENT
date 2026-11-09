@@ -354,6 +354,14 @@ def _job_script(config, run_id, name, step, directory, binds):
     """The Slurm batch script. Every value in it was validated; nothing comes from the caller as text."""
     q = shlex.quote
     bind = ','.join([f'{directory}:{directory}'] + [f'{path}:{path}:ro' for path in binds])
+    container = f"{q(config['executor'])} exec --cleanenv --no-home --bind {q(bind)} {q(config['image'])}"
+    native_qc = ''
+    if name == 'genotype':
+        native_qc = f'''if [ "$rc" -eq 0 ]; then
+  (cd {q(directory + '/steps')} && {container} python3 -B -m signet_qc collect-genotype-evidence --run-dir {q(directory)} --cohort {q(step.cohort)}) ||
+    echo "[SIGNET-AGENT] Could not collect native genotype QC evidence" >&2
+fi
+'''
     return f'''#!/bin/bash
 #SBATCH --job-name=signet-{name}-{run_id}
 #SBATCH --output={directory}/steps/{name}.out
@@ -363,10 +371,10 @@ cd {q(directory + '/work')} || exit 1
 echo "[SIGNET-AGENT] START step={name} job=$SLURM_JOB_ID ts=$(date -Iseconds)"
 # Batch jobs cannot answer prompts: flush old temporary files and use the cores Slurm gave this job.
 sed -i -e 's/^forcerm *=.*/forcerm = T/' -e "s/^ncore_local *=.*/ncore_local = ${{SLURM_CPUS_PER_TASK:-1}}/" config.ini
-{q(config['executor'])} exec --cleanenv --no-home --bind {q(bind)} {q(config['image'])} bash ./signet {step.flag} < /dev/null
+{container} bash ./signet {step.flag} < /dev/null
 rc=$?
 echo "[SIGNET-AGENT] END step={name} exit=$rc ts=$(date -Iseconds)"
-(cd {q(directory + '/steps')} && python3 -B -m signet_qc {q(name)} --run-dir {q(directory)} --cohort {q(step.cohort)} --job-id "$SLURM_JOB_ID" --exit-code "$rc") ||
+{native_qc}(cd {q(directory + '/steps')} && python3 -B -m signet_qc {q(name)} --run-dir {q(directory)} --cohort {q(step.cohort)} --job-id "$SLURM_JOB_ID" --exit-code "$rc") ||
   echo "[SIGNET-AGENT] Could not publish QC summary" >&2
 printf '%s %s\\n' "$rc" "$(date -Iseconds)" > {q(directory + '/steps/' + name + '.done')}
 '''

@@ -1,7 +1,9 @@
 import argparse
 from pathlib import Path
+import subprocess
 
 from . import COHORTS, STEPS, publish, qc_path, read_summary
+from .plink_reports import collect
 
 
 def main(argv=None):
@@ -17,15 +19,20 @@ def main(argv=None):
     pairing_command.add_argument('--run-dir', type=Path, required=True)
     pairing_command.add_argument('--genotype-build', choices=('GRCh37', 'GRCh38'))
     pairing_command.add_argument('--expression-build', choices=('GRCh37', 'GRCh38'))
+    native_command = commands.add_parser('collect-genotype-evidence')
+    native_command.add_argument('--run-dir', type=Path, required=True)
+    native_command.add_argument('--cohort', choices=COHORTS, required=True)
     args = parser.parse_args(argv)
 
     try:
         if args.command in STEPS:
             publish(args.run_dir, args.command, args.cohort,
                     job_id=args.job_id, exit_code=args.exit_code)
-        else:
+        elif args.command == 'check-pairing':
             publish_pairing(args)
-    except (OSError, ValueError) as error:
+        else:
+            collect(args.run_dir.resolve(), args.cohort)
+    except (OSError, ValueError, subprocess.CalledProcessError) as error:
         parser.error(str(error))
 
 

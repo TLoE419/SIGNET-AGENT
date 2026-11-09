@@ -27,6 +27,15 @@ class SignetQcTest(unittest.TestCase):
         path = signet_qc.publish(self.run_dir, step, cohort, **kwargs)
         return json.loads(path.read_text())
 
+    def native_reports(self, sample_id):
+        directory = self.run_dir / 'steps/native-qc'
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / 'plink-1.imiss').write_text(f'IID N_MISS N_GENO\n{sample_id} 1 2\n')
+        (directory / 'plink-1.lmiss').write_text('SNP N_MISS N_GENO\nrs1 1 1\nrs2 0 1\n')
+        (directory / 'plink-1.frq').write_text('SNP MAF\nrs1 NA\nrs2 0.5\n')
+        (directory / 'plink-1.hwe').write_text('SNP TEST P\nrs1 ALL NA\nrs2 ALL 0.8\nrs2 UNAFF 0.7\n')
+        return directory
+
     def test_tcga_expression_checks_dimensions_and_zero_gene_output(self):
         self.write('config.ini', 'restrict.tcga = 1\n')
         self.write('res/rest/signet_gexpID', 'TCGA-AA-1234-01A\n')
@@ -51,7 +60,20 @@ class SignetQcTest(unittest.TestCase):
         self.assertEqual(report['qc_status'], 'blocked')
         self.assertEqual(report['issues'][0]['code'], 'imputation_chunks_incomplete')
         self.write('tmp/tmpg/impute/impute_chr1chunk1', 'imputed\n')
-        self.assertEqual(self.qc('genotype')['qc_status'], 'pass')
+        report = self.qc('genotype')
+        self.assertEqual(report['qc_status'], 'pass')
+        self.assertEqual(report['metrics']['missingness_before_zero_replacement']['status'], 'unavailable')
+        self.native_reports('TCGA-AA-1234-01A')
+        self.write('tmp/tmpg/impute/impute_chr1chunk1_info',
+                   'info certainty concord_type1\n0.9 0.95 0.8\n-0.2 1 -1\n')
+        metrics = self.qc('genotype')['metrics']
+        missingness = metrics['missingness_before_zero_replacement']
+        self.assertEqual(missingness['overall_rate'], 0.5)
+        self.assertEqual(missingness['per_snp_rate'], {'count': 2, 'min': 0.0, 'median': 0.5, 'max': 1.0})
+        self.assertEqual(metrics['minor_allele_frequency']['groups']['all']['count'], 1)
+        self.assertEqual(metrics['hardy_weinberg_p_values']['groups']['UNAFF']['median'], 0.7)
+        self.assertEqual(metrics['imputation_quality']['concord_type1']['count'], 1)
+        self.assertEqual(metrics['imputation_quality']['info']['min'], -0.2)
 
     def test_gtex_genotype_checks_original_missingness_and_vcf_order(self):
         self.write('config.ini', 'tissue = Lung\n')
@@ -60,12 +82,15 @@ class SignetQcTest(unittest.TestCase):
         self.write('res/resg/signet_snps.maf', '0.2\n0.5\n')
         self.write('tmp/tmpg/GTEx_Lung.raw', 'FID IID PAT MAT SEX PHENOTYPE rs1_A rs2_G\n'
                    'GTEX-AA GTEX-AA 0 0 0 -9 NA 2\n')
-        header = '#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\t'
-        self.write('tmp/tmpg/GTEx_snp.vcf', header + 'GTEX-AA\n')
+        native = self.native_reports('GTEX-AA')
+        (native / 'vcf-samples.txt').write_text('GTEX-AA\n')
         report = self.qc('genotype', 'GTEx')
         self.assertEqual(report['qc_status'], 'pass')
         self.assertEqual(report['metrics']['missing_values_before_replacement'], 1)
-        self.write('tmp/tmpg/GTEx_snp.vcf', header + 'GTEX-BB\n')
+        missingness = report['metrics']['missingness_before_zero_replacement']
+        self.assertEqual(missingness['status'], 'measured')
+        self.assertEqual(missingness['per_sample_rate'], {'count': 1, 'min': 0.5, 'median': 0.5, 'max': 0.5})
+        (native / 'vcf-samples.txt').write_text('GTEX-BB\n')
         self.assertEqual(self.qc('genotype', 'GTEx')['issues'][0]['code'], 'vcf_sample_order_mismatch')
         self.write('res/resg/signet_snps.maf', 'not-a-frequency\n0.5\n')
         self.assertEqual(self.qc('genotype', 'GTEx')['issues'][0]['code'], 'invalid_snp_maf')
@@ -95,3 +120,15 @@ class SignetQcTest(unittest.TestCase):
         report = self.qc('pairing', genotype_build='GRCh38', expression_build='GRCh38')
         self.assertEqual([issue['code'] for issue in report['issues']], ['invalid_tcga_sample_barcode'])
         self.assertNotIn('matched_subjects', report['metrics'])
+
+    def test_pairing_reports_order_of_the_shared_subset(self):
+        self.write('res/resg/signet_Genotype.sampleID', 'TCGA-AA-1234-01A\nTCGA-AA-5678-01A\n')
+        self.write('res/rest/signet_gexpID', 'TCGA-AA-5678-01A\nTCGA-AA-0000-01A\nTCGA-AA-1234-01A\n')
+        report = self.qc('pairing', genotype_build='GRCh38', expression_build='GRCh38')
+        self.assertEqual(report['qc_status'], 'review_required')
+        self.assertEqual(report['metrics']['alignment'], {
+            'one_to_one_subject_count': 2,
+            'expression_reordering_required': True,
+            'genotype_excluded_row_count': 0,
+            'expression_excluded_row_count': 1,
+        })

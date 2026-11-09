@@ -53,6 +53,16 @@ def check_matches(genotype_keys, expression_keys, report, collisions=()):
     matched_count = len(shared_subjects) - len(ambiguous_subjects)
     report.metrics.update(matched_subjects=matched_count, ambiguous_subjects=len(ambiguous_subjects),
                           genotype_only_subjects=len(genotype_only), expression_only_subjects=len(expression_only))
+    if matched_count:
+        one_to_one_subjects = shared_subjects - ambiguous_subjects
+        genotype_order = [key for key in genotype_keys if key in one_to_one_subjects]
+        expression_order = [key for key in expression_keys if key in one_to_one_subjects]
+        report.metrics['alignment'] = {
+            'one_to_one_subject_count': matched_count,
+            'expression_reordering_required': genotype_order != expression_order,
+            'genotype_excluded_row_count': len(genotype_keys) - matched_count,
+            'expression_excluded_row_count': len(expression_keys) - matched_count,
+        }
     if ambiguous_subjects:
         report.issue(PairingIssue.AMBIGUOUS_SAMPLE_PAIRING)
     if not matched_count:

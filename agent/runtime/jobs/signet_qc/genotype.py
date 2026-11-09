@@ -1,9 +1,9 @@
 """Check SIGNET -g artifacts for each cohort."""
 
-import gzip
 from itertools import zip_longest
 import re
 
+from . import imputation_quality, plink_reports
 from .checks import (
     artifact_prefix, check_ids, check_numeric_matrix, input_path,
     read_identifiers, read_run_settings, split_whitespace_rows,
@@ -51,6 +51,8 @@ def check_tcga(run_dir, report):
     plink_dir = run_dir / 'work/tmp/tmpg'
     record_plink_retention(run_dir, config, plink_dir, sample_ids, report)
     check_imputation_chunks(plink_dir, report)
+    plink_reports.record_quality(run_dir, sample_ids, snp_count, report,
+                                 stage='post_imputation_before_zero_replacement')
 
 
 def record_plink_retention(run_dir, config, plink_dir, output_sample_ids, report):
@@ -79,6 +81,7 @@ def check_imputation_chunks(plink_dir, report):
     manifest = plink_dir / 'impute_params.txt'
     if not manifest.is_file():
         report.issue(GenotypeIssue.IMPUTATION_MANIFEST_MISSING)
+        report.metrics['imputation_quality'] = {'status': 'unavailable', 'reason': 'imputation_manifest_missing'}
         return
 
     expected_outputs = []
@@ -104,6 +107,7 @@ def check_imputation_chunks(plink_dir, report):
     if expected_count == 0 or output_count != expected_count or completed_count != expected_count:
         report.issue(GenotypeIssue.IMPUTATION_CHUNKS_INCOMPLETE,
                      parameters=('--ncores', '--int', '--ref', '--gmap'))
+    report.metrics['imputation_quality'] = imputation_quality.summarize(expected_outputs)
 
 
 def gtex_plink_raw(run_dir, config):
@@ -132,7 +136,12 @@ def check_gtex(run_dir, report):
     snp_ids = check_gtex_snp_metadata(prefix, snp_count, report)
     plink_raw = gtex_plink_raw(run_dir, config)
     check_plink_dosages(plink_raw, published_matrix, snp_ids, snp_count, report)
-    check_vcf_sample_order(plink_raw.parent / 'GTEx_snp.vcf', sample_ids, report)
+    plink_reports.record_quality(run_dir, sample_ids, snp_count, report,
+                                 stage='post_mac_filter_before_zero_replacement')
+    missingness = report.metrics['missingness_before_zero_replacement']
+    if missingness['status'] == 'measured':
+        report.metrics['missing_values_before_replacement'] = missingness['missing_call_count']
+    check_vcf_sample_order(run_dir, sample_ids, report)
 
 
 def check_gtex_snp_metadata(prefix, expected_snps, report):
@@ -171,29 +180,27 @@ def check_plink_dosages(raw, published_matrix, snp_ids, expected_snps, report):
         if dosage_snp_ids != snp_ids:
             report.issue(GenotypeIssue.PLINK_SNP_ORDER_MISMATCH)
 
-        missing_before_replacement = 0
         matrix_mismatches = 0
         original_rows = split_whitespace_rows(original)
         published_rows = split_whitespace_rows(published)
         for raw_row, published_row in zip_longest(original_rows, published_rows, fillvalue=[]):
             raw_dosages = raw_row[6:]
-            missing_before_replacement += raw_dosages.count('NA')
             expected_dosages = ['0' if value == 'NA' else value for value in raw_dosages]
             if expected_dosages != published_row:
                 matrix_mismatches += 1
 
-    report.metrics['missing_values_before_replacement'] = missing_before_replacement
     if matrix_mismatches or len(dosage_columns) != expected_snps:
         report.issue(GenotypeIssue.PLINK_MATRIX_ORDER_MISMATCH)
 
 
-def check_vcf_sample_order(vcf, plink_sample_ids, report):
-    # VCF has nine fixed columns before the sample IDs.
-    with (vcf.open() if vcf.is_file() else gzip.open(vcf.with_suffix('.vcf.gz'), 'rt')) as stream:
-        for line in stream:
-            if line.startswith('#CHROM\t'):
-                vcf_sample_ids = line.rstrip('\r\n').split('\t')[9:]
-                if vcf_sample_ids != plink_sample_ids:
-                    report.issue(GenotypeIssue.VCF_SAMPLE_ORDER_MISMATCH)
-                return
-    report.issue(GenotypeIssue.VCF_HEADER_MISSING)
+def check_vcf_sample_order(run_dir, plink_sample_ids, report):
+    sample_list = run_dir / plink_reports.REPORTS_DIR / 'vcf-samples.txt'
+    if not sample_list.is_file():
+        report.metrics['vcf_sample_order_check'] = 'unavailable'
+        return
+    vcf_sample_ids = read_identifiers(sample_list)
+    if not vcf_sample_ids:
+        report.issue(GenotypeIssue.VCF_HEADER_MISSING)
+    elif vcf_sample_ids != plink_sample_ids:
+        report.issue(GenotypeIssue.VCF_SAMPLE_ORDER_MISMATCH)
+    report.metrics['vcf_sample_order_check'] = 'match' if vcf_sample_ids == plink_sample_ids else 'mismatch'
