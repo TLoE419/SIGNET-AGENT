@@ -1,6 +1,15 @@
 """Run single SIGNET steps on HPC3 as Slurm jobs, over the app's SSH connection.
 
-Steps so far: "expression" (`signet -t`) and "genotype" (`signet -g`), both TCGA.
+Steps so far, all TCGA: "expression" (`signet -t`), "genotype" (`signet -g`) and
+"adjust" (`signet -a`).
+
+One run is one analysis and one HPC3 folder. SIGNET knows nothing about runs: a
+later step reads earlier results from its own work/ folder (partly through
+config.ini paths, partly through fixed temporary folders such as tmp/tmpg). So
+"adjust" may only start once "expression" and "genotype" completed in the same
+run (Step.requires), and their files are checked on HPC3 first (Step.needs).
+SIGNET questions that a person would type an answer to (Step.prompts, e.g. the
+number of genotype PCs in -a) are answered from validated options instead.
 
 This is the one place that decides what a step may do. The local HTTP API
 (agent/app) and any future AI tool call these functions; neither builds shell
@@ -24,8 +33,13 @@ Flow for one step of one local run (runs/<run_id>):
 .done file says exit 0, every required output exists and is non-empty, and the
 logs contain no known failure line. The login node only runs light commands
 (mkdir, tar, sbatch, squeue, sacct, scancel, tail); SIGNET itself runs inside
-the container in the Slurm job. Each step may be attempted once per run; a
-retry uses a new run, as for local steps.
+the container in the Slurm job.
+
+A step that failed or was cancelled may be submitted again in the same run, so
+the earlier steps' results stay usable (one analysis = one run). Each earlier
+attempt is kept, never overwritten: locally as steps/<step>.attempt<N>.json and
+on HPC3 as steps/<step>.attempt<N>.{job,done,out,err,sbatch}. A completed step
+is not rerun in place, since later steps may already have read its results.
 
 The HTTP server is multi-threaded, so submit/status/cancel of the same run and
 step run one at a time (see _one_at_a_time); otherwise two status checks of a
@@ -51,6 +65,9 @@ import agent.tools.signet as signet
 FAILURE_PATTERNS = ('Execution halted', 'Error in ', 'cannot open', 'No such file or directory', 'command not found')
 ACTIVE = ('submitting', 'submitted', 'pending', 'running', 'validating', 'unknown')
 TERMINAL = ('completed', 'failed', 'cancelled')
+RETRYABLE = ('failed', 'cancelled')   # may be submitted again in the same run
+# Files a job leaves in <run>/steps on HPC3; renamed to <step>.attempt<N>.<suffix> before a retry.
+_JOB_FILES = ('job', 'done', 'out', 'err', 'sbatch', 'sbatch.err')
 CACHE_SECONDS = 15
 MAX_LOG_LINES = 200
 _MARKER = '@@'
@@ -82,6 +99,15 @@ class Step:
     # <prefix><N><suffix> for each chromosome N it processes (see _chromosomes).
     prefixes: dict = field(default_factory=dict)
     failures: tuple = ()  # extra log lines, specific to this step, that mean it failed
+    # Steps that must have completed in THIS run first. SIGNET has no notion of runs: it
+    # reads earlier results from its own work/ folder, which is this run's HPC3 folder.
+    requires: tuple = ()
+    # Files (relative to work/) that those earlier steps left in this run's HPC3 folder
+    # and that this step reads; checked on HPC3 before anything is queued.
+    needs: tuple = ()
+    # Answers to SIGNET's interactive questions, fed to its stdin in this order:
+    # key -> (rule, default). A batch job has no keyboard, so without them `read` gets nothing.
+    prompts: dict = field(default_factory=dict)
 
 
 STEPS = {
@@ -110,6 +136,30 @@ STEPS = {
         # check_ped.sh and imputation.sh print these, then stop with kill -10; signet still exits 0.
         failures=('No SNP listed in your chromosome input', 'Some of the jobs are incomplete'),
         description='TCGA genotype preprocessing (signet -g): PLINK quality control, then IMPUTE2 imputation.'),
+    'adjust': Step(
+        flag='-a', cohort='TCGA', inputs=('cli.file',),
+        settings={},
+        requires=('expression', 'genotype'),
+        # script/adj_portal.sh reads the -t and -g results through rest.tcga / resg.tcga
+        # (res/rest/signet, res/resg/signet); script/adj/adj_filter.sh also reads -g's
+        # temporary files in tmp/tmpg/impute, a folder no setting can move.
+        needs=('res/rest/signet_gexp', 'res/rest/signet_gexpID',
+               'res/resg/signet_Geno', 'res/resg/signet_Genotype.sampleID',
+               'tmp/tmpg/impute/impute_Genotype.sizes'),
+        # script/adj/adj.sh asks "Enter the number of PCs for population structures";
+        # adj_adjust.R uses that many of the 10 genotype PCs as covariates (0 = none).
+        prompts={'npc': ('pcs', 3)},
+        # Written with the resa.tcga prefix res/resa/signet; the -c step reads these.
+        required=('res/resa/signet_matched.gexp', 'res/resa/signet_new.Geno',
+                  'res/resa/signet_new.Geno.map', 'res/resa/signet_new.Geno.maf',
+                  'res/resa/signet_gexp.data', 'res/resa/signet_gexp_rmpc.data',
+                  'res/resa/signet_geno.data'),
+        download='work/res/resa',
+        # Light: one R job per chromosome (ParaFly -CPU ncore_local), smartpca, then R regressions.
+        resources={'cpus': 4, 'mem_gb': 16, 'hours': 2},
+        limits={'cpus': (1, 16), 'mem_gb': (1, 64), 'hours': (0.25, 12)},
+        description='TCGA adjustment (signet -a): match expression and genotype samples, filter rare SNPs, '
+                    'compute genotype PCs, and regress out race, gender and PCs.'),
 }
 
 
@@ -118,6 +168,8 @@ def catalog():
     return {'steps': [{'name': name, 'flag': step.flag, 'cohort': step.cohort, 'description': step.description,
                        'inputs': list(step.inputs), 'prefix_inputs': step.prefixes, 'settings': step.settings,
                        'resources': step.resources, 'limits': {k: list(v) for k, v in step.limits.items()},
+                       'requires': list(step.requires),
+                       'options': {k: {'rule': rule, 'default': default} for k, (rule, default) in step.prompts.items()},
                        'required_outputs': list(step.required)} for name, step in STEPS.items()],
             'input_roots': ['<workspace>/refdata', '<signet source>/example', '<this run on HPC3>'],
             'states': ['submitted', 'pending', 'running', 'validating', *TERMINAL, 'unknown']}
@@ -140,6 +192,11 @@ def _root(run_id):
 
 def _record_path(root, name):
     return root / 'steps' / f'{name}.json'
+
+
+def _attempt_path(root, name, number):
+    """Where an earlier attempt of a step is kept once it is retried: steps/<step>.attempt<N>.json."""
+    return root / 'steps' / f'{name}.attempt{number}.json'
 
 
 def _load(root, name):
@@ -188,8 +245,16 @@ def _one_at_a_time(function):
     return wrapper
 
 
+def _current_records(root):
+    """Paths of each step's current record (steps/<step>.json), leaving out archived attempts."""
+    folder = root / 'steps'
+    if not folder.is_dir():
+        return []
+    return [path for path in sorted(folder.glob('*.json')) if '.' not in path.stem]
+
+
 def _active_step(root):
-    for path in sorted((root / 'steps').glob('*.json')) if (root / 'steps').is_dir() else ():
+    for path in _current_records(root):
         record = json.loads(path.read_text())
         if record.get('state') in ACTIVE:
             return record['step']
@@ -198,11 +263,7 @@ def _active_step(root):
 
 def run_steps(run_id):
     """State of every step recorded for one run, e.g. {'expression': 'running'}."""
-    root = _root(run_id)
-    folder = root / 'steps'
-    if not folder.is_dir():
-        return {}
-    return {path.stem: json.loads(path.read_text()).get('state') for path in sorted(folder.glob('*.json'))}
+    return {path.stem: json.loads(path.read_text()).get('state') for path in _current_records(_root(run_id))}
 
 
 def update_settings(run_id, values):
@@ -258,6 +319,59 @@ def _resources(step, overrides):
             raise StepError('invalid_request', f'{key} must be between {low} and {high}.')
     minutes = round(values['hours'] * 60)
     return {**values, 'time': f'{minutes // 60:02d}:{minutes % 60:02d}:00'}
+
+
+def _options(step, values):
+    """Answers for the step's SIGNET prompts: the caller's values checked by rule, the rest defaults."""
+    if values is None:
+        values = {}
+    if not isinstance(values, dict) or set(values) - set(step.prompts):
+        allowed = ', '.join(step.prompts) or 'nothing'
+        raise StepError('invalid_request', f'options may only set {allowed} for this step.')
+    checked = {}
+    for key, (rule, default) in step.prompts.items():
+        value = values.get(key, default)
+        if rule == 'pcs':   # adj_adjust.R takes the first npc of 10 genotype PCs
+            if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 10:
+                raise StepError('invalid_request', f'{key} must be a whole number from 0 to 10.')
+        else:
+            raise StepError('invalid_request', f'No rule for {key}.')
+        checked[key] = value
+    return checked
+
+
+def _other_runs_with(root, name):
+    """Other local runs in which step `name` completed, to point the user at them."""
+    found = []
+    for path in sorted(root.parent.glob(f'*/steps/{name}.json')):
+        if path.parent.parent != root:
+            try:
+                if json.loads(path.read_text()).get('state') == 'completed':
+                    found.append(path.parent.parent.name)
+            except (OSError, ValueError):
+                continue
+    return found
+
+
+def _prerequisites(root, step):
+    """Refuse unless every step this one builds on has completed in this same run."""
+    missing = []
+    for name in step.requires:
+        path = _record_path(root, name)
+        state = json.loads(path.read_text()).get('state') if path.is_file() else 'not submitted'
+        if state != 'completed':
+            missing.append((name, state))
+    if not missing:
+        return
+    parts = []
+    for name, state in missing:
+        elsewhere = _other_runs_with(root, name)
+        note = f' (completed in other runs: {", ".join(elsewhere)})' if elsewhere else ''
+        parts.append(f'{name} is {state}{note}')
+    raise StepError('invalid_request',
+                    f'This step needs {" and ".join(step.requires)} completed in this same run first: '
+                    + '; '.join(parts) + '. Results from other runs are not used, because SIGNET reads them '
+                    'from this run\'s own HPC3 folder.')
 
 
 def _inputs(step, values, allowed):
@@ -348,10 +462,16 @@ def _remote_dir(config, root, run_id):
     return config['workRoot'] + '/' + run_id
 
 
-def _job_script(config, run_id, name, step, directory, binds):
-    """The Slurm batch script. Every value in it was validated; nothing comes from the caller as text."""
+def _job_script(config, run_id, name, step, directory, binds, options=None):
+    """The Slurm batch script. Every value in it was validated; nothing comes from the caller as text.
+
+    SIGNET's stdin is /dev/null, or, for a step with prompts, one line per answer in
+    step.prompts order (validated whole numbers only).
+    """
     q = shlex.quote
     bind = ','.join([f'{directory}:{directory}'] + [f'{path}:{path}:ro' for path in binds])
+    answers = [str(options[key]) for key in step.prompts] if options else []
+    stdin = f"< <(printf '%s\\n' {' '.join(q(a) for a in answers)})" if answers else '< /dev/null'
     return f'''#!/bin/bash
 #SBATCH --job-name=signet-{name}-{run_id}
 #SBATCH --output={directory}/steps/{name}.out
@@ -361,7 +481,7 @@ cd {q(directory + '/work')} || exit 1
 echo "[SIGNET-AGENT] START step={name} job=$SLURM_JOB_ID ts=$(date -Iseconds)"
 # Batch jobs cannot answer prompts: flush old temporary files and use the cores Slurm gave this job.
 sed -i -e 's/^forcerm *=.*/forcerm = T/' -e "s/^ncore_local *=.*/ncore_local = ${{SLURM_CPUS_PER_TASK:-1}}/" config.ini
-{q(config['executor'])} exec --cleanenv --no-home --bind {q(bind)} {q(config['image'])} bash ./signet {step.flag} < /dev/null
+{q(config['executor'])} exec --cleanenv --no-home --bind {q(bind)} {q(config['image'])} bash ./signet {step.flag} {stdin}
 rc=$?
 echo "[SIGNET-AGENT] END step={name} exit=$rc ts=$(date -Iseconds)"
 printf '%s %s\\n' "$rc" "$(date -Iseconds)" > {q(directory + '/steps/' + name + '.done')}
@@ -397,23 +517,34 @@ def _upload(root, directory, token):
         raise StepError('remote_failed', 'Could not upload the run to HPC3; nothing was submitted.')
 
 
-def _submit_script(config, run_id, name, step, directory, files, resources):
-    """Login-node script: check every input file, write the job script, sbatch it and record the job ID."""
+def _submit_script(config, run_id, name, step, directory, files, resources, options=None, archive=None):
+    """Login-node script: check every input file and earlier result, write the job script, sbatch it, record the job ID.
+
+    archive=N (a retry): once every check passed, the previous attempt's files are renamed
+    to <step>.attemptN.* so the new job starts clean and the old logs stay readable.
+    """
     q = shlex.quote
+    keep = ''
+    if archive:
+        keep = ''.join(f'[ -e "$D/steps/{name}.{suffix}" ] && mv -f "$D/steps/{name}.{suffix}" '
+                       f'"$D/steps/{name}.attempt{archive}.{suffix}"\n' for suffix in _JOB_FILES)
     binds = sorted({root for _, _, root in files if root != directory})
+    # Results of earlier steps must still be in this run's folder (nobody cleaned it up).
+    needs = ''.join(f'if [ ! -s "$D/work/"{q(path)} ]; then say missing_prior {q(path)}; exit 4; fi\n'
+                    for path in step.needs)
     # A file must be a real, non-empty file at exactly this path: no link may lead elsewhere.
     checks = ''.join(
         f'r="$(readlink -f -- {q(root)})"; f="$(readlink -f -- {q(path)})"\n'
         f'if [ "$f" != "$r/{path[len(root) + 1:]}" ] || [ ! -f "$f" ] || [ ! -s "$f" ]; then '
         f'say missing_input {q(key)}; say missing_file {q(path)}; exit 4; fi\n'
         for key, path, root in files)
-    job = _job_script(config, run_id, name, step, directory, binds)
+    job = _job_script(config, run_id, name, step, directory, binds, options)
     sbatch = (f'sbatch --parsable --partition={config["partition"]} --cpus-per-task={resources["cpus"]} '
               f'--mem={resources["mem_gb"]}G --time={resources["time"]} "$D/steps/{name}.sbatch"')
     return _say() + f'''D={q(directory)}
-{checks}if [ ! -s {q(config['image'])} ]; then say not_ready container; exit 5; fi
+{checks}{needs}if [ ! -s {q(config['image'])} ]; then say not_ready container; exit 5; fi
 if ! command -v sbatch >/dev/null 2>&1; then say not_ready sbatch; exit 5; fi
-if [ -e "$D/steps/{name}.job" ]; then say conflict submitted; exit 6; fi
+{keep}if [ -e "$D/steps/{name}.job" ]; then say conflict submitted; exit 6; fi
 cat > "$D/steps/{name}.sbatch" <<'SIGNET_JOB'
 {job}SIGNET_JOB
 job="$({sbatch} 2>"$D/steps/{name}.sbatch.err")" || {{ say sbatch_failed "$(head -c 300 "$D/steps/{name}.sbatch.err")"; exit 7; }}
@@ -426,18 +557,27 @@ say job "$job"
 # ---------- the four operations ----------
 
 @_one_at_a_time
-def submit(run_id, name, inputs, resources=None):
-    """Submit one step of a run as a Slurm job and return its record (state "submitted" with job_id)."""
+def submit(run_id, name, inputs, resources=None, options=None):
+    """Submit one step of a run as a Slurm job and return its record (state "submitted" with job_id).
+
+    options answers the step's SIGNET prompts (see Step.prompts); missing ones take their default.
+    """
     step = _step(name)
     root = _root(run_id)
     if signet._settings(root).get('cohort') != step.cohort:
         raise StepError('invalid_request', f'Step {name} needs a {step.cohort} run.')
     request = _resources(step, resources)
-    if _record_path(root, name).exists():
-        raise StepError('conflict', f'Step {name} was already attempted in this run; use a new run to retry.')
+    answers = _options(step, options)
+    previous = _load(root, name) if _record_path(root, name).exists() else None
+    if previous is not None and previous.get('state') not in RETRYABLE:
+        if previous.get('state') == 'completed':
+            raise StepError('conflict', f'Step {name} already completed in this run; use a new run to compute it again.')
+        raise StepError('conflict', f'Step {name} of this run is {previous.get("state")}; check its status first.')
+    attempt = previous.get('attempt', 1) + 1 if previous else 1
     active = _active_step(root)
     if active:
         raise StepError('conflict', f'Step {active} of this run is still active.')
+    _prerequisites(root, step)
     config = _environment()
     directory = _remote_dir(config, root, run_id)
     checked = _inputs(step, inputs, (config['root'] + '/refdata', config['source'] + '/example', directory))
@@ -452,13 +592,22 @@ def submit(run_id, name, inputs, resources=None):
         record = {'step': name, 'run_id': run_id, 'flag': step.flag, 'remote_dir': directory,
                   'inputs': {key: path for key, (path, _) in checked.items()}, 'resources': request,
                   'partition': config['partition'], 'image': config['image'], 'submitted_at': _now()}
+        if answers:
+            record['options'] = answers   # kept for reproducibility: the answers SIGNET was given
+        if previous:
+            record['attempt'] = attempt
+            record['previous_job_id'] = previous.get('job_id')   # never mistaken for this attempt's job
+        archived = _attempt_path(root, name, attempt - 1) if previous else None
         try:
             _upload(root, directory, token)
+            if previous:   # keep the failed attempt's record before the new one replaces it
+                archived.write_text(json.dumps(previous, indent=2) + '\n')
             # Record intent before sbatch: a lost connection from here on may have started a job.
             _change(record, 'submitting')
             _save(root, record)
             files = _files(step, checked, signet._settings(root))
-            code, values, _ = _shell(_submit_script(config, run_id, name, step, directory, files, request))
+            code, values, _ = _shell(_submit_script(config, run_id, name, step, directory, files, request, answers,
+                                                    archive=attempt - 1 if previous else None))
         except OSError as error:
             if record.get('state') != 'submitting':
                 raise StepError('remote_failed', 'HPC3 connection failed before anything was submitted.') from error
@@ -467,13 +616,21 @@ def submit(run_id, name, inputs, resources=None):
         if code == 0 and re.fullmatch(r'[0-9]+', values.get('job', '')):
             _change(record, 'submitted', job_id=values['job'], checked_at=0)
             return _save(root, record)
-        # Nothing was queued, so forget the attempt and let the user fix the cause and retry.
-        _record_path(root, name).unlink(missing_ok=True)
+        # Nothing was queued, so forget this attempt and let the user fix the cause and retry.
+        # A retry puts the previous attempt's record back, so the step still reads as failed.
+        if previous:
+            _save(root, previous)
+            archived.unlink(missing_ok=True)
+        else:
+            _record_path(root, name).unlink(missing_ok=True)
         if 'missing_input' in values:
             key = values['missing_input']
             hint = (f' (looked for {values.get("missing_file")}; set {_chromosome_key(step)} to the chromosome you have'
                     ' files for)') if key in step.prefixes else ''
             raise StepError('invalid_request', f'{key} is missing, empty, or reached through a link on HPC3{hint}.')
+        if 'missing_prior' in values:
+            raise StepError('invalid_request', f'{values["missing_prior"]} from an earlier step is missing in this '
+                            'run\'s HPC3 folder; compute that step again in a new run.')
         if 'not_ready' in values:
             raise StepError('not_ready', f'HPC3 is not ready: {values["not_ready"]} is missing. Check the remote environment.')
         if 'conflict' in values:
@@ -525,6 +682,13 @@ def status(run_id, name, refresh=False):
     if code:
         return {**record, 'connection': 'interrupted', 'reason': 'The status check did not complete on HPC3.'}
     record['checked_at'] = time.time()
+    if (not record.get('job_id') and record.get('previous_job_id')
+            and values.get('job') == record['previous_job_id']):
+        # A retry lost its connection before the old attempt's files were renamed on HPC3:
+        # what was found belongs to the previous attempt, so this attempt has no job yet.
+        for key in ('job', 'squeue', 'sacct', 'done'):
+            values.pop(key, None)
+        hints = []
     if not record.get('job_id') and re.fullmatch(r'[0-9]+', values.get('job', '')):
         record['job_id'] = values['job']   # recovered after a lost connection during submit
     queued, accounted = values.get('squeue', ''), values.get('sacct', '').split(' ')[0]
@@ -545,7 +709,7 @@ def status(run_id, name, refresh=False):
     elif not record.get('job_id'):
         # No ID file, and Slurm knows no job with this step's name: sbatch never ran.
         _change(record, 'failed', finished_at=_now(),
-                reason='No Slurm job was found for this step on HPC3, so it never started. Create a new run to try again.')
+                reason='No Slurm job was found for this step on HPC3, so it never started. Submit it again.')
     elif time.time() - record.get('first_seen_missing', time.time()) > 300:
         _change(record, 'unknown', reason='Slurm has no record of this job; inspect the run folder on HPC3.')
     else:

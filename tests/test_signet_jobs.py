@@ -7,7 +7,12 @@ Slurm or container is needed.
 
 Most tests use the expression step (signet -t). The genotype tests (signet -g) at
 the end cover what is new there: per-chromosome prefix inputs (ref, gmap),
-the PLINK/IMPUTE2 settings, and failure lines specific to -g.
+the PLINK/IMPUTE2 settings, and failure lines specific to -g. The adjust tests
+(signet -a) cover steps that build on others: -t and -g must have completed in
+the same run, their files (including -g's tmp/tmpg/impute) must still be on
+HPC3, and SIGNET's "number of PCs" question is answered from a checked option.
+The retry tests check that a failed step can be submitted again in the same run
+while every earlier attempt is kept, locally and on HPC3.
 """
 import json
 import os
@@ -149,6 +154,67 @@ class StepsTest(unittest.TestCase):
         self.assertEqual(self.code_of(steps.submit, 'gtex_run', 'expression', self.inputs), 'invalid_request')
         self.assertEqual(self.code_of(steps.submit, 'step_test', 'network', self.inputs), 'not_found')
         self.assertEqual(self.code_of(steps.status, 'missing_run', 'expression'), 'not_found')
+
+    # ---------- retrying a failed step in the same run ----------
+
+    def failed_expression(self):
+        """Submit -t (job 12345) and let it fail: signet exited 0 but wrote no outputs."""
+        steps.submit('step_test', 'expression', self.inputs)
+        self.finish_job(outputs=())
+        self.assertEqual(steps.status('step_test', 'expression', refresh=True)['state'], 'failed')
+        (self.remote_dir / 'steps/expression.out').write_text('first attempt log\n')
+        self.slurm(sbatch_reply='222', squeue='', sacct='')
+
+    def test_failed_step_is_retried_in_the_same_run_and_the_old_attempt_is_kept(self):
+        self.failed_expression()
+        record = steps.submit('step_test', 'expression', self.inputs)
+        self.assertEqual((record['state'], record['job_id']), ('submitted', '222'))
+        self.assertEqual((record['attempt'], record['previous_job_id']), (2, '12345'))
+        old = json.loads((self.root / 'steps/expression.attempt1.json').read_text())
+        self.assertEqual((old['state'], old['job_id']), ('failed', '12345'))
+        steps_dir = self.remote_dir / 'steps'
+        self.assertEqual((steps_dir / 'expression.job').read_text().strip(), '222')
+        self.assertEqual((steps_dir / 'expression.attempt1.job').read_text().strip(), '12345')
+        self.assertEqual((steps_dir / 'expression.attempt1.out').read_text(), 'first attempt log\n')
+        self.assertTrue((steps_dir / 'expression.attempt1.done').is_file())
+        self.assertFalse((steps_dir / 'expression.done').exists())   # the new job starts clean
+        self.assertEqual(steps.run_steps('step_test'), {'expression': 'submitted'})   # archives are not steps
+        # The retry itself can fail and be retried again: attempt 2 is kept as well.
+        self.finish_job(outputs=())
+        self.assertEqual(steps.status('step_test', 'expression', refresh=True)['state'], 'failed')
+        self.slurm(sbatch_reply='333')
+        self.assertEqual(steps.submit('step_test', 'expression', self.inputs)['attempt'], 3)
+        self.assertEqual((steps_dir / 'expression.attempt2.job').read_text().strip(), '222')
+
+    def test_completed_or_active_step_is_not_resubmitted(self):
+        steps.submit('step_test', 'expression', self.inputs)
+        self.assertEqual(self.code_of(steps.submit, 'step_test', 'expression', self.inputs), 'conflict')
+        self.finish_job()
+        self.assertEqual(steps.status('step_test', 'expression', refresh=True)['state'], 'completed')
+        with self.assertRaises(steps.StepError) as caught:
+            steps.submit('step_test', 'expression', self.inputs)
+        self.assertEqual(caught.exception.code, 'conflict')
+        self.assertIn('already completed', str(caught.exception))
+
+    def test_retry_refused_on_hpc3_keeps_the_failed_attempt_as_it_was(self):
+        self.failed_expression()
+        self.gexp.unlink()
+        self.assertEqual(self.code_of(steps.submit, 'step_test', 'expression', self.inputs), 'invalid_request')
+        record = json.loads((self.root / 'steps/expression.json').read_text())
+        self.assertEqual((record['state'], record['job_id']), ('failed', '12345'))
+        self.assertFalse((self.root / 'steps/expression.attempt1.json').exists())
+        self.assertEqual((self.remote_dir / 'steps/expression.job').read_text().strip(), '12345')   # not moved
+
+    def test_retry_that_lost_its_connection_never_takes_the_old_job_as_its_own(self):
+        self.failed_expression()
+        self.lose_connection_on = 'sbatch --parsable'
+        self.assertEqual(steps.submit('step_test', 'expression', self.inputs)['state'], 'unknown')
+        self.lose_connection_on = None
+        self.slurm(sacct='COMPLETED')   # what Slurm says about the OLD job 12345
+        record = steps.status('step_test', 'expression', refresh=True)
+        self.assertEqual(record['state'], 'failed')
+        self.assertNotIn('job_id', record)
+        self.assertIn('never started', record['reason'])
 
     def test_hpc3_folder_of_another_run_is_never_reused(self):
         self.remote_dir.mkdir(parents=True)
@@ -401,6 +467,101 @@ class StepsTest(unittest.TestCase):
         for bad in ({'mind': 1.5}, {'hwe': '0.01'}, {'geno': True}, {'int': 0}, {'int': 2.5},
                     {'restrict.tcga.geno': 23}):
             self.assertEqual(self.code_of(steps.update_settings, 'step_test', bad), 'invalid_request', bad)
+
+    # ---------- adjust (signet -a) ----------
+
+    def adjust_ready(self, needs=None):
+        """This run as it is after -t and -g completed: local records, plus their files in the HPC3 folder."""
+        (self.root / 'steps').mkdir(exist_ok=True)
+        for name in ('expression', 'genotype'):
+            (self.root / f'steps/{name}.json').write_text(json.dumps({'step': name, 'state': 'completed'}))
+        token = steps._owner(self.root, str(self.remote_dir))
+        self.remote_dir.mkdir(parents=True)
+        (self.remote_dir / '.owner').write_text(token + '\n')
+        for relative in steps.STEPS['adjust'].needs if needs is None else needs:
+            path = self.remote_dir / 'work' / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('data\n')
+        clinical = self.hpc / 'ws/refdata/clinical.tsv'
+        clinical.write_text('submitter_id\trace\tgender\n')
+        return {'cli.file': str(clinical)}
+
+    def test_catalog_describes_adjust_prerequisites_and_options(self):
+        step = next(s for s in steps.catalog()['steps'] if s['name'] == 'adjust')
+        self.assertEqual((step['flag'], step['inputs']), ('-a', ['cli.file']))
+        self.assertEqual(step['requires'], ['expression', 'genotype'])
+        self.assertEqual(step['options'], {'npc': {'rule': 'pcs', 'default': 3}})
+        self.assertIn('res/resa/signet_gexp_rmpc.data', step['required_outputs'])
+
+    def test_adjust_needs_expression_and_genotype_completed_in_the_same_run(self):
+        clinical = self.hpc / 'ws/refdata/clinical.tsv'
+        clinical.write_text('submitter_id\trace\tgender\n')
+        st.configure_signet('other_run')   # a run where only -t completed, like t_gtf1
+        (self.project / 'runs/other_run/steps').mkdir()
+        (self.project / 'runs/other_run/steps/expression.json').write_text('{"state": "completed"}')
+        with self.assertRaises(steps.StepError) as caught:
+            steps.submit('step_test', 'adjust', {'cli.file': str(clinical)})
+        self.assertEqual(caught.exception.code, 'invalid_request')
+        message = str(caught.exception)
+        self.assertIn('expression is not submitted (completed in other runs: other_run)', message)
+        self.assertIn('genotype is not submitted.', message)
+        self.assertFalse((self.root / 'steps/adjust.json').exists())
+        self.assertFalse((self.fake / 'sbatch_args').exists())
+
+    def test_adjust_refused_while_genotype_failed(self):
+        inputs = self.adjust_ready()
+        (self.root / 'steps/genotype.json').write_text('{"step": "genotype", "state": "failed"}')
+        with self.assertRaises(steps.StepError) as caught:
+            steps.submit('step_test', 'adjust', inputs)
+        self.assertIn('genotype is failed', str(caught.exception))
+
+    def test_adjust_answers_the_pc_question_and_queues_signet_a(self):
+        inputs = self.adjust_ready()
+        record = steps.submit('step_test', 'adjust', inputs)
+        self.assertEqual((record['state'], record['options']), ('submitted', {'npc': 3}))
+        text = (self.remote_dir / 'steps/adjust.sbatch').read_text()
+        self.assertIn("bash ./signet -a < <(printf '%s\\n' 3)", text)
+        config = (self.remote_dir / 'work/config.ini').read_text()
+        self.assertIn(f'cli.file = {inputs["cli.file"]}', config)
+        # The stdin line really answers SIGNET's `read -p` prompt.
+        line = text.split('bash ./signet -a ', 1)[1].splitlines()[0]
+        answer = subprocess.run(['bash', '-c', 'read -p "PCs: " pc ' + line + '; echo "pc=$pc"'],
+                                capture_output=True, text=True)
+        self.assertEqual(answer.stdout.strip(), 'pc=3')
+
+    def test_adjust_takes_a_chosen_pc_count(self):
+        record = steps.submit('step_test', 'adjust', self.adjust_ready(), options={'npc': 0})
+        self.assertEqual(record['options'], {'npc': 0})
+        self.assertIn("< <(printf '%s\\n' 0)", (self.remote_dir / 'steps/adjust.sbatch').read_text())
+
+    def test_adjust_option_rules(self):
+        inputs = self.adjust_ready()
+        for bad in ({'npc': 11}, {'npc': -1}, {'npc': True}, {'npc': '3'}, {'npc': 2.5}, {'pcs': 3}, ['npc']):
+            self.assertEqual(self.code_of(steps.submit, 'step_test', 'adjust', inputs, options=bad),
+                             'invalid_request', bad)
+        self.assertEqual(self.code_of(steps.submit, 'step_test', 'expression', self.inputs, options={'npc': 3}),
+                         'invalid_request')
+        self.assertFalse((self.fake / 'sbatch_args').exists())
+
+    def test_adjust_refused_when_genotype_temp_files_are_gone_on_hpc3(self):
+        needs = [p for p in steps.STEPS['adjust'].needs if not p.startswith('tmp/')]
+        inputs = self.adjust_ready(needs=needs)
+        with self.assertRaises(steps.StepError) as caught:
+            steps.submit('step_test', 'adjust', inputs)
+        self.assertIn('tmp/tmpg/impute/impute_Genotype.sizes', str(caught.exception))
+        self.assertFalse((self.fake / 'sbatch_args').exists())
+        self.assertFalse((self.root / 'steps/adjust.json').exists())   # nothing queued: may retry
+
+    def test_adjust_completed_downloads_resa(self):
+        steps.submit('step_test', 'adjust', self.adjust_ready())
+        for relative in steps.STEPS['adjust'].required:
+            path = self.remote_dir / 'work' / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('data\n')
+        (self.remote_dir / 'steps/adjust.done').write_text('0 2026-11-08T10:00:00\n')
+        self.slurm(squeue='', sacct='COMPLETED')
+        self.assertEqual(steps.status('step_test', 'adjust', refresh=True)['state'], 'completed')
+        self.assertEqual((self.root / 'work/res/resa/signet_new.Geno').read_text(), 'data\n')
 
     def test_read_log_returns_last_lines_with_limits(self):
         steps.submit('step_test', 'expression', self.inputs)

@@ -15,7 +15,7 @@ Every error reply is {"error": "<message for the user>", "code": "<machine code>
   403 forbidden         Host, Origin or token check failed (sent by ChatHandler)
   404 not_found         unknown route, run or step
   405 method_not_allowed the route exists but not for this method
-  409 conflict          run exists, step already attempted, another step active
+  409 conflict          run exists, step already completed or still active, another step active
   412 not_ready         HPC3 not connected or not prepared
   500 internal_error    an unexpected error in this app (details go to the backend log only)
   502 remote_failed     an SSH or Slurm command on HPC3 failed
@@ -181,22 +181,29 @@ def update_settings(handler, url, run_id):
 def submit_step(handler, url, run_id, step):
     """POST /signet/runs/{run_id}/steps/{step}
        body {"inputs": {"gexp.file": "/pub/.../example_gexp", "pmap.file": "/pub/.../gencode.v22.annotation.gtf"},
-             "resources": {"cpus": 4, "mem_gb": 16, "hours": 2}}   (resources optional)
+             "resources": {"cpus": 4, "mem_gb": 16, "hours": 2},   (optional)
+             "options": {"npc": 3}}                                (optional; only steps with prompts, e.g. adjust)
 
     Start one SIGNET step on HPC3 as a Slurm job. Inputs must be HPC3 files
     under the workspace refdata/, the SIGNET example/ folder or this run's own
-    HPC3 folder. Uploads the run, writes the job script, runs sbatch, and
-    returns as soon as Slurm accepts the job; follow it with the status route.
+    HPC3 folder. Options answer SIGNET's interactive questions (the catalog
+    lists them with rules and defaults). Uploads the run, writes the job
+    script, runs sbatch, and returns as soon as Slurm accepts the job; follow
+    it with the status route.
     Response 202: the step record with "state": "submitted" and "job_id"
     (or "state": "unknown" if the connection dropped during sbatch; check
     status, never resubmit).
-    Errors: 400 bad input path or resources, wrong cohort, input missing on HPC3;
-            404 unknown run or step; 409 already attempted or another step active;
+    Errors: 400 bad input path, resources or options, wrong cohort, input missing on HPC3,
+            an earlier step this one needs has not completed in this run;
+            404 unknown run or step; 409 step already completed or still active, or another step active;
             412 HPC3 not connected or container missing; 502 upload or sbatch failed.
+    Retry: a failed or cancelled step may be submitted again in the same run. The earlier
+    attempt is kept (steps/<step>.attempt<N>.json here, steps/<step>.attempt<N>.* on HPC3)
+    and the new record carries "attempt" and "previous_job_id".
     """
     _query(url, ())
-    body = _body(handler, ('inputs', 'resources'), required=('inputs',))
-    return 202, jobs.submit(run_id, step, body['inputs'], body.get('resources'))
+    body = _body(handler, ('inputs', 'resources', 'options'), required=('inputs',))
+    return 202, jobs.submit(run_id, step, body['inputs'], body.get('resources'), body.get('options'))
 
 
 def get_step(handler, url, run_id, step):
