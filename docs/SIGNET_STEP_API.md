@@ -10,6 +10,7 @@ Steps available now (TCGA cohort only):
 | `genotype` | `signet -g` | PLINK quality control, then IMPUTE2 imputation |
 | `adjust` | `signet -a` | Match expression and genotype samples, filter rare SNPs, compute genotype PCs, regress out race, gender and PCs |
 | `cis` | `signet -c` | cis-eQTL mapping: each gene's significant nearby SNPs (common, low-frequency, rare), used later as instrumental variables |
+| `network` | `signet -n` | Gene regulatory network by two-stage penalized least squares on bootstrap data; SIGNET submits its own Slurm jobs (section 6.4) |
 
 The chat tool `cis_eqtl` still runs `signet -c` through the older `remote.execute_cis()` path on the login node; the `cis` step here is the Slurm replacement.
 
@@ -322,6 +323,9 @@ Before queueing, each of those files is checked on HPC3. A missing one is named 
 
 ### 6.3 Setting and option rules
 
+Before a step is submitted, the run's **current** values of that step's settings are checked against these rules too, since they may still be defaults that do not fit HPC3 (SIGNET's `memory = 256` for `-n`). A failing value returns 400 naming the key; change it with route 5 first.
+
+
 | Key | Step | Rule | Example |
 |---|---|---|---|
 | `restrict.tcga` | expression | `"no"` or a whole number 1–22 | `1` |
@@ -330,12 +334,47 @@ Before queueing, each of those files is checked on HPC3. A missing one is named 
 | `int` | genotype | a whole number of base pairs, 1–100,000,000 (IMPUTE2 chunk length) | `5000000` |
 | `alpha.cis` | cis | a number above 0 and at most 1 (significance level) | `0.05` |
 | `nperms` | cis | a whole number 1–100,000 (permutations for low-frequency and rare variants) | `100` |
+| `nboots` | network | a whole number 1–1,000 (bootstrap data sets; SIGNET runs nboots + 1) | `100` |
+| `ncis` | network | a whole number 1–10 (most instrumental variables per gene) | `3` |
+| `cor` | network | a number above 0 and at most 1 (largest correlation between a gene's instrumental variables) | `0.3` |
+| `ncores` | network | a whole number 1–64: CPUs of **each of SIGNET's own jobs** | `16` |
+| `memory` | network | a whole number of GB 1–128: memory of each of SIGNET's own jobs | `32` |
+| `walltime` | network | `H:MM:SS` from `0:05:00` to `48:00:00`: wall time of each of SIGNET's own jobs | `4:00:00` |
 | `upstream`, `downstream` | cis | a whole number of base pairs 0–10,000,000 around each gene | `1000` |
 | `npc` (option) | adjust | a whole number 0–10: genotype PCs used as covariates (0 = none) | `3` |
 
 Booleans and numbers sent as strings are rejected. Settings such as `forcerm` and `ncore_local` are not exposed: every job forces `forcerm = T` (batch jobs cannot answer SIGNET's "remove old files?" prompt) and sets `ncore_local` to the CPUs Slurm granted.
 
 **Why options exist.** `signet -a` asks *"Enter the number of PCs for population structures"* with `read -p`. A batch job has no keyboard, so the job feeds the validated answers to SIGNET's standard input in order. Steps without options get `/dev/null` as standard input. The answers are stored in the step record under `options`.
+
+### 6.4 The `network` step (`signet -n`)
+
+`signet -n` is itself a job dispatcher, so this step works differently from the others:
+
+| | Other steps | `network` |
+|---|---|---|
+| Where `signet` runs | inside the container, in the step's Slurm job | on the compute node, **outside** the container, in the step's Slurm job (the *control job*) |
+| Slurm jobs | one | the control job, plus the jobs SIGNET submits for stage 1 and stage 2 (`sbatch -W`, one ParaFly batch of `ncores` commands each) |
+| Resources in `resources` | the SIGNET job | the control job only (default 2 CPUs, 16 GB, 24 h; it waits for both stages, runs data preparation and the summary) |
+| Size of the 2SPLS jobs | — | settings `ncores`, `memory`, `walltime` |
+
+What the control job adds around `bash ./signet -n`:
+
+- `singularity` on `PATH`: a link to the configured container runtime if only `apptainer` exists, because SIGNET calls `singularity exec` itself.
+- `SINGULARITY_BIND` / `APPTAINER_BIND` set to the run folder, so every container SIGNET starts (and its own jobs, which inherit the environment) can read the run's files.
+- `OPENBLAS_NUM_THREADS`, `OMP_NUM_THREADS`, `MKL_NUM_THREADS` = 1.
+- `#SBATCH --mem=<memory>G` added to SIGNET's job template `script/network/template.sub.ori`, which has none. SIGNET fills in `queue`, `ncores` and `walltime` itself; the app sets `queue` to the HPC3 partition and `sif` to the container image.
+
+Following and stopping it:
+
+- Status adds `"progress": {"stage1": "<finished> <total>", "stage2": "..."}`: ParaFly commands finished out of all commands in each stage.
+- Cancel cancels the control job and the jobs SIGNET submitted (IDs from `tmp/tmpn/stage1/submit1_log` and `stage2/submit2_log`), but only those whose working directory is inside this run's HPC3 folder.
+- When the control job has ended (completed, failed, timed out), a status call cancels any of those jobs still queued, so none are left behind.
+- Failure lines: `Some jobs are incomplete` (SIGNET then cancels its jobs and stops), `Cannot find the container`, `doesn't exist`, `Please reset` (SIGNET's test run found `ncores × memory per job` too large).
+
+Required outputs: `res/resn/signet_Afreq` (edge frequencies over the bootstraps), `signet_CoeffMat0` (coefficients on the original data) and `signet_net.genepos`; `work/res/resn` is downloaded.
+
+Measured on HPC3 (chromosome-1 example: 2,090 genes, 85 with cis-eQTL, `nboots` 10, `ncores` 4): stage 1 had 11 commands and stage 2 had 165; the whole step took 19 minutes, mostly waiting in the queue. `signet_Afreq` is comma-separated, 2,090 rows × 85 columns (one column per gene with cis-eQTL), with values in steps of 1/`nboots`.
 
 ## 7. Step states
 
@@ -371,6 +410,7 @@ Record fields (route 7 and route 4):
 | `missing_outputs`, `failure_hints`, `reason` | Why it failed, or the validation note on success |
 | `outputs` | Files downloaded into the local run |
 | `required_outputs` | Present when output names depend on settings (`cis`): the exact files this attempt must produce |
+| `progress` | `network` only: finished and total ParaFly commands per stage |
 | `attempt`, `previous_job_id` | Present on a retry |
 | `connection` | `"interrupted"` when HPC3 could not be reached (not saved) |
 
@@ -381,8 +421,9 @@ HPC3, run folder `<workRoot>/<run_id>/`:
 ```
 .owner                       random token: this folder belongs to this run
 work/                        SIGNET's home for the run: signet, script/, config.ini
-  res/rest/ res/resg/ res/resa/ res/resc/    step results (-t, -g, -a, -c)
-  tmp/tmpt/ tmp/tmpg/ tmp/tmpa/ tmp/tmpc/    step temporary files (-a reads tmp/tmpg/impute/)
+  res/rest/ res/resg/ res/resa/ res/resc/ res/resn/    step results (-t, -g, -a, -c, -n)
+  tmp/tmpt/ tmp/tmpg/ tmp/tmpa/ tmp/tmpc/ tmp/tmpn/    step temporary files (-a reads tmp/tmpg/impute/; -n runs its own jobs in tmp/tmpn/stage1, stage2)
+steps/bin/singularity        (network only) link to the container runtime, if HPC3 has no `singularity`
 steps/
   <step>.sbatch              the generated job script
   <step>.job                 Slurm job ID
@@ -433,6 +474,10 @@ api GET '/signet/runs/luad_run1/steps/adjust?refresh=1'
 api PATCH /signet/runs/luad_run1/settings '{"values":{"alpha.cis":0.05,"nperms":100}}'   # optional
 api POST /signet/runs/luad_run1/steps/cis '{"inputs":{}}'
 api GET '/signet/runs/luad_run1/steps/cis?refresh=1'
+
+api PATCH /signet/runs/luad_run1/settings '{"values":{"nboots":100,"ncores":16,"memory":32,"walltime":"4:00:00"}}'
+api POST /signet/runs/luad_run1/steps/network '{"inputs":{}}'
+api GET '/signet/runs/luad_run1/steps/network?refresh=1'      # "progress": {"stage1": "120 303"}
 ```
 
 If `adjust` fails (for example because of the clinical file), fix the cause and send the same `POST` again in the same run: the reply has `"attempt": 2`, and `-t` and `-g` are not rerun.
@@ -443,4 +488,5 @@ If `adjust` fails (for example because of the clinical file), fix the cause and 
 - **IMPUTE2 seed.** SIGNET runs IMPUTE2 without `-seed`, so two `-g` runs on the same data differ slightly (about 0.01 % of genotype calls in one test).
 - **No job confirmed.** A step that ends `unknown` without a job ID has no way out yet other than inspecting the HPC3 folder: it cannot be retried, and it blocks the run's other steps and settings.
 - **One run per analysis.** Results are never taken from another run. Copying `-t` or `-g` results between runs would also need `-g`'s `tmp/tmpg/impute/` and a check that both runs used the same samples.
-- **Not yet steps:** `-n` (network), `-v` (visualization), and all GTEx steps. The chat tool `cis_eqtl` still uses the older login-node path.
+- **`network` holds a control job for hours.** It needs 1–2 CPUs while SIGNET's jobs run; a control job that hits its wall time stops SIGNET, and its remaining jobs are cancelled by the next status call.
+- **Not yet steps:** `-v` (visualization) and all GTEx steps. The chat tool `cis_eqtl` still uses the older login-node path.

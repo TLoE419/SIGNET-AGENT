@@ -33,10 +33,12 @@ import agent.tools.signet as st
 
 FAKE_SLURM = {
     'sbatch': 'printf "%s\\n" "$@" > "$FAKE/sbatch_args"; cat "$FAKE/sbatch_reply" 2>/dev/null || echo 12345',
-    'squeue': ('case "$*" in *%j*) cat "$FAKE/name";; *%i*) cat "$FAKE/queued_id";; *) cat "$FAKE/squeue";; '
+    # "-o %Z" (a job's working directory) reads workdir_<job id>, set per job by a test.
+    'squeue': ('case "$*" in *%j*) cat "$FAKE/name";; *%i*) cat "$FAKE/queued_id";; *%Z*) cat "$FAKE/workdir_$3";; '
+               '*) cat "$FAKE/squeue";; '
                'esac 2>/dev/null; true'),
     'sacct': 'case "$*" in *--name=*) cat "$FAKE/sacct_id";; *) cat "$FAKE/sacct";; esac 2>/dev/null; true',
-    'scancel': 'printf "%s\\n" "$@" > "$FAKE/scancel"',
+    'scancel': 'printf "%s\\n" "$@" >> "$FAKE/scancel"',
 }
 OUTPUTS = steps.STEPS['expression'].required
 
@@ -155,7 +157,7 @@ class StepsTest(unittest.TestCase):
         self.assertEqual(self.code_of(steps.submit, 'step_test', 'expression', self.inputs), 'conflict')
         st.configure_signet('gtex_run', cohort='GTEx')
         self.assertEqual(self.code_of(steps.submit, 'gtex_run', 'expression', self.inputs), 'invalid_request')
-        self.assertEqual(self.code_of(steps.submit, 'step_test', 'network', self.inputs), 'not_found')
+        self.assertEqual(self.code_of(steps.submit, 'step_test', 'visualize', self.inputs), 'not_found')
         self.assertEqual(self.code_of(steps.status, 'missing_run', 'expression'), 'not_found')
 
     # ---------- retrying a failed step in the same run ----------
@@ -816,6 +818,113 @@ class StepsTest(unittest.TestCase):
             self.assertEqual(self.code_of(steps.update_settings, 'step_test', bad), 'invalid_request', bad)
         self.assertEqual(self.code_of(steps.submit, 'step_test', 'cis', {'gexp.file': str(self.gexp)}),
                          'invalid_request')   # -c takes no inputs: everything comes from this run
+
+    # ---------- network (signet -n) ----------
+
+    NETWORK_SETTINGS = {'nboots': 10, 'ncores': 4, 'memory': 16, 'walltime': '0:30:00'}
+
+    def network_ready(self, settings=NETWORK_SETTINGS):
+        """This run after -c completed (alpha.cis 0.05), with SIGNET's own job sizes set."""
+        self.cis_ready()
+        (self.root / 'steps/cis.json').write_text(json.dumps({'step': 'cis', 'state': 'completed'}))
+        for relative in steps.STEPS['network'].needs:
+            path = self.remote_dir / 'work' / relative.replace('{alpha.cis}', '0.05')
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('data\n')
+        if settings:
+            steps.update_settings('step_test', settings)
+
+    def test_catalog_describes_network(self):
+        step = next(s for s in steps.catalog()['steps'] if s['name'] == 'network')
+        self.assertEqual((step['flag'], step['inputs'], step['requires']), ('-n', [], ['cis']))
+        self.assertEqual(set(step['settings']), {'nboots', 'ncis', 'cor', 'ncores', 'memory', 'walltime'})
+        self.assertEqual(step['required_outputs'][0], 'res/resn/signet_Afreq')
+
+    def test_network_refused_while_the_run_keeps_signets_default_job_memory(self):
+        self.network_ready(settings=None)   # config.ini.default has memory = 256
+        with self.assertRaises(steps.StepError) as caught:
+            steps.submit('step_test', 'network', {})
+        self.assertEqual(caught.exception.code, 'invalid_request')
+        self.assertIn("memory is '256'", str(caught.exception))
+        self.assertFalse((self.fake / 'sbatch_args').exists())
+
+    def test_network_runs_signet_on_the_node_and_sizes_signets_own_jobs(self):
+        self.network_ready()
+        record = steps.submit('step_test', 'network', {})
+        self.assertEqual(record['state'], 'submitted')
+        text = (self.remote_dir / 'steps/network.sbatch').read_text()
+        self.assertNotIn('exec --cleanenv', text)              # not inside the container
+        self.assertIn('bash ./signet -n < /dev/null', text)
+        self.assertIn("ln -sf apptainer", text)                 # singularity name for SIGNET
+        self.assertIn(f"export SINGULARITY_BIND={self.remote_dir}:{self.remote_dir}", text)
+        self.assertIn('export OPENBLAS_NUM_THREADS=1', text)
+        self.assertIn("/^#SBATCH -N 1$/a #SBATCH --mem=16G' script/network/template.sub.ori", text)
+        args = (self.fake / 'sbatch_args').read_text().split()
+        self.assertEqual(args[2:5], ['--cpus-per-task=2', '--mem=16G', '--time=24:00:00'])   # the control job
+        config = (self.remote_dir / 'work/config.ini').read_text()
+        work = f'{self.remote_dir}/work'
+        # SIGNET reads each value with sed '/^key[ ]*= /' and needs the space after "=": with
+        # "queue=standard" its own jobs got "#SBATCH -p Please check the file name" (job 59412524).
+        sed = ['sed', '-nE', r'/^queue[ ]*= /{ s/.*=[ ]*//; p; q; }', str(self.remote_dir / 'work/config.ini')]
+        self.assertEqual(subprocess.run(sed, capture_output=True, text=True).stdout.strip(), 'standard')
+        for line in (f'sig.pair = {work}/res/resc/signet_all.sig.pValue_0.05', f'sif = {self.hpc}/signet.sif',
+                     'queue = standard', 'computing = slurm', 'interactive = F', 'nboots = 10',
+                     'ncores = 4', 'memory = 16', 'walltime = 0:30:00'):
+            self.assertIn(line, config)
+
+    def test_network_settings_rules(self):
+        for bad in ({'nboots': 0}, {'nboots': 1001}, {'ncis': 11}, {'cor': 0}, {'ncores': 65},
+                    {'memory': 256}, {'walltime': '4:00'}, {'walltime': '0:01:00'}, {'walltime': '49:00:00'},
+                    {'walltime': 3600}):
+            self.assertEqual(self.code_of(steps.update_settings, 'step_test', bad), 'invalid_request', bad)
+        self.assertEqual(steps.update_settings('step_test', {'walltime': '12:00:00', 'cor': 0.3})['walltime'],
+                         '12:00:00')
+
+    def test_network_reports_progress_and_completes(self):
+        self.network_ready()
+        steps.submit('step_test', 'network', {})
+        stage1 = self.remote_dir / 'work/tmp/tmpn/stage1'
+        stage1.mkdir(parents=True)
+        (stage1 / 'params.txt').write_text('a\nb\nc\nd\n')
+        (stage1 / 'params1.txt.completed').write_text('a\nb\nc\n')
+        self.slurm(squeue='RUNNING')
+        record = steps.status('step_test', 'network', refresh=True)
+        self.assertEqual((record['state'], record['progress']), ('running', {'stage1': '3 4'}))
+        for relative in steps.STEPS['network'].required:
+            path = self.remote_dir / 'work' / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('data\n')
+        (self.remote_dir / 'steps/network.done').write_text('0 2026-11-09T21:00:00-08:00\n')
+        self.slurm(squeue='', sacct='COMPLETED')
+        self.assertEqual(steps.status('step_test', 'network', refresh=True)['state'], 'completed')
+        self.assertEqual((self.root / 'work/res/resn/signet_Afreq').read_text(), 'data\n')
+
+    def signet_children(self):
+        """SIGNET submitted two jobs: 777 runs in this run's folder, 888 somewhere else."""
+        stage1 = self.remote_dir / 'work/tmp/tmpn/stage1'
+        stage1.mkdir(parents=True, exist_ok=True)
+        (stage1 / 'submit1_log').write_text('Submitted batch job 777\nSubmitted batch job 888\n')
+        self.slurm(workdir_777=str(stage1), workdir_888='/pub/someone/else')
+
+    def test_cancel_also_cancels_signets_jobs_in_this_run_only(self):
+        self.network_ready()
+        steps.submit('step_test', 'network', {})
+        self.signet_children()
+        self.slurm(name='signet-network-step_test', squeue='RUNNING')
+        self.assertEqual(steps.cancel('step_test', 'network')['state'], 'cancelled')
+        self.assertEqual((self.fake / 'scancel').read_text().split(), ['12345', '777'])
+
+    def test_failed_control_job_leaves_no_orphan_jobs(self):
+        self.network_ready()
+        steps.submit('step_test', 'network', {})
+        self.signet_children()
+        (self.remote_dir / 'steps/network.out').write_text('Warning: Some jobs are incomplete! Find the problem\n')
+        (self.remote_dir / 'steps/network.done').write_text('0 2026-11-09T21:00:00-08:00\n')
+        self.slurm(squeue='', sacct='COMPLETED')
+        record = steps.status('step_test', 'network', refresh=True)
+        self.assertEqual(record['state'], 'failed')
+        self.assertIn('Some jobs are incomplete', record['failure_hints'][0])
+        self.assertEqual((self.fake / 'scancel').read_text().split(), ['777'])
 
     def test_read_log_returns_last_lines_with_limits(self):
         steps.submit('step_test', 'expression', self.inputs)

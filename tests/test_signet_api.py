@@ -174,7 +174,7 @@ class SignetApiTest(unittest.TestCase):
     def test_step_errors_map_to_status_codes(self):
         self.assertEqual(self.call('POST', '/signet/runs/step_test/steps/expression', {'inputs': {'gexp.file': '/etc/passwd'}})[0], 400)
         self.assertEqual(self.call('POST', '/signet/runs/step_test/steps/expression', {})[0], 400)
-        self.assertEqual(self.call('POST', '/signet/runs/step_test/steps/network', {'inputs': self.inputs})[0], 404)
+        self.assertEqual(self.call('POST', '/signet/runs/step_test/steps/visualize', {'inputs': self.inputs})[0], 404)
         self.assertEqual(self.call('GET', '/signet/runs/step_test/steps/expression')[0], 404)
         for query in ('refresh=2', 'stream=out&stream=err', 'other=1'):
             self.assertEqual(self.call('GET', f'/signet/runs/step_test/steps/expression?{query}')[0], 400, query)

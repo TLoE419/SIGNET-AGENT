@@ -116,6 +116,19 @@ class Step:
     # configure_signet sets every input path to a work/missing/<key> placeholder, so a step that
     # reads earlier results through such keys must set them itself.
     links: dict = field(default_factory=dict)
+    # config.ini keys set at submit from the HPC3 environment: '{image}', '{partition}' or a literal.
+    fixed: dict = field(default_factory=dict)
+    # True: run `signet` on the compute node itself, not inside the container. Needed when
+    # SIGNET starts containers and submits its own Slurm jobs (signet -n).
+    host: bool = False
+    # For a host step: the config.ini key holding the memory (GB) of SIGNET's own jobs; the job
+    # adds `#SBATCH --mem=<value>G` to SIGNET's job template, which has no memory line.
+    child_memory: str = ''
+    # Logs (relative to work/) in which SIGNET records the Slurm jobs it submitted; those jobs
+    # are cancelled with the step, but only if they run inside this run's folder.
+    children: tuple = ()
+    # Folders (relative to work/) where SIGNET's ParaFly batches run, to report progress.
+    stages: tuple = ()
 
 
 STEPS = {
@@ -196,6 +209,38 @@ STEPS = {
         env={'OPENBLAS_NUM_THREADS': '1', 'OMP_NUM_THREADS': '1', 'MKL_NUM_THREADS': '1'},
         description='TCGA cis-eQTL mapping (signet -c): find each gene\'s significant nearby SNPs '
                     '(common, low-frequency and rare variants) to use as instrumental variables.'),
+    'network': Step(
+        flag='-n', cohort='TCGA', inputs=(),
+        requires=('cis',),
+        # The same pairs as the [network] defaults of SIGNET's config.ini.default.
+        links={'net.gexp.data': 'res/resc/signet_net.gexp.data', 'net.geno.data': 'res/resc/signet_all.eQTL.data',
+               'sig.pair': 'res/resc/signet_all.sig.pValue_{alpha.cis}',
+               'net.genename': 'res/resc/signet_net.genename', 'net.genepos': 'res/resc/signet_net.genepos'},
+        needs=('res/resc/signet_net.gexp.data', 'res/resc/signet_all.eQTL.data',
+               'res/resc/signet_all.sig.pValue_{alpha.cis}', 'res/resc/signet_net.genename',
+               'res/resc/signet_net.genepos'),
+        fixed={'sif': '{image}', 'queue': '{partition}', 'computing': 'slurm', 'interactive': 'F', 'email': 'F'},
+        # nboots, ncis and cor are statistical; ncores, memory and walltime size each of SIGNET's
+        # own Slurm jobs (script/network/template.sub.ori), not this step's control job.
+        settings={'nboots': 'boots', 'ncis': 'ncis', 'cor': 'alpha',
+                  'ncores': 'cores', 'memory': 'gigabytes', 'walltime': 'hms'},
+        host=True, child_memory='memory',
+        children=('tmp/tmpn/stage1/submit1_log', 'tmp/tmpn/stage2/submit2_log'),
+        stages=('tmp/tmpn/stage1', 'tmp/tmpn/stage2'),
+        # script/network/network.sh: summarize.r writes <resn>_Afreq; the last lines copy
+        # CoeffMat0 and net.genepos next to it (resn = res/resn/signet).
+        required=('res/resn/signet_Afreq', 'res/resn/signet_CoeffMat0', 'res/resn/signet_net.genepos'),
+        download='work/res/resn',
+        # This job only drives SIGNET (and runs its data preparation and summary in R); the
+        # 2SPLS work runs in the Slurm jobs SIGNET submits. It must outlive both stages.
+        resources={'cpus': 2, 'mem_gb': 16, 'hours': 24},
+        limits={'cpus': (1, 8), 'mem_gb': (1, 128), 'hours': (0.25, 72)},
+        env={'OPENBLAS_NUM_THREADS': '1', 'OMP_NUM_THREADS': '1', 'MKL_NUM_THREADS': '1'},
+        # stage1.sh / bts2gensub.sh print the first and then `kill -10` the driver;
+        # network_portal.sh prints the second when it finds no singularity.
+        failures=('Some jobs are incomplete', 'Cannot find the container', "doesn't exist", 'Please reset'),
+        description='TCGA network construction (signet -n): two-stage penalized least squares on bootstrap '
+                    'data; SIGNET submits its own Slurm jobs, this step drives and follows them.'),
 }
 
 
@@ -355,11 +400,46 @@ def _setting(key, rule, value):
         if isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 100_000:
             return str(value)
         raise StepError('invalid_request', f'{key} must be a whole number from 1 to 100000.')
+    if rule == 'boots':      # number of bootstrap data sets
+        if isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 1000:
+            return str(value)
+        raise StepError('invalid_request', f'{key} must be a whole number from 1 to 1000.')
+    if rule == 'ncis':       # most instrumental variables per gene
+        if isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 10:
+            return str(value)
+        raise StepError('invalid_request', f'{key} must be a whole number from 1 to 10.')
+    if rule == 'cores':      # CPUs of each of SIGNET's own jobs
+        if isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 64:
+            return str(value)
+        raise StepError('invalid_request', f'{key} must be a whole number from 1 to 64.')
+    if rule == 'gigabytes':  # memory of each of SIGNET's own jobs
+        if isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 128:
+            return str(value)
+        raise StepError('invalid_request', f'{key} must be a whole number of GB from 1 to 128.')
+    if rule == 'hms':        # wall time of each of SIGNET's own jobs, H:MM:SS
+        match = re.fullmatch(r'([0-9]{1,2}):([0-5][0-9]):([0-5][0-9])', value) if isinstance(value, str) else None
+        if match and 300 <= int(match[1]) * 3600 + int(match[2]) * 60 + int(match[3]) <= 48 * 3600:
+            return value
+        raise StepError('invalid_request', f'{key} must be H:MM:SS from 0:05:00 to 48:00:00.')
     if rule == 'flank':      # base pairs added up- or downstream of a gene
         if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 10_000_000:
             return str(value)
         raise StepError('invalid_request', f'{key} must be a whole number of base pairs from 0 to 10000000.')
     raise StepError('invalid_request', f'No rule for {key}.')
+
+
+def _check_current(step, settings):
+    """Re-check the run's current values of this step's settings, which may still be SIGNET's or
+    configure_signet's defaults (e.g. memory = 256 for -n), before anything reaches HPC3."""
+    for key, rule in step.settings.items():
+        text = settings.get(key, '')
+        value = int(text) if re.fullmatch(r'-?[0-9]+', text) else (
+            float(text) if re.fullmatch(r'-?[0-9]*\.?[0-9]+(e-?[0-9]+)?', text) else text)
+        try:
+            _setting(key, rule, value)
+        except StepError as error:
+            raise StepError('invalid_request', f'This run\'s {key} is {text!r}: {error} '
+                            'Change it with the settings route first.') from error
 
 
 # ---------- validation of caller values ----------
@@ -521,17 +601,40 @@ def _remote_dir(config, root, run_id):
     return config['workRoot'] + '/' + run_id
 
 
-def _job_script(config, run_id, name, step, directory, binds, options=None):
+def _job_script(config, run_id, name, step, directory, binds, options=None, settings=None):
     """The Slurm batch script. Every value in it was validated; nothing comes from the caller as text.
 
     SIGNET's stdin is /dev/null, or, for a step with prompts, one line per answer in
     step.prompts order (validated whole numbers only).
+
+    Most steps run `signet` inside the container. A host step (signet -n) runs it on the
+    compute node, because SIGNET then calls `singularity exec` itself and submits its own
+    Slurm jobs: the script makes `singularity` available (HPC3 may only have apptainer),
+    binds the run folder for every container SIGNET starts, and adds a memory line to
+    SIGNET's job template.
     """
     q = shlex.quote
     bind = ','.join([f'{directory}:{directory}'] + [f'{path}:{path}:ro' for path in binds])
     answers = [str(options[key]) for key in step.prompts] if options else []
-    env = f"--env {q(','.join(f'{k}={v}' for k, v in step.env.items()))} " if step.env else ''
     stdin = f"< <(printf '%s\\n' {' '.join(q(a) for a in answers)})" if answers else '< /dev/null'
+    if step.host:
+        exports = ''.join(f'export {key}={q(value)}\n' for key, value in step.env.items())
+        memory = ''
+        if step.child_memory:
+            gigabytes = int((settings or {})[step.child_memory])   # validated by _check_current
+            memory = (f"sed -i '/^#SBATCH --mem=/d; /^#SBATCH -N 1$/a #SBATCH --mem={gigabytes}G' "
+                      'script/network/template.sub.ori\n')
+        run = f'''# SIGNET starts containers and Slurm jobs itself; its jobs inherit this environment.
+if ! command -v singularity >/dev/null 2>&1; then
+  mkdir -p {q(directory + '/steps/bin')} && ln -sf {q(config['executor'])} {q(directory + '/steps/bin/singularity')}
+  export PATH={q(directory + '/steps/bin')}:"$PATH"
+fi
+export SINGULARITY_BIND={q(bind)} APPTAINER_BIND={q(bind)}
+{exports}{memory}bash ./signet {step.flag} {stdin}'''
+    else:
+        env = f"--env {q(','.join(f'{k}={v}' for k, v in step.env.items()))} " if step.env else ''
+        run = (f"{q(config['executor'])} exec --cleanenv --no-home {env}--bind {q(bind)} {q(config['image'])} "
+               f"bash ./signet {step.flag} {stdin}")
     return f'''#!/bin/bash
 #SBATCH --job-name=signet-{name}-{run_id}
 #SBATCH --output={directory}/steps/{name}.out
@@ -541,7 +644,7 @@ cd {q(directory + '/work')} || exit 1
 echo "[SIGNET-AGENT] START step={name} job=$SLURM_JOB_ID ts=$(date -Iseconds)"
 # Batch jobs cannot answer prompts: flush old temporary files and use the cores Slurm gave this job.
 sed -i -e 's/^forcerm *=.*/forcerm = T/' -e "s/^ncore_local *=.*/ncore_local = ${{SLURM_CPUS_PER_TASK:-1}}/" config.ini
-{q(config['executor'])} exec --cleanenv --no-home {env}--bind {q(bind)} {q(config['image'])} bash ./signet {step.flag} {stdin}
+{run}
 rc=$?
 echo "[SIGNET-AGENT] END step={name} exit=$rc ts=$(date -Iseconds)"
 printf '%s %s\\n' "$rc" "$(date -Iseconds)" > {q(directory + '/steps/' + name + '.done')}
@@ -577,7 +680,8 @@ def _upload(root, directory, token):
         raise StepError('remote_failed', 'Could not upload the run to HPC3; nothing was submitted.')
 
 
-def _submit_script(config, run_id, name, step, directory, files, resources, options=None, archive=None):
+def _submit_script(config, run_id, name, step, directory, files, resources, options=None, archive=None,
+                   needs=None, settings=None):
     """Login-node script: check every input file and earlier result, write the job script, sbatch it, record the job ID.
 
     archive=N (a retry): once every check passed, the previous attempt's files are renamed
@@ -591,14 +695,14 @@ def _submit_script(config, run_id, name, step, directory, files, resources, opti
     binds = sorted({root for _, _, root in files if root != directory})
     # Results of earlier steps must still be in this run's folder (nobody cleaned it up).
     needs = ''.join(f'if [ ! -s "$D/work/"{q(path)} ]; then say missing_prior {q(path)}; exit 4; fi\n'
-                    for path in step.needs)
+                    for path in (step.needs if needs is None else needs))
     # A file must be a real, non-empty file at exactly this path: no link may lead elsewhere.
     checks = ''.join(
         f'r="$(readlink -f -- {q(root)})"; f="$(readlink -f -- {q(path)})"\n'
         f'if [ "$f" != "$r/{path[len(root) + 1:]}" ] || [ ! -f "$f" ] || [ ! -s "$f" ]; then '
         f'say missing_input {q(key)}; say missing_file {q(path)}; exit 4; fi\n'
         for key, path, root in files)
-    job = _job_script(config, run_id, name, step, directory, binds, options)
+    job = _job_script(config, run_id, name, step, directory, binds, options, settings)
     sbatch = (f'sbatch --parsable --partition={config["partition"]} --cpus-per-task={resources["cpus"]} '
               f'--mem={resources["mem_gb"]}G --time={resources["time"]} "$D/steps/{name}.sbatch"')
     return _say() + f'''D={q(directory)}
@@ -638,6 +742,7 @@ def submit(run_id, name, inputs, resources=None, options=None):
     if active:
         raise StepError('conflict', f'Step {active} of this run is still active.')
     _prerequisites(root, step)
+    _check_current(step, signet._settings(root))
     config = _environment()
     directory = _remote_dir(config, root, run_id)
     checked = _inputs(step, inputs, (config['root'] + '/refdata', config['source'] + '/example', directory))
@@ -649,8 +754,12 @@ def submit(run_id, name, inputs, resources=None, options=None):
     try:
         # Inputs, plus the keys this step reads from earlier results of the run (as local work/
         # paths; the upload rewrites them to the run's HPC3 folder).
+        current = signet._settings(root)
+        fixed = {key: value.replace('{image}', config['image']).replace('{partition}', config['partition'])
+                 for key, value in step.fixed.items()}
         signet._update(root, {**{key: path for key, (path, _) in checked.items()},
-                              **{key: str(root / 'work' / rel) for key, rel in step.links.items()}})
+                              **{key: str(root / 'work' / _resolve(rel, current)) for key, rel in step.links.items()},
+                              **fixed})
         token = _owner(root, directory)
         record = {'step': name, 'run_id': run_id, 'flag': step.flag, 'remote_dir': directory,
                   'inputs': {key: path for key, (path, _) in checked.items()}, 'resources': request,
@@ -672,8 +781,11 @@ def submit(run_id, name, inputs, resources=None, options=None):
             _change(record, 'submitting')
             _save(root, record)
             files = _files(step, checked, signet._settings(root))
+            settings = signet._settings(root)
             code, values, _ = _shell(_submit_script(config, run_id, name, step, directory, files, request, answers,
-                                                    archive=attempt - 1 if previous else None))
+                                                    archive=attempt - 1 if previous else None,
+                                                    needs=[_resolve(path, settings) for path in step.needs],
+                                                    settings=settings))
         except OSError as error:
             if record.get('state') != 'submitting':
                 raise StepError('remote_failed', 'HPC3 connection failed before anything was submitted.') from error
@@ -706,6 +818,17 @@ def submit(run_id, name, inputs, resources=None, options=None):
         (root / '.active').unlink(missing_ok=True)
 
 
+def _children_script(step):
+    """Cancel jobs SIGNET submitted for this step (IDs from its submit logs), but only those whose
+    working directory is inside this run's HPC3 folder ($D), so no other job can be touched."""
+    q = shlex.quote
+    return ''.join(
+        f'for c in $(grep -Eo "[0-9]+$" "$D/work/"{q(log)} 2>/dev/null | sort -u); do\n'
+        '  w="$(squeue -h -j "$c" -o %Z 2>/dev/null)"\n'
+        '  case "$w" in "$D"/*) scancel "$c" && say child_cancelled "$c";; esac\n'
+        'done\n' for log in step.children)
+
+
 def _status_script(record, step):
     q = shlex.quote
     directory, name = record['remote_dir'], record['step']
@@ -714,6 +837,14 @@ def _status_script(record, step):
     outputs = ''.join(f'[ -s {q(directory + "/work/" + path)} ] && say output_{i} yes\n'
                       for i, path in enumerate(_required(step, record)))
     pattern = '|'.join(re.escape(p) for p in FAILURE_PATTERNS + step.failures)
+    # SIGNET's ParaFly batches: params.txt lists every command, params<N>.txt.completed the finished ones.
+    progress = ''.join(
+        f'if [ -s "$D/work/"{q(stage)}/params.txt ]; then say progress_{i} "$(cat "$D/work/"{q(stage)}/params[0-9]*.txt.completed '
+        f'2>/dev/null | wc -l | tr -d " ") $(wc -l < "$D/work/"{q(stage)}/params.txt | tr -d " ")"; fi\n'
+        for i, stage in enumerate(step.stages))
+    # When the control job is gone, SIGNET's own jobs still queued for this run are orphans.
+    orphans = (f'if [ -n "$j" ] && [ -z "$(squeue -h -j "$j" -o %T 2>/dev/null)" ]; then\n{_children_script(step)}fi\n'
+               if step.children else '')
     return _say() + f'''D={q(directory)}
 j={q(job) if job else '"$(head -n 1 "$D/steps/' + name + '.job" 2>/dev/null)"'}
 # No ID recorded (connection lost around sbatch): look for this step's own job name, ours only.
@@ -726,7 +857,7 @@ if [ -n "$j" ]; then
 fi
 [ -f "$D/steps/{name}.done" ] && say done "$(head -n 1 "$D/steps/{name}.done")"
 {outputs}cat "$D/steps/{name}.out" "$D/steps/{name}.err" 2>/dev/null | grep -E -m 20 {q(pattern)} | while IFS= read -r l; do say line "$l"; done
-true
+{progress}{orphans}true
 '''
 
 
@@ -764,6 +895,9 @@ def status(run_id, name, refresh=False):
     queued, accounted = values.get('squeue', ''), values.get('sacct', '').split(' ')[0]
     slurm = queued or accounted
     record['slurm_state'] = slurm or None
+    if step.stages:
+        record['progress'] = {f'stage{i + 1}': values[f'progress_{i}'] for i in range(len(step.stages))
+                              if f'progress_{i}' in values}   # "finished total" ParaFly commands
     missing = [path for i, path in enumerate(_required(step, record)) if values.get(f'output_{i}') != 'yes']
     if slurm == 'PENDING':
         _change(record, 'pending')
@@ -826,8 +960,9 @@ def _finish(root, record, step, done, missing, hints):
 
 @_one_at_a_time
 def cancel(run_id, name):
-    """Cancel the step's own Slurm job (checked by job name). Finished steps cannot be cancelled."""
-    _step(name)
+    """Cancel the step's own Slurm job (checked by job name), and for signet -n the jobs SIGNET
+    submitted inside this run's folder. Finished steps cannot be cancelled."""
+    step = _step(name)
     root = _root(run_id)
     record = _load(root, name)
     if record['state'] in TERMINAL:
@@ -836,9 +971,10 @@ def cancel(run_id, name):
         raise StepError('conflict', 'No job ID is known yet; check status first.')
     _environment()
     expected = f'signet-{name}-{run_id}'
-    script = _say() + (f'j={shlex.quote(record["job_id"])}\n'
+    script = _say() + (f'D={shlex.quote(record["remote_dir"])}\nj={shlex.quote(record["job_id"])}\n'
                        f'if [ "$(squeue -h -j "$j" -o %j 2>/dev/null)" = {shlex.quote(expected)} ]; then '
-                       'scancel "$j" && say cancel requested; else say cancel not_queued; fi\n')
+                       'scancel "$j" && say cancel requested; else say cancel not_queued; fi\n'
+                       + _children_script(step))
     try:
         code, values, _ = _shell(script, timeout=30)
     except OSError as error:
