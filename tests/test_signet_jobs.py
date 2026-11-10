@@ -15,6 +15,7 @@ The retry tests check that a failed step can be submitted again in the same run
 while every earlier attempt is kept, locally and on HPC3.
 """
 import json
+from concurrent.futures import ThreadPoolExecutor
 import os
 from pathlib import Path
 import stat
@@ -212,9 +213,11 @@ class StepsTest(unittest.TestCase):
         self.lose_connection_on = None
         self.slurm(sacct='COMPLETED')   # what Slurm says about the OLD job 12345
         record = steps.status('step_test', 'expression', refresh=True)
-        self.assertEqual(record['state'], 'failed')
+        # Not the old job's result: no job of this attempt is confirmed yet, so it stays
+        # unknown and the user is told not to resubmit (a job may still appear).
+        self.assertEqual(record['state'], 'unknown')
         self.assertNotIn('job_id', record)
-        self.assertIn('never started', record['reason'])
+        self.assertIn('Do not resubmit', record['reason'])
 
     def test_hpc3_folder_of_another_run_is_never_reused(self):
         self.remote_dir.mkdir(parents=True)
@@ -282,6 +285,65 @@ class StepsTest(unittest.TestCase):
             self.assertEqual(record[key], expected)
             self.assertFalse((self.project / 'runs' / run_id / 'work/res/rest/signet_gexp').exists())
 
+    def test_completed_job_waits_for_a_complete_exit_marker_before_downloading(self):
+        for index, marker in enumerate((None, '', '0', '0 2026-11-01T10:')):
+            with self.subTest(marker=marker):
+                run_id = f'delayed_marker_{index}'
+                st.configure_signet(run_id)
+                self.remote_dir = self.hpc / 'ws/work' / run_id
+                steps.submit(run_id, 'expression', self.inputs)
+                self.finish_job()
+                path = self.remote_dir / 'steps/expression.done'
+                if marker is None:
+                    path.unlink()
+                else:
+                    path.write_text(marker)
+                record = steps.status(run_id, 'expression', refresh=True)
+                self.assertEqual(record['state'], 'validating')
+                self.assertNotIn('finished_at', record)
+                self.assertFalse((self.project / 'runs' / run_id / 'work/res/rest/signet_gexp').exists())
+                self.assertEqual(self.code_of(steps.submit, run_id, 'expression', self.inputs), 'conflict')
+                path.write_text('0 2026-11-01T10:00:00\n')
+                record = steps.status(run_id, 'expression', refresh=True)
+                self.assertEqual(record['state'], 'completed')
+                self.assertEqual((self.project / 'runs' / run_id / 'work/res/rest/signet_gexp').read_text(), 'data\n')
+
+    def test_refresh_recovers_a_legacy_missing_marker_failure_without_resubmitting(self):
+        record = steps.submit('step_test', 'expression', self.inputs)
+        self.finish_job()
+        marker = self.remote_dir / 'steps/expression.done'
+        marker.unlink()
+        record.update(state='failed', slurm_state='COMPLETED', exit_code=None,
+                      reason='The job did not finish its last line.', finished_at='2026-11-01T10:00:01')
+        (self.root / 'steps/expression.json').write_text(json.dumps(record))
+        calls = len(self.calls)
+        self.assertEqual(steps.status('step_test', 'expression')['state'], 'failed')
+        self.assertEqual(len(self.calls), calls)
+        record = steps.status('step_test', 'expression', refresh=True)
+        self.assertEqual(record['state'], 'validating')
+        self.assertNotIn('finished_at', record)
+        marker.write_text('0 2026-11-01T10:00:00\n')
+        record = steps.status('step_test', 'expression', refresh=True)
+        self.assertEqual((record['state'], record['job_id']), ('completed', '12345'))
+        self.assertEqual((self.root / 'work/res/rest/signet_gexp').read_text(), 'data\n')
+        self.assertEqual(sum('sbatch --parsable' in call for call in self.calls), 1)
+
+    def test_refresh_does_not_reopen_confirmed_failures(self):
+        for index, job in enumerate(({'exit_code': '1'}, {'outputs': OUTPUTS[:2]},
+                                     {'err': 'Error in fread(x): failed\n'})):
+            with self.subTest(job=job):
+                run_id = f'confirmed_failure_{index}'
+                st.configure_signet(run_id)
+                self.remote_dir = self.hpc / 'ws/work' / run_id
+                steps.submit(run_id, 'expression', self.inputs)
+                self.finish_job(**job)
+                failed = steps.status(run_id, 'expression', refresh=True)
+                self.assertEqual(failed['state'], 'failed')
+                self.finish_job()  # A changed remote folder must not erase a confirmed failure.
+                calls = len(self.calls)
+                self.assertEqual(steps.status(run_id, 'expression', refresh=True), failed)
+                self.assertEqual(len(self.calls), calls)
+
     def test_slurm_failure_and_cancellation_states(self):
         steps.submit('step_test', 'expression', self.inputs)
         self.slurm(squeue='', sacct='OUT_OF_MEMORY')
@@ -333,6 +395,32 @@ class StepsTest(unittest.TestCase):
         self.assertEqual(sum('tar czf' in call for call in self.calls), 1)
         self.assertEqual(steps.run_steps('step_test'), {'expression': 'completed'})
 
+    def test_unknown_submission_survives_scheduler_outage_and_recovers(self):
+        for commands in (('squeue',), ('sacct',), ('squeue', 'sacct')):
+            with self.subTest(commands=commands):
+                run_id = 'outage_' + '_'.join(commands)
+                st.configure_signet(run_id)
+                self.remote_dir = self.hpc / 'ws/work' / run_id
+                self.lose_connection_on = 'sbatch --parsable'
+                steps.submit(run_id, 'expression', self.inputs)
+                self.lose_connection_on = None
+                self.slurm(queued_id='', sacct_id='', squeue='', sacct='')
+                for name in commands:
+                    (self.fake / 'bin' / name).write_text('#!/bin/bash\nexit 1\n')
+                try:
+                    record = steps.status(run_id, 'expression', refresh=True)
+                    self.assertEqual(record['state'], 'unknown')
+                    self.assertEqual(self.code_of(steps.submit, run_id, 'expression', self.inputs), 'conflict')
+                    self.assertEqual(self.code_of(steps.update_settings, run_id, {'restrict.tcga': 1}), 'conflict')
+                finally:
+                    for name in commands:
+                        (self.fake / 'bin' / name).write_text('#!/bin/bash\n' + FAKE_SLURM[name] + '\n')
+                self.slurm(queued_id='888', squeue='RUNNING')
+                record = steps.status(run_id, 'expression', refresh=True)
+                self.assertEqual((record['state'], record['job_id']), ('running', '888'))
+                self.finish_job()
+                self.assertEqual(steps.status(run_id, 'expression', refresh=True)['state'], 'completed')
+
     def test_results_already_downloaded_complete_instead_of_staying_validating(self):
         steps.submit('step_test', 'expression', self.inputs)
         self.finish_job()
@@ -348,7 +436,7 @@ class StepsTest(unittest.TestCase):
         self.assertEqual((record['state'], record['job_id']), ('submitted', '4242'))
         self.assertEqual((self.remote_dir / 'steps/expression.job').read_text(), '4242\n')
 
-    def test_unknown_submit_is_found_by_job_name_or_ends_as_failed(self):
+    def test_unknown_submit_waits_for_delayed_scheduler_records(self):
         self.lose_connection_on = 'sbatch --parsable'
         steps.submit('step_test', 'expression', self.inputs)
         self.lose_connection_on = None
@@ -362,9 +450,12 @@ class StepsTest(unittest.TestCase):
         self.lose_connection_on = None
         self.slurm(queued_id='', squeue='', sacct='', sacct_id='')
         record = steps.status('never_queued', 'expression', refresh=True)
-        self.assertEqual(record['state'], 'failed')
-        self.assertIn('never started', record['reason'])
-        self.assertEqual(steps.update_settings('never_queued', {'restrict.tcga': 3})['restrict.tcga'], '3')
+        self.assertEqual(record['state'], 'unknown')
+        self.assertNotIn('finished_at', record)
+        self.assertEqual(self.code_of(steps.update_settings, 'never_queued', {'restrict.tcga': 3}), 'conflict')
+        self.slurm(sacct_id='999', sacct='RUNNING')
+        record = steps.status('never_queued', 'expression', refresh=True)
+        self.assertEqual((record['state'], record['job_id']), ('running', '999'))
 
     def test_settings_whitelist_and_lock_while_active(self):
         self.assertEqual(steps.update_settings('step_test', {'restrict.tcga': 1})['restrict.tcga'], '1')
@@ -373,6 +464,64 @@ class StepsTest(unittest.TestCase):
             self.assertEqual(self.code_of(steps.update_settings, 'step_test', bad), 'invalid_request', bad)
         steps.submit('step_test', 'expression', self.inputs)
         self.assertEqual(self.code_of(steps.update_settings, 'step_test', {'restrict.tcga': 2}), 'conflict')
+
+    def test_submission_waits_for_settings_write_and_uploads_the_accepted_settings(self):
+        config = self.root / 'work/config.ini'
+        writing, release, submitting, submitted = (threading.Event() for _ in range(4))
+        write_text = Path.write_text
+
+        def blocked_write(path, data, *args, **kwargs):
+            if path == config and 'restrict.tcga = 1\n' in data and not release.is_set():
+                writing.set()
+                if not release.wait(10):
+                    raise TimeoutError('Settings write was not released.')
+            return write_text(path, data, *args, **kwargs)
+
+        def submit():
+            submitting.set()
+            try:
+                return steps.submit('step_test', 'expression', self.inputs)
+            finally:
+                submitted.set()
+
+        with patch.object(Path, 'write_text', new=blocked_write), ThreadPoolExecutor(max_workers=2) as pool:
+            settings = pool.submit(steps.update_settings, 'step_test', {'restrict.tcga': 1})
+            try:
+                self.assertTrue(writing.wait(5))
+                submission = pool.submit(submit)
+                self.assertTrue(submitting.wait(5))
+                self.assertFalse(submitted.wait(0.5), 'Submission raced ahead of the accepted settings write.')
+            finally:
+                release.set()
+            self.assertEqual(settings.result(timeout=5)['restrict.tcga'], '1')
+            self.assertEqual(submission.result(timeout=5)['state'], 'submitted')
+        remote = (self.remote_dir / 'work/config.ini').read_text()
+        self.assertIn('restrict.tcga = 1\n', remote)
+        self.assertEqual(st.get_signet_settings('step_test')['settings']['restrict.tcga'], '1')
+
+    def test_settings_update_during_submission_is_rejected_without_changing_the_job(self):
+        uploading, release = threading.Event(), threading.Event()
+
+        def blocked_remote(command, **kwargs):
+            if 'tar xzf' in command:
+                uploading.set()
+                if not release.wait(10):
+                    raise TimeoutError('Upload was not released.')
+            return self.remote(command, **kwargs)
+
+        with patch.object(ssh_transport, 'remote', side_effect=blocked_remote), ThreadPoolExecutor(max_workers=2) as pool:
+            submission = pool.submit(steps.submit, 'step_test', 'expression', self.inputs)
+            try:
+                self.assertTrue(uploading.wait(5))
+                settings = pool.submit(steps.update_settings, 'step_test', {'restrict.tcga': 1})
+            finally:
+                release.set()
+            self.assertEqual(submission.result(timeout=5)['state'], 'submitted')
+            with self.assertRaises(steps.StepError) as caught:
+                settings.result(timeout=5)
+            self.assertEqual(caught.exception.code, 'conflict')
+        self.assertEqual(st.get_signet_settings('step_test')['settings']['restrict.tcga'], 'no')
+        self.assertIn('restrict.tcga = no\n', (self.remote_dir / 'work/config.ini').read_text())
 
     # ---------- genotype (signet -g) ----------
 

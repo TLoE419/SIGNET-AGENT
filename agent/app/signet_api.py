@@ -215,6 +215,8 @@ def get_step(handler, url, run_id, step):
     every 15 s per step; refresh=1 asks now. When the job has ended, this call
     checks the outputs and logs and, on success, downloads the results into the
     local run (so it may take a little longer once).
+    An absent or incomplete exit marker keeps the step validating. refresh=1
+    also rechecks old failures caused solely by an unconfirmed exit marker.
     Response 200: the step record. If HPC3 cannot be reached, the last known
     record with "connection": "interrupted".
     Errors: 404 unknown run, step, or a step never submitted; 412 not connected.
