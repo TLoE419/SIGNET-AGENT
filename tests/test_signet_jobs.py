@@ -1107,7 +1107,8 @@ class StepsTest(unittest.TestCase):
         (self.remote_dir / 'steps/network.done').write_text('0 2026-11-09T21:00:00-08:00\n')
         for parent, waiting, final in (('CANCELLED', 'cancelling', 'cancelled'),
                                        ('FAILED', 'validating', 'failed'),
-                                       ('COMPLETED', 'validating', 'completed')):
+                                       ('COMPLETED', 'validating', 'completed'),
+                                       ('', 'validating', 'completed')):
             with self.subTest(parent=parent):
                 steps._save(self.root, initial)
                 self.signet_children()

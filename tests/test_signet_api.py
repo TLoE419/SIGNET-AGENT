@@ -171,6 +171,34 @@ class SignetApiTest(unittest.TestCase):
         self.assertEqual((status, value['state']), (200, 'cancelled'))
         self.assertEqual(self.call('PATCH', '/signet/runs/step_test/settings', {'values': {'nboots': 2}})[0], 200)
 
+    def test_network_done_marker_without_accounting_waits_for_children_over_http(self):
+        from agent.runtime import signet_jobs
+        (self.root / 'steps').mkdir()
+        (self.remote_dir / 'steps').mkdir(parents=True)
+        (self.root / 'steps/network.json').write_text(json.dumps({
+            'step': 'network', 'run_id': 'step_test', 'remote_dir': str(self.remote_dir),
+            'job_id': '12345', 'state': 'running'}))
+        test_signet_jobs.StepsTest.signet_children(self)
+        for relative in signet_jobs.STEPS['network'].required:
+            path = self.remote_dir / 'work' / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('fresh output\n')
+        (self.remote_dir / 'steps/network.done').write_text('0 2026-11-10T00:00:00-08:00\n')
+        self.slurm(squeue='', sacct='')
+        path = '/signet/runs/step_test/steps/network?refresh=1'
+        self.assertEqual(self.call('GET', path)[1]['state'], 'validating')
+        self.assertEqual(self.call('PATCH', '/signet/runs/step_test/settings', {'values': {'nboots': 2}})[0], 409)
+        self.assertFalse((self.root / 'work/res/resn/signet_Afreq').exists())
+        (self.fake / 'workdir_777').unlink()
+        queue = self.fake / 'bin/squeue'
+        queue.write_text('#!/bin/bash\nexit 1\n')
+        self.assertEqual(self.call('GET', path)[1]['state'], 'validating')
+        self.assertFalse((self.root / 'work/res/resn/signet_Afreq').exists())
+        queue.write_text('#!/bin/bash\n' + test_signet_jobs.FAKE_SLURM['squeue'] + '\n')
+        status, value = self.call('GET', path)
+        self.assertEqual((status, value['state']), (200, 'completed'))
+        self.assertEqual((self.root / 'work/res/resn/signet_Afreq').read_text(), 'fresh output\n')
+
     def test_retry_never_returns_previous_outputs_over_http(self):
         self.submit()
         self.finish_job(err='Error in fread(x): failed\n')

@@ -957,8 +957,9 @@ def status(run_id, name, refresh=False):
     missing = [path for i, path in enumerate(_required(step, record)) if values.get(f'output_{i}') != 'yes']
     cancelling = record.get('cancel_requested_at')
     terminal = slurm == 'COMPLETED' or slurm.startswith('CANCELLED') or slurm in _SLURM_FAILED
+    finishing = terminal or 'done' in values
     if ((cancelling and not terminal)
-            or ((cancelling or step.children) and terminal
+            or ((cancelling or step.children) and finishing
                 and (values.get('queue_checked') != 'yes' or values.get('active_jobs')))):
         record.pop('finished_at', None)
         state = 'cancelling' if cancelling or slurm.startswith('CANCELLED') else 'validating'
