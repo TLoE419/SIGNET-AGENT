@@ -1060,6 +1060,9 @@ class StepsTest(unittest.TestCase):
         (self.remote_dir / 'steps/network.done').write_text('0 2026-11-09T21:00:00-08:00\n')
         self.slurm(squeue='', sacct='COMPLETED')
         record = steps.status('step_test', 'network', refresh=True)
+        self.assertEqual(record['state'], 'validating')
+        (self.fake / 'workdir_777').unlink()
+        record = steps.status('step_test', 'network', refresh=True)
         self.assertEqual(record['state'], 'failed')
         self.assertIn('Some jobs are incomplete', record['failure_hints'][0])
         self.assertEqual((self.fake / 'scancel').read_text().split(), ['777'])
@@ -1077,6 +1080,46 @@ class StepsTest(unittest.TestCase):
         self.assertEqual(steps.status('step_test', 'network', refresh=True)['state'], 'cancelled')
         self.slurm(sbatch_reply='222')
         self.assertEqual(steps.submit('step_test', 'network', {})['job_id'], '222')
+
+    def test_network_cancel_after_parent_left_queue_waits_for_children(self):
+        self.network_ready()
+        steps.submit('step_test', 'network', {})
+        self.signet_children()
+        self.slurm(squeue='', sacct='CANCELLED')
+        record = steps.cancel('step_test', 'network')
+        self.assertEqual(record['state'], 'cancelling')
+        self.assertIn('cancel_requested_at', record)
+        self.assertNotIn('finished_at', record)
+        self.assertEqual(self.code_of(steps.update_settings, 'step_test', {'nboots': 2}), 'conflict')
+        self.assertEqual(self.code_of(steps.submit, 'step_test', 'network', {}), 'conflict')
+        self.assertEqual(set((self.fake / 'scancel').read_text().split()), {'777'})
+        (self.fake / 'workdir_777').unlink()
+        self.assertEqual(steps.status('step_test', 'network', refresh=True)['state'], 'cancelled')
+        self.assertEqual(steps.update_settings('step_test', {'nboots': 2})['nboots'], '2')
+
+    def test_terminal_network_parent_keeps_run_locked_until_children_stop(self):
+        self.network_ready()
+        initial = steps.submit('step_test', 'network', {})
+        for relative in steps.STEPS['network'].required:
+            path = self.remote_dir / 'work' / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('data\n')
+        (self.remote_dir / 'steps/network.done').write_text('0 2026-11-09T21:00:00-08:00\n')
+        for parent, waiting, final in (('CANCELLED', 'cancelling', 'cancelled'),
+                                       ('FAILED', 'validating', 'failed'),
+                                       ('COMPLETED', 'validating', 'completed')):
+            with self.subTest(parent=parent):
+                steps._save(self.root, initial)
+                self.signet_children()
+                self.slurm(squeue='', sacct=parent)
+                self.assertEqual(steps.status('step_test', 'network', refresh=True)['state'], waiting)
+                self.assertEqual(self.code_of(steps.update_settings, 'step_test', {'nboots': 2}), 'conflict')
+                (self.fake / 'workdir_777').unlink()
+                queue = self.fake / 'bin/squeue'
+                queue.write_text('#!/bin/bash\nexit 1\n')
+                self.assertEqual(steps.status('step_test', 'network', refresh=True)['state'], waiting)
+                queue.write_text('#!/bin/bash\n' + FAKE_SLURM['squeue'] + '\n')
+                self.assertEqual(steps.status('step_test', 'network', refresh=True)['state'], final)
 
     def test_read_log_returns_last_lines_with_limits(self):
         steps.submit('step_test', 'expression', self.inputs)

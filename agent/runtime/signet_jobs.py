@@ -898,7 +898,7 @@ def _status_script(record, step):
     # When the control job is gone, SIGNET's own jobs still queued for this run are orphans.
     orphans = (f'if [ -n "$j" ] && [ -z "$(squeue -h -j "$j" -o %T 2>/dev/null)" ]; then\n{_children_script(step)}fi\n'
                if step.children else '')
-    queue_check = _queue_check(record) if record.get('cancel_requested_at') else ''
+    queue_check = _queue_check(record) if record.get('cancel_requested_at') or step.children else ''
     return _say() + f'''D={q(directory)}
 j={q(job) if job else '"$(head -n 1 "$D/steps/' + name + '.job" 2>/dev/null)"'}
 # No ID recorded (connection lost around sbatch): look for this step's own job name, ours only.
@@ -957,14 +957,18 @@ def status(run_id, name, refresh=False):
     missing = [path for i, path in enumerate(_required(step, record)) if values.get(f'output_{i}') != 'yes']
     cancelling = record.get('cancel_requested_at')
     terminal = slurm == 'COMPLETED' or slurm.startswith('CANCELLED') or slurm in _SLURM_FAILED
-    if cancelling and (not terminal or values.get('queue_checked') != 'yes' or values.get('active_jobs')):
-        _change(record, 'cancelling', reason='Cancellation requested; waiting for HPC3 to confirm the job and its children have stopped.')
+    if ((cancelling and not terminal)
+            or ((cancelling or step.children) and terminal
+                and (values.get('queue_checked') != 'yes' or values.get('active_jobs')))):
+        record.pop('finished_at', None)
+        state = 'cancelling' if cancelling or slurm.startswith('CANCELLED') else 'validating'
+        _change(record, state, reason='Waiting for HPC3 to confirm the job and its children have stopped.')
     elif slurm == 'PENDING':
         _change(record, 'pending')
     elif slurm in _SLURM_RUNNING:
         _change(record, 'running')
     elif slurm.startswith('CANCELLED'):
-        _change(record, 'cancelled', finished_at=_now())
+        _change(record, 'cancelled', finished_at=_now(), reason='Slurm confirmed the job was cancelled.')
     elif slurm in _SLURM_FAILED:
         _change(record, 'failed', finished_at=_now(), missing_outputs=missing, failure_hints=hints,
                 reason=f'Slurm ended the job with {slurm}.')
@@ -1041,7 +1045,8 @@ def cancel(run_id, name):
         raise StepError('remote_failed', 'Could not reach HPC3; the job was not cancelled.') from error
     if code or 'cancel' not in values:
         raise StepError('remote_failed', 'scancel did not complete on HPC3.')
-    if values['cancel'] == 'requested':
+    if values['cancel'] == 'requested' or step.children:
+        # The control job can already be gone while its cancelled children are still draining.
         record.pop('finished_at', None)
         _change(record, 'cancelling', cancel_requested_at=_now(), checked_at=0,
                 reason='Cancellation requested; waiting for HPC3 to confirm termination.')

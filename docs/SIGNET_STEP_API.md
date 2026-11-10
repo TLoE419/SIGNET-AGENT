@@ -267,6 +267,7 @@ The step's current record (section 7).
 - Slurm is asked at most once every 15 seconds per step. `refresh=1` asks now.
 - When Slurm reports the job ended, this call validates it (section 2): exit marker, required outputs, log lines. On success it downloads the step's result folder into the local run, so that one call takes longer.
 - If the exit marker is missing or incomplete, the step stays `validating`. A later call decides.
+- For a step with child jobs, a terminal control job is insufficient: a successful queue check must confirm that its children also stopped. While they drain (or the queue check fails), the run stays locked in `cancelling` for a cancelled parent or `validating` for a completed/failed parent. This also applies to normal status polling without an earlier cancel request.
 - A `failed` record caused only by missing outputs after exit 0 can be rechecked with `refresh=1`, and downloads if the outputs become readable. Confirmed nonzero exits, scheduler failures and known log errors remain terminal.
 - `refresh=1` also rechecks an older failure whose only reason was an unconfirmed exit marker ("The job did not finish its last line."). Other failures stay final.
 - If HPC3 cannot be reached, the reply is 200 with the last known record plus `"connection": "interrupted"`. The job keeps running.
@@ -277,6 +278,7 @@ The step's current record (section 7).
 Body `{}` or empty. Cancels the step's own job after checking its job name on HPC3. If the job already left the queue, the reply reports how it actually ended.
 
 - 200: the record (`cancelling` while cancellation is pending, or its final state). A successful `scancel` only acknowledges the request. Keep polling; retry and settings changes remain blocked until the job and its children have stopped.
+- If the control job already left the queue, cancellation still records the intent and waits for this run's child jobs. It does not release the settings lock merely because the parent is terminal.
 - 404: never submitted. 409: already ended, or no job ID known yet. 412: not connected. 502: `scancel` failed.
 
 ### 5.9 `GET /signet/runs/{run_id}/steps/{step}/log[?stream=out|err&lines=50]`

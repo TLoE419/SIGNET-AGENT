@@ -153,6 +153,24 @@ class SignetApiTest(unittest.TestCase):
         status, value = self.call('GET', path + '?refresh=1')
         self.assertEqual((status, value['state']), (200, 'completed'))
 
+    def test_network_cancel_after_parent_ended_keeps_http_settings_locked(self):
+        (self.root / 'steps').mkdir()
+        (self.remote_dir / 'steps').mkdir(parents=True)
+        record = {'step': 'network', 'run_id': 'step_test', 'remote_dir': str(self.remote_dir),
+                  'job_id': '12345', 'state': 'running'}
+        (self.root / 'steps/network.json').write_text(json.dumps(record))
+        test_signet_jobs.StepsTest.signet_children(self)
+        self.slurm(squeue='', sacct='CANCELLED')
+        path = '/signet/runs/step_test/steps/network'
+        status, value = self.call('POST', path + '/cancel', {})
+        self.assertEqual((status, value['state']), (200, 'cancelling'))
+        self.assertEqual(self.call('PATCH', '/signet/runs/step_test/settings', {'values': {'nboots': 2}})[0], 409)
+        self.assertEqual(self.call('POST', path, {'inputs': {}})[0], 409)
+        (self.fake / 'workdir_777').unlink()
+        status, value = self.call('GET', path + '?refresh=1')
+        self.assertEqual((status, value['state']), (200, 'cancelled'))
+        self.assertEqual(self.call('PATCH', '/signet/runs/step_test/settings', {'values': {'nboots': 2}})[0], 200)
+
     def test_retry_never_returns_previous_outputs_over_http(self):
         self.submit()
         self.finish_job(err='Error in fread(x): failed\n')
