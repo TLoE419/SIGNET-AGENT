@@ -255,6 +255,20 @@ class StepsTest(unittest.TestCase):
         self.assertIn('temporarily-refused', (folder / 'expression.attempt2.sbatch.err').read_text())
         self.assertEqual(json.loads((self.root / 'steps/expression.attempt2.json').read_text()), refused)
 
+    def test_connection_loss_after_a_refused_retry_never_adopts_the_older_job(self):
+        self.failed_expression()
+        batch = self.fake / 'bin/sbatch'
+        batch.write_text('#!/bin/bash\necho temporarily-refused >&2\nexit 1\n')
+        self.assertEqual(self.code_of(steps.submit, 'step_test', 'expression', self.inputs), 'remote_failed')
+        batch.write_text('#!/bin/bash\n' + FAKE_SLURM['sbatch'] + '\n')
+        self.lose_connection_on = 'sbatch --parsable'
+        self.assertEqual(steps.submit('step_test', 'expression', self.inputs)['state'], 'unknown')
+        self.lose_connection_on = None
+        self.slurm(sacct_id='12345', sacct='COMPLETED')
+        record = steps.status('step_test', 'expression', refresh=True)
+        self.assertEqual(record['state'], 'unknown')
+        self.assertNotIn('job_id', record)
+
     def test_cancel_waits_for_terminal_scheduler_state_before_retry_or_settings(self):
         steps.submit('step_test', 'expression', self.inputs)
         self.slurm(squeue='RUNNING', sacct='RUNNING', name='signet-expression-step_test')

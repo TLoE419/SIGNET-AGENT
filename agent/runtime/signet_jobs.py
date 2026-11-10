@@ -811,7 +811,8 @@ def submit(run_id, name, inputs, resources=None, options=None):
             record['required_outputs'] = [_resolve(path, settings) for path in step.required]
         if previous:
             record['attempt'] = attempt
-            record['previous_job_id'] = previous.get('job_id')   # never mistaken for this attempt's job
+            # A refused submission has no job of its own; retain the last real ID across it.
+            record['previous_job_id'] = previous.get('job_id') or previous.get('previous_job_id')
         archived = _attempt_path(root, name, attempt - 1) if previous else None
         try:
             _upload(root, directory, token)
