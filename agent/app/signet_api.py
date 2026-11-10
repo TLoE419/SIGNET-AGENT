@@ -1,5 +1,8 @@
 """HTTP routes under /signet/ for running SIGNET steps on HPC3 by hand from the app.
 
+Full specification for clients (routes, bodies, states, errors, examples):
+docs/SIGNET_STEP_API.md. Keep it in step with this file and signet_jobs.py.
+
 These routes only translate HTTP into calls to agent.runtime.signet_jobs (and,
 for creating runs, agent.tools.signet.configure_signet). They hold no business
 rules: every check on run names, paths, settings and resources happens in the

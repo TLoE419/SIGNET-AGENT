@@ -58,7 +58,7 @@ There are **23 SIGNET tools, 2 general file tools, 7 HPC3 setup tools and 1 page
 
 ## Usage and Data
 
-Follow the [no-data demonstration guide](docs/DEMO.md) to try chat, capability queries, and missing-prerequisite reporting. For scientific analysis, start with the [scientific setup guide](docs/SCIENTIFIC_SETUP.md), then consult the [advanced environment guide](docs/ADVANCED.md) for runtime configuration.
+Follow the [no-data demonstration guide](docs/DEMO.md) to try chat, capability queries, and missing-prerequisite reporting. For scientific analysis, start with the [scientific setup guide](docs/SCIENTIFIC_SETUP.md), then consult the [advanced environment guide](docs/ADVANCED.md) for runtime configuration. To run SIGNET steps on HPC3 through the app's local API, see the [SIGNET step API](docs/SIGNET_STEP_API.md).
 
 Create `data/` yourself for inputs; scientific tools create `runs/`. Both directories are excluded from version control. Credentials in `.env`, chat histories, workspace state, execution logs, screenshots, and VM assets are also excluded. For the scientific software, VM, data, and six-stage workflow requirements, follow the [scientific setup guide](docs/SCIENTIFIC_SETUP.md); it also explains what a clean download still cannot provision.
 

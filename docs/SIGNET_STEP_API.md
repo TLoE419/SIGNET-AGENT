@@ -1,0 +1,434 @@
+# SIGNET Step API
+
+This document specifies the local HTTP API under `/signet/` that runs SIGNET steps on HPC3 as Slurm jobs. The workflow panel and any future AI tool call these routes. They never build shell or R commands themselves: every rule lives in one service, `agent/runtime/signet_jobs.py`, and the routes in `agent/app/signet_api.py` only translate HTTP into calls to it.
+
+Steps available now (TCGA cohort only):
+
+| Step name | SIGNET flag | What it does |
+|---|---|---|
+| `expression` | `signet -t` | Normalize read counts and find gene positions |
+| `genotype` | `signet -g` | PLINK quality control, then IMPUTE2 imputation |
+| `adjust` | `signet -a` | Match expression and genotype samples, filter rare SNPs, compute genotype PCs, regress out race, gender and PCs |
+
+`signet -c` (cis-eQTL) still runs through the older `remote.execute_cis()` path and is not yet a step here.
+
+## Contents
+
+1. [How it fits together](#1-how-it-fits-together)
+2. [Concepts: runs, steps, attempts](#2-concepts-runs-steps-attempts)
+3. [Access and security](#3-access-and-security)
+4. [Conventions and errors](#4-conventions-and-errors)
+5. [Routes](#5-routes)
+6. [Step reference](#6-step-reference)
+7. [Step states](#7-step-states)
+8. [Files on HPC3 and on this computer](#8-files-on-hpc3-and-on-this-computer)
+9. [Worked example: -t, -g, -a in one run](#9-worked-example--t--g--a-in-one-run)
+10. [Known limits](#10-known-limits)
+
+## 1. How it fits together
+
+```
+Workflow panel / AI tool
+  → /signet/* routes            agent/app/signet_api.py   (HTTP only, no rules)
+  → step service                agent/runtime/signet_jobs.py  (all checks and decisions)
+  → the app's SSH connection    Electron SSH transport (the user's own HPC3 login)
+  → HPC3 login node             light commands only: mkdir, tar, sbatch, squeue, sacct, scancel, tail
+  → Slurm job                   apptainer exec <signet image> bash ./signet <flag>
+```
+
+- One step is one Slurm job. A submit call returns as soon as Slurm accepts the job; the client then polls the status route. The job keeps running if the app or the SSH connection goes away, and the next status call picks it up.
+- SIGNET itself runs only inside the container in the Slurm job, never on the login node.
+- Run records and downloaded results live on this computer under `runs/<run_id>/`; the job's working files live in the run's HPC3 folder (section 8).
+
+## 2. Concepts: runs, steps, attempts
+
+**Run.** One analysis. A run is a local folder `runs/<run_id>/` (audited SIGNET scripts plus a `config.ini`) and one HPC3 folder `<workRoot>/<run_id>`.
+
+- Run IDs are 1 to 64 letters, digits, `_` or `-`, starting with a letter or digit.
+- `cis`, `network` and `runs` are reserved (other features use those folders under `workRoot`).
+- Runs created before 2026-11-07 live in `<workRoot>/runs/<run_id>` on HPC3 and keep using it.
+
+**Steps build on each other inside one run.** SIGNET has no notion of runs: a later step reads earlier results from its own `work/` folder, partly through `config.ini` paths and partly through fixed temporary folders (for example `-a` reads `-g`'s `tmp/tmpg/impute/`). So:
+
+- A step lists the steps it `requires`. It is refused unless they completed **in the same run**. The error names other runs where they did complete, but their results are not used.
+- A step lists the files it `needs` from earlier steps. They are checked on HPC3 before anything is queued.
+
+**Attempt.** Each submission of a step is an attempt.
+
+- A step that `failed` or was `cancelled` may be submitted again in the same run, so the earlier steps' results stay usable.
+- Every earlier attempt is kept, never overwritten (section 8). The new record carries `attempt` (2, 3, …) and `previous_job_id`.
+- A `completed` step is not rerun in place: later steps may already have read its results. Compute it again in a new run.
+- A step that is still active or `unknown` cannot be resubmitted; check its status first.
+
+**One active step per run.** While a step of a run is active, no other step of that run can be submitted and its settings cannot change. Two steps of one run would otherwise share one `config.ini`.
+
+**Success is decided by the app, not by `signet`'s exit code.** `signet` exits 0 even when a step fails. A step is `completed` only when all of these hold:
+
+1. the job's exit marker (`steps/<step>.done`) is complete and says exit code 0,
+2. every required output exists and is non-empty,
+3. the job's stdout and stderr contain no known failure line (`Execution halted`, `Error in `, `cannot open`, `No such file or directory`, `command not found`, plus step-specific lines).
+
+`completed` is not scientific validation. It means the outputs exist and the logs are clean.
+
+## 3. Access and security
+
+The API is served by the app's local Python backend on `127.0.0.1:<port>`. `agent/app/chat_ui.py` checks every request before it reaches `signet_api.py`:
+
+| Check | Applies to | Failure |
+|---|---|---|
+| `Host` is `127.0.0.1:<port>` | every request | 403 |
+| `X-Chat-Token` equals the page token | every request, **GET included** (responses name the user's runs and HPC3 paths) | 403 |
+| `Origin` is `http://127.0.0.1:<port>` | POST and PATCH | 403 |
+
+- The page obtains the token from `GET /bootstrap`. Developer scripts can do the same; see [Worked example](#9-worked-example--t--g--a-in-one-run).
+- A 403 from these checks is plain text from `chat_ui.py`, not the JSON error below, and never contacts HPC3.
+
+Inside the API:
+
+- Bodies are JSON objects of at most 32 KB. Unknown or missing top-level fields are rejected. Query parameters are single-valued and only the listed ones are allowed.
+- Inputs are absolute HPC3 paths made of letters, digits, `_`, `.`, `/` and `-` only, with no `..` and no `//`. They must lie below one of: `<workspace>/refdata/`, `<signet source>/example/`, or the run's own HPC3 folder. On HPC3, `readlink -f` must resolve each file to exactly that path, so no link can lead elsewhere.
+- Settings, resources and options are checked against fixed rules (section 6). Values reach the shell only after validation, quoted.
+- The HPC3 run folder holds a random owner token. A run never writes into a folder that belongs to another run.
+- Cancel checks the Slurm job name (`signet-<step>-<run_id>`) on HPC3 first, so no other job can be cancelled.
+- Unexpected errors return 500 `internal_error`. Details go to the backend log only, never to the page.
+
+## 4. Conventions and errors
+
+- Requests and responses are JSON (`application/json; charset=utf-8`).
+- Times in records are local ISO 8601 with offset, for example `2026-11-08T11:24:16-0800`. `checked_at` is Unix seconds.
+- Every error reply has the same shape:
+
+```json
+{"error": "Message for the user.", "code": "invalid_request"}
+```
+
+| HTTP | `code` | When |
+|---|---|---|
+| 400 | `invalid_request` | Bad JSON; unknown or missing field; value out of range; path not allowed; input missing on HPC3; a required earlier step has not completed in this run |
+| 403 | (plain text) | Host, Origin or token check failed |
+| 404 | `not_found` | Unknown route, run or step; a step never submitted |
+| 405 | `method_not_allowed` | The route exists but not for this method |
+| 409 | `conflict` | Run name taken; step already completed or still active; another step of the run is active; HPC3 folder belongs to another run |
+| 412 | `not_ready` | Not connected to HPC3, HPC3 too slow to answer, or the container or `sbatch` missing |
+| 500 | `internal_error` | Unexpected error in the app; check the run state before retrying |
+| 502 | `remote_failed` | An SSH or Slurm command on HPC3 failed (upload, sbatch, scancel) |
+
+## 5. Routes
+
+| # | Method and path | Contacts HPC3 | Purpose |
+|---|---|---|---|
+| 1 | `GET /signet/catalog` | no | Steps, inputs, settings, options, resources, outputs |
+| 2 | `GET /signet/runs` | no | List local runs with step states |
+| 3 | `POST /signet/runs` | no | Create a run |
+| 4 | `GET /signet/runs/{run_id}` | no | One run's settings and full step records |
+| 5 | `PATCH /signet/runs/{run_id}/settings` | no | Change settings (`signet -s`) |
+| 6 | `POST /signet/runs/{run_id}/steps/{step}` | yes | Submit (or retry) a step as a Slurm job |
+| 7 | `GET /signet/runs/{run_id}/steps/{step}` | yes | Step state; on completion, validate and download |
+| 8 | `POST /signet/runs/{run_id}/steps/{step}/cancel` | yes | Cancel the step's own job |
+| 9 | `GET /signet/runs/{run_id}/steps/{step}/log` | yes | Last lines of the job's stdout or stderr |
+
+### 5.1 `GET /signet/catalog`
+
+What the app may offer. The panel builds its forms from this instead of hard-coding them.
+
+Response 200:
+
+```json
+{
+  "steps": [
+    {
+      "name": "adjust",
+      "flag": "-a",
+      "cohort": "TCGA",
+      "description": "TCGA adjustment (signet -a): ...",
+      "inputs": ["cli.file"],
+      "prefix_inputs": {},
+      "settings": {},
+      "resources": {"cpus": 4, "mem_gb": 16, "hours": 2},
+      "limits": {"cpus": [1, 16], "mem_gb": [1, 64], "hours": [0.25, 12]},
+      "requires": ["expression", "genotype"],
+      "options": {"npc": {"rule": "pcs", "default": 3}},
+      "required_outputs": ["res/resa/signet_matched.gexp", "..."]
+    }
+  ],
+  "input_roots": ["<workspace>/refdata", "<signet source>/example", "<this run on HPC3>"],
+  "states": ["submitted", "pending", "running", "validating", "completed", "failed", "cancelled", "unknown"]
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `inputs` | `config.ini` keys the caller sets to HPC3 paths at submit |
+| `prefix_inputs` | Inputs that are per-chromosome prefixes, not files: key → suffix (section 6.2) |
+| `settings` | `config.ini` keys that may be changed with route 5, and their rule name |
+| `options` | Answers to SIGNET's interactive questions, with rule and default |
+| `requires` | Steps that must have completed in the same run first |
+| `resources`, `limits` | Default Slurm request and the allowed range of each override |
+| `required_outputs` | Files (relative to `work/`) that must exist and be non-empty for success |
+
+### 5.2 `GET /signet/runs`
+
+Every local run, newest first. Local files only.
+
+```json
+{"runs": [{"run_id": "a_test1", "cohort": "TCGA", "created_at": 1794100914,
+           "steps": {"adjust": "completed", "expression": "completed", "genotype": "completed"}}]}
+```
+
+The step states here are the last recorded ones. Use route 7 for a fresh state.
+
+### 5.3 `POST /signet/runs`
+
+```json
+{"run_id": "luad_run1", "cohort": "TCGA"}
+```
+
+`cohort` is optional (default `TCGA`; `GTEx` is accepted for runs, but no GTEx step exists yet). This copies the audited SIGNET scripts and a fresh `config.ini` into `runs/<run_id>/`. It never overwrites a run.
+
+- 201: `{"run_id", "cohort", "settings": {...}}`
+- 400: bad name or cohort. 409: name taken.
+
+### 5.4 `GET /signet/runs/{run_id}`
+
+```json
+{"run_id": "a_test1", "cohort": "TCGA", "settings": {"restrict.tcga.geno": "1", "...": "..."},
+ "steps": {"adjust": {"state": "completed", "job_id": "59411219", "attempt": 2, "...": "..."}}}
+```
+
+`steps` holds the current record of each step (section 7). Earlier attempts are not listed here; they are kept as files (section 8).
+
+- 404: unknown run.
+
+### 5.5 `PATCH /signet/runs/{run_id}/settings`
+
+The app's `signet -s`. Only keys listed under some step's `settings` in the catalog are accepted, each checked by its rule (section 6.3).
+
+```json
+{"values": {"restrict.tcga.geno": 1, "mind": 0.05}}
+```
+
+The local `config.ini` changes now. It is sent to HPC3 with the next submitted step.
+
+- 200: `{"settings": {...}}` (all current settings)
+- 400: key not allowed or bad value. 404: unknown run. 409: a step of this run is active.
+
+### 5.6 `POST /signet/runs/{run_id}/steps/{step}`
+
+Submit one step as a Slurm job, or retry a failed or cancelled one.
+
+```json
+{
+  "inputs":    {"cli.file": "/pub/<ucinetid>/signet-agent/refdata/clinical.tsv"},
+  "resources": {"cpus": 4, "mem_gb": 16, "hours": 2},
+  "options":   {"npc": 3}
+}
+```
+
+- `inputs` (required): exactly the step's input keys, each an HPC3 path inside an allowed root.
+- `resources` (optional): any of `cpus`, `mem_gb` (whole numbers) and `hours` (may be fractional), within the step's limits. Missing ones take the defaults.
+- `options` (optional): only for steps that list `options` in the catalog. Missing ones take their default.
+
+What happens, in order. Steps 1 to 3 run locally; nothing is sent to HPC3 if they fail.
+
+1. The cohort, resources and options are checked.
+2. The previous record of this step is checked: none, `failed` or `cancelled` may continue; `completed` or active returns 409.
+3. No other step of the run may be active, and every step in `requires` must be `completed` in this run.
+4. The inputs are written into the local `config.ini`. The run's scripts and `config.ini` are uploaded to its HPC3 folder.
+5. A record in state `submitting` is saved before `sbatch`. A lost connection from here on may have started a job, so the record becomes `unknown`, never deleted.
+6. On the login node, one script:
+   - checks each input file (and each per-chromosome file of a prefix input),
+   - checks each file in `needs` in the run folder,
+   - checks that the container image and `sbatch` exist,
+   - on a retry, renames the previous attempt's files to `<step>.attempt<N>.*`,
+   - writes `steps/<step>.sbatch` and runs `sbatch`.
+
+Response 202: the step record with `"state": "submitted"` and `"job_id"`. A retry also has `"attempt"` and `"previous_job_id"`.
+
+If the connection dropped during `sbatch`, the response is 202 with `"state": "unknown"`. **Check the status route; never resubmit**: the job may be running.
+
+| Status | When |
+|---|---|
+| 400 | Bad inputs, resources or options; wrong cohort; an input or a `needs` file missing on HPC3 (the message names it); a required step not completed in this run |
+| 404 | Unknown run or step |
+| 409 | Step completed or still active; another step of the run active; HPC3 folder owned by another run |
+| 412 | Not connected; container or `sbatch` missing |
+| 502 | Upload or `sbatch` failed |
+
+When the login-node script refuses the submission (400, 409, 412 or 502), nothing was queued, so the attempt is forgotten. On a retry, the previous failed record is put back unchanged and its HPC3 files are not renamed.
+
+### 5.7 `GET /signet/runs/{run_id}/steps/{step}[?refresh=1]`
+
+The step's current record (section 7).
+
+- Slurm is asked at most once every 15 seconds per step. `refresh=1` asks now.
+- When Slurm reports the job ended, this call validates it (section 2): exit marker, required outputs, log lines. On success it downloads the step's result folder into the local run, so that one call takes longer.
+- If the exit marker is missing or incomplete, the step stays `validating`. A later call decides.
+- `refresh=1` also rechecks an older failure whose only reason was an unconfirmed exit marker ("The job did not finish its last line."). Other failures stay final.
+- If HPC3 cannot be reached, the reply is 200 with the last known record plus `"connection": "interrupted"`. The job keeps running.
+- 400: `refresh` not `0` or `1`. 404: unknown run or step, or never submitted. 412: not connected.
+
+### 5.8 `POST /signet/runs/{run_id}/steps/{step}/cancel`
+
+Body `{}` or empty. Cancels the step's own job after checking its job name on HPC3. If the job already left the queue, the reply reports how it actually ended.
+
+- 200: the record (`cancelled`, or its final state).
+- 404: never submitted. 409: already ended, or no job ID known yet. 412: not connected. 502: `scancel` failed.
+
+### 5.9 `GET /signet/runs/{run_id}/steps/{step}/log[?stream=out|err&lines=50]`
+
+Last lines of the job's stdout (`out`, default) or stderr (`err`) on HPC3. `lines` is 1 to 200 (default 50). Read-only. Only the current attempt's log is read.
+
+```json
+{"lines": ["[SIGNET-AGENT] START step=adjust job=59411219 ts=...", "..."], "truncated": true}
+```
+
+- 400: bad `stream` or `lines`. 404: never submitted. 412: not connected.
+
+## 6. Step reference
+
+### 6.1 Steps
+
+| | `expression` (`-t`) | `genotype` (`-g`) | `adjust` (`-a`) |
+|---|---|---|---|
+| Inputs | `gexp.file`, `pmap.file` | `ped.file`, `map.file`, `ref` (prefix), `gmap` (prefix) | `cli.file` |
+| Requires | none | none | `expression`, `genotype` |
+| Needs on HPC3 | none | none | `res/rest/signet_gexp`, `res/rest/signet_gexpID`, `res/resg/signet_Geno`, `res/resg/signet_Genotype.sampleID`, `tmp/tmpg/impute/impute_Genotype.sizes` |
+| Settings | `restrict.tcga` | `restrict.tcga.geno`, `mind`, `geno`, `hwe`, `int` | none |
+| Options | none | none | `npc` |
+| Required outputs (under `work/`) | `res/rest/signet_gexp`, `_gexpID`, `_gene_pos`, `_gene_name` | `res/resg/signet_Geno`, `_Genotype.sampleID` | `res/resa/signet_matched.gexp`, `_new.Geno`, `_new.Geno.map`, `_new.Geno.maf`, `_gexp.data`, `_gexp_rmpc.data`, `_geno.data` |
+| Downloaded folder | `work/res/rest` | `work/res/resg` | `work/res/resa` |
+| Default resources | 4 CPUs, 16 GB, 2 h | 8 CPUs, 32 GB, 4 h | 4 CPUs, 16 GB, 2 h |
+| Limits | 1–16 CPUs, 1–64 GB, 0.25–12 h | 1–32 CPUs, 1–128 GB, 0.25–24 h | 1–16 CPUs, 1–64 GB, 0.25–12 h |
+| Extra failure lines | none | `No SNP listed in your chromosome input`, `Some of the jobs are incomplete` | none |
+| Typical time on HPC3 | about 1 min | 25–40 min (chromosome 1 only) | under 1 min |
+
+Input notes:
+
+- `pmap.file` must be a **collapsed** GENCODE v22 gene GTF (gene rows carry `transcript_type`). The full annotation GTF yields empty `gene_pos` and `gene_name`, and the step correctly fails.
+- `cli.file` is a tab-separated clinical file with at least `submitter_id`, `race` and `gender` (see section 10 for SIGNET's race handling). Samples are matched on the third part of the TCGA barcode.
+
+### 6.2 Prefix inputs
+
+`ref` and `gmap` of `genotype` are prefixes. SIGNET reads `<ref><N>.gen` and `<gmap><N>.map` for each chromosome `N` it processes:
+
+- If `restrict.tcga.geno` is a chromosome `N`: only chromosome `N`.
+- Otherwise: chromosomes 1 to `nchr` (22 by default).
+
+Before queueing, each of those files is checked on HPC3. A missing one is named in the 400 error, with a hint to set `restrict.tcga.geno`.
+
+### 6.3 Setting and option rules
+
+| Key | Step | Rule | Example |
+|---|---|---|---|
+| `restrict.tcga` | expression | `"no"` or a whole number 1–22 | `1` |
+| `restrict.tcga.geno` | genotype | `"no"` or a whole number 1–22 | `1` |
+| `mind`, `geno`, `hwe` | genotype | a number from 0 to 1 (PLINK `--mind`, `--geno`, `--hwe`) | `0.1`, `0.0001` |
+| `int` | genotype | a whole number of base pairs, 1–100,000,000 (IMPUTE2 chunk length) | `5000000` |
+| `npc` (option) | adjust | a whole number 0–10: genotype PCs used as covariates (0 = none) | `3` |
+
+Booleans and numbers sent as strings are rejected. Settings such as `forcerm` and `ncore_local` are not exposed: every job forces `forcerm = T` (batch jobs cannot answer SIGNET's "remove old files?" prompt) and sets `ncore_local` to the CPUs Slurm granted.
+
+**Why options exist.** `signet -a` asks *"Enter the number of PCs for population structures"* with `read -p`. A batch job has no keyboard, so the job feeds the validated answers to SIGNET's standard input in order. Steps without options get `/dev/null` as standard input. The answers are stored in the step record under `options`.
+
+## 7. Step states
+
+```
+submitting ──► submitted ──► pending ──► running ──► validating ──► completed
+     │              │                       │             │
+     │              └───────────────────────┴─────────────┴──► failed
+     ▼                                      └────────────────► cancelled
+   unknown  (connection lost during sbatch, or the job cannot be confirmed)
+```
+
+| State | Meaning | Client action |
+|---|---|---|
+| `submitting` | Record saved, `sbatch` in progress | Wait |
+| `submitted` | Slurm accepted the job | Poll status |
+| `pending` | Waiting in the Slurm queue | Poll status |
+| `running` | Running | Poll status; read logs |
+| `validating` | Job ended; checking outputs and logs, downloading, or waiting for a complete exit marker | Poll status |
+| `completed` | Outputs present, logs clean, results downloaded | Go on to the next step |
+| `failed` | Slurm failure (OUT_OF_MEMORY, TIMEOUT, …), nonzero exit, missing outputs, or a failure line in the logs | Read `reason`, `missing_outputs`, `failure_hints`; fix; resubmit in the same run |
+| `cancelled` | Cancelled by the user or Slurm | Resubmit in the same run if wanted |
+| `unknown` | No job could be confirmed (lost connection during `sbatch`, or Slurm has no record) | Check status again; inspect the HPC3 folder. **Do not resubmit** |
+
+Record fields (route 7 and route 4):
+
+| Field | Meaning |
+|---|---|
+| `step`, `run_id`, `flag`, `remote_dir` | Which step, run and HPC3 folder |
+| `inputs`, `resources`, `options`, `partition`, `image` | Exactly what was submitted (for reproducibility) |
+| `state`, `history` | Current state and every change with its time |
+| `job_id`, `slurm_state`, `exit_code` | Slurm job, its last Slurm state, and SIGNET's exit code |
+| `submitted_at`, `finished_at`, `checked_at` | Times |
+| `missing_outputs`, `failure_hints`, `reason` | Why it failed, or the validation note on success |
+| `outputs` | Files downloaded into the local run |
+| `attempt`, `previous_job_id` | Present on a retry |
+| `connection` | `"interrupted"` when HPC3 could not be reached (not saved) |
+
+## 8. Files on HPC3 and on this computer
+
+HPC3, run folder `<workRoot>/<run_id>/`:
+
+```
+.owner                       random token: this folder belongs to this run
+work/                        SIGNET's home for the run: signet, script/, config.ini
+  res/rest/ res/resg/ res/resa/    step results (-t, -g, -a)
+  tmp/tmpt/ tmp/tmpg/ tmp/tmpa/    step temporary files (-a reads tmp/tmpg/impute/)
+steps/
+  <step>.sbatch              the generated job script
+  <step>.job                 Slurm job ID
+  <step>.out  <step>.err     job stdout and stderr
+  <step>.done                exit marker: "<exit code> <ISO time>", written as the job's last line
+  <step>.attempt<N>.*        the same files of earlier attempts, kept on retry
+```
+
+This computer, `runs/<run_id>/`:
+
+```
+work/config.ini              settings, including the input paths last submitted
+work/res/...                 downloaded results of completed steps
+steps/<step>.json            current record of each step
+steps/<step>.attempt<N>.json records of earlier attempts
+steps/remote.owner           the HPC3 folder and its owner token
+```
+
+## 9. Worked example: -t, -g, -a in one run
+
+A developer can call the API with `curl`. The port is that of the app's Python backend (listening on `127.0.0.1`); the token comes from `/bootstrap`.
+
+```bash
+BASE=http://127.0.0.1:<port>
+TOKEN=$(curl -s "$BASE/bootstrap" | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])')
+api() { curl -s -X "$1" -H "X-Chat-Token: $TOKEN" -H "Origin: $BASE" -H 'Content-Type: application/json' ${3:+-d "$3"} "$BASE$2"; }
+W=/pub/<ucinetid>/signet-agent
+P=$W/refdata/prepared/example
+```
+
+```bash
+api POST  /signet/runs '{"run_id":"luad_run1","cohort":"TCGA"}'
+api PATCH /signet/runs/luad_run1/settings '{"values":{"restrict.tcga.geno":1}}'
+
+api POST /signet/runs/luad_run1/steps/expression \
+  "{\"inputs\":{\"gexp.file\":\"$W/refdata/example/example_gexp\",\"pmap.file\":\"$W/refdata/gencode.v22.genes.gtf\"}}"
+api GET '/signet/runs/luad_run1/steps/expression?refresh=1'     # repeat until "completed"
+
+api POST /signet/runs/luad_run1/steps/genotype \
+  "{\"inputs\":{\"ped.file\":\"$P/study.ped\",\"map.file\":\"$P/study.map\",\"ref\":\"$P/ref/chr\",\"gmap\":\"$P/gmap/chr\"}}"
+api GET '/signet/runs/luad_run1/steps/genotype?refresh=1'       # repeat until "completed"
+api GET '/signet/runs/luad_run1/steps/genotype/log?lines=20'
+
+api POST /signet/runs/luad_run1/steps/adjust \
+  "{\"inputs\":{\"cli.file\":\"$W/refdata/clinical.tsv\"},\"options\":{\"npc\":3}}"
+api GET '/signet/runs/luad_run1/steps/adjust?refresh=1'
+```
+
+If `adjust` fails (for example because of the clinical file), fix the cause and send the same `POST` again in the same run: the reply has `"attempt": 2`, and `-t` and `-g` are not rerun.
+
+## 10. Known limits
+
+- **Clinical file and SIGNET's race handling.** `script/adj/adj_adjust.R` (official SIGNET) drops `american indian or alaska native`, turns `not reported` into `white`, and then expects exactly three race levels, named by position as asian, black or african american, white. Any other value (an empty race, `Unknown`) stops `-a` with `number of levels differs`. Worse, three different levels would be renamed silently. The app does not yet check race values before submitting. It also requires a `gender` column, which the clinical file downloaded by the environment panel does not yet include.
+- **IMPUTE2 seed.** SIGNET runs IMPUTE2 without `-seed`, so two `-g` runs on the same data differ slightly (about 0.01 % of genotype calls in one test).
+- **No job confirmed.** A step that ends `unknown` without a job ID has no way out yet other than inspecting the HPC3 folder: it cannot be retried, and it blocks the run's other steps and settings.
+- **One run per analysis.** Results are never taken from another run. Copying `-t` or `-g` results between runs would also need `-g`'s `tmp/tmpg/impute/` and a check that both runs used the same samples.
+- **Not yet steps:** `-c`, `-n`, `-v`, and all GTEx steps.

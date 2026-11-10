@@ -52,6 +52,7 @@ SIGNET-agent/
 │   ├── INSTALL.md                # First installation, model sign-in, and interface startup
 │   ├── SCIENTIFIC_SETUP.md       # Scientific software, VM, data, and six-stage readiness guide
 │   ├── ADVANCED.md               # Official source, user-supplied data, and advanced scientific environment
+│   ├── SIGNET_STEP_API.md        # /signet/* HTTP API: runs, settings, SIGNET steps as HPC3 Slurm jobs, retries, states
 │   ├── THIRD_PARTY.md            # Third-party sources and pending licensing decision
 │   ├── FILE_TREE.md              # This file tree and per-file responsibilities
 │   └── DEMO.md                   # No-data demonstration and operations with user-supplied results
