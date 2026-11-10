@@ -124,6 +124,10 @@ class SignetApiTest(unittest.TestCase):
         self.submit()
         self.slurm(squeue='RUNNING', name='signet-expression-step_test')
         status, value = self.call('POST', '/signet/runs/step_test/steps/expression/cancel', {})
+        self.assertEqual((status, value['state']), (200, 'cancelling'))
+        self.assertEqual(self.submit()[0], 409)
+        self.slurm(squeue='', sacct='CANCELLED')
+        status, value = self.call('GET', '/signet/runs/step_test/steps/expression?refresh=1')
         self.assertEqual((status, value['state']), (200, 'cancelled'))
         self.assertEqual(self.call('POST', '/signet/runs/step_test/steps/expression/cancel', {'force': True})[0], 400)
 
@@ -148,6 +152,51 @@ class SignetApiTest(unittest.TestCase):
         self.finish_job()
         status, value = self.call('GET', path + '?refresh=1')
         self.assertEqual((status, value['state']), (200, 'completed'))
+
+    def test_retry_never_returns_previous_outputs_over_http(self):
+        self.submit()
+        self.finish_job(err='Error in fread(x): failed\n')
+        path = '/signet/runs/step_test/steps/expression'
+        self.assertEqual(self.call('GET', path + '?refresh=1')[1]['state'], 'failed')
+        for relative in test_signet_jobs.OUTPUTS:
+            (self.remote_dir / 'work' / relative).write_text('old-attempt-only\n')
+        changed = self.hpc / 'ws/refdata/new_counts'
+        changed.write_text('new input\n')
+        self.slurm(sbatch_reply='222')
+        status, record = self.call('POST', path, {'inputs': {**self.inputs, 'gexp.file': str(changed)}})
+        self.assertEqual((status, record['job_id']), (202, '222'))
+        self.finish_job(outputs=())
+        status, record = self.call('GET', path + '?refresh=1')
+        self.assertEqual(status, 200)
+        self.assertNotEqual(record['state'], 'completed')
+        self.assertFalse((self.root / 'work' / test_signet_jobs.OUTPUTS[0]).exists())
+
+    def test_refresh_downloads_later_visible_outputs_over_http_without_new_job(self):
+        self.submit()
+        path = '/signet/runs/step_test/steps/expression'
+        self.finish_job(outputs=())
+        self.assertNotEqual(self.call('GET', path + '?refresh=1')[1]['state'], 'completed')
+        self.finish_job()
+        status, record = self.call('GET', path + '?refresh=1')
+        self.assertEqual((status, record['state'], record['job_id']), (200, 'completed', '12345'))
+        self.assertEqual((self.root / 'work' / test_signet_jobs.OUTPUTS[0]).read_text(), 'data\n')
+        self.assertEqual(sum('sbatch --parsable' in call for call in self.calls), 1)
+
+    def test_sbatch_refusal_keeps_an_independent_attempt_over_http(self):
+        self.submit()
+        self.finish_job(outputs=())
+        path = '/signet/runs/step_test/steps/expression'
+        self.assertEqual(self.call('GET', path + '?refresh=1')[1]['state'], 'failed')
+        batch = self.fake / 'bin/sbatch'
+        batch.write_text('#!/bin/bash\necho temporarily-refused >&2\nexit 1\n')
+        self.assertEqual(self.submit()[0], 502)
+        record = self.call('GET', path)[1]
+        self.assertEqual((record['state'], record['attempt']), ('failed', 2))
+        batch.write_text('#!/bin/bash\n' + test_signet_jobs.FAKE_SLURM['sbatch'] + '\n')
+        self.slurm(sbatch_reply='222')
+        status, record = self.submit()
+        self.assertEqual((status, record['attempt']), (202, 3))
+        self.assertIn('temporarily-refused', (self.remote_dir / 'steps/expression.attempt2.sbatch.err').read_text())
 
     def test_refresh_recovers_a_saved_missing_marker_failure_and_downloads_results(self):
         status, record = self.submit()

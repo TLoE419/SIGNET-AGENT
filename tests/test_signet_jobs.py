@@ -34,7 +34,10 @@ import agent.tools.signet as st
 FAKE_SLURM = {
     'sbatch': 'printf "%s\\n" "$@" > "$FAKE/sbatch_args"; cat "$FAKE/sbatch_reply" 2>/dev/null || echo 12345',
     # "-o %Z" (a job's working directory) reads workdir_<job id>, set per job by a test.
-    'squeue': ('case "$*" in *%j*) cat "$FAKE/name";; *%i*) cat "$FAKE/queued_id";; *%Z*) cat "$FAKE/workdir_$3";; '
+    'squeue': ('case "$*" in *"%i %j %Z"*) '
+               'if [ -s "$FAKE/squeue" ]; then printf "12345 %s /login\\n" "$(cat "$FAKE/name" 2>/dev/null)"; fi; '
+               'for f in "$FAKE"/workdir_*; do [ ! -f "$f" ] || printf "%s child %s\\n" "${f##*workdir_}" "$(cat "$f")"; done;; '
+               '*%j*) cat "$FAKE/name";; *%i*) cat "$FAKE/queued_id";; *%Z*) cat "$FAKE/workdir_$3";; '
                '*) cat "$FAKE/squeue";; '
                'esac 2>/dev/null; true'),
     'sacct': 'case "$*" in *--name=*) cat "$FAKE/sacct_id";; *) cat "$FAKE/sacct";; esac 2>/dev/null; true',
@@ -168,7 +171,7 @@ class StepsTest(unittest.TestCase):
         self.finish_job(outputs=())
         self.assertEqual(steps.status('step_test', 'expression', refresh=True)['state'], 'failed')
         (self.remote_dir / 'steps/expression.out').write_text('first attempt log\n')
-        self.slurm(sbatch_reply='222', squeue='', sacct='')
+        self.slurm(sbatch_reply='222', squeue='', sacct='COMPLETED')
 
     def test_failed_step_is_retried_in_the_same_run_and_the_old_attempt_is_kept(self):
         self.failed_expression()
@@ -200,6 +203,115 @@ class StepsTest(unittest.TestCase):
             steps.submit('step_test', 'expression', self.inputs)
         self.assertEqual(caught.exception.code, 'conflict')
         self.assertIn('already completed', str(caught.exception))
+
+    def test_retry_cannot_download_previous_attempt_outputs_remote_or_local(self):
+        steps.submit('step_test', 'expression', self.inputs)
+        self.finish_job(err='Error in fread(x): first attempt failed\n')
+        failed = steps.status('step_test', 'expression', refresh=True)
+        self.assertEqual(failed['state'], 'failed')
+        for relative in OUTPUTS:
+            (self.remote_dir / 'work' / relative).write_text('old-attempt-only\n')
+            local = self.root / 'work' / relative
+            local.parent.mkdir(parents=True, exist_ok=True)
+            local.write_text('old-local-attempt\n')
+        changed = self.hpc / 'ws/refdata/new_counts'
+        changed.write_text('new study input\n')
+        self.slurm(sbatch_reply='222')
+        steps.submit('step_test', 'expression', {**self.inputs, 'gexp.file': str(changed)})
+        self.finish_job(outputs=())
+        result = steps.status('step_test', 'expression', refresh=True)
+        self.assertNotEqual(result['state'], 'completed')
+        self.assertFalse((self.root / 'work' / OUTPUTS[0]).exists())
+        self.assertEqual((self.remote_dir / 'steps/expression.attempt1.results/signet_gexp').read_text(),
+                         'old-attempt-only\n')
+        self.assertEqual((self.root / 'steps/expression.attempt1.results/signet_gexp').read_text(),
+                         'old-local-attempt\n')
+        self.finish_job()
+        self.assertEqual(steps.status('step_test', 'expression', refresh=True)['state'], 'completed')
+        self.assertEqual((self.root / 'work' / OUTPUTS[0]).read_text(), 'data\n')
+
+    def test_sbatch_refusal_consumes_attempt_and_preserves_every_archive(self):
+        self.failed_expression()
+        folder = self.remote_dir / 'steps'
+        original = {suffix: (folder / f'expression.{suffix}').read_bytes()
+                    for suffix in ('job', 'done', 'out', 'err', 'sbatch', 'sbatch.err')
+                    if (folder / f'expression.{suffix}').exists()}
+        changed = self.hpc / 'ws/refdata/new_counts'
+        changed.write_text('different input\n')
+        inputs = {**self.inputs, 'gexp.file': str(changed)}
+        batch = self.fake / 'bin/sbatch'
+        batch.write_text('#!/bin/bash\necho temporarily-refused >&2\nexit 1\n')
+        self.assertEqual(self.code_of(steps.submit, 'step_test', 'expression', inputs), 'remote_failed')
+        refused = json.loads((self.root / 'steps/expression.json').read_text())
+        self.assertEqual((refused['state'], refused['attempt']), ('failed', 2))
+        self.assertNotIn('job_id', refused)
+        refused_script = (folder / 'expression.sbatch').read_bytes()
+        batch.write_text('#!/bin/bash\n' + FAKE_SLURM['sbatch'] + '\n')
+        result = steps.submit('step_test', 'expression', inputs)
+        self.assertEqual(result['attempt'], 3)
+        for suffix, data in original.items():
+            self.assertEqual((folder / f'expression.attempt1.{suffix}').read_bytes(), data)
+        self.assertEqual((folder / 'expression.attempt2.sbatch').read_bytes(), refused_script)
+        self.assertIn('temporarily-refused', (folder / 'expression.attempt2.sbatch.err').read_text())
+        self.assertEqual(json.loads((self.root / 'steps/expression.attempt2.json').read_text()), refused)
+
+    def test_cancel_waits_for_terminal_scheduler_state_before_retry_or_settings(self):
+        steps.submit('step_test', 'expression', self.inputs)
+        self.slurm(squeue='RUNNING', sacct='RUNNING', name='signet-expression-step_test')
+        result = steps.cancel('step_test', 'expression')
+        self.assertEqual(result['state'], 'cancelling')
+        for queue, accounting in (('RUNNING', 'RUNNING'), ('COMPLETING', 'CANCELLED'), ('', '')):
+            with self.subTest(queue=queue, accounting=accounting):
+                self.slurm(squeue=queue, sacct=accounting)
+                self.assertEqual(steps.status('step_test', 'expression', refresh=True)['state'], 'cancelling')
+                self.assertEqual(self.code_of(steps.submit, 'step_test', 'expression', self.inputs), 'conflict')
+                self.assertEqual(self.code_of(steps.update_settings, 'step_test', {'restrict.tcga': 1}), 'conflict')
+        self.slurm(squeue='', sacct='CANCELLED by 1000', sbatch_reply='222')
+        self.assertEqual(steps.status('step_test', 'expression', refresh=True)['state'], 'cancelled')
+        self.assertEqual(steps.submit('step_test', 'expression', self.inputs)['job_id'], '222')
+
+    def test_legacy_cancelled_record_cannot_upload_over_a_still_running_job(self):
+        record = steps.submit('step_test', 'expression', self.inputs)
+        record.update(state='cancelled', reason='Cancelled by the user.')
+        (self.root / 'steps/expression.json').write_text(json.dumps(record))
+        self.slurm(squeue='COMPLETING', sacct='RUNNING')
+        calls = len(self.calls)
+        self.assertEqual(self.code_of(steps.submit, 'step_test', 'expression', self.inputs), 'conflict')
+        self.assertFalse(any('tar xzf' in call for call in self.calls[calls:]))
+
+    def test_missing_outputs_can_be_rechecked_without_resubmitting(self):
+        steps.submit('step_test', 'expression', self.inputs)
+        self.finish_job(outputs=())
+        result = steps.status('step_test', 'expression', refresh=True)
+        self.assertNotEqual(result['state'], 'completed')
+        self.finish_job()
+        result = steps.status('step_test', 'expression', refresh=True)
+        self.assertEqual((result['state'], result['job_id']), ('completed', '12345'))
+        self.assertEqual((self.root / 'work' / OUTPUTS[0]).read_text(), 'data\n')
+        self.assertEqual(sum('sbatch --parsable' in call for call in self.calls), 1)
+
+    def test_retry_does_not_overwrite_existing_remote_archive(self):
+        self.failed_expression()
+        archive = self.remote_dir / 'steps/expression.attempt1.sbatch'
+        archive.write_text('irreplaceable history\n')
+        job = (self.remote_dir / 'steps/expression.job').read_text()
+        self.assertEqual(self.code_of(steps.submit, 'step_test', 'expression', self.inputs), 'conflict')
+        self.assertEqual(archive.read_text(), 'irreplaceable history\n')
+        self.assertEqual((self.remote_dir / 'steps/expression.job').read_text(), job)
+        self.assertEqual(steps.status('step_test', 'expression')['job_id'], '12345')
+
+    def test_retry_waits_when_scheduler_cannot_confirm_termination(self):
+        self.failed_expression()
+        (self.fake / 'bin/squeue').write_text('#!/bin/bash\nexit 1\n')
+        calls = len(self.calls)
+        self.assertEqual(self.code_of(steps.submit, 'step_test', 'expression', self.inputs), 'conflict')
+        self.assertFalse(any('tar xzf' in call for call in self.calls[calls:]))
+
+    def test_successful_sbatch_without_a_valid_id_is_never_retryable(self):
+        self.slurm(sbatch_reply='unexpected reply')
+        record = steps.submit('step_test', 'expression', self.inputs)
+        self.assertEqual(record['state'], 'unknown')
+        self.assertEqual(self.code_of(steps.submit, 'step_test', 'expression', self.inputs), 'conflict')
 
     def test_retry_refused_on_hpc3_keeps_the_failed_attempt_as_it_was(self):
         self.failed_expression()
@@ -333,7 +445,7 @@ class StepsTest(unittest.TestCase):
         self.assertEqual(sum('sbatch --parsable' in call for call in self.calls), 1)
 
     def test_refresh_does_not_reopen_confirmed_failures(self):
-        for index, job in enumerate(({'exit_code': '1'}, {'outputs': OUTPUTS[:2]},
+        for index, job in enumerate(({'exit_code': '1'}, {'outputs': OUTPUTS[:2], 'err': 'Error in fread(x): failed\n'},
                                      {'err': 'Error in fread(x): failed\n'})):
             with self.subTest(job=job):
                 run_id = f'confirmed_failure_{index}'
@@ -361,8 +473,10 @@ class StepsTest(unittest.TestCase):
     def test_cancel_checks_job_name_and_finished_steps_cannot_be_cancelled(self):
         steps.submit('step_test', 'expression', self.inputs)
         self.slurm(squeue='RUNNING', name='signet-expression-step_test')
-        self.assertEqual(steps.cancel('step_test', 'expression')['state'], 'cancelled')
+        self.assertEqual(steps.cancel('step_test', 'expression')['state'], 'cancelling')
         self.assertEqual((self.fake / 'scancel').read_text().split(), ['12345'])
+        self.slurm(squeue='', sacct='CANCELLED')
+        self.assertEqual(steps.status('step_test', 'expression', refresh=True)['state'], 'cancelled')
         self.assertEqual(self.code_of(steps.cancel, 'step_test', 'expression'), 'conflict')
         st.configure_signet('other_job')
         self.remote_dir = self.hpc / 'ws/work/other_job'
@@ -911,7 +1025,7 @@ class StepsTest(unittest.TestCase):
         steps.submit('step_test', 'network', {})
         self.signet_children()
         self.slurm(name='signet-network-step_test', squeue='RUNNING')
-        self.assertEqual(steps.cancel('step_test', 'network')['state'], 'cancelled')
+        self.assertEqual(steps.cancel('step_test', 'network')['state'], 'cancelling')
         self.assertEqual((self.fake / 'scancel').read_text().split(), ['12345', '777'])
 
     def test_failed_control_job_leaves_no_orphan_jobs(self):
@@ -925,6 +1039,20 @@ class StepsTest(unittest.TestCase):
         self.assertEqual(record['state'], 'failed')
         self.assertIn('Some jobs are incomplete', record['failure_hints'][0])
         self.assertEqual((self.fake / 'scancel').read_text().split(), ['777'])
+
+    def test_network_cancellation_waits_for_children_before_allowing_retry(self):
+        self.network_ready()
+        steps.submit('step_test', 'network', {})
+        self.signet_children()
+        self.slurm(name='signet-network-step_test', squeue='RUNNING')
+        self.assertEqual(steps.cancel('step_test', 'network')['state'], 'cancelling')
+        self.slurm(squeue='', sacct='CANCELLED')
+        self.assertEqual(steps.status('step_test', 'network', refresh=True)['state'], 'cancelling')
+        self.assertEqual(self.code_of(steps.submit, 'step_test', 'network', {}), 'conflict')
+        (self.fake / 'workdir_777').unlink()
+        self.assertEqual(steps.status('step_test', 'network', refresh=True)['state'], 'cancelled')
+        self.slurm(sbatch_reply='222')
+        self.assertEqual(steps.submit('step_test', 'network', {})['job_id'], '222')
 
     def test_read_log_returns_last_lines_with_limits(self):
         steps.submit('step_test', 'expression', self.inputs)

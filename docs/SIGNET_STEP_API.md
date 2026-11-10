@@ -59,6 +59,8 @@ Workflow panel / AI tool
 
 - A step that `failed` or was `cancelled` may be submitted again in the same run, so the earlier steps' results stay usable.
 - Every earlier attempt is kept, never overwritten (section 8). The new record carries `attempt` (2, 3, …) and `previous_job_id`.
+- Before retrying, a successful scheduler query must confirm that the previous job and this run's child jobs have stopped. This check happens before uploading a new configuration.
+- A retry moves the step's previous result folder, remotely and locally, to `steps/<step>.attempt<N>.results`. Earlier steps' results stay in place; only fresh outputs can complete the new attempt.
 - A `completed` step is not rerun in place: later steps may already have read its results. Compute it again in a new run.
 - A step that is still active or `unknown` cannot be resubmitted; check its status first.
 
@@ -154,7 +156,7 @@ Response 200:
     }
   ],
   "input_roots": ["<workspace>/refdata", "<signet source>/example", "<this run on HPC3>"],
-  "states": ["submitted", "pending", "running", "validating", "completed", "failed", "cancelled", "unknown"]
+  "states": ["submitted", "pending", "running", "cancelling", "validating", "completed", "failed", "cancelled", "unknown"]
 }
 ```
 
@@ -256,7 +258,7 @@ If the connection dropped during `sbatch`, the response is 202 with `"state": "u
 | 412 | Not connected; container or `sbatch` missing |
 | 502 | Upload or `sbatch` failed |
 
-When the login-node script refuses the submission (400, 409, 412 or 502), nothing was queued, so the attempt is forgotten. On a retry, the previous failed record is put back unchanged and its HPC3 files are not renamed.
+When preflight checks refuse the submission before remote files move (400, 409 or 412), the previous record and local results are restored. Once preparation starts, the new attempt number is consumed even if `sbatch` refuses the job (502): its record remains `failed` without a job ID, its script and error are kept, and the next retry gets the next number. Existing archives are never overwritten.
 
 ### 5.7 `GET /signet/runs/{run_id}/steps/{step}[?refresh=1]`
 
@@ -265,6 +267,7 @@ The step's current record (section 7).
 - Slurm is asked at most once every 15 seconds per step. `refresh=1` asks now.
 - When Slurm reports the job ended, this call validates it (section 2): exit marker, required outputs, log lines. On success it downloads the step's result folder into the local run, so that one call takes longer.
 - If the exit marker is missing or incomplete, the step stays `validating`. A later call decides.
+- A `failed` record caused only by missing outputs after exit 0 can be rechecked with `refresh=1`, and downloads if the outputs become readable. Confirmed nonzero exits, scheduler failures and known log errors remain terminal.
 - `refresh=1` also rechecks an older failure whose only reason was an unconfirmed exit marker ("The job did not finish its last line."). Other failures stay final.
 - If HPC3 cannot be reached, the reply is 200 with the last known record plus `"connection": "interrupted"`. The job keeps running.
 - 400: `refresh` not `0` or `1`. 404: unknown run or step, or never submitted. 412: not connected.
@@ -273,7 +276,7 @@ The step's current record (section 7).
 
 Body `{}` or empty. Cancels the step's own job after checking its job name on HPC3. If the job already left the queue, the reply reports how it actually ended.
 
-- 200: the record (`cancelled`, or its final state).
+- 200: the record (`cancelling` while cancellation is pending, or its final state). A successful `scancel` only acknowledges the request. Keep polling; retry and settings changes remain blocked until the job and its children have stopped.
 - 404: never submitted. 409: already ended, or no job ID known yet. 412: not connected. 502: `scancel` failed.
 
 ### 5.9 `GET /signet/runs/{run_id}/steps/{step}/log[?stream=out|err&lines=50]`
@@ -393,6 +396,7 @@ submitting ──► submitted ──► pending ──► running ──► val
 | `pending` | Waiting in the Slurm queue | Poll status |
 | `running` | Running | Poll status; read logs |
 | `validating` | Job ended; checking outputs and logs, downloading, or waiting for a complete exit marker | Poll status |
+| `cancelling` | Cancellation accepted, but termination of the job and its children is not confirmed | Poll status; do not resubmit or change settings |
 | `completed` | Outputs present, logs clean, results downloaded | Go on to the next step |
 | `failed` | Slurm failure (OUT_OF_MEMORY, TIMEOUT, …), nonzero exit, missing outputs, or a failure line in the logs | Read `reason`, `missing_outputs`, `failure_hints`; fix; resubmit in the same run |
 | `cancelled` | Cancelled by the user or Slurm | Resubmit in the same run if wanted |
@@ -430,6 +434,7 @@ steps/
   <step>.out  <step>.err     job stdout and stderr
   <step>.done                exit marker: "<exit code> <ISO time>", written as the job's last line
   <step>.attempt<N>.*        the same files of earlier attempts, kept on retry
+  <step>.attempt<N>.results/ the earlier attempt's result folder, kept on retry
 ```
 
 This computer, `runs/<run_id>/`:
@@ -439,6 +444,7 @@ work/config.ini              settings, including the input paths last submitted
 work/res/...                 downloaded results of completed steps
 steps/<step>.json            current record of each step
 steps/<step>.attempt<N>.json records of earlier attempts
+steps/<step>.attempt<N>.results/ earlier attempts' local result folders
 steps/remote.owner           the HPC3 folder and its owner token
 ```
 

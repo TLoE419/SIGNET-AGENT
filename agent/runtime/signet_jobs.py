@@ -65,7 +65,7 @@ import agent.tools.signet as signet
 
 # Lines that mean a SIGNET/R step failed even though `signet` exited 0.
 FAILURE_PATTERNS = ('Execution halted', 'Error in ', 'cannot open', 'No such file or directory', 'command not found')
-ACTIVE = ('submitting', 'submitted', 'pending', 'running', 'validating', 'unknown')
+ACTIVE = ('submitting', 'submitted', 'pending', 'running', 'cancelling', 'validating', 'unknown')
 TERMINAL = ('completed', 'failed', 'cancelled')
 RETRYABLE = ('failed', 'cancelled')   # may be submitted again in the same run
 # Files a job leaves in <run>/steps on HPC3; renamed to <step>.attempt<N>.<suffix> before a retry.
@@ -253,7 +253,7 @@ def catalog():
                        'options': {k: {'rule': rule, 'default': default} for k, (rule, default) in step.prompts.items()},
                        'required_outputs': list(step.required)} for name, step in STEPS.items()],
             'input_roots': ['<workspace>/refdata', '<signet source>/example', '<this run on HPC3>'],
-            'states': ['submitted', 'pending', 'running', 'validating', *TERMINAL, 'unknown']}
+            'states': ['submitted', 'pending', 'running', 'cancelling', 'validating', *TERMINAL, 'unknown']}
 
 
 # ---------- local run records ----------
@@ -690,8 +690,14 @@ def _submit_script(config, run_id, name, step, directory, files, resources, opti
     q = shlex.quote
     keep = ''
     if archive:
-        keep = ''.join(f'[ -e "$D/steps/{name}.{suffix}" ] && mv -f "$D/steps/{name}.{suffix}" '
-                       f'"$D/steps/{name}.attempt{archive}.{suffix}"\n' for suffix in _JOB_FILES)
+        pairs = [(f'steps/{name}.{suffix}', f'steps/{name}.attempt{archive}.{suffix}') for suffix in _JOB_FILES]
+        pairs.append((step.download, f'steps/{name}.attempt{archive}.results'))
+        # Check every destination before moving anything; an archive is immutable.
+        keep = ''.join(f'if [ -e "$D/"{q(dst)} ]; then say conflict archive; exit 6; fi\n'
+                       for _, dst in pairs)
+        keep += 'say attempt_started yes\n'
+        keep += ''.join(f'if [ -e "$D/"{q(src)} ]; then mv -- "$D/"{q(src)} "$D/"{q(dst)} || '
+                        '{ say archive_failed yes; exit 8; }; fi\n' for src, dst in pairs)
     binds = sorted({root for _, _, root in files if root != directory})
     # Results of earlier steps must still be in this run's folder (nobody cleaned it up).
     needs = ''.join(f'if [ ! -s "$D/work/"{q(path)} ]; then say missing_prior {q(path)}; exit 4; fi\n'
@@ -709,6 +715,7 @@ def _submit_script(config, run_id, name, step, directory, files, resources, opti
 {checks}{needs}if [ ! -s {q(config['image'])} ]; then say not_ready container; exit 5; fi
 if ! command -v sbatch >/dev/null 2>&1; then say not_ready sbatch; exit 5; fi
 {keep}if [ -e "$D/steps/{name}.job" ]; then say conflict submitted; exit 6; fi
+say attempt_started yes
 cat > "$D/steps/{name}.sbatch" <<'SIGNET_JOB'
 {job}SIGNET_JOB
 job="$({sbatch} 2>"$D/steps/{name}.sbatch.err")" || {{ say sbatch_failed "$(head -c 300 "$D/steps/{name}.sbatch.err")"; exit 7; }}
@@ -716,6 +723,33 @@ job="${{job%%;*}}"   # --parsable prints "<id>;<cluster>" on multi-cluster setup
 printf '%s\\n' "$job" > "$D/steps/{name}.job"
 say job "$job"
 '''
+
+
+def _queue_check(record):
+    """List active jobs of this run, including SIGNET's children, with a checked scheduler query."""
+    q = shlex.quote
+    return (f'jobs="$(squeue -h -u "$(id -un)" -o "%i %j %Z" 2>/dev/null)" && {{\n'
+            '  say queue_checked yes\n'
+            f'  say active_jobs "$(printf \'%s\\n\' "$jobs" | awk -v j={q(record.get("job_id") or "-")} '
+            f'-v n={q("signet-" + record["step"] + "-" + record["run_id"])} '
+            f'-v d={q(record["remote_dir"] + "/")} '
+            "'$1 == j || $2 == n || index($3, d) == 1 {print $1}')\"\n}\n")
+
+
+def _ensure_stopped(record):
+    """A terminal local record (especially an old 'cancelled') is insufficient to overwrite a run."""
+    script = _say() + _queue_check(record)
+    if record.get('job_id'):
+        script += (f'say ended "$(sacct -n -X -P -j {shlex.quote(record["job_id"])} '
+                   '-o State 2>/dev/null | head -n 1)"\n')
+    try:
+        code, values, _ = _shell(script + 'true\n')
+    except OSError as error:
+        raise StepError('remote_failed', 'Could not confirm the previous job has stopped; do not retry yet.') from error
+    ended = values.get('ended', '').split(' ')[0]
+    terminal = ended == 'COMPLETED' or ended.startswith('CANCELLED') or ended in _SLURM_FAILED
+    if code or values.get('queue_checked') != 'yes' or values.get('active_jobs') or (record.get('job_id') and not terminal):
+        raise StepError('conflict', 'The previous job or its children have not been confirmed stopped on HPC3; check status before retrying.')
 
 
 # ---------- the four operations ----------
@@ -746,6 +780,12 @@ def submit(run_id, name, inputs, resources=None, options=None):
     config = _environment()
     directory = _remote_dir(config, root, run_id)
     checked = _inputs(step, inputs, (config['root'] + '/refdata', config['source'] + '/example', directory))
+    if previous:
+        _ensure_stopped(previous)  # before uploading config.ini or touching any old result
+        archived = _attempt_path(root, name, attempt - 1)
+        local_results = root / 'steps' / f'{name}.attempt{attempt - 1}.results'
+        if archived.exists() or local_results.exists():
+            raise StepError('conflict', 'The previous attempt archive already exists; it will not be overwritten.')
     try:
         fd = os.open(root / '.active', os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     except FileExistsError as error:
@@ -776,7 +816,10 @@ def submit(run_id, name, inputs, resources=None, options=None):
         try:
             _upload(root, directory, token)
             if previous:   # keep the failed attempt's record before the new one replaces it
-                archived.write_text(json.dumps(previous, indent=2) + '\n')
+                with archived.open('x') as stream:
+                    stream.write(json.dumps(previous, indent=2) + '\n')
+                if (root / step.download).exists():
+                    (root / step.download).rename(local_results)
             # Record intent before sbatch: a lost connection from here on may have started a job.
             _change(record, 'submitting')
             _save(root, record)
@@ -794,11 +837,20 @@ def submit(run_id, name, inputs, resources=None, options=None):
         if code == 0 and re.fullmatch(r'[0-9]+', values.get('job', '')):
             _change(record, 'submitted', job_id=values['job'], checked_at=0)
             return _save(root, record)
-        # Nothing was queued, so forget this attempt and let the user fix the cause and retry.
-        # A retry puts the previous attempt's record back, so the step still reads as failed.
-        if previous:
+        if code == 0:
+            _change(record, 'unknown', reason='Submission returned no valid job ID; check status. Do not resubmit.')
+            return _save(root, record)
+        # Once remote files moved, consume this attempt even if sbatch refused it.
+        # Reusing its number would archive the new script over the previous one.
+        if values.get('attempt_started') == 'yes':
+            _change(record, 'failed', finished_at=_now(),
+                    reason='Submission failed before a job ID was returned: ' + values.get('sbatch_failed', 'remote preparation failed.'))
+            _save(root, record)
+        elif previous:
             _save(root, previous)
             archived.unlink(missing_ok=True)
+            if local_results.exists():
+                local_results.rename(root / step.download)
         else:
             _record_path(root, name).unlink(missing_ok=True)
         if 'missing_input' in values:
@@ -845,6 +897,7 @@ def _status_script(record, step):
     # When the control job is gone, SIGNET's own jobs still queued for this run are orphans.
     orphans = (f'if [ -n "$j" ] && [ -z "$(squeue -h -j "$j" -o %T 2>/dev/null)" ]; then\n{_children_script(step)}fi\n'
                if step.children else '')
+    queue_check = _queue_check(record) if record.get('cancel_requested_at') else ''
     return _say() + f'''D={q(directory)}
 j={q(job) if job else '"$(head -n 1 "$D/steps/' + name + '.job" 2>/dev/null)"'}
 # No ID recorded (connection lost around sbatch): look for this step's own job name, ours only.
@@ -857,7 +910,7 @@ if [ -n "$j" ]; then
 fi
 [ -f "$D/steps/{name}.done" ] && say done "$(head -n 1 "$D/steps/{name}.done")"
 {outputs}cat "$D/steps/{name}.out" "$D/steps/{name}.err" 2>/dev/null | grep -E -m 20 {q(pattern)} | while IFS= read -r l; do say line "$l"; done
-{progress}{orphans}true
+{progress}{orphans}{queue_check}true
 '''
 
 
@@ -867,10 +920,12 @@ def status(run_id, name, refresh=False):
     step = _step(name)
     root = _root(run_id)
     record = _load(root, name)
-    # Only explicitly refresh the old, unconfirmed-marker failure; real failures stay terminal.
+    # Only reopen unconfirmed artifacts, never an observed nonzero exit or log error.
     retry_marker = (refresh and record['state'] == 'failed' and record.get('slurm_state') == 'COMPLETED'
-                    and record.get('exit_code') is None
-                    and record.get('reason') == 'The job did not finish its last line.')
+                    and not record.get('failure_hints')
+                    and ((record.get('exit_code') is None
+                          and record.get('reason') == 'The job did not finish its last line.')
+                         or (record.get('exit_code') == '0' and record.get('reason') == 'Required outputs are missing.')))
     if record['state'] in TERMINAL and not retry_marker:
         return record
     if not refresh and time.time() - record.get('checked_at', 0) < CACHE_SECONDS:
@@ -899,7 +954,11 @@ def status(run_id, name, refresh=False):
         record['progress'] = {f'stage{i + 1}': values[f'progress_{i}'] for i in range(len(step.stages))
                               if f'progress_{i}' in values}   # "finished total" ParaFly commands
     missing = [path for i, path in enumerate(_required(step, record)) if values.get(f'output_{i}') != 'yes']
-    if slurm == 'PENDING':
+    cancelling = record.get('cancel_requested_at')
+    terminal = slurm == 'COMPLETED' or slurm.startswith('CANCELLED') or slurm in _SLURM_FAILED
+    if cancelling and (not terminal or values.get('queue_checked') != 'yes' or values.get('active_jobs')):
+        _change(record, 'cancelling', reason='Cancellation requested; waiting for HPC3 to confirm the job and its children have stopped.')
+    elif slurm == 'PENDING':
         _change(record, 'pending')
     elif slurm in _SLURM_RUNNING:
         _change(record, 'running')
@@ -982,8 +1041,10 @@ def cancel(run_id, name):
     if code or 'cancel' not in values:
         raise StepError('remote_failed', 'scancel did not complete on HPC3.')
     if values['cancel'] == 'requested':
-        _change(record, 'cancelled', finished_at=_now(), reason='Cancelled by the user.')
-        return _save(root, record)
+        record.pop('finished_at', None)
+        _change(record, 'cancelling', cancel_requested_at=_now(), checked_at=0,
+                reason='Cancellation requested; waiting for HPC3 to confirm termination.')
+        _save(root, record)
     return status(run_id, name, refresh=True)   # it already left the queue; report how it ended
 
 
