@@ -12,7 +12,9 @@ the PLINK/IMPUTE2 settings, and failure lines specific to -g. The adjust tests
 the same run, their files (including -g's tmp/tmpg/impute) must still be on
 HPC3, and SIGNET's "number of PCs" question is answered from a checked option.
 The retry tests check that a failed step can be submitted again in the same run
-while every earlier attempt is kept, locally and on HPC3.
+while every earlier attempt is kept, locally and on HPC3. The cis tests (signet -c)
+cover a step with no inputs of its own, settings-dependent output names
+(alpha.cis) fixed at submit, and fixed container environment variables.
 """
 import json
 from concurrent.futures import ThreadPoolExecutor
@@ -711,6 +713,109 @@ class StepsTest(unittest.TestCase):
         self.slurm(squeue='', sacct='COMPLETED')
         self.assertEqual(steps.status('step_test', 'adjust', refresh=True)['state'], 'completed')
         self.assertEqual((self.root / 'work/res/resa/signet_new.Geno').read_text(), 'data\n')
+
+    # ---------- cis (signet -c) ----------
+
+    def cis_ready(self, needs=None):
+        """This run after -t, -g and -a completed: local records, plus their results in the HPC3 folder."""
+        self.adjust_ready(needs=())
+        (self.root / 'steps/adjust.json').write_text(json.dumps({'step': 'adjust', 'state': 'completed'}))
+        for relative in steps.STEPS['cis'].needs if needs is None else needs:
+            path = self.remote_dir / 'work' / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('data\n')
+
+    def finish_cis(self, alpha):
+        for relative in steps.STEPS['cis'].required:
+            path = self.remote_dir / 'work' / relative.replace('{alpha.cis}', alpha)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('data\n')
+        (self.remote_dir / 'steps/cis.done').write_text('0 2026-11-09T10:00:00-08:00\n')
+        self.slurm(squeue='', sacct='COMPLETED')
+
+    def test_catalog_describes_cis(self):
+        step = next(s for s in steps.catalog()['steps'] if s['name'] == 'cis')
+        self.assertEqual((step['flag'], step['inputs'], step['requires']), ('-c', [], ['expression', 'adjust']))
+        self.assertEqual(step['settings'], {'alpha.cis': 'alpha', 'nperms': 'count', 'upstream': 'flank',
+                                            'downstream': 'flank'})
+        self.assertIn('res/resc/signet_all.sig.pValue_{alpha.cis}', step['required_outputs'])
+
+    def test_cis_needs_adjust_completed_in_the_same_run(self):
+        self.adjust_ready()   # -t and -g done, -a not
+        with self.assertRaises(steps.StepError) as caught:
+            steps.submit('step_test', 'cis', {})
+        self.assertEqual(caught.exception.code, 'invalid_request')
+        self.assertIn('adjust is not submitted', str(caught.exception))
+        self.assertFalse((self.fake / 'sbatch_args').exists())
+
+    def test_cis_queues_signet_c_with_single_threaded_blas(self):
+        self.cis_ready()
+        record = steps.submit('step_test', 'cis', {})
+        self.assertEqual(record['state'], 'submitted')
+        self.assertIn('res/resc/signet_all.sig.pValue_0.05', record['required_outputs'])   # default alpha.cis
+        text = (self.remote_dir / 'steps/cis.sbatch').read_text()
+        self.assertIn('--env OPENBLAS_NUM_THREADS=1,OMP_NUM_THREADS=1,MKL_NUM_THREADS=1 --bind', text)
+        self.assertIn('bash ./signet -c < /dev/null', text)
+        args = (self.fake / 'sbatch_args').read_text().split()
+        self.assertEqual(args[2:5], ['--cpus-per-task=8', '--mem=32G', '--time=04:00:00'])
+
+    def test_cis_points_ciseqtl_paths_at_this_runs_results(self):
+        # configure_signet leaves these keys at work/missing/<key>; -c failed on HPC3 that way
+        # ("The file  doesn't exist", job 59412199).
+        self.assertIn('/work/missing/snps.map', (self.root / 'work/config.ini').read_text())
+        self.cis_ready()
+        steps.submit('step_test', 'cis', {})
+        config = (self.remote_dir / 'work/config.ini').read_text()
+        work = f'{self.remote_dir}/work'
+        for key, relative in steps.STEPS['cis'].links.items():
+            self.assertIn(f'{key} = {work}/{relative}', config)
+        self.assertNotIn('/missing/', config.split('[ciseqtl]')[1].split('[network]')[0])
+        self.assertEqual(set(steps.STEPS['cis'].links.values()), set(steps.STEPS['cis'].needs))
+
+    def test_cis_missing_file_line_fails_the_step(self):
+        self.cis_ready()
+        steps.submit('step_test', 'cis', {})
+        (self.remote_dir / 'steps/cis.out').write_text("The file  doesn't exist\n")
+        (self.remote_dir / 'steps/cis.done').write_text('0 2026-11-09T19:41:56-08:00\n')
+        self.slurm(squeue='', sacct='COMPLETED')
+        record = steps.status('step_test', 'cis', refresh=True)
+        self.assertEqual(record['state'], 'failed')
+        self.assertIn("doesn't exist", record['failure_hints'][0])
+
+    def test_cis_result_name_follows_alpha_and_is_fixed_at_submit(self):
+        self.cis_ready()
+        steps.update_settings('step_test', {'alpha.cis': 0.01, 'nperms': 200, 'upstream': 0, 'downstream': 5000})
+        config = (self.root / 'work/config.ini').read_text()
+        for line in ('alpha.cis = 0.01', 'nperms = 200', 'upstream = 0', 'downstream = 5000'):
+            self.assertIn(line, config)
+        record = steps.submit('step_test', 'cis', {})
+        self.assertIn('res/resc/signet_all.sig.pValue_0.01', record['required_outputs'])
+        self.finish_cis('0.01')
+        record = steps.status('step_test', 'cis', refresh=True)
+        self.assertEqual(record['state'], 'completed')
+        self.assertEqual((self.root / 'work/res/resc/signet_all.sig.pValue_0.01').read_text(), 'data\n')
+
+    def test_cis_fails_when_the_result_for_its_alpha_is_missing(self):
+        self.cis_ready()
+        steps.submit('step_test', 'cis', {})
+        self.finish_cis('0.1')   # files for another alpha do not count
+        record = steps.status('step_test', 'cis', refresh=True)
+        self.assertEqual(record['state'], 'failed')
+        self.assertEqual(record['missing_outputs'], ['res/resc/signet_all.sig.pValue_0.05'])
+
+    def test_cis_refused_when_adjust_results_are_gone_on_hpc3(self):
+        self.cis_ready(needs=[p for p in steps.STEPS['cis'].needs if 'geno.data' not in p])
+        with self.assertRaises(steps.StepError) as caught:
+            steps.submit('step_test', 'cis', {})
+        self.assertIn('res/resa/signet_geno.data', str(caught.exception))
+        self.assertFalse((self.fake / 'sbatch_args').exists())
+
+    def test_cis_settings_rules(self):
+        for bad in ({'alpha.cis': 0}, {'alpha.cis': 1.5}, {'alpha.cis': '0.05'}, {'nperms': 0}, {'nperms': 2.5},
+                    {'nperms': 100001}, {'upstream': -1}, {'downstream': True}, {'downstream': 10_000_001}):
+            self.assertEqual(self.code_of(steps.update_settings, 'step_test', bad), 'invalid_request', bad)
+        self.assertEqual(self.code_of(steps.submit, 'step_test', 'cis', {'gexp.file': str(self.gexp)}),
+                         'invalid_request')   # -c takes no inputs: everything comes from this run
 
     def test_read_log_returns_last_lines_with_limits(self):
         steps.submit('step_test', 'expression', self.inputs)

@@ -1,13 +1,15 @@
 """Run single SIGNET steps on HPC3 as Slurm jobs, over the app's SSH connection.
 
-Steps so far, all TCGA: "expression" (`signet -t`), "genotype" (`signet -g`) and
-"adjust" (`signet -a`).
+Steps so far, all TCGA: "expression" (`signet -t`), "genotype" (`signet -g`),
+"adjust" (`signet -a`) and "cis" (`signet -c`, cis-eQTL mapping).
 
 One run is one analysis and one HPC3 folder. SIGNET knows nothing about runs: a
 later step reads earlier results from its own work/ folder (partly through
 config.ini paths, partly through fixed temporary folders such as tmp/tmpg). So
 "adjust" may only start once "expression" and "genotype" completed in the same
 run (Step.requires), and their files are checked on HPC3 first (Step.needs).
+Some output names depend on settings (the -c results carry alpha.cis in their
+name); they are fixed in the step record at submit time.
 SIGNET questions that a person would type an answer to (Step.prompts, e.g. the
 number of genotype PCs in -a) are answered from validated options instead.
 
@@ -108,6 +110,12 @@ class Step:
     # Answers to SIGNET's interactive questions, fed to its stdin in this order:
     # key -> (rule, default). A batch job has no keyboard, so without them `read` gets nothing.
     prompts: dict = field(default_factory=dict)
+    # Environment variables set inside the container (fixed values, never from the caller).
+    env: dict = field(default_factory=dict)
+    # config.ini keys pointed at earlier results of this run (path relative to work/) at submit.
+    # configure_signet sets every input path to a work/missing/<key> placeholder, so a step that
+    # reads earlier results through such keys must set them itself.
+    links: dict = field(default_factory=dict)
 
 
 STEPS = {
@@ -160,6 +168,34 @@ STEPS = {
         limits={'cpus': (1, 16), 'mem_gb': (1, 64), 'hours': (0.25, 12)},
         description='TCGA adjustment (signet -a): match expression and genotype samples, filter rare SNPs, '
                     'compute genotype PCs, and regress out race, gender and PCs.'),
+    'cis': Step(
+        flag='-c', cohort='TCGA', inputs=(),
+        # script/cis_portal.sh reads everything from earlier steps of this run through the
+        # [ciseqtl] paths in config.ini (res/resa/... and res/rest/signet_gene_pos).
+        requires=('expression', 'adjust'),
+        # The same pairs as the [ciseqtl] defaults of SIGNET's config.ini.default.
+        links={'snps.map': 'res/resa/signet_new.Geno.map', 'snps.maf': 'res/resa/signet_new.Geno.maf',
+               'matched.gexp': 'res/resa/signet_gexp_rmpc.data', 'matched.gexp.withpc': 'res/resa/signet_gexp.data',
+               'matched.geno': 'res/resa/signet_geno.data', 'gene.pos': 'res/rest/signet_gene_pos'},
+        needs=('res/resa/signet_new.Geno.map', 'res/resa/signet_new.Geno.maf',
+               'res/resa/signet_gexp_rmpc.data', 'res/resa/signet_gexp.data',
+               'res/resa/signet_geno.data', 'res/rest/signet_gene_pos'),
+        # script/file_manage.sh file_check prints "The file <path> doesn't exist" and stops; signet exits 0.
+        failures=("doesn't exist",),
+        settings={'alpha.cis': 'alpha', 'nperms': 'count', 'upstream': 'flank', 'downstream': 'flank'},
+        # Written by script/cis-eQTL/combine.sigcis.r and combine.sh with the resc prefix
+        # res/resc/signet. {alpha.cis} is filled in from the run's settings at submit.
+        required=('res/resc/signet_all.sig.pValue_{alpha.cis}', 'res/resc/signet_all.eQTL.data',
+                  'res/resc/signet_net.gexp.data', 'res/resc/signet_net.genepos',
+                  'res/resc/signet_net.genename'),
+        download='work/res/resc',
+        # Low-frequency and rare variants are tested by permutation, one R job per core
+        # (ParaFly -CPU ncore_local); the R jobs must not each start a full BLAS thread pool.
+        resources={'cpus': 8, 'mem_gb': 32, 'hours': 4},
+        limits={'cpus': (1, 32), 'mem_gb': (1, 128), 'hours': (0.25, 24)},
+        env={'OPENBLAS_NUM_THREADS': '1', 'OMP_NUM_THREADS': '1', 'MKL_NUM_THREADS': '1'},
+        description='TCGA cis-eQTL mapping (signet -c): find each gene\'s significant nearby SNPs '
+                    '(common, low-frequency and rare variants) to use as instrumental variables.'),
 }
 
 
@@ -197,6 +233,16 @@ def _record_path(root, name):
 def _attempt_path(root, name, number):
     """Where an earlier attempt of a step is kept once it is retried: steps/<step>.attempt<N>.json."""
     return root / 'steps' / f'{name}.attempt{number}.json'
+
+
+def _resolve(path, settings):
+    """Fill {setting} placeholders in an output path from the run's settings (e.g. {alpha.cis} -> 0.05)."""
+    return re.sub(r'\{([A-Za-z0-9_.]+)\}', lambda m: settings[m.group(1)], path)
+
+
+def _required(step, record):
+    """The outputs this attempt must produce: fixed at submit time, so a later settings change cannot alter them."""
+    return record.get('required_outputs') or list(step.required)
 
 
 def _load(root, name):
@@ -301,6 +347,18 @@ def _setting(key, rule, value):
         if isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 100_000_000:
             return str(value)
         raise StepError('invalid_request', f'{key} must be a whole number of base pairs from 1 to 100000000.')
+    if rule == 'alpha':      # significance level; also part of the -c result file name
+        if number and 0 < value <= 1:
+            return str(value)
+        raise StepError('invalid_request', f'{key} must be a number above 0 and at most 1.')
+    if rule == 'count':      # number of permutations
+        if isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 100_000:
+            return str(value)
+        raise StepError('invalid_request', f'{key} must be a whole number from 1 to 100000.')
+    if rule == 'flank':      # base pairs added up- or downstream of a gene
+        if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 10_000_000:
+            return str(value)
+        raise StepError('invalid_request', f'{key} must be a whole number of base pairs from 0 to 10000000.')
     raise StepError('invalid_request', f'No rule for {key}.')
 
 
@@ -472,6 +530,7 @@ def _job_script(config, run_id, name, step, directory, binds, options=None):
     q = shlex.quote
     bind = ','.join([f'{directory}:{directory}'] + [f'{path}:{path}:ro' for path in binds])
     answers = [str(options[key]) for key in step.prompts] if options else []
+    env = f"--env {q(','.join(f'{k}={v}' for k, v in step.env.items()))} " if step.env else ''
     stdin = f"< <(printf '%s\\n' {' '.join(q(a) for a in answers)})" if answers else '< /dev/null'
     return f'''#!/bin/bash
 #SBATCH --job-name=signet-{name}-{run_id}
@@ -482,7 +541,7 @@ cd {q(directory + '/work')} || exit 1
 echo "[SIGNET-AGENT] START step={name} job=$SLURM_JOB_ID ts=$(date -Iseconds)"
 # Batch jobs cannot answer prompts: flush old temporary files and use the cores Slurm gave this job.
 sed -i -e 's/^forcerm *=.*/forcerm = T/' -e "s/^ncore_local *=.*/ncore_local = ${{SLURM_CPUS_PER_TASK:-1}}/" config.ini
-{q(config['executor'])} exec --cleanenv --no-home --bind {q(bind)} {q(config['image'])} bash ./signet {step.flag} {stdin}
+{q(config['executor'])} exec --cleanenv --no-home {env}--bind {q(bind)} {q(config['image'])} bash ./signet {step.flag} {stdin}
 rc=$?
 echo "[SIGNET-AGENT] END step={name} exit=$rc ts=$(date -Iseconds)"
 printf '%s %s\\n' "$rc" "$(date -Iseconds)" > {q(directory + '/steps/' + name + '.done')}
@@ -588,13 +647,19 @@ def submit(run_id, name, inputs, resources=None, options=None):
         raise StepError('conflict', 'Another operation on this run is in progress.') from error
     os.close(fd)
     try:
-        signet._update(root, {key: path for key, (path, _) in checked.items()})
+        # Inputs, plus the keys this step reads from earlier results of the run (as local work/
+        # paths; the upload rewrites them to the run's HPC3 folder).
+        signet._update(root, {**{key: path for key, (path, _) in checked.items()},
+                              **{key: str(root / 'work' / rel) for key, rel in step.links.items()}})
         token = _owner(root, directory)
         record = {'step': name, 'run_id': run_id, 'flag': step.flag, 'remote_dir': directory,
                   'inputs': {key: path for key, (path, _) in checked.items()}, 'resources': request,
                   'partition': config['partition'], 'image': config['image'], 'submitted_at': _now()}
         if answers:
             record['options'] = answers   # kept for reproducibility: the answers SIGNET was given
+        settings = signet._settings(root)
+        if any('{' in path for path in step.required):
+            record['required_outputs'] = [_resolve(path, settings) for path in step.required]
         if previous:
             record['attempt'] = attempt
             record['previous_job_id'] = previous.get('job_id')   # never mistaken for this attempt's job
@@ -647,7 +712,7 @@ def _status_script(record, step):
     job = record.get('job_id')
     job_name = f'signet-{name}-{record["run_id"]}'
     outputs = ''.join(f'[ -s {q(directory + "/work/" + path)} ] && say output_{i} yes\n'
-                      for i, path in enumerate(step.required))
+                      for i, path in enumerate(_required(step, record)))
     pattern = '|'.join(re.escape(p) for p in FAILURE_PATTERNS + step.failures)
     return _say() + f'''D={q(directory)}
 j={q(job) if job else '"$(head -n 1 "$D/steps/' + name + '.job" 2>/dev/null)"'}
@@ -699,7 +764,7 @@ def status(run_id, name, refresh=False):
     queued, accounted = values.get('squeue', ''), values.get('sacct', '').split(' ')[0]
     slurm = queued or accounted
     record['slurm_state'] = slurm or None
-    missing = [path for i, path in enumerate(step.required) if values.get(f'output_{i}') != 'yes']
+    missing = [path for i, path in enumerate(_required(step, record)) if values.get(f'output_{i}') != 'yes']
     if slurm == 'PENDING':
         _change(record, 'pending')
     elif slurm in _SLURM_RUNNING:
@@ -748,7 +813,7 @@ def _finish(root, record, step, done, missing, hints):
             raise OSError('tar failed')
         record['outputs'] = vm.restore_outputs(root, result.stdout)
     except (OSError, ValueError) as error:
-        local = [root / 'work' / path for path in step.required]
+        local = [root / 'work' / path for path in _required(step, record)]
         if not all(path.is_file() and path.stat().st_size for path in local):
             record['reason'] = f'Results are ready on HPC3 but could not be downloaded yet ({error}); check status again.'
             return

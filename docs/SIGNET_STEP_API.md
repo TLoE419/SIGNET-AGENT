@@ -9,8 +9,9 @@ Steps available now (TCGA cohort only):
 | `expression` | `signet -t` | Normalize read counts and find gene positions |
 | `genotype` | `signet -g` | PLINK quality control, then IMPUTE2 imputation |
 | `adjust` | `signet -a` | Match expression and genotype samples, filter rare SNPs, compute genotype PCs, regress out race, gender and PCs |
+| `cis` | `signet -c` | cis-eQTL mapping: each gene's significant nearby SNPs (common, low-frequency, rare), used later as instrumental variables |
 
-`signet -c` (cis-eQTL) still runs through the older `remote.execute_cis()` path and is not yet a step here.
+The chat tool `cis_eqtl` still runs `signet -c` through the older `remote.execute_cis()` path on the login node; the `cis` step here is the Slurm replacement.
 
 ## Contents
 
@@ -288,23 +289,26 @@ Last lines of the job's stdout (`out`, default) or stderr (`err`) on HPC3. `line
 
 ### 6.1 Steps
 
-| | `expression` (`-t`) | `genotype` (`-g`) | `adjust` (`-a`) |
-|---|---|---|---|
-| Inputs | `gexp.file`, `pmap.file` | `ped.file`, `map.file`, `ref` (prefix), `gmap` (prefix) | `cli.file` |
-| Requires | none | none | `expression`, `genotype` |
-| Needs on HPC3 | none | none | `res/rest/signet_gexp`, `res/rest/signet_gexpID`, `res/resg/signet_Geno`, `res/resg/signet_Genotype.sampleID`, `tmp/tmpg/impute/impute_Genotype.sizes` |
-| Settings | `restrict.tcga` | `restrict.tcga.geno`, `mind`, `geno`, `hwe`, `int` | none |
-| Options | none | none | `npc` |
-| Required outputs (under `work/`) | `res/rest/signet_gexp`, `_gexpID`, `_gene_pos`, `_gene_name` | `res/resg/signet_Geno`, `_Genotype.sampleID` | `res/resa/signet_matched.gexp`, `_new.Geno`, `_new.Geno.map`, `_new.Geno.maf`, `_gexp.data`, `_gexp_rmpc.data`, `_geno.data` |
-| Downloaded folder | `work/res/rest` | `work/res/resg` | `work/res/resa` |
-| Default resources | 4 CPUs, 16 GB, 2 h | 8 CPUs, 32 GB, 4 h | 4 CPUs, 16 GB, 2 h |
-| Limits | 1–16 CPUs, 1–64 GB, 0.25–12 h | 1–32 CPUs, 1–128 GB, 0.25–24 h | 1–16 CPUs, 1–64 GB, 0.25–12 h |
-| Extra failure lines | none | `No SNP listed in your chromosome input`, `Some of the jobs are incomplete` | none |
-| Typical time on HPC3 | about 1 min | 25–40 min (chromosome 1 only) | under 1 min |
+| | `expression` (`-t`) | `genotype` (`-g`) | `adjust` (`-a`) | `cis` (`-c`) |
+|---|---|---|---|---|
+| Inputs | `gexp.file`, `pmap.file` | `ped.file`, `map.file`, `ref` (prefix), `gmap` (prefix) | `cli.file` | none (send `{}`) |
+| Requires | none | none | `expression`, `genotype` | `expression`, `adjust` |
+| Needs on HPC3 | none | none | `res/rest/signet_gexp`, `res/rest/signet_gexpID`, `res/resg/signet_Geno`, `res/resg/signet_Genotype.sampleID`, `tmp/tmpg/impute/impute_Genotype.sizes` | `res/resa/signet_new.Geno.map`, `_new.Geno.maf`, `_gexp_rmpc.data`, `_gexp.data`, `_geno.data`, `res/rest/signet_gene_pos` |
+| Settings | `restrict.tcga` | `restrict.tcga.geno`, `mind`, `geno`, `hwe`, `int` | none | `alpha.cis`, `nperms`, `upstream`, `downstream` |
+| Options | none | none | `npc` | none |
+| Required outputs (under `work/`) | `res/rest/signet_gexp`, `_gexpID`, `_gene_pos`, `_gene_name` | `res/resg/signet_Geno`, `_Genotype.sampleID` | `res/resa/signet_matched.gexp`, `_new.Geno`, `_new.Geno.map`, `_new.Geno.maf`, `_gexp.data`, `_gexp_rmpc.data`, `_geno.data` | `res/resc/signet_all.sig.pValue_<alpha.cis>`, `_all.eQTL.data`, `_net.gexp.data`, `_net.genepos`, `_net.genename` |
+| Downloaded folder | `work/res/rest` | `work/res/resg` | `work/res/resa` | `work/res/resc` |
+| Default resources | 4 CPUs, 16 GB, 2 h | 8 CPUs, 32 GB, 4 h | 4 CPUs, 16 GB, 2 h | 8 CPUs, 32 GB, 4 h |
+| Limits | 1–16 CPUs, 1–64 GB, 0.25–12 h | 1–32 CPUs, 1–128 GB, 0.25–24 h | 1–16 CPUs, 1–64 GB, 0.25–12 h | 1–32 CPUs, 1–128 GB, 0.25–24 h |
+| Extra failure lines | none | `No SNP listed in your chromosome input`, `Some of the jobs are incomplete` | none | none |
+| Typical time on HPC3 | about 1 min | 25–40 min (chromosome 1 only) | under 1 min | about 1 min (chromosome 1 only) |
 
 Input notes:
 
 - `pmap.file` must be a **collapsed** GENCODE v22 gene GTF (gene rows carry `transcript_type`). The full annotation GTF yields empty `gene_pos` and `gene_name`, and the step correctly fails.
+- `cis` takes no input files: `script/cis_portal.sh` reads the `-a` and `-t` results of the same run through the `[ciseqtl]` paths in `config.ini`.
+- The name of the main `-c` result contains `alpha.cis` (for example `signet_all.sig.pValue_0.05`). The required output names are fixed in the step record (`required_outputs`) at submit, so a later settings change cannot alter how that attempt is judged.
+- `cis` runs R with `OPENBLAS_NUM_THREADS`, `OMP_NUM_THREADS` and `MKL_NUM_THREADS` set to 1, because ParaFly already runs one R job per CPU.
 - `cli.file` is a tab-separated clinical file with at least `submitter_id`, `race` and `gender` (see section 10 for SIGNET's race handling). Samples are matched on the third part of the TCGA barcode.
 
 ### 6.2 Prefix inputs
@@ -324,6 +328,9 @@ Before queueing, each of those files is checked on HPC3. A missing one is named 
 | `restrict.tcga.geno` | genotype | `"no"` or a whole number 1–22 | `1` |
 | `mind`, `geno`, `hwe` | genotype | a number from 0 to 1 (PLINK `--mind`, `--geno`, `--hwe`) | `0.1`, `0.0001` |
 | `int` | genotype | a whole number of base pairs, 1–100,000,000 (IMPUTE2 chunk length) | `5000000` |
+| `alpha.cis` | cis | a number above 0 and at most 1 (significance level) | `0.05` |
+| `nperms` | cis | a whole number 1–100,000 (permutations for low-frequency and rare variants) | `100` |
+| `upstream`, `downstream` | cis | a whole number of base pairs 0–10,000,000 around each gene | `1000` |
 | `npc` (option) | adjust | a whole number 0–10: genotype PCs used as covariates (0 = none) | `3` |
 
 Booleans and numbers sent as strings are rejected. Settings such as `forcerm` and `ncore_local` are not exposed: every job forces `forcerm = T` (batch jobs cannot answer SIGNET's "remove old files?" prompt) and sets `ncore_local` to the CPUs Slurm granted.
@@ -363,6 +370,7 @@ Record fields (route 7 and route 4):
 | `submitted_at`, `finished_at`, `checked_at` | Times |
 | `missing_outputs`, `failure_hints`, `reason` | Why it failed, or the validation note on success |
 | `outputs` | Files downloaded into the local run |
+| `required_outputs` | Present when output names depend on settings (`cis`): the exact files this attempt must produce |
 | `attempt`, `previous_job_id` | Present on a retry |
 | `connection` | `"interrupted"` when HPC3 could not be reached (not saved) |
 
@@ -373,8 +381,8 @@ HPC3, run folder `<workRoot>/<run_id>/`:
 ```
 .owner                       random token: this folder belongs to this run
 work/                        SIGNET's home for the run: signet, script/, config.ini
-  res/rest/ res/resg/ res/resa/    step results (-t, -g, -a)
-  tmp/tmpt/ tmp/tmpg/ tmp/tmpa/    step temporary files (-a reads tmp/tmpg/impute/)
+  res/rest/ res/resg/ res/resa/ res/resc/    step results (-t, -g, -a, -c)
+  tmp/tmpt/ tmp/tmpg/ tmp/tmpa/ tmp/tmpc/    step temporary files (-a reads tmp/tmpg/impute/)
 steps/
   <step>.sbatch              the generated job script
   <step>.job                 Slurm job ID
@@ -421,6 +429,10 @@ api GET '/signet/runs/luad_run1/steps/genotype/log?lines=20'
 api POST /signet/runs/luad_run1/steps/adjust \
   "{\"inputs\":{\"cli.file\":\"$W/refdata/clinical.tsv\"},\"options\":{\"npc\":3}}"
 api GET '/signet/runs/luad_run1/steps/adjust?refresh=1'
+
+api PATCH /signet/runs/luad_run1/settings '{"values":{"alpha.cis":0.05,"nperms":100}}'   # optional
+api POST /signet/runs/luad_run1/steps/cis '{"inputs":{}}'
+api GET '/signet/runs/luad_run1/steps/cis?refresh=1'
 ```
 
 If `adjust` fails (for example because of the clinical file), fix the cause and send the same `POST` again in the same run: the reply has `"attempt": 2`, and `-t` and `-g` are not rerun.
@@ -431,4 +443,4 @@ If `adjust` fails (for example because of the clinical file), fix the cause and 
 - **IMPUTE2 seed.** SIGNET runs IMPUTE2 without `-seed`, so two `-g` runs on the same data differ slightly (about 0.01 % of genotype calls in one test).
 - **No job confirmed.** A step that ends `unknown` without a job ID has no way out yet other than inspecting the HPC3 folder: it cannot be retried, and it blocks the run's other steps and settings.
 - **One run per analysis.** Results are never taken from another run. Copying `-t` or `-g` results between runs would also need `-g`'s `tmp/tmpg/impute/` and a check that both runs used the same samples.
-- **Not yet steps:** `-c`, `-n`, `-v`, and all GTEx steps.
+- **Not yet steps:** `-n` (network), `-v` (visualization), and all GTEx steps. The chat tool `cis_eqtl` still uses the older login-node path.
