@@ -5,7 +5,7 @@ Recorded across 2026-11-09/10 (America/Los_Angeles). This is author-side validat
 ## Version and defect
 
 - Before: `bc79eb391c5588c9d49059805b9c00aeb6c6f070`.
-- After runtime source: `855b8d1abe53809c84ae9b5ada99b97895665f22`.
+- Initial correction runtime source: `855b8d1abe53809c84ae9b5ada99b97895665f22`.
 - `agent/runtime/signet_jobs.py` SHA-256: `b95934b053fba1b85e569e3a74d97087cc3a9a99d72c83bbd06a35409bc12554`.
 
 The previous independent review found that `POST .../network/cancel` only persisted cancellation intent if the control job still appeared in the queue. In the `not_queued` branch it could report `cancelled` and allow settings changes while children were still `COMPLETING`.
@@ -20,13 +20,13 @@ The existing job-name and child-working-directory checks still limit which jobs 
 
 ## Regression checks
 
-Three new test functions cover:
+The initial three new test functions cover:
 
 1. cancellation after a network parent already left the queue: child cancellation, no `finished_at`, settings/retry refused, release only after child termination;
 2. direct status polling with cancelled, failed and completed parents, plus unsuccessful queue lookups: stay active until confirmed quiescent, then preserve the parent's actual outcome;
 3. the real HTTP route and persistent record: cancellation returns active state, settings/retry each return 409, then settings return 200 after children stop.
 
-The tests first failed on the before version (five failing assertions across the three functions/subtests). After the fix, **374 Python tests, 116 Electron tests, and four renderer logic checks passed**. These offline service tests run the real login-node scripts against isolated fake Slurm/filesystem boundaries; the HTTP test uses a real local server. They are separate from real HPC3 evidence below.
+The tests first failed on the before version (five failing assertions across the three functions/subtests). After the initial correction, **374 Python tests, 116 Electron tests, and four renderer logic checks passed**. The follow-up below increases the Python total to 375. These offline service tests run the real login-node scripts against isolated fake Slurm/filesystem boundaries; the HTTP test uses a real local server. They are separate from real HPC3 evidence below.
 
 ```sh
 SIGNET_SOURCE=<audited-source> python -m unittest discover -s tests -v
@@ -59,3 +59,24 @@ Raw request/response and scheduler events, before/after logs, code hashes and re
 ## Scope
 
 This verifies the P2 lifecycle invariant on actual HPC3 service/queue interactions. Failed/completed parent outcomes and queue-query failure are additionally covered by deterministic offline regressions. It does not rerun `-g/-t/-a`, scientific `-c/-n`, full-genome data, biological validation, or production scheduler-policy rejection. Previous whole-chain evidence remains separately recorded in `pr30-retry-safety-20261109.md`.
+
+## Follow-up: exit-marker fallback without scheduler state
+
+An independent review of `7ebc48b` found that a readable done marker could enter completion validation even when both parent scheduler lookups were empty/failed. That bypassed the child check because the initial guard only considered terminal scheduler states. The reviewer reproduced it with real service/HPC3 files and explicitly injected scheduler-query failure; this was not a natural cluster outage.
+
+The completion fallback now requires child quiescence for **either** terminal scheduler evidence **or** an exit marker. Missing accounting cannot bypass the run lock, download results, or treat a failed queue query as an empty queue.
+
+- Follow-up runtime source: `8b2a2792ad56e0abe341b4bb32ff47a444569a59`.
+- Runtime file SHA-256: `72648afaeb98ff95574c1485e7e2c67d8514d8148f79457264fb12c39e664286`.
+- Four new regression functions in total versus `bc79eb3`, with the status subtest also covering an empty scheduler state.
+- New HTTP regression first failed on `7ebc48b`; it now checks that readable outputs/done marker plus active children keep status `validating`, settings return 409, and no output is downloaded. A failed queue query continues to block; a successful empty queue permits completion and download.
+- **375 Python, 116 Electron and four renderer logic checks pass.**
+
+The author repeated the two normal real-HPC3 lifecycle cases against this final source:
+
+| Case | Parent / child | While child active | Settings during → after |
+| --- | --- | --- | --- |
+| cancel | 59419760 / 59419761 | `cancelling`; retry 409 | 409 → 200 |
+| poll | 59419766 / 59419767 | `cancelling`; retry 409 | 409 → 200 |
+
+These four jobs were all confirmed cancelled and absent from the queue. They supplement the initial six before/after jobs above. The marker-only fault path is separately labelled controlled fault-injection evidence; this report is not an independent review approval.
