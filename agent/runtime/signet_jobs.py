@@ -514,7 +514,11 @@ def status(run_id, name, refresh=False):
     step = _step(name)
     root = _root(run_id)
     record = _load(root, name)
-    if record['state'] in TERMINAL:
+    # Only explicitly refresh the old, unconfirmed-marker failure; real failures stay terminal.
+    retry_marker = (refresh and record['state'] == 'failed' and record.get('slurm_state') == 'COMPLETED'
+                    and record.get('exit_code') is None
+                    and record.get('reason') == 'The job did not finish its last line.')
+    if record['state'] in TERMINAL and not retry_marker:
         return record
     if not refresh and time.time() - record.get('checked_at', 0) < CACHE_SECONDS:
         return record
@@ -556,14 +560,21 @@ def status(run_id, name, refresh=False):
 
 def _finish(root, record, step, done, missing, hints):
     """The job ended: decide completed or failed (spec §7), and on success copy the results here."""
-    exit_code = done.split(' ')[0] if done else None
+    # Slurm completion can be visible before the exit marker is readable in full.
+    marker = re.fullmatch(r'([0-9]+) \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:Z|[+-]\d{2}:\d{2})?', done)
+    if marker is None:
+        record.pop('finished_at', None)
+        _change(record, 'validating', exit_code=None, missing_outputs=missing, failure_hints=hints,
+                reason='Waiting for a complete exit marker on HPC3; check status again. Do not resubmit.')
+        return
+    exit_code = marker.group(1)
     if exit_code != '0' or missing or hints:
-        reason = ('The job did not finish its last line.' if exit_code is None else
-                  f'signet exited with {exit_code}.' if exit_code != '0' else
+        reason = (f'signet exited with {exit_code}.' if exit_code != '0' else
                   'Required outputs are missing.' if missing else 'The log reports an error.')
         _change(record, 'failed', finished_at=_now(), exit_code=exit_code, missing_outputs=missing,
                 failure_hints=hints, reason=reason)
         return
+    record.pop('finished_at', None)
     _change(record, 'validating', exit_code='0')
     try:
         q = shlex.quote

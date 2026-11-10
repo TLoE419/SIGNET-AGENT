@@ -217,6 +217,65 @@ class StepsTest(unittest.TestCase):
             self.assertEqual(record[key], expected)
             self.assertFalse((self.project / 'runs' / run_id / 'work/res/rest/signet_gexp').exists())
 
+    def test_completed_job_waits_for_a_complete_exit_marker_before_downloading(self):
+        for index, marker in enumerate((None, '', '0', '0 2026-11-01T10:')):
+            with self.subTest(marker=marker):
+                run_id = f'delayed_marker_{index}'
+                st.configure_signet(run_id)
+                self.remote_dir = self.hpc / 'ws/work' / run_id
+                steps.submit(run_id, 'expression', self.inputs)
+                self.finish_job()
+                path = self.remote_dir / 'steps/expression.done'
+                if marker is None:
+                    path.unlink()
+                else:
+                    path.write_text(marker)
+                record = steps.status(run_id, 'expression', refresh=True)
+                self.assertEqual(record['state'], 'validating')
+                self.assertNotIn('finished_at', record)
+                self.assertFalse((self.project / 'runs' / run_id / 'work/res/rest/signet_gexp').exists())
+                self.assertEqual(self.code_of(steps.submit, run_id, 'expression', self.inputs), 'conflict')
+                path.write_text('0 2026-11-01T10:00:00\n')
+                record = steps.status(run_id, 'expression', refresh=True)
+                self.assertEqual(record['state'], 'completed')
+                self.assertEqual((self.project / 'runs' / run_id / 'work/res/rest/signet_gexp').read_text(), 'data\n')
+
+    def test_refresh_recovers_a_legacy_missing_marker_failure_without_resubmitting(self):
+        record = steps.submit('step_test', 'expression', self.inputs)
+        self.finish_job()
+        marker = self.remote_dir / 'steps/expression.done'
+        marker.unlink()
+        record.update(state='failed', slurm_state='COMPLETED', exit_code=None,
+                      reason='The job did not finish its last line.', finished_at='2026-11-01T10:00:01')
+        (self.root / 'steps/expression.json').write_text(json.dumps(record))
+        calls = len(self.calls)
+        self.assertEqual(steps.status('step_test', 'expression')['state'], 'failed')
+        self.assertEqual(len(self.calls), calls)
+        record = steps.status('step_test', 'expression', refresh=True)
+        self.assertEqual(record['state'], 'validating')
+        self.assertNotIn('finished_at', record)
+        marker.write_text('0 2026-11-01T10:00:00\n')
+        record = steps.status('step_test', 'expression', refresh=True)
+        self.assertEqual((record['state'], record['job_id']), ('completed', '12345'))
+        self.assertEqual((self.root / 'work/res/rest/signet_gexp').read_text(), 'data\n')
+        self.assertEqual(sum('sbatch --parsable' in call for call in self.calls), 1)
+
+    def test_refresh_does_not_reopen_confirmed_failures(self):
+        for index, job in enumerate(({'exit_code': '1'}, {'outputs': OUTPUTS[:2]},
+                                     {'err': 'Error in fread(x): failed\n'})):
+            with self.subTest(job=job):
+                run_id = f'confirmed_failure_{index}'
+                st.configure_signet(run_id)
+                self.remote_dir = self.hpc / 'ws/work' / run_id
+                steps.submit(run_id, 'expression', self.inputs)
+                self.finish_job(**job)
+                failed = steps.status(run_id, 'expression', refresh=True)
+                self.assertEqual(failed['state'], 'failed')
+                self.finish_job()  # A changed remote folder must not erase a confirmed failure.
+                calls = len(self.calls)
+                self.assertEqual(steps.status(run_id, 'expression', refresh=True), failed)
+                self.assertEqual(len(self.calls), calls)
+
     def test_slurm_failure_and_cancellation_states(self):
         steps.submit('step_test', 'expression', self.inputs)
         self.slurm(squeue='', sacct='OUT_OF_MEMORY')

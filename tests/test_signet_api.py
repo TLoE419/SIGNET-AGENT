@@ -149,6 +149,20 @@ class SignetApiTest(unittest.TestCase):
         status, value = self.call('GET', path + '?refresh=1')
         self.assertEqual((status, value['state']), (200, 'completed'))
 
+    def test_refresh_recovers_a_saved_missing_marker_failure_and_downloads_results(self):
+        status, record = self.submit()
+        self.assertEqual(status, 202)
+        self.finish_job()
+        record.update(state='failed', slurm_state='COMPLETED', exit_code=None,
+                      reason='The job did not finish its last line.', finished_at='2026-11-01T10:00:01')
+        (self.root / 'steps/expression.json').write_text(json.dumps(record))
+        path = '/signet/runs/step_test/steps/expression'
+        self.assertEqual(self.call('GET', path)[1]['state'], 'failed')
+        status, value = self.call('GET', path + '?refresh=1')
+        self.assertEqual((status, value['state'], value['job_id']), (200, 'completed', '12345'))
+        self.assertEqual((self.root / 'work/res/rest/signet_gexp').read_text(), 'data\n')
+        self.assertEqual(sum('sbatch --parsable' in call for call in self.calls), 1)
+
     def test_unexpected_error_still_gets_a_json_reply(self):
         (self.project / 'runs/broken').mkdir()
         (self.project / 'runs/broken/manifest.json').write_text('{not json')
