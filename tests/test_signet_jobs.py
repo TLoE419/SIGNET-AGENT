@@ -304,6 +304,16 @@ class StepsTest(unittest.TestCase):
         self.assertEqual((self.root / 'work' / OUTPUTS[0]).read_text(), 'data\n')
         self.assertEqual(sum('sbatch --parsable' in call for call in self.calls), 1)
 
+    def test_missing_output_recovery_does_not_require_accounting_to_have_arrived(self):
+        steps.submit('step_test', 'expression', self.inputs)
+        self.finish_job(outputs=())
+        self.slurm(sacct='')
+        failed = steps.status('step_test', 'expression', refresh=True)
+        self.assertEqual((failed['state'], failed['exit_code'], failed['slurm_state']), ('failed', '0', None))
+        self.finish_job()
+        record = steps.status('step_test', 'expression', refresh=True)
+        self.assertEqual((record['state'], record['job_id']), ('completed', '12345'))
+
     def test_retry_does_not_overwrite_existing_remote_archive(self):
         self.failed_expression()
         archive = self.remote_dir / 'steps/expression.attempt1.sbatch'

@@ -922,9 +922,9 @@ def status(run_id, name, refresh=False):
     root = _root(run_id)
     record = _load(root, name)
     # Only reopen unconfirmed artifacts, never an observed nonzero exit or log error.
-    retry_marker = (refresh and record['state'] == 'failed' and record.get('slurm_state') == 'COMPLETED'
+    retry_marker = (refresh and record['state'] == 'failed'
                     and not record.get('failure_hints')
-                    and ((record.get('exit_code') is None
+                    and ((record.get('slurm_state') == 'COMPLETED' and record.get('exit_code') is None
                           and record.get('reason') == 'The job did not finish its last line.')
                          or (record.get('exit_code') == '0' and record.get('reason') == 'Required outputs are missing.')))
     if record['state'] in TERMINAL and not retry_marker:
