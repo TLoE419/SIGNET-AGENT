@@ -96,7 +96,9 @@ def bundle(root, settings, remote_root, input_keys=INPUT_KEYS, network=False):
     config = (work / 'config.ini').read_text()
     runtime = desktop_environment()
     if runtime:
-        config = re.sub(r'^queue\s*=.*$', 'queue=' + runtime['partition'], config, flags=re.MULTILINE)
+        # SIGNET reads settings with sed '/^key[ ]*= /' (config_controller.sh get_param): the space
+        # after "=" is required, or `signet -s --queue` answers "Please check the file name".
+        config = re.sub(r'^queue\s*=.*$', 'queue = ' + runtime['partition'], config, flags=re.MULTILINE)
     replacements = {str(work): remote_root + '/work'}
     for index, key in enumerate(input_keys):
         replacements[settings[key]] = f'{remote_root}/inputs/{index}'

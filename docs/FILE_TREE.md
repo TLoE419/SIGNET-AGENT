@@ -16,7 +16,8 @@ SIGNET-agent/
 ├── agent/                        # All Python code, one package
 │   ├── paths.py                  # The single definition of the project root (data/, runs/, .env, assets/)
 │   ├── app/
-│   │   └── chat_ui.py            # Loopback API, conversation storage, and workspace API
+│   │   ├── chat_ui.py            # Loopback API, conversation storage, and workspace API
+│   │   └── signet_api.py         # /signet/* routes: runs, settings (-s), and HPC3 step jobs; no business logic
 │   ├── core/
 │   │   ├── conversation.py       # Conversation flow, public progress, controlled tool calls; terminal chat entry point
 │   │   ├── context_budget.py     # Input length and compression of repeated tool evidence
@@ -38,6 +39,7 @@ SIGNET-agent/
 │   │   ├── ssh_transport.py      # Private Electron broker client for SSH command transport
 │   │   ├── network.py            # Network inference submission, queries, cancellation, and result checks
 │   │   ├── network_worker.py     # Uploaded on its own; supervises owned jobs on the remote host
+│   │   ├── signet_jobs.py        # One SIGNET step (signet -t, -g, -a, -c, -n) as a Slurm job: prerequisites, submit, status, cancel, logs, output checks
 │   │   └── visualization.py      # Stage 6 plotting and input/output checks
 │   └── stage6/
 │       └── workspace.py          # Parameter proposals, human confirmation, history, and comparison
@@ -50,6 +52,7 @@ SIGNET-agent/
 │   ├── INSTALL.md                # First installation, model sign-in, and interface startup
 │   ├── SCIENTIFIC_SETUP.md       # Scientific software, VM, data, and six-stage readiness guide
 │   ├── ADVANCED.md               # Official source, user-supplied data, and advanced scientific environment
+│   ├── SIGNET_STEP_API.md        # /signet/* HTTP API: runs, settings, SIGNET steps as HPC3 Slurm jobs, retries, states
 │   ├── THIRD_PARTY.md            # Third-party sources and pending licensing decision
 │   ├── FILE_TREE.md              # This file tree and per-file responsibilities
 │   └── DEMO.md                   # No-data demonstration and operations with user-supplied results
@@ -109,6 +112,8 @@ SIGNET-agent/
     ├── test_network_runtime.py # Scheduling, cancellation, and the actual verifier
     ├── test_portability.py     # Portable paths, source installation, and configuration protection
     ├── test_read_file.py       # Text-reading boundaries and pagination
+    ├── test_signet_api.py      # /signet/* token, Origin and Host checks, status codes and JSON shapes
+    ├── test_signet_jobs.py     # SIGNET step jobs against a fake HPC3 folder and fake Slurm commands
     ├── test_signet_runtime.py  # VM packaging, collection, and unknown status
     ├── test_ssh_transport.py   # Electron broker protocol and runtime transport selection
     ├── test_signet_tools.py    # Source, tools, and execution restrictions
