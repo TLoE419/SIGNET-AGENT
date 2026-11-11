@@ -5,7 +5,7 @@ import {randomUUID} from 'node:crypto';
 import type {SshConnectionService} from '../ssh/SshConnectionService';
 import type {EnvironmentConfig,EnvironmentSnapshot,EnvironmentPhase} from '../../shared/environment/types';
 import {validRuntimeModule} from './runtimeModules';
-import {probe,sourceCheck,installSource,verify,validRemotePath,type Inventory} from './scripts';
+import {probe,sourceCheck,exampleCheck,installSource,installExample,verify,validRemotePath,type Inventory} from './scripts';
 
 export class EnvironmentService extends EventEmitter {
  private snapshot:EnvironmentSnapshot={phase:'disconnected',message:'Connect SSH to prepare the remote environment.'};
@@ -62,8 +62,9 @@ export class EnvironmentService extends EventEmitter {
   if(!/^[A-Za-z0-9_-]{1,80}$/.test(config.partition||''))missing.push('Slurm partition (select one)');
   if(values.writable!=='yes')missing.push('Writable installation root');
   if(missing.length){this.set('blocked',`Missing prerequisites: ${missing.join(', ')}.`,{config,missing});return}
-  if(values.source==='exists')await this.command(`set -e\n${sourceCheck(config,this.inventory)}`,token,'source-integrity');
-  const absent=[...(values.source==='missing'?['SIGNET source']:[]),...(values.image==='missing'?['SIGNET container']:[])];
+  const exampleMissing=values.source==='exists'&&values.example!=='exists'&&!!this.inventory.example_files?.length;
+  if(values.source==='exists')await this.command(`set -e\n${sourceCheck(config,this.inventory)}\n${exampleMissing?'':exampleCheck(config,this.inventory)}`,token,'source-integrity');
+  const absent=[...(values.source==='missing'?['SIGNET source']:[]),...(exampleMissing?['SIGNET example data']:[]),...(values.image==='missing'?['SIGNET container']:[])];
   if(absent.length){this.set('needs-install',`Installation required: ${absent.join(', ')}.`,{config,missing:absent});return}
   this.set('verifying','Validating SIGNET and container tools; checking the Slurm partition.',{config,missing:[]});
   await this.command(verify(config),token,'runtime-verification',120000);
@@ -75,10 +76,12 @@ export class EnvironmentService extends EventEmitter {
  install(){
   if(this.running)return Promise.reject(Error('An environment operation is already running.'));
   if(this.snapshot.phase!=='needs-install'||!this.snapshot.config)return Promise.reject(Error('Check the remote environment before installing.'));
-  if(!this.snapshot.missing?.includes('SIGNET source'))return Promise.reject(Error('SIGNET source is already installed. Download the container from the Workflow panel.'));
+  const source=this.snapshot.missing?.includes('SIGNET source'),example=this.snapshot.missing?.includes('SIGNET example data');
+  if(!source&&!example)return Promise.reject(Error('SIGNET source is already installed. Download the container from the Workflow panel.'));
   const c=structuredClone(this.snapshot.config);
   return this.run(async token=>{
-   this.set('installing-source','Downloading and verifying the pinned SIGNET source.');await this.command(installSource(c,this.inventory),token,'install-source',600000);
+   if(source){this.set('installing-source','Downloading and verifying the pinned SIGNET source and example data.');await this.command(installSource(c,this.inventory),token,'install-source',600000)}
+   else{this.set('installing-source','Downloading and verifying the SIGNET example data.');await this.command(installExample(c,this.inventory),token,'install-example',600000)}
    await this.inspect(c.root,c.partition,token);
   });
  }

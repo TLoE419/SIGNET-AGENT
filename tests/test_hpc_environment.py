@@ -24,7 +24,7 @@ def markers(**values):
 
 READY = dict(user='tester', host='login-i15', workspace_path='/pub/tester/signet-agent', workspace='yes',
              workspace_writable='yes', sbatch='yes', apptainer='apptainer version 1.4.5', signet='yes',
-             signet_revision=REVISION, signet_integrity='verified', file_container='3221225472', file_ref='1048576',
+             signet_revision=REVISION, signet_integrity='verified', signet_example='verified', file_container='3221225472', file_ref='1048576',
              file_gmap='2048', file_gtf='1500000000', file_clinical='512', file_prepare='4096')
 
 
@@ -84,6 +84,16 @@ class CheckTest(unittest.TestCase):
         self.assertEqual(result['status'], 'ok')
         self.assertEqual(result['not_ready'], ['container'])
         self.assertIn('images/signet-0.0.6.sif', self.item(result, 'container')['detail'])
+
+    def test_missing_or_modified_example_data_is_reported_on_the_source_row(self):
+        result, remote = self.check(markers(**{**READY, 'signet_example': 'missing'}))
+        source = self.item(result, 'signet_source')
+        self.assertEqual(source['status'], 'missing')
+        self.assertIn('example data', source['detail'])
+        self.assertIn('SIGNET_EXAMPLE_HASHES', remote.call_args.kwargs['input'].decode())
+        self.assertIn('example/geno/example.ped', remote.call_args.kwargs['input'].decode())
+        result, _ = self.check(markers(**{**READY, 'signet_example': 'mismatch'}))
+        self.assertEqual(self.item(result, 'signet_source')['status'], 'problem')
 
     def test_ready_environment_reports_every_item_ok_and_read_only(self):
         result, remote = self.check('Welcome banner\n' + markers(**READY))

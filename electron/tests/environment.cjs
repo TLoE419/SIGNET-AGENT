@@ -28,7 +28,7 @@ async function until(check){for(let i=0;i<200;i++){if(await check())return;await
     if(info.command!=='bash -s'){stream.write('host=login-mock\nuser=testuser\nslurm=yes\n');stream.exit(0);stream.end();return}
     let script='';stream.on('data',chunk=>{script+=chunk.toString()});stream.on('end',()=>{
      commands.push(script);let out='',err='',code=0;
-     if(script.includes("printf 'home="))out=`home=/home/testuser\nroot=/home/testuser/mock-signet\n${['bash','git','tar','sha256sum','timeout','python3','setsid','sbatch','scontrol','sinfo','squeue'].map(t=>t+'=yes').join('\n')}\nexecutor=/usr/bin/apptainer\npartition=mock\nwritable=yes\nsource=${source?'exists':'missing'}\nimage=${image?'exists':'missing'}\n`;
+     if(script.includes("printf 'home="))out=`home=/home/testuser\nroot=/home/testuser/mock-signet\n${['bash','git','tar','sha256sum','timeout','python3','setsid','sbatch','scontrol','sinfo','squeue'].map(t=>t+'=yes').join('\n')}\nexecutor=/usr/bin/apptainer\npartition=mock\nwritable=yes\nsource=${source?'exists':'missing'}\nexample=${source?'exists':'missing'}\nimage=${image?'exists':'missing'}\n`;
      else if(script.includes('git -C'))source=true;
      else if(script.includes('Rscript -e')&&failVerification){err='MOCK: SIGNET settings verification failed: config.ini unreadable\n';code=1}
      setTimeout(()=>{if(out)stream.write(out);if(err)stream.stderr.write(err);stream.exit(code);stream.end()},80);

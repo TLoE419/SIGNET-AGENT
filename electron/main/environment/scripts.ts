@@ -1,9 +1,12 @@
 import type {EnvironmentConfig} from '../../shared/environment/types';
 import {runtimeModuleShell,modulePrelude} from './runtimeModules';
-export interface Inventory {repository:string;revision:string;scripts:{path:string;sha256:string}[];support_files:{path:string;sha256:string}[]}
+export interface Inventory {repository:string;revision:string;scripts:{path:string;sha256:string}[];support_files:{path:string;sha256:string}[];example_files?:{path:string;sha256:string}[]}
 export const quote=(s:string)=>"'"+s.replace(/'/g,"'\\''")+"'";
 export function validRemotePath(s:string){return s.length<=2048&&/^\/[A-Za-z0-9_./-]+$/.test(s)&&!s.split('/').includes('..')&&s!=='/'}
 export function checksums(i:Inventory){return [...i.scripts,...i.support_files].map(x=>`${x.sha256}  ${x.path}`).join('\n')+'\n'}
+const exampleSums=(i:Inventory)=>(i.example_files||[]).map(x=>`${x.sha256}  ${x.path}`).join('\n')+'\n';
+/** The official example data, verified separately so an installation from before it was added can gain it. */
+export function exampleCheck(c:EnvironmentConfig,i:Inventory){return i.example_files?.length?`(cd ${quote(c.source)} && sha256sum --check --status <<'SIGNET_EXAMPLE_HASHES'\n${exampleSums(i)}SIGNET_EXAMPLE_HASHES\n)`:'true'}
 export function sourceCheck(c:EnvironmentConfig,i:Inventory){return `(cd ${quote(c.source)} && sha256sum --check --status <<'SIGNET_HASHES'\n${checksums(i)}SIGNET_HASHES\n)`}
 export function probe(root:string,partition:string,revision:string){return `set -eu
 printf 'home=%s\\n' "$HOME"
@@ -21,13 +24,14 @@ partition=${quote(partition)}
 if [ -z "$partition" ] && command -v sinfo >/dev/null 2>&1; then partition=$(sinfo -h -o '%P' 2>/dev/null | sed -n 's/\\*$//p' | head -1); fi
 printf 'partition=%s\\n' "$partition"
 if [ -e "$root/software/${revision}" ]; then printf 'source=exists\\n'; else printf 'source=missing\\n'; fi
+if [ -e "$root/software/${revision}/example" ]; then printf 'example=exists\\n'; else printf 'example=missing\\n'; fi
 if [ -s "$root/images/signet-0.0.6.sif" ]; then printf 'image=exists\\n'; else printf 'image=missing\\n'; fi
 # Probe permission without creating directories during automatic checks.
 parent="$root"; while [ ! -e "$parent" ]; do parent=$(dirname "$parent"); done
 if [ -d "$parent" ] && [ -w "$parent" ]; then printf 'writable=yes\\n'; else printf 'writable=no\\n'; fi
 `}
 export function installSource(c:EnvironmentConfig,i:Inventory){
- const files=[...i.scripts,...i.support_files].map(x=>x.path).concat(['LICENSE.txt','LICENSE_THIRD_PARTY.md']);
+ const files=[...i.scripts,...i.support_files,...(i.example_files||[])].map(x=>x.path).concat(['LICENSE.txt','LICENSE_THIRD_PARTY.md']);
  return `set -euo pipefail
 umask 077
 mkdir -p ${quote(c.root+'/software')}
@@ -39,11 +43,33 @@ git -C "$stage/repository" init -q
 git -C "$stage/repository" fetch -q --depth=1 ${quote(i.repository)} ${quote(i.revision)}
 git -C "$stage/repository" archive ${quote(i.revision)} -- ${files.map(quote).join(' ')} | tar -xf - -C "$stage/source"
 (cd "$stage/source" && sha256sum --check --status <<'SIGNET_HASHES'
-${checksums(i)}SIGNET_HASHES
+${checksums(i)}${exampleSums(i)}SIGNET_HASHES
 )
 # -T refuses replacement if a directory appeared while downloading.
 mv -T -n "$stage/source" ${quote(c.source)}
 ${sourceCheck(c,i)}
+${exampleCheck(c,i)}
+`;
+}
+/** Adds the example folder to an existing installation; nothing already there is replaced. */
+export function installExample(c:EnvironmentConfig,i:Inventory){
+ const files=(i.example_files||[]).map(x=>x.path);
+ return `set -euo pipefail
+umask 077
+[ -d ${quote(c.source)} ] || { echo 'SIGNET source is not installed.' >&2; exit 1; }
+[ ! -e ${quote(c.source+'/example')} ] || { echo 'An example folder already exists but does not match the pinned data. Move it aside, then install again.' >&2; exit 1; }
+stage=$(mktemp -d ${quote(c.root+'/software/.example-XXXXXX')})
+trap 'rm -rf -- "$stage"' EXIT
+mkdir "$stage/repository" "$stage/source"
+git -C "$stage/repository" init -q
+git -C "$stage/repository" fetch -q --depth=1 ${quote(i.repository)} ${quote(i.revision)}
+git -C "$stage/repository" archive ${quote(i.revision)} -- ${files.map(quote).join(' ')} | tar -xf - -C "$stage/source"
+(cd "$stage/source" && sha256sum --check --status <<'SIGNET_EXAMPLE_HASHES'
+${exampleSums(i)}SIGNET_EXAMPLE_HASHES
+)
+# The stage is on the same filesystem, so this is a rename; -T refuses a folder that appeared meanwhile.
+mv -T -n "$stage/source/example" ${quote(c.source+'/example')}
+${exampleCheck(c,i)}
 `;
 }
 export function verify(c:EnvironmentConfig){

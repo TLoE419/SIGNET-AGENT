@@ -1492,5 +1492,80 @@
       "path": "script/network/template.sub.ori",
       "sha256": "ec4258e04a15b8e1ee057956266918818112279c17641116be011bd5dc733884"
     }
+  ],
+  "example_note": "Official example data at the pinned revision. Installed on HPC3 with the source and verified by hash; kept apart from support_files so it is never uploaded with each run.",
+  "example_files": [
+    {
+      "path": "example/README_data.md",
+      "sha256": "ce88a1b5fa73e77443a61bcc10a43d43f59a04b31be0b22343a3c6e957ff1c9e"
+    },
+    {
+      "path": "example/ciseqtl/signet_gene_pos",
+      "sha256": "abc46036e955d17f1f774c0a5f3c56a5f04f2d813879da714d51aca88600fb42"
+    },
+    {
+      "path": "example/ciseqtl/signet_geno.data",
+      "sha256": "6d2e5a5d00f24074f1dddebdc402f054403cf00147533f232726485d249e9303"
+    },
+    {
+      "path": "example/ciseqtl/signet_gexp.data",
+      "sha256": "bc23607651e991281309ac959f05c6dd65e7c9563a912be6f9b6530cf173910e"
+    },
+    {
+      "path": "example/ciseqtl/signet_gexp_rmpc.data",
+      "sha256": "9513bdb8a5455ddc892a3fe331df7c59658feda38a35c7f56e2bf5f8a929f3de"
+    },
+    {
+      "path": "example/ciseqtl/signet_new.Geno.maf",
+      "sha256": "6546f185f28ed46bec9cd5adc8f3e12d0df4af3be1af81df40a677d967d8bf43"
+    },
+    {
+      "path": "example/ciseqtl/signet_new.Geno.map",
+      "sha256": "82edb35933c30471556f4a7f1781ab06c6fdf8fc5c42fe2e2fdb4bfb471b50c8"
+    },
+    {
+      "path": "example/geno/example.map",
+      "sha256": "605d61147372298293c902561d5f8d0ffcb157af78959826217d553fc93ed84a"
+    },
+    {
+      "path": "example/geno/example.ped",
+      "sha256": "23da61aa5c23bf36b2409d9a87d849160875ab70bc5b15ba9177ea53e3613d11"
+    },
+    {
+      "path": "example/gexp/example_gexp",
+      "sha256": "5a6585abea92859a92e9f1692db5464954bdc09f7dc8f6981fcf63d0ca7f7d81"
+    },
+    {
+      "path": "example/netvis/signet_Afreq",
+      "sha256": "d38bbcf94c5b4e722eabaaaa3d6b627a94ef05dac0f4f2e8fc43a9c946457193"
+    },
+    {
+      "path": "example/netvis/signet_CoeffMat0",
+      "sha256": "354f56d2d1d19029474e77306d04ebb167a2d0705d6ee378fa911a99bb7b02f9"
+    },
+    {
+      "path": "example/netvis/signet_net.genepos",
+      "sha256": "8f4ffd71673f512b5451cc13f9b041e166be4b33d6278d9deead4cfe227843b8"
+    },
+    {
+      "path": "example/network/signet_all.eQTL.data",
+      "sha256": "3cf575b9a9aa49a03145c1531c4e17461da14ae6165813ce009599fde25e78d5"
+    },
+    {
+      "path": "example/network/signet_all.sig.pValue_0.05",
+      "sha256": "74b9644373f0fb1fa03aabae0f3db58e5f058b2cc2db1e499e2d815722f1568b"
+    },
+    {
+      "path": "example/network/signet_net.genename",
+      "sha256": "05c8a0aa8e8e8c6287de61a2eac2fc39cf5b761ce58773f2fcbb8197d8cc9674"
+    },
+    {
+      "path": "example/network/signet_net.genepos",
+      "sha256": "900d1003d137f340bbfe7c7f15f309cac6a840d5f4adeb76afbd3a27913e09cf"
+    },
+    {
+      "path": "example/network/signet_net.gexp.data",
+      "sha256": "302d41dd408a478c03569249a85b3fb3b21a730bd49664f014054170ffccb65e"
+    }
   ]
 }

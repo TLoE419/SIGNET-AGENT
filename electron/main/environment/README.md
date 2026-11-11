@@ -8,7 +8,9 @@ independent: missing Slurm or software blocks environment readiness, not SSH log
 
 The user chooses a writable root accessible to compute jobs and a Slurm partition.
 Missing components are offered in the Workflow panel, each with its own confirmation.
-Source installation fetches the inventory commit and archives only
+The source installation also extracts the official `example/` data listed under
+`example_files` in the inventory, verified by hash; an installation made before
+that is offered the example data alone, without replacing anything. Source installation fetches the inventory commit and archives only
 its audited scripts/support files plus licenses, verifying SHA-256 hashes. The
 container is downloaded by a Slurm job (`agent/runtime/hpc.py`), not on the login node,
 and is published only after its size and checksum match, without replacing an existing
