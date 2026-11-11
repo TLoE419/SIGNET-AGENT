@@ -128,8 +128,6 @@ class Step:
     # Logs (relative to work/) in which SIGNET records the Slurm jobs it submitted; those jobs
     # are cancelled with the step, but only if they run inside this run's folder.
     children: tuple = ()
-    # Folders (relative to work/) where SIGNET's ParaFly batches run, to report progress.
-    stages: tuple = ()
 
 
 STEPS = {
@@ -227,7 +225,6 @@ STEPS = {
                   'ncores': 'cores', 'memory': 'gigabytes', 'walltime': 'hms'},
         host=True, child_memory='memory',
         children=('tmp/tmpn/stage1/submit1_log', 'tmp/tmpn/stage2/submit2_log'),
-        stages=('tmp/tmpn/stage1', 'tmp/tmpn/stage2'),
         # script/network/network.sh: summarize.r writes <resn>_Afreq; the last lines copy
         # CoeffMat0 and net.genepos next to it (resn = res/resn/signet).
         required=('res/resn/signet_Afreq', 'res/resn/signet_CoeffMat0', 'res/resn/signet_net.genepos'),
@@ -259,6 +256,17 @@ STEPS = {
 
 
 ANALYSIS_STEPS = ('genotype', 'expression', 'adjust', 'cis', 'network', 'visualize')
+
+# Each manifest is paired with the completion file(s) written by ParaFly.
+COMMAND_PROGRESS = {
+    'genotype': (('imputation', 'tmp/tmpg/impute_params.txt', 'impute_params.txt.completed'),),
+    'adjust': (('variant_filter', 'tmp/tmpg/qsub.sh', 'qsub.sh.completed'),),
+    'cis': (('low_frequency', 'tmp/tmpc/low.qsub.sh', 'low.qsub.sh.completed'),
+            ('rare_variants', 'tmp/tmpc/rare.qsub.sh', 'rare.qsub.sh.completed')),
+    'network': (('stage1', 'tmp/tmpn/stage1/params.txt', 'params[0-9]*.txt.completed'),
+                ('stage2', 'tmp/tmpn/stage2/params.txt', 'params[0-9]*.txt.completed')),
+}
+
 
 def catalog():
     """Describe every step so a form can be built without hard-coding: inputs, settings, resources, outputs."""
@@ -436,8 +444,16 @@ def analysis_view(root, cohort, records, *, include_attempts=True):
             stage = {'step': name, 'flag': flag, 'phase': phase}
             if include_attempts:
                 stage['attempts'] = attempts
-            elif record and record.get('progress'):
-                stage['progress'] = record['progress']
+            elif record:
+                progress = dict(record.get('progress', {}))
+                if phase == 'completed' and name == 'expression':
+                    progress['expression_outputs'] = '2 2'
+                if phase == 'completed' and name == 'visualize':
+                    count = record.get('settings', {}).get('ntop')
+                    if count:
+                        progress['subnetworks'] = f'{count} {count}'
+                if progress:
+                    stage['progress'] = progress
             stages.append(stage)
     return {'session': analysis_session(root), 'steps': stages,
             'completed_steps': sum(step['phase'] == 'completed' for step in stages),
@@ -728,10 +744,16 @@ export SINGULARITY_BIND={q(bind)} APPTAINER_BIND={q(bind)}
         env = f"--env {q(','.join(f'{k}={v}' for k, v in step.env.items()))} " if step.env else ''
         run = (f"{q(config['executor'])} exec --cleanenv --no-home {env}--bind {q(bind)} {q(config['image'])} "
                f"bash ./signet {step.flag} {stdin}")
+    if name == 'expression':
+        # Write each marker only after the corresponding audited R script ends.
+        run = """printf '\nfile.create(file.path(Sys.getenv("SIGNET_TMP_ROOT"), "tmpt", ".signet-normalized"))\n' >> script/gexp_prep/gexp_prep.R
+printf '\nfile.create(file.path(Sys.getenv("SIGNET_TMP_ROOT"), "tmpt", ".signet-annotated"))\n' >> script/gexp_prep/gpos.R
+""" + run
     if name == 'visualize':
         # Change only the uploaded script. Use R's own frequency formatting for
         # upstream filenames, and publish the graph CSV only after exports exist.
-        run = """sed -i '1i Sys.setenv(freq=trimws(Sys.getenv("freq")))' script/netvis/netshiny.R
+        run = r"""sed -i '1i Sys.setenv(freq=trimws(Sys.getenv("freq")))' script/netvis/netshiny.R
+sed -i '/^[[:space:]]*dev.off()$/a\   file.create(file.path(Sys.getenv("SIGNET_TMP_ROOT"), "tmpv", paste0(".signet-network-", i)))' script/netvis/circular.R
 cat >> script/netvis/netshiny.R <<'SIGNET_EXPORT_CHECK'
 frequency <- as.numeric(Sys.getenv("freq"))
 prefix <- Sys.getenv("resv")
@@ -993,6 +1015,58 @@ def _children_script(step):
         'done\n' for log in step.children)
 
 
+def _progress_script(record):
+    """Count only current-attempt evidence from the official scripts."""
+    name = record['step']
+    commands = []
+    for label, manifest, completed in COMMAND_PROGRESS.get(name, ()):
+        directory, basename = manifest.rsplit('/', 1)
+        commands.append(f'count_commands {label} "$D/work/"{shlex.quote(directory)} '
+                        f'{shlex.quote(basename)} {shlex.quote(completed)}')
+    if name == 'expression':
+        commands.append('count_markers expression_outputs 2 "$D/work/tmp/tmpt/" .signet-normalized .signet-annotated')
+    if name == 'visualize':
+        count = record.get('settings', {}).get('ntop')
+        if isinstance(count, str) and re.fullmatch(r'(?:[1-9]|1[0-9]|20)', count):
+            names = ' '.join(f'.signet-network-{index}' for index in range(1, int(count) + 1))
+            commands.append(f'count_markers subnetworks {count} "$D/work/tmp/tmpv/" {names}')
+    if not commands:
+        return ''
+    # Retry counters can remain in temporary folders until the new job starts.
+    # Compare to the script written immediately before this attempt was submitted.
+    freshness = f' && [ "$1" -nt "$D/steps/{name}.sbatch" ]' if record.get('attempt', 1) > 1 else ''
+    return f'''
+fresh_progress_file() {{ [ -f "$1" ]{freshness}; }}
+count_commands() {{
+  local key="$1" directory="$2" manifest="$2/$3" pattern="$4" file counts
+  fresh_progress_file "$manifest" || return 0
+  set -- "$manifest"
+  for file in "$directory"/$pattern; do
+    if fresh_progress_file "$file"; then set -- "$@" "$file"; fi
+  done
+  counts="$(awk 'FILENAME == ARGV[1] {{ if (NF) {{ remaining[$0]++; total++ }}; next }}
+    NF && remaining[$0] > 0 {{ remaining[$0]--; done++ }}
+    END {{ if (total) printf "%d %d", done, total }}' "$@")" || return 0
+  if [ -n "$counts" ]; then say "progress_$key" "$counts"; fi
+}}
+count_markers() {{
+  local key="$1" total="$2" directory="$3" file done=0
+  shift 3
+  for file in "$@"; do
+    if fresh_progress_file "$directory$file"; then done=$((done + 1)); fi
+  done
+  if [ "$done" -gt 0 ] || [ "$account_state" != COMPLETED ]; then
+    say "progress_$key" "$done $total"
+  fi
+}}
+case "$queue_state:$account_state" in
+  RUNNING:*|COMPLETING:*|:RUNNING*|:COMPLETING*|:COMPLETED*)
+    {chr(10).join(commands)}
+    ;;
+esac
+'''
+
+
 def _status_script(record, step):
     q = shlex.quote
     directory, name = record['remote_dir'], record['step']
@@ -1001,11 +1075,7 @@ def _status_script(record, step):
     outputs = ''.join(f'[ -s {q(directory + "/work/" + path)} ] && say output_{i} yes\n'
                       for i, path in enumerate(_required(step, record)))
     pattern = '|'.join(re.escape(p) for p in FAILURE_PATTERNS + step.failures)
-    # SIGNET's ParaFly batches: params.txt lists every command, params<N>.txt.completed the finished ones.
-    progress = ''.join(
-        f'if [ -s "$D/work/"{q(stage)}/params.txt ]; then say progress_{i} "$(cat "$D/work/"{q(stage)}/params[0-9]*.txt.completed '
-        f'2>/dev/null | wc -l | tr -d " ") $(wc -l < "$D/work/"{q(stage)}/params.txt | tr -d " ")"; fi\n'
-        for i, stage in enumerate(step.stages))
+    progress = _progress_script(record)
     # When the control job is gone, SIGNET's own jobs still queued for this run are orphans.
     orphans = (f'if [ -n "$j" ] && [ -z "$(squeue -h -j "$j" -o %T 2>/dev/null)" ]; then\n{_children_script(step)}fi\n'
                if step.children else '')
@@ -1017,8 +1087,10 @@ if [ -z "$j" ]; then j="$(squeue -h -u "$(id -un)" -n {q(job_name)} -o %i 2>/dev
 if [ -z "$j" ]; then j="$(sacct -n -X -P --name={q(job_name)} -S now-7days -o JobID 2>/dev/null | tail -n 1)"; fi
 say job "$j"
 if [ -n "$j" ]; then
-  say squeue "$(squeue -h -j "$j" -o %T 2>/dev/null)"
-  say sacct "$(sacct -n -X -P -j "$j" -o State 2>/dev/null | head -n 1)"
+  queue_state="$(squeue -h -j "$j" -o %T 2>/dev/null)"
+  account_state="$(sacct -n -X -P -j "$j" -o State 2>/dev/null | head -n 1)"
+  say squeue "$queue_state"
+  say sacct "$account_state"
 fi
 [ -f "$D/steps/{name}.done" ] && say done "$(head -n 1 "$D/steps/{name}.done")"
 {outputs}cat "$D/steps/{name}.out" "$D/steps/{name}.err" 2>/dev/null | grep -E -m 20 {q(pattern)} | while IFS= read -r l; do say line "$l"; done
@@ -1063,9 +1135,15 @@ def status(run_id, name, refresh=False):
     queued, accounted = values.get('squeue', ''), values.get('sacct', '').split(' ')[0]
     slurm = queued or accounted
     record['slurm_state'] = slurm or None
-    if step.stages:
-        record['progress'] = {f'stage{i + 1}': values[f'progress_{i}'] for i in range(len(step.stages))
-                              if f'progress_{i}' in values}   # "finished total" ParaFly commands
+    measured = {}
+    for key, value in values.items():
+        if not key.startswith('progress_') or not re.fullmatch(r'[0-9]+ [0-9]+', value):
+            continue
+        done, total = map(int, value.split())
+        if 0 <= done <= total and total > 0 and record.get('job_id'):
+            measured[key.removeprefix('progress_')] = value
+    if measured:
+        record.setdefault('progress', {}).update(measured)
     missing = [path for i, path in enumerate(_required(step, record)) if values.get(f'output_{i}') != 'yes']
     cancelling = record.get('cancel_requested_at')
     terminal = slurm == 'COMPLETED' or slurm.startswith('CANCELLED') or slurm in _SLURM_FAILED

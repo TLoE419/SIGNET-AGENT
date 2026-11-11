@@ -392,5 +392,30 @@ function setup(initial={}, analysisApi) {
   resultCard.querySelectorAll('button')[0].click();
   await new Promise(setImmediate);
   assert.equal(activatedLinks.at(-1),'/signet/result-download?ticket=example-ticket');
+  const metricSteps = [
+    {step:'genotype',phase:'running',progress:{imputation:'35 36'}},
+    {step:'expression',phase:'completed',progress:{expression_outputs:'2 2'}},
+    {step:'adjust',phase:'completed',progress:{variant_filter:'1 1'}},
+    {step:'cis',phase:'completed',progress:{low_frequency:'2 2',rare_variants:'1 1'}},
+    {step:'network',phase:'completed',progress:{stage1:'3 3',stage2:'3 3'}},
+    {step:'visualize',phase:'completed',progress:{subnetworks:'1 1'}}
+  ];
+  const measuredApp=setup({session},async path=>{
+    if(path.startsWith('/signet/progress?'))return json({analyses:[{
+      run_id:'measured',session,total_steps:6,completed_steps:5,next_step:'genotype',
+      proposal:null,steps:metricSteps
+    }]});
+    return json({state:'running'});
+  });
+  await new Promise(setImmediate);
+  const measuredCard=measuredApp.ids.get('messages').children.find(el=>el.className==='analysis-progress-card');
+  assert.match(measuredCard.children[0].textContent,/第 1 階段 · 基因型前處理/);
+  assert.match(measuredCard.children[0].textContent,/補值分段 · 已完成 35\/36/,'the collapsed card displays current segment progress');
+  const measuredRows=measuredCard.children[1].children;
+  for(const [index, text] of ['補值分段','表現前處理步驟','染色體變異篩選','低頻變異分段','建網第一組','子網路圖'].entries()){
+    assert.ok(measuredRows[index].textContent.includes(text), text);
+  }
+  assert.match(measuredRows[3].textContent,/罕見變異分段/);
+  assert.match(measuredRows[4].textContent,/建網第二組/);
   console.log('Chat progress visibility, status, history, errors and Stage 6 independence passed.');
 })().catch(error=>{console.error(error);process.exitCode=1;});

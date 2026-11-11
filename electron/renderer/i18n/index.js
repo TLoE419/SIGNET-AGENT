@@ -1,5 +1,13 @@
 'use strict';
 const uiEnglish = {
+  "補值分段": "Imputation segments",
+  "表現前處理步驟": "Expression preprocessing tasks",
+  "染色體變異篩選": "Chromosome variant filtering",
+  "低頻變異分段": "Low-frequency variant batches",
+  "罕見變異分段": "Rare variant batches",
+  "建網第一組": "Network batch 1",
+  "建網第二組": "Network batch 2",
+  "子網路圖": "Subnetwork plots",
   "第 2 階段 · 基因表現前處理": "Stage 2 · Expression preprocessing",
   "第 3 階段 · 樣本調整": "Stage 3 · Sample adjustment",
   "第 4 階段 · 尋找附近變異": "Stage 4 · Find nearby variants",
@@ -296,6 +304,7 @@ function translateUI(source, language = uiLanguage) {
     if (zh.length > 2) output = output.split(zh).join(en);
   }
   return output.replace(/工具結果：/g,'Tool result: ').replace(/缺少依賴：/g,'Missing dependencies: ')
+    .replace(/^第 (\d+) 階段 · /, 'Stage $1 · ')
     .replace(/原因：/g,'Reason: ').replace(/工具錯誤類別：/g,'Tool error type: ')
     .replace(/工具錯誤：/g,'Tool error: ').replace(/服務訊息：/g,'Service message: ').replace(/目前進度：/g,'Progress: ').replace(/判讀提示：/g,'Guidance: ').replace(/選擇原因：/g,'Selection reason: ')
     .replace(/資訊依據：/g,'Evidence: ').replace(/尚缺資訊：/g,'Missing information: ');

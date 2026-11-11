@@ -1018,6 +1018,57 @@ class StepsTest(unittest.TestCase):
         self.assertEqual(steps.update_settings('step_test', {'walltime': '12:00:00', 'cor': 0.3})['walltime'],
                          '12:00:00')
 
+    def test_reports_measured_progress_for_each_supported_stage(self):
+        cases = {
+            'genotype': ({'tmp/tmpg/impute_params.txt': 'a\nb\nc\n',
+                          'tmp/tmpg/impute_params.txt.completed': 'a\na\nnot in the manifest\n'},
+                         {'imputation': '1 3'}),
+            'expression': ({'tmp/tmpt/.signet-normalized': ''}, {'expression_outputs': '1 2'}),
+            'adjust': ({'tmp/tmpg/qsub.sh': 'x\ny\n',
+                        'tmp/tmpg/qsub.sh.completed': 'y\n'}, {'variant_filter': '1 2'}),
+            'cis': ({'tmp/tmpc/low.qsub.sh': 'low1\nlow2\n',
+                     'tmp/tmpc/low.qsub.sh.completed': 'low2\n',
+                     'tmp/tmpc/rare.qsub.sh': 'rare1\n'}, {'low_frequency': '1 2', 'rare_variants': '0 1'}),
+            'visualize': ({'tmp/tmpv/.signet-network-2': ''}, {'subnetworks': '1 2'}),
+        }
+        for name, (files, expected) in cases.items():
+            with self.subTest(step=name):
+                folder = self.remote_dir / name
+                for relative, content in files.items():
+                    path = folder / 'work' / relative
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text(content)
+                record = {'step': name, 'remote_dir': str(folder), 'run_id': 'step_test',
+                          'job_id': '12345', 'state': 'submitted', 'settings': {'ntop': '2'}}
+                steps._save(self.root, record)
+                self.slurm(squeue='PENDING')
+                self.assertNotIn('progress', steps.status('step_test', name, refresh=True))
+                self.slurm(squeue='RUNNING')
+                result = steps.status('step_test', name, refresh=True)
+                self.assertEqual(result.get('progress'), expected)
+
+    def test_retry_progress_rejects_previous_command_list(self):
+        directory = self.remote_dir
+        old = directory / 'work/tmp/tmpg/impute_params.txt'
+        old.parent.mkdir(parents=True)
+        old.write_text('a\nb\n')
+        complete = old.with_name(old.name + '.completed')
+        complete.write_text('a\n')
+        script = directory / 'steps/genotype.sbatch'
+        script.parent.mkdir()
+        script.touch()
+        os.utime(old, (100, 100))
+        os.utime(complete, (100, 100))
+        os.utime(script, (200, 200))
+        steps._save(self.root, {'step': 'genotype', 'remote_dir': str(directory), 'run_id': 'step_test',
+                                'job_id': '12345', 'state': 'submitted', 'attempt': 2})
+        self.slurm(squeue='RUNNING')
+        self.assertNotIn('progress', steps.status('step_test', 'genotype', refresh=True))
+        os.utime(old, (300, 300))
+        self.assertEqual(steps.status('step_test', 'genotype', refresh=True)['progress'], {'imputation': '0 2'})
+        os.utime(complete, (301, 301))
+        self.assertEqual(steps.status('step_test', 'genotype', refresh=True)['progress'], {'imputation': '1 2'})
+
     def test_network_reports_progress_and_completes(self):
         self.network_ready()
         steps.submit('step_test', 'network', {})

@@ -34,16 +34,21 @@
     return response.json();
   }
 
+  const metricLabels = {
+    imputation:'補值分段', expression_outputs:'表現前處理步驟', variant_filter:'染色體變異篩選',
+    low_frequency:'低頻變異分段', rare_variants:'罕見變異分段',
+    stage1:'建網第一組', stage2:'建網第二組', subnetworks:'子網路圖'
+  };
+
   function progressUnits(step) {
-    if (step.phase !== 'running') return '';
-    return Object.entries(step.progress || {}).flatMap(([batch, count]) => {
-      const index = /^stage([1-9]\d*)$/.exec(batch)?.[1];
+    return Object.entries(step.progress || {}).flatMap(([key, count]) => {
+      const label = metricLabels[key];
       const values = /^(\d+)\s+(\d+)$/.exec(count);
-      if (!index || !values) return [];
+      if (!label || !values) return [];
       const done = Number(values[1]), total = Number(values[2]);
       if (!Number.isSafeInteger(total) || !Number.isSafeInteger(done) || total <= 0 || done > total) return [];
-      return [`第 ${index} 組：${done}/${total}`];
-    }).join('\n');
+      return [label + ' · 已完成 ' + done + '/' + total];
+    });
   }
 
   function createCard(analysis) {
@@ -112,13 +117,16 @@
     card.bar.value = analysis.completed_steps;
     const focus = analysis.steps.find(item => active.has(item.phase))
       || analysis.steps.find(item => item.phase === 'failed' || item.phase === 'cancelled');
-    const text = focus ? labels[focus.step] + ' · ' + phases[focus.phase] : '';
+    const text = focus ? [
+      `第 ${analysis.steps.indexOf(focus) + 1} 階段 · ${labels[focus.step]} · ${phases[focus.phase]}`,
+      ...progressUnits(focus)
+    ].join(' | ') : '';
     if (card.current.dataset.i18n !== text) uiText(card.current, text);
     card.current.hidden = !text;
     for (const step of analysis.steps) {
       const {row, status, units} = card.stages.get(step.step);
       row.dataset.phase = step.phase;
-      const measured = progressUnits(step);
+      const measured = progressUnits(step).join('\n');
       const text = step.phase === 'running' && !measured ? '執行中 · 目前無分段進度'
         : phases[step.phase] || phases.unknown;
       if (status.dataset.i18n !== text) uiText(status, text);

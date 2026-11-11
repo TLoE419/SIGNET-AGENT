@@ -324,7 +324,7 @@ incomplete stage. Its current review is returned as `proposal`, with reviewed pa
 
 In a saved chat, **Track an existing analysis** links an unassigned run. The chat updates one
 progress card per run and checks active jobs separately via route 7. A lost connection leaves the
-last recorded phase visible. Running stages only show work-unit counts reported by the backend.
+last recorded phase visible. The card shows finished and total work units when the job has measurable records. Genotype counts imputation segments. Expression counts the two completed preprocessing operations. Adjustment counts chromosome filtering jobs. Cis mapping counts low-frequency and rare-variant batches. Network construction keeps the two ParaFly batch counts separate, and visualization counts completed subnetwork plots. These counts do not replace the six-stage completion bar.
 
 ### 5.12 Review and continue a linked analysis
 
@@ -485,7 +485,7 @@ Record fields (route 7 and route 4):
 | `missing_outputs`, `failure_hints`, `reason` | Why it failed, or the validation note on success |
 | `outputs` | Files downloaded into the local run |
 | `required_outputs` | Present when output names depend on settings (`cis`): the exact files this attempt must produce |
-| `progress` | `network` only: finished and total ParaFly commands per stage |
+| `progress` | `network` reports both ParaFly batches. Other stages report their own measured work units |
 | `attempt`, `previous_job_id` | Present on a retry |
 | `connection` | `"interrupted"` when HPC3 could not be reached (not saved) |
 
