@@ -490,6 +490,12 @@ Record fields (route 7 and route 4):
 | `attempt`, `previous_job_id` | Present on a retry |
 | `connection` | `"interrupted"` when HPC3 could not be reached (not saved) |
 
+After a clean visualization exit, a required file that is missing on the first check keeps the
+stage validating for up to two minutes. The chat rechecks the same job and downloads the results
+when all required files appear. It reports missing outputs if a check after that window still finds
+them missing. Older visualization records that failed solely for missing outputs also get rechecked
+on a normal status poll.
+
 ## 8. Files on HPC3 and on this computer
 
 HPC3, run folder `<workRoot>/<run_id>/`:

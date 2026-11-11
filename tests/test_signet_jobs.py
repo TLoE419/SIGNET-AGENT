@@ -314,6 +314,54 @@ class StepsTest(unittest.TestCase):
         record = steps.status('step_test', 'expression', refresh=True)
         self.assertEqual((record['state'], record['job_id']), ('completed', '12345'))
 
+    def test_visualization_only_waits_for_missing_outputs_after_a_clean_exit(self):
+        folder = self.remote_dir / 'steps'
+        folder.mkdir(parents=True)
+        record = {'step': 'visualize', 'run_id': 'step_test', 'state': 'running', 'job_id': '12345',
+                  'remote_dir': str(self.remote_dir), 'settings': {'ntop': '1'}}
+        self.slurm(sacct='COMPLETED')
+        (folder / 'visualize.done').write_text('0 2026-11-01T10:00:00\n')
+        steps._save(self.root, record)
+        with patch.object(steps.time, 'time', return_value=1000):
+            self.assertEqual(steps.status('step_test', 'visualize')['state'], 'validating')
+        with patch.object(steps.time, 'time', return_value=1000 + steps.VISUALIZE_OUTPUT_GRACE_SECONDS):
+            result = steps.status('step_test', 'visualize')
+            self.assertEqual((result['state'], result['reason']), ('failed', 'Required outputs are missing.'))
+            calls = len(self.calls)
+            self.assertEqual(steps.status('step_test', 'visualize')['state'], 'failed')
+            self.assertEqual(len(self.calls), calls)
+        for exit_code, log in [('1', ''), ('0', 'Error in export: failed\n')]:
+            with self.subTest(exit_code=exit_code, log=log):
+                steps._save(self.root, record)
+                (folder / 'visualize.done').write_text(f'{exit_code} 2026-11-01T10:00:00\n')
+                (folder / 'visualize.err').write_text(log)
+                result = steps.status('step_test', 'visualize')
+                self.assertEqual(result['state'], 'failed')
+                self.assertNotIn('missing_outputs_since', result)
+        self.assertFalse(any('sbatch --parsable' in call or 'tar czf' in call for call in self.calls))
+
+    def test_saved_visualization_missing_output_failure_recovers_on_normal_poll(self):
+        folder = self.remote_dir / 'steps'
+        folder.mkdir(parents=True)
+        (folder / 'visualize.done').write_text('0 2026-11-01T10:00:00\n')
+        self.slurm(sacct='COMPLETED')
+        record = {'step': 'visualize', 'run_id': 'step_test', 'state': 'failed', 'job_id': '12345',
+                  'remote_dir': str(self.remote_dir), 'settings': {'ntop': '1'}, 'exit_code': '0',
+                  'reason': 'Required outputs are missing.'}
+        steps._save(self.root, record)
+        analysis = steps.analysis_view(self.root, 'TCGA', {'visualize': record}, include_attempts=False)
+        self.assertEqual(analysis['steps'][-1]['phase'], 'validating')
+        edges = 'source_gene_symbol,target_gene_symbol,frequency,coefficient\nA,B,0.75,0.2\n'
+        for relative in steps.STEPS['visualize'].required:
+            path = self.remote_dir / 'work' / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(edges if path.suffix == '.csv' else 'plot\n')
+        result = steps.status('step_test', 'visualize')
+        self.assertEqual((result['state'], result['job_id']), ('completed', '12345'))
+        self.assertEqual((self.root / 'work/res/resv/signet-edges.csv').read_text(), edges)
+        self.assertEqual(sum('tar czf' in call for call in self.calls), 1)
+        self.assertFalse(any('sbatch --parsable' in call for call in self.calls))
+
     def test_retry_does_not_overwrite_existing_remote_archive(self):
         self.failed_expression()
         archive = self.remote_dir / 'steps/expression.attempt1.sbatch'

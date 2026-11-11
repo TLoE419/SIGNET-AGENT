@@ -286,7 +286,24 @@ class SignetApiTest(unittest.TestCase):
                 file.write_text(edges if name.endswith('signet-edges.csv') else step)
             (self.remote_dir / f'steps/{step}.done').write_text('0 2026-11-01T10:00:00\n')
             self.slurm(sacct='COMPLETED')
-            status, completed = self.call('GET', base + '?refresh=1')
+            if step == 'visualize':
+                edge_file = self.remote_dir / 'work/res/resv/signet-edges.csv'
+                edge_file.unlink()
+                status, waiting = self.call('GET', base)
+                self.assertEqual((status, waiting['state'], waiting['job_id']),
+                                 (200, 'validating', record['job_id']))
+                self.assertEqual(waiting['missing_outputs'], ['res/resv/signet-edges.csv'])
+                analysis = self.call('GET', progress)[1]['analyses'][0]
+                self.assertEqual((analysis['completed_steps'], analysis['steps'][-1]['phase']), (5, 'validating'))
+                self.assertEqual(self.call('POST', base + '/proposal/prepare', {'session': session})[0], 409)
+                self.assertEqual(self.call('GET', results)[0], 409)
+                edge_file.write_text(edges)
+                # The chat polls this route normally after the status cache expires.
+                with patch.object(jobs, 'CACHE_SECONDS', 0):
+                    status, completed = self.call('GET', base)
+                self.assertEqual((completed['job_id'], completed['attempt']), (record['job_id'], 1))
+            else:
+                status, completed = self.call('GET', base + '?refresh=1')
             self.assertEqual((status, completed['state']), (200, 'completed'), completed)
             analysis = self.call('GET', progress)[1]['analyses'][0]
             self.assertEqual(analysis['completed_steps'], index + 1)

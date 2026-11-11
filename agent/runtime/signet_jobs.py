@@ -72,6 +72,8 @@ RETRYABLE = ('failed', 'cancelled')   # may be submitted again in the same run
 # Files a job leaves in <run>/steps on HPC3; renamed to <step>.attempt<N>.<suffix> before a retry.
 _JOB_FILES = ('job', 'done', 'out', 'err', 'sbatch', 'sbatch.err')
 CACHE_SECONDS = 15
+VISUALIZE_OUTPUT_GRACE_SECONDS = 120
+MISSING_OUTPUTS_REASON = 'Required outputs are missing.'
 MAX_LOG_LINES = 200
 _MARKER = '@@'
 _PATH = re.compile(r'/[A-Za-z0-9_./-]+')
@@ -368,10 +370,16 @@ def _current_records(root):
     return [path for path in sorted(folder.glob('*.json')) if '.' not in path.stem]
 
 
+def _legacy_visualize_output_failure(record):
+    return (record.get('step') == 'visualize' and record.get('state') == 'failed'
+            and record.get('exit_code') == '0' and not record.get('failure_hints')
+            and record.get('reason') == MISSING_OUTPUTS_REASON and 'missing_outputs_since' not in record)
+
+
 def _active_step(root):
     for path in _current_records(root):
         record = json.loads(path.read_text())
-        if record.get('state') in ACTIVE:
+        if record.get('state') in ACTIVE or _legacy_visualize_output_failure(record):
             return record['step']
     return None
 
@@ -440,6 +448,8 @@ def analysis_view(root, cohort, records, *, include_attempts=True):
                     phase = 'queued'
                 elif phase == 'validating' and record.get('download_pending'):
                     phase = 'downloading'
+                elif _legacy_visualize_output_failure(record):
+                    phase = 'validating'
             flag = STEPS[name].flag if name in STEPS else '-v'
             stage = {'step': name, 'flag': flag, 'phase': phase}
             if include_attempts:
@@ -1109,12 +1119,11 @@ def status(run_id, name, refresh=False):
     root = _root(run_id)
     record = _load(root, name)
     # Only reopen unconfirmed artifacts, never an observed nonzero exit or log error.
-    retry_marker = (refresh and record['state'] == 'failed'
-                    and not record.get('failure_hints')
-                    and ((record.get('slurm_state') == 'COMPLETED' and record.get('exit_code') is None
-                          and record.get('reason') == 'The job did not finish its last line.')
-                         or (record.get('exit_code') == '0' and record.get('reason') == 'Required outputs are missing.')))
-    if record['state'] in TERMINAL and not retry_marker:
+    recheck_failure = (refresh and record['state'] == 'failed' and not record.get('failure_hints')
+                       and ((record.get('slurm_state') == 'COMPLETED' and record.get('exit_code') is None
+                             and record.get('reason') == 'The job did not finish its last line.')
+                            or (record.get('exit_code') == '0' and record.get('reason') == MISSING_OUTPUTS_REASON)))
+    if record['state'] in TERMINAL and not (recheck_failure or _legacy_visualize_output_failure(record)):
         return record
     if not refresh and time.time() - record.get('checked_at', 0) < CACHE_SECONDS:
         return record
@@ -1190,13 +1199,23 @@ def _finish(root, record, step, done, missing, hints):
                 reason='Waiting for a complete exit marker on HPC3; check status again. Do not resubmit.')
         return
     exit_code = marker.group(1)
+    if record['step'] == 'visualize' and exit_code == '0' and missing and not hints:
+        # The login node can see the successful exit before it sees the graph files.
+        checked_at = record['checked_at']
+        since = record.setdefault('missing_outputs_since', checked_at)
+        if checked_at - since < VISUALIZE_OUTPUT_GRACE_SECONDS:
+            record.pop('finished_at', None)
+            _change(record, 'validating', exit_code=exit_code, missing_outputs=missing, failure_hints=[],
+                    reason='Waiting for visualization outputs to appear on HPC3.')
+            return
     if exit_code != '0' or missing or hints:
         reason = (f'signet exited with {exit_code}.' if exit_code != '0' else
-                  'Required outputs are missing.' if missing else 'The log reports an error.')
+                  MISSING_OUTPUTS_REASON if missing else 'The log reports an error.')
         _change(record, 'failed', finished_at=_now(), exit_code=exit_code, missing_outputs=missing,
                 failure_hints=hints, reason=reason)
         return
     record.pop('finished_at', None)
+    record.pop('missing_outputs_since', None)
     _change(record, 'validating', exit_code='0', download_pending=True,
             reason='Results passed the checks on HPC3; downloading them now.')
     _save(root, record)  # The local analysis view can see this while the transfer runs.

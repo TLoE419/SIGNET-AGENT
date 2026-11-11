@@ -51,7 +51,9 @@ def _available(root, step):
     records = jobs.run_records(root)
     if next_step(records) != step:
         raise jobs.StepError('conflict', 'Complete the preceding steps of this analysis first.')
-    if (root / '.active').exists() or any(record['state'] in jobs.ACTIVE for record in records.values()):
+    if ((root / '.active').exists()
+            or any(record['state'] in jobs.ACTIVE or jobs._legacy_visualize_output_failure(record)
+                   for record in records.values())):
         raise jobs.StepError('conflict', 'This analysis already has an active attempt.')
     return records.get(step, {})
 
