@@ -37,6 +37,7 @@ STATUS = {'invalid_request': 400, 'not_found': 404, 'conflict': 409, 'not_ready'
 _RUN_NAME = r'[A-Za-z0-9][A-Za-z0-9_-]{0,63}'  # same rule as agent.tools.signet._name
 _RUN = rf'(?P<run_id>{_RUN_NAME})'
 _STEP = r'(?P<step>[a-z_]{1,32})'
+_SESSION = re.compile(r'[a-f0-9-]{36}')  # same session IDs accepted by ChatHandler
 
 
 class ApiError(Exception):
@@ -104,13 +105,15 @@ def get_catalog(handler, url):
 # ---------- runs (local; includes signet -s) ----------
 
 def list_runs(handler, url):
-    """GET /signet/runs
+    """GET /signet/runs?session=<id> (filter optional)
 
     Every local run under runs/, newest first, with its cohort and the state of
     each step submitted to HPC3. Reads local files only; does not contact HPC3.
-    Response 200: {"runs": [{"run_id", "cohort", "created_at", "steps": {"expression": "running"}}]}
+    Response 200: {"runs": [{"run_id", "cohort", "created_at", "session", "steps": {"expression": "running"}}]}
     """
-    _query(url, ())
+    session = _query(url, ('session',)).get('session')
+    if session is not None and not _SESSION.fullmatch(session):
+        raise ApiError(400, 'invalid_request', 'Invalid conversation session.')
     runs = []
     folder = signet.PROJECT / 'runs'
     for path in sorted(folder.iterdir() if folder.is_dir() else (), key=lambda p: p.name):
@@ -121,8 +124,11 @@ def list_runs(handler, url):
             root = signet._run(path.name)
         except ValueError:
             continue
+        linked = jobs.analysis_session(root)
+        if session is not None and linked != session:
+            continue
         runs.append({'run_id': path.name, 'cohort': json.loads(manifest.read_text()).get('cohort'),
-                     'created_at': int(manifest.stat().st_mtime), 'steps': jobs.run_steps(root.name)})
+                     'created_at': int(manifest.stat().st_mtime), 'session': linked, 'steps': jobs.run_steps(root.name)})
     runs.sort(key=lambda item: item['created_at'], reverse=True)
     return 200, {'runs': runs}
 
@@ -151,16 +157,28 @@ def get_run(handler, url, run_id):
 
     One run's current config.ini settings and the full record of each step
     submitted to HPC3 (state, job ID, timestamps, validation). Local files only.
-    Response 200: {"run_id", "cohort", "settings": {...}, "steps": {"expression": {...}}}
+    Response 200: {"run_id", "cohort", "settings": {...}, "steps": {"expression": {...}}, "analysis": {...}}
     Errors: 404 unknown run.
     """
     _query(url, ())
     root = _run_root(run_id)
     settings = signet._settings(root)
-    records = {}
-    for name in jobs.run_steps(run_id):
-        records[name] = json.loads((root / 'steps' / f'{name}.json').read_text())
-    return 200, {'run_id': run_id, 'cohort': settings.get('cohort'), 'settings': settings, 'steps': records}
+    records = jobs.run_records(root)
+    cohort = settings.get('cohort')
+    return 200, {'run_id': run_id, 'cohort': cohort, 'settings': settings, 'steps': records,
+                 'analysis': jobs.analysis_view(root, cohort, records)}
+
+
+def link_conversation(handler, url, run_id):
+    """Associate an existing run with a saved conversation without touching HPC3."""
+    _query(url, ())
+    session = _body(handler, ('session',), required=('session',))['session']
+    if not isinstance(session, str) or not _SESSION.fullmatch(session):
+        raise ApiError(400, 'invalid_request', 'Invalid conversation session.')
+    server = handler.server
+    if session not in server.histories and session not in server.stage6.sessions:
+        raise ApiError(404, 'not_found', 'No such conversation.')
+    return 200, jobs.link_conversation(run_id, session)
 
 
 def update_settings(handler, url, run_id):
@@ -265,6 +283,7 @@ ROUTES = [
     (re.compile(r'/signet/catalog'), {'GET': get_catalog}),
     (re.compile(r'/signet/runs'), {'GET': list_runs, 'POST': create_run}),
     (re.compile(rf'/signet/runs/{_RUN}'), {'GET': get_run}),
+    (re.compile(rf'/signet/runs/{_RUN}/conversation'), {'PATCH': link_conversation}),
     (re.compile(rf'/signet/runs/{_RUN}/settings'), {'PATCH': update_settings}),
     (re.compile(rf'/signet/runs/{_RUN}/steps/{_STEP}'), {'GET': get_step, 'POST': submit_step}),
     (re.compile(rf'/signet/runs/{_RUN}/steps/{_STEP}/cancel'), {'POST': cancel_step}),

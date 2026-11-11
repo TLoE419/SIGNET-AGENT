@@ -145,10 +145,13 @@ def bundle(root, settings, remote_root, input_keys=INPUT_KEYS, network=False):
     return buffer.getvalue()
 
 
-def restore_outputs(root, data):
+def restore_outputs(root, data, *, required=()):
     # Validate the entire archive before writing anything received from the VM.
     with tarfile.open(fileobj=io.BytesIO(data), mode='r:gz') as archive:
         members = archive.getmembers()
+        nonempty = {item.name for item in members if item.isfile() and item.size > 0}
+        if not nonempty.issuperset(required):
+            raise ValueError('Download is missing required non-empty outputs.')
         for item in members:
             path = Path(item.name)
             if (path.is_absolute() or '..' in path.parts or

@@ -56,6 +56,7 @@ import re
 import secrets
 import shlex
 import subprocess
+import tarfile
 import threading
 import time
 
@@ -352,9 +353,68 @@ def _active_step(root):
     return None
 
 
+def run_records(root):
+    """Read the current step records from disk without checking HPC3."""
+    return {path.stem: json.loads(path.read_text()) for path in _current_records(root)}
+
+
 def run_steps(run_id):
     """State of every step recorded for one run, e.g. {'expression': 'running'}."""
-    return {path.stem: json.loads(path.read_text()).get('state') for path in _current_records(_root(run_id))}
+    return {name: record.get('state') for name, record in run_records(_root(run_id)).items()}
+
+
+def analysis_session(root):
+    """An older run without an explicit link is not assigned to any conversation."""
+    path = root / 'conversation.json'
+    try:
+        return json.loads(path.read_text())['session']
+    except FileNotFoundError:
+        return None
+
+
+@_one_at_a_time
+def link_conversation(run_id, session):
+    root = _root(run_id)
+    previous = analysis_session(root)
+    if previous is not None and previous != session:
+        raise StepError('conflict', 'This analysis already belongs to another conversation.')
+    if previous is None:
+        path = root / 'conversation.json'
+        temporary = path.with_suffix('.tmp')
+        temporary.write_text(json.dumps({'session': session}) + '\n')
+        temporary.replace(path)
+    return {'run_id': run_id, 'session': session}
+
+
+def analysis_view(root, cohort, records):
+    """Project stored records for chat without polling, downloading or starting a job."""
+    stages = []
+    if cohort == 'TCGA':
+        for name in ('genotype', 'expression', 'adjust', 'cis', 'network', 'visualize'):
+            record = records.get(name)
+            phase = 'untracked' if name == 'visualize' else 'not_started'
+            attempts = []
+            if record is not None:
+                current = record.get('attempt', 1)
+                # A retry archives its predecessor before publishing the new current
+                # record. Only read archives older than the snapshot's current attempt.
+                for number in range(1, current):
+                    path = _attempt_path(root, name, number)
+                    try:
+                        attempts.append({**json.loads(path.read_text()), 'attempt': number})
+                    except FileNotFoundError:
+                        continue
+                attempts.append({**record, 'attempt': current})
+                phase = record['state']
+                if phase == 'pending':
+                    phase = 'queued'
+                elif phase == 'validating' and record.get('download_pending'):
+                    phase = 'downloading'
+            flag = STEPS[name].flag if name in STEPS else '-v'
+            stages.append({'step': name, 'flag': flag, 'phase': phase, 'attempts': attempts})
+    return {'session': analysis_session(root), 'steps': stages,
+            'completed_steps': sum(step['phase'] == 'completed' for step in stages),
+            'total_steps': len(stages)}
 
 
 @_one_at_a_time
@@ -803,14 +863,15 @@ def submit(run_id, name, inputs, resources=None, options=None):
         token = _owner(root, directory)
         record = {'step': name, 'run_id': run_id, 'flag': step.flag, 'remote_dir': directory,
                   'inputs': {key: path for key, (path, _) in checked.items()}, 'resources': request,
-                  'partition': config['partition'], 'image': config['image'], 'submitted_at': _now()}
+                  'partition': config['partition'], 'image': config['image'], 'submitted_at': _now(),
+                  'attempt': attempt}
         if answers:
             record['options'] = answers   # kept for reproducibility: the answers SIGNET was given
         settings = signet._settings(root)
         if any('{' in path for path in step.required):
             record['required_outputs'] = [_resolve(path, settings) for path in step.required]
+        record['settings'] = {key: settings[key] for key in step.settings}
         if previous:
-            record['attempt'] = attempt
             # A refused submission has no job of its own; retain the last real ID across it.
             record['previous_job_id'] = previous.get('job_id') or previous.get('previous_job_id')
         archived = _attempt_path(root, name, attempt - 1) if previous else None
@@ -939,6 +1000,7 @@ def status(run_id, name, refresh=False):
     if code:
         return {**record, 'connection': 'interrupted', 'reason': 'The status check did not complete on HPC3.'}
     record['checked_at'] = time.time()
+    record.pop('download_pending', None)
     if (not record.get('job_id') and record.get('previous_job_id')
             and values.get('job') == record['previous_job_id']):
         # A retry lost its connection before the old attempt's files were renamed on HPC3:
@@ -1003,22 +1065,26 @@ def _finish(root, record, step, done, missing, hints):
                 failure_hints=hints, reason=reason)
         return
     record.pop('finished_at', None)
-    _change(record, 'validating', exit_code='0')
+    _change(record, 'validating', exit_code='0', download_pending=True,
+            reason='Results passed the checks on HPC3; downloading them now.')
+    _save(root, record)  # The local analysis view can see this while the transfer runs.
+    required = tuple('work/' + path for path in _required(step, record))
+    # Only recover results that were already present before this transfer.
+    already_downloaded = all((root / path).is_file() and (root / path).stat().st_size for path in required)
     try:
         q = shlex.quote
         result = ssh_transport.remote(f'cd {q(record["remote_dir"])} && tar czf - {q(step.download)}',
                                       capture_output=True, timeout=300)
         if result.returncode:
             raise OSError('tar failed')
-        record['outputs'] = vm.restore_outputs(root, result.stdout)
-    except (OSError, ValueError) as error:
-        local = [root / 'work' / path for path in _required(step, record)]
-        if not all(path.is_file() and path.stat().st_size for path in local):
+        record['outputs'] = vm.restore_outputs(root, result.stdout, required=required)
+    except (OSError, ValueError, tarfile.TarError, EOFError, subprocess.TimeoutExpired) as error:
+        if not already_downloaded:
             record['reason'] = f'Results are ready on HPC3 but could not be downloaded yet ({error}); check status again.'
             return
-        # An earlier check already downloaded them (restore_outputs never overwrites).
-        folder = root / step.download
-        record['outputs'] = sorted(str(p.relative_to(root)) for p in folder.rglob('*') if p.is_file())
+        record['outputs'] = sorted(str(path.relative_to(root)) for path in
+                                   (root / step.download).rglob('*') if path.is_file())
+    record.pop('download_pending', None)
     _change(record, 'completed', finished_at=_now(), missing_outputs=[], failure_hints=[],
             reason='Outputs present and logs clean. This is not scientific validation; review the results.')
 

@@ -156,7 +156,7 @@ class ChatHandler(BaseHTTPRequestHandler):
                 and secrets.compare_digest(self.headers.get('X-Chat-Token', ''), self.server.token))
 
     def do_PATCH(self):
-        # Only the SIGNET API uses PATCH (changing a run's settings).
+        # Only the SIGNET API uses PATCH (run settings and conversation links).
         if not self._app_request():
             return self._error(403, '請從本機聊天頁面送出。')
         url = urlsplit(self.path)

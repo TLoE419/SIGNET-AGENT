@@ -7,7 +7,10 @@ status codes, error codes and JSON shapes.
 """
 from contextlib import contextmanager
 import http.client
+import io
 import json
+from subprocess import CompletedProcess
+import tarfile
 import threading
 import unittest
 from unittest.mock import patch
@@ -58,7 +61,7 @@ class SignetApiTest(unittest.TestCase):
 
     def test_every_route_needs_the_page_token_and_writes_need_the_origin(self):
         routes = [('GET', '/signet/catalog'), ('GET', '/signet/runs'), ('POST', '/signet/runs'),
-                  ('GET', '/signet/runs/step_test'), ('PATCH', '/signet/runs/step_test/settings'),
+                  ('GET', '/signet/runs/step_test'), ('PATCH', '/signet/runs/step_test/conversation'), ('PATCH', '/signet/runs/step_test/settings'),
                   ('POST', '/signet/runs/step_test/steps/expression'), ('GET', '/signet/runs/step_test/steps/expression'),
                   ('POST', '/signet/runs/step_test/steps/expression/cancel'),
                   ('GET', '/signet/runs/step_test/steps/expression/log')]
@@ -95,6 +98,97 @@ class SignetApiTest(unittest.TestCase):
         status, value = self.call('GET', '/signet/runs/luad_t1')
         self.assertEqual((status, value['cohort'], value['steps']), (200, 'TCGA', {}))
         self.assertEqual(self.call('GET', '/signet/runs/missing')[0], 404)
+
+    def test_analysis_can_be_linked_to_one_saved_conversation_without_submitting(self):
+        session = '12345678-1234-1234-1234-123456789abc'
+        other = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+        self.server.histories.update({session: [], other: []})
+        path = '/signet/runs/step_test'
+        self.assertIsNone(self.call('GET', path)[1]['analysis']['session'])
+        self.assertEqual(self.call('PATCH', path + '/conversation', {'session': 'invalid'})[0], 400)
+        self.assertEqual(self.call('PATCH', path + '/conversation', {'session': '0' * 36})[0], 404)
+        for _ in range(2):
+            self.assertEqual(self.call('PATCH', path + '/conversation', {'session': session})[0], 200)
+        self.assertEqual(self.call('PATCH', path + '/conversation', {'session': other})[0], 409)
+        self.assertEqual(self.call('GET', path)[1]['analysis']['session'], session)
+        self.assertEqual([r['run_id'] for r in self.call('GET', '/signet/runs?session=' + session)[1]['runs']],
+                         ['step_test'])
+        self.assertEqual(self.call('GET', '/signet/runs?session=' + other)[1]['runs'], [])
+        self.assertEqual(self.calls, [])
+
+    def test_analysis_reports_each_attempt_and_distinguishes_transfer_from_completion(self):
+        path = '/signet/runs/step_test'
+        status_path = path + '/steps/expression?refresh=1'
+
+        def analysis():
+            count = len(self.calls)
+            status, value = self.call('GET', path)
+            self.assertEqual(status, 200)
+            self.assertEqual(len(self.calls), count)
+            return value['analysis']
+
+        initial = analysis()
+        self.assertEqual([s['step'] for s in initial['steps']],
+                         ['genotype', 'expression', 'adjust', 'cis', 'network', 'visualize'])
+        self.assertEqual(initial['steps'][-1]['phase'], 'untracked')
+        self.assertEqual(self.submit()[0], 202)
+        self.slurm(squeue='PENDING')
+        self.assertEqual(self.call('GET', status_path)[1]['state'], 'pending')
+        self.assertEqual(analysis()['steps'][1]['phase'], 'queued')
+        self.finish_job(exit_code='1')
+        self.assertEqual(self.call('GET', status_path)[1]['state'], 'failed')
+        self.assertEqual(analysis()['steps'][1]['phase'], 'failed')
+        self.slurm(sbatch_reply='222')
+        self.assertEqual(self.call('PATCH', path + '/settings', {'values': {'restrict.tcga': 1}})[0], 200)
+        self.assertEqual(self.submit()[0], 202)
+        self.finish_job()
+        marker = self.remote_dir / 'steps/expression.done'
+        marker.unlink()
+        self.assertEqual(self.call('GET', status_path)[1]['state'], 'validating')
+        self.assertEqual(analysis()['steps'][1]['phase'], 'validating')
+        self.finish_job()
+        self.lose_connection_on = 'tar czf'
+        self.assertEqual(self.call('GET', status_path)[1]['state'], 'validating')
+        waiting = analysis()
+        self.assertEqual(waiting['completed_steps'], 0)
+        self.assertEqual(waiting['steps'][1]['phase'], 'downloading')
+        self.lose_connection_on = None
+        self.assertEqual(self.call('GET', status_path)[1]['state'], 'completed')
+        completed = analysis()
+        self.assertEqual(completed['completed_steps'], 1)
+        step = completed['steps'][1]
+        self.assertEqual(step['phase'], 'completed')
+        self.assertEqual([(a['attempt'], a['job_id'], a['state']) for a in step['attempts']],
+                         [(1, '12345', 'failed'), (2, '222', 'completed')])
+        self.assertNotEqual(step['attempts'][0]['settings']['restrict.tcga'], '1')
+        self.assertEqual(step['attempts'][1]['settings']['restrict.tcga'], '1')
+        self.assertEqual(sum('sbatch --parsable' in c for c in self.calls), 2)
+
+    def test_corrupt_or_incomplete_download_does_not_complete_or_submit_again(self):
+        self.assertEqual(self.submit()[0], 202)
+        self.finish_job()
+        path = '/signet/runs/step_test/steps/expression?refresh=1'
+        partial = io.BytesIO()
+        with tarfile.open(fileobj=partial, mode='w:gz') as archive:
+            member = tarfile.TarInfo('work/' + test_signet_jobs.OUTPUTS[0])
+            member.size = 1
+            archive.addfile(member, io.BytesIO(b'x'))
+
+        for content in (b'not a tar archive', partial.getvalue()):
+            def remote(command, **kwargs):
+                if 'tar czf' in command:
+                    return CompletedProcess(command, 0, content, b'')
+                return self.remote(command, **kwargs)
+
+            with patch.object(ssh_transport, 'remote', side_effect=remote):
+                status, record = self.call('GET', path)
+            self.assertEqual((status, record['state'], record['job_id']), (200, 'validating', '12345'))
+            self.assertTrue(record['download_pending'])
+            self.assertFalse((self.root / 'work' / test_signet_jobs.OUTPUTS[0]).exists())
+            self.assertEqual(self.submit()[0], 409)
+        status, record = self.call('GET', path)
+        self.assertEqual((status, record['state'], record['job_id']), (200, 'completed', '12345'))
+        self.assertEqual(sum('sbatch --parsable' in c for c in self.calls), 1)
 
     def test_settings_patch_is_whitelisted(self):
         status, value = self.call('PATCH', '/signet/runs/step_test/settings', {'values': {'restrict.tcga': 1}})

@@ -122,7 +122,7 @@ Inside the API:
 | # | Method and path | Contacts HPC3 | Purpose |
 |---|---|---|---|
 | 1 | `GET /signet/catalog` | no | Steps, inputs, settings, options, resources, outputs |
-| 2 | `GET /signet/runs` | no | List local runs with step states |
+| 2 | `GET /signet/runs?session=<id>` | no | List local runs, optionally filtered by conversation |
 | 3 | `POST /signet/runs` | no | Create a run |
 | 4 | `GET /signet/runs/{run_id}` | no | One run's settings and full step records |
 | 5 | `PATCH /signet/runs/{run_id}/settings` | no | Change settings (`signet -s`) |
@@ -130,6 +130,7 @@ Inside the API:
 | 7 | `GET /signet/runs/{run_id}/steps/{step}` | yes | Step state; on completion, validate and download |
 | 8 | `POST /signet/runs/{run_id}/steps/{step}/cancel` | yes | Cancel the step's own job |
 | 9 | `GET /signet/runs/{run_id}/steps/{step}/log` | yes | Last lines of the job's stdout or stderr |
+| 10 | `PATCH /signet/runs/{run_id}/conversation` | no | Link an analysis to a saved conversation |
 
 ### 5.1 `GET /signet/catalog`
 
@@ -172,10 +173,10 @@ Response 200:
 
 ### 5.2 `GET /signet/runs`
 
-Every local run, newest first. Local files only.
+Every local run, newest first. Local files only. Optionally pass `?session=<id>` to list runs linked to one conversation.
 
 ```json
-{"runs": [{"run_id": "a_test1", "cohort": "TCGA", "created_at": 1794100914,
+{"runs": [{"run_id": "a_test1", "cohort": "TCGA", "created_at": 1794100914, "session": null,
            "steps": {"adjust": "completed", "expression": "completed", "genotype": "completed"}}]}
 ```
 
@@ -196,10 +197,16 @@ The step states here are the last recorded ones. Use route 7 for a fresh state.
 
 ```json
 {"run_id": "a_test1", "cohort": "TCGA", "settings": {"restrict.tcga.geno": "1", "...": "..."},
- "steps": {"adjust": {"state": "completed", "job_id": "59411219", "attempt": 2, "...": "..."}}}
+ "steps": {"adjust": {"state": "completed", "job_id": "59411219", "attempt": 2, "...": "..."}},
+ "analysis": {"session": null, "completed_steps": 3, "total_steps": 6, "steps": ["..."]}}
 ```
 
-`steps` holds the current record of each step (section 7). Earlier attempts are not listed here; they are kept as files (section 8).
+`steps` holds the current record of each submitted step (section 7). The additive `analysis` view includes the linked conversation (`null` for unlinked runs), completion counts, and an ordered list of `{step, flag, phase, attempts}` entries for the six TCGA stages. Other cohorts have no stages in this view yet.
+
+- `attempts` is the archived and current records, oldest first, with an explicit attempt number. New records also snapshot the step's editable settings at submission. Older records are read as-is; an absent attempt number means 1, and absent settings are not reconstructed from today's configuration.
+- `phase` preserves the job state except that scheduler `pending` is reported as `queued` and a validated job whose results have not finished transferring is `downloading`. A transfer error leaves the same attempt in this phase; poll route 7 to resume checking it.
+- `not_started` means no attempt exists. Visualization is `untracked` because the separate visualization workspace does not yet publish a record for the HPC3 analysis. It does not count as complete. This view does not create drafts or claim a step is awaiting approval.
+- This view reads saved state only. Use route 7 to refresh scheduler status and collect results.
 
 - 404: unknown run.
 
@@ -291,6 +298,16 @@ Last lines of the job's stdout (`out`, default) or stderr (`err`) on HPC3. `line
 ```
 
 - 400: bad `stream` or `lines`. 404: never submitted. 412: not connected.
+
+### 5.10 `PATCH /signet/runs/{run_id}/conversation`
+
+Body: `{"session": "<saved conversation ID>"}`. Returns `{"run_id": "...", "session": "..."}`.
+A run may be linked to one saved conversation; a conversation can have several runs. Linking the
+same pair again is safe, and changing a linked run to a different conversation returns 409.
+Invalid IDs return 400; unknown runs or conversations return 404. Existing runs can be linked
+without starting or repeating any computation. The association is stored locally in
+`runs/<run_id>/conversation.json`.
+
 
 ## 6. Step reference
 
