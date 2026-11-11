@@ -14,6 +14,7 @@ const uiEnglish = {
   "第 5 階段 · 建構調控網路": "Stage 5 · Build the regulatory network",
   "第 6 階段 · 畫出網路圖": "Stage 6 · Plot the network",
   "基因表現資料": "Gene expression data",
+  "基因註解": "Gene annotation",
   "臨床資料表": "Clinical table",
   "顯著性門檻": "Significance threshold",
   "置換次數": "Permutations",
