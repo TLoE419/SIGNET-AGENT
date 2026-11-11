@@ -35,7 +35,7 @@ import sys
 import traceback
 from urllib.parse import parse_qs
 
-from agent.runtime import step_proposal
+from agent.runtime import analysis_rerun, step_proposal
 from agent.runtime import signet_jobs as jobs
 from agent.runtime.visualization import read_graph
 import agent.tools.signet as signet
@@ -210,7 +210,7 @@ def link_conversation(handler, url, run_id):
     return 200, jobs.link_conversation(run_id, session)
 
 
-def step_action(handler, url, run_id, action, step='genotype'):
+def step_action(handler, url, run_id, action, step='genotype', rerun=None):
     """Create, decline, or consume a conversation’s confirmation."""
     _query(url, ())
     required = {
@@ -218,11 +218,15 @@ def step_action(handler, url, run_id, action, step='genotype'):
         'decline': ('session', 'proposal_id'),
         'confirm': ('session', 'proposal_id', 'inputs', 'settings', 'resources'),
     }[action]
-    optional = {'prepare': ('mode',), 'decline': (), 'confirm': ('options',)}[action]
+    optional = {'prepare': () if rerun else ('mode',), 'decline': (), 'confirm': ('options',)}[action]
     body = _body(handler, required + optional, required=required)
     session = body.pop('session')
     if not isinstance(session, str) or not _SESSION.fullmatch(session):
         raise ApiError(400, 'invalid_request', 'Invalid conversation session.')
+    if rerun:
+        if action == 'prepare':
+            return 200, analysis_rerun.prepare(run_id, session, step)
+        return 202, analysis_rerun.confirm(run_id, session, step, **body)
     if action == 'prepare':
         return 200, step_proposal.prepare(run_id, session, body.get('mode'), step_name=step)
     if action == 'decline':
@@ -418,6 +422,7 @@ ROUTES = [
     (re.compile(rf'/signet/runs/{_RUN}/conversation'), {'PATCH': link_conversation}),
     (re.compile(rf'/signet/runs/{_RUN}/genotype-proposal/(?P<action>prepare|decline|confirm)'), {'POST': step_action}),
     (re.compile(rf'/signet/runs/{_RUN}/steps/{_STEP}/proposal/(?P<action>prepare|decline|confirm)'), {'POST': step_action}),
+    (re.compile(rf'/signet/runs/{_RUN}/steps/{_STEP}/(?P<rerun>rerun)/(?P<action>prepare|confirm)'), {'POST': step_action}),
     (re.compile(rf'/signet/runs/{_RUN}/results'), {'GET': get_results}),
     (re.compile(rf'/signet/runs/{_RUN}/results/download'), {'POST': issue_download}),
     (re.compile(rf'/signet/runs/{_RUN}/settings'), {'PATCH': update_settings}),

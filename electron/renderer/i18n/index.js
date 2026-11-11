@@ -31,6 +31,24 @@ const uiEnglish = {
   "請選用含樣本編號、種族與性別欄位的相容臨床表。": "Use a compatible clinical table with submitter ID, race, and gender.",
   "準備本階段設定": "Prepare this stage",
   "本次送算設定": "Submitted settings",
+  "輸入檔案": "Input files",
+  "分析參數": "Analysis parameters",
+  "運算資源": "Compute resources",
+  "查看完整路徑": "Show full paths",
+  "重新執行": "Rerun stage",
+  "重新執行自": "Rerun of",
+  "沿用已完成結果": "Reused completed results",
+  "沿用上次設定，可在送算前調整。": "Review or edit the previous settings before submitting.",
+  "這次會影響哪些階段": "Affected stages",
+  "保留原分析結果。": "The original analysis results are retained.",
+  "需要重跑": "Needs to run again",
+  "可沿用": "Reused results",
+  "沒有後續階段需要重跑。": "No downstream stages need to run again.",
+  "確認重新送算": "Confirm rerun",
+  "取消": "Cancel",
+  "新的分析已建立，請查看聊天中的進度。": "New analysis created. Follow its progress in this chat.",
+  "無法完成重新送算，請查看分析進度。": "Could not confirm the rerun. Check the analysis progress.",
+  "無法開啟重新執行設定，請重新整理分析進度。": "Could not open rerun settings. Refresh analysis progress.",
   "分析結果": "Analysis results",
   "基因調控網路圖": "Gene regulatory network",
   "下載分析結果": "Download analysis results",
@@ -324,7 +342,7 @@ function applyLanguage(language) {
     });
   }
   const toggle = document.getElementById('language-toggle');
-  toggle.textContent = uiLanguage === 'en' ? '繁體中文' : 'English';
+  toggle.textContent = uiLanguage === 'en' ? 'Traditional Chinese' : 'English';
   toggle.setAttribute('aria-label', uiLanguage === 'en' ? 'Switch to Traditional Chinese' : '切換為英文');
   try { localStorage.setItem('signet-language', uiLanguage); } catch (_) {}
   window.dispatchEvent(new Event('languagechange'));

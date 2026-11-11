@@ -10,6 +10,7 @@ from contextlib import contextmanager
 import http.client
 import io
 import json
+from pathlib import Path
 from subprocess import CompletedProcess
 import tarfile
 import threading
@@ -20,6 +21,7 @@ from zipfile import ZipFile
 import agent.app.chat_ui as chat_ui
 import agent.runtime.ssh_transport as ssh_transport
 from agent.runtime import signet_jobs as jobs
+from agent.tools import signet
 from agent.tools.signet import dispatch_tool
 import test_signet_jobs
 
@@ -76,6 +78,8 @@ class SignetApiTest(unittest.TestCase):
                   ('GET', '/signet/runs/step_test/results'),
                   ('POST', '/signet/runs/step_test/results/download'),
                   ('POST', '/signet/runs/step_test/steps/expression/proposal/prepare'),
+                  ('POST', '/signet/runs/step_test/steps/expression/rerun/prepare'),
+                  ('POST', '/signet/runs/step_test/steps/expression/rerun/confirm'),
                   ('GET', '/signet/runs/step_test'), ('PATCH', '/signet/runs/step_test/conversation'), ('PATCH', '/signet/runs/step_test/settings'),
                   ('POST', '/signet/runs/step_test/steps/expression'), ('GET', '/signet/runs/step_test/steps/expression'),
                   ('POST', '/signet/runs/step_test/steps/expression/cancel'),
@@ -325,6 +329,88 @@ class SignetApiTest(unittest.TestCase):
             self.assertIn('work/res/resv/signet_top1_freq0.75_files/widget.js', archive.namelist())
             self.assertIn('work/res/resg/signet_Geno', archive.namelist())
         self.assertEqual(self.call('GET', ticket, headers={})[0], 403)
+
+        stages = jobs.ANALYSIS_STEPS
+        old_records = jobs.run_records(self.root)
+        old_config = (self.root / 'work/config.ini').read_bytes()
+        plans = {}
+        for index, name in enumerate(stages):
+            endpoint = routes(name) + '/rerun/prepare'
+            self.assertEqual(self.call('POST', endpoint, {'session': other})[0], 404)
+            status, draft = self.call('POST', endpoint, {'session': session})
+            self.assertEqual(status, 200, draft)
+            self.assertEqual(draft['parameters']['settings'], old_records[name]['settings'])
+            self.assertEqual(draft['affected_steps'], list(stages[max(2, index + 1):]))
+            reused = [stage for stage in stages if stage not in [name, *draft['affected_steps']]]
+            self.assertEqual(draft['reused_steps'], reused)
+            plans[name] = draft
+        self.assertEqual(sum('sbatch --parsable' in command for command in self.calls), 6)
+        self.assertEqual(len(list(self.root.parent.iterdir())), 1, 'preview creates no new run')
+
+        for index, name in enumerate(stages):
+            draft = plans[name]
+            parameters = draft['parameters']
+            rules = jobs.STEPS[name].settings
+            settings = {key: value if value == 'no' or rules[key] == 'hms' else
+                        float(value) if rules[key] in ('alpha', 'fraction') else int(value)
+                        for key, value in parameters['settings'].items()}
+            if name == 'visualize':
+                settings['freq'] = .5
+            request = {**parameters, 'settings': settings, 'session': session, 'proposal_id': draft['id']}
+            endpoint = routes(name) + '/rerun/confirm'
+            self.slurm(sbatch_reply=str(5000 + index), sacct='', squeue='')
+            if name == 'adjust':
+                remote_input = self.remote_dir / 'work/tmp/tmpg/impute/impute_Genotype.sizes'
+                saved_input = remote_input.read_bytes()
+                remote_input.unlink()
+                self.assertEqual(self.call('POST', endpoint, request)[0], 502)
+                self.assertEqual(sum('sbatch --parsable' in command for command in self.calls), 6 + index)
+                remote_input.write_bytes(saved_input)
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                responses = list(pool.map(lambda _: self.call('POST', endpoint, request), range(2)))
+            self.assertEqual(sorted(code for code, _ in responses), [202, 409], responses)
+            _, rerun = next(response for response in responses if response[0] == 202)
+            self.assertNotEqual(rerun['run_id'], 'step_test')
+            self.assertEqual((rerun['step'], rerun['attempt']), (name, 1))
+            child = self.root.parent / rerun['run_id']
+            self.assertEqual(jobs.analysis_session(child), session)
+            child_records = jobs.run_records(child)
+            self.assertEqual(set(child_records), {name, *draft['reused_steps']})
+            for reused in draft['reused_steps']:
+                self.assertEqual(child_records[reused]['reused_from'], 'step_test')
+                for file in child_records[reused]['outputs']:
+                    self.assertEqual((child / file).read_bytes(), (self.root / file).read_bytes())
+                    self.assertEqual((Path(rerun['remote_dir']) / file).read_bytes(), (self.remote_dir / file).read_bytes())
+            if 'genotype' in draft['reused_steps']:
+                self.assertTrue((Path(rerun['remote_dir']) / 'work/tmp/tmpg/impute/impute_Genotype.sizes').is_file())
+            self.assertEqual((Path(rerun['remote_dir']) / 'steps' / f'{name}.job').read_text().strip(), str(5000 + index))
+            if name == 'visualize':
+                self.assertEqual(rerun['settings']['freq'], '0.5')
+            self.assertEqual(sum('sbatch --parsable' in command for command in self.calls), 7 + index)
+        self.assertEqual(jobs.run_records(self.root), old_records)
+        self.assertEqual((self.root / 'work/config.ini').read_bytes(), old_config)
+        self.assertEqual(self.call('GET', results)[1]['graph'], graph)
+        endpoint = routes('genotype') + '/rerun/'
+        draft = self.call('POST', endpoint + 'prepare', {'session': session})[1]
+        self.assertEqual(draft['chromosome_pair'], {'setting': 'restrict.tcga.geno', 'stage': 'expression'})
+        parameters = draft['parameters']
+        for key, suffix in jobs.STEPS['genotype'].prefixes.items():
+            Path(parameters['inputs'][key] + '2' + suffix).write_text('chromosome 2 data')
+        settings = {**parameters['settings'], 'restrict.tcga.geno': 2, 'int': int(parameters['settings']['int'])}
+        for key in ('mind', 'geno', 'hwe'):
+            settings[key] = float(settings[key])
+        status, moved = self.call('POST', endpoint + 'confirm', {
+            **parameters, 'settings': settings, 'session': session, 'proposal_id': draft['id']})
+        self.assertEqual(status, 202, moved)
+        child = self.root.parent / moved['run_id']
+        self.assertEqual(set(jobs.run_records(child)), {'genotype'})
+        self.assertEqual(signet._settings(child)['restrict.tcga'], '2')
+        analyses = self.call('GET', progress)[1]['analyses']
+        self.assertEqual(len(analyses), 8)
+        branched = next(item for item in analyses if item.get('rerun', {}).get('from_step') == 'adjust')
+        self.assertEqual(branched['rerun']['source_run'], 'step_test')
+        self.assertEqual(branched['steps'][0]['reused_from'], 'step_test')
+        self.assertEqual(branched['steps'][3]['phase'], 'not_started')
 
     def test_progress_is_scoped_to_conversation_and_readable_while_downloading(self):
         session = '12345678-1234-1234-1234-123456789abc'

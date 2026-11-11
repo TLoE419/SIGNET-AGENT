@@ -112,7 +112,12 @@ def prepare(run_id, session, mode=None, *, step_name='genotype', allow_unlinked=
     if (existing and existing['state'] == 'pending' and existing['mode'] == mode
             and existing['baseline'] == baseline):
         return view(root, step_name)
-    parameters = _parameters(step_name, step, settings, attempt, mode)
+    previous = attempt
+    if not previous and (origin := jobs._rerun_origin(root)):
+        original = jobs.run_records(root.parent / origin['source_run']).get(step_name, {})
+        if original.get('state') == 'completed':
+            previous = original
+    parameters = _parameters(step_name, step, settings, previous, mode)
     if jobs.analysis_session(root) is None:
         jobs.link_conversation(run_id, session)
     _write(root, step_name, {'id': secrets.token_hex(16), 'state': 'pending', 'mode': mode,
@@ -137,6 +142,22 @@ def decline(run_id, session, proposal_id, *, step_name='genotype'):
     return view(root, step_name)
 
 
+def reviewed_parameters(step, inputs, settings, resources, options):
+    if not isinstance(settings, dict) or set(settings) != set(step.settings):
+        raise jobs.StepError('invalid_request', 'All step settings must be reviewed.')
+    if not isinstance(resources, dict) or set(resources) != set(step.resources):
+        raise jobs.StepError('invalid_request', 'All compute resources must be reviewed.')
+    if step.prompts and (not isinstance(options, dict) or set(options) != set(step.prompts)):
+        raise jobs.StepError('invalid_request', 'All step options must be reviewed.')
+    reviewed = jobs.validate_settings(step.settings, settings)
+    answers = jobs._options(step, options)
+    jobs._resources(step, resources)
+    parameters = {'inputs': inputs, 'settings': reviewed, 'resources': resources}
+    if answers:
+        parameters['options'] = answers
+    return parameters
+
+
 @jobs._one_at_a_time
 def confirm(run_id, session, proposal_id, inputs, settings, resources, options=None, *, step_name='genotype'):
     root = jobs._root(run_id)
@@ -147,27 +168,16 @@ def confirm(run_id, session, proposal_id, inputs, settings, resources, options=N
         _write(root, step_name, record)
         raise jobs.StepError('conflict', 'Analysis settings changed. Open a fresh confirmation card.')
     step = jobs._step(step_name)
-    if not isinstance(settings, dict) or set(settings) != set(step.settings):
-        raise jobs.StepError('invalid_request', 'All step settings must be reviewed.')
-    if not isinstance(resources, dict) or set(resources) != set(step.resources):
-        raise jobs.StepError('invalid_request', 'All compute resources must be reviewed.')
-    if step.prompts and (not isinstance(options, dict) or set(options) != set(step.prompts)):
-        raise jobs.StepError('invalid_request', 'All step options must be reviewed.')
-    reviewed = jobs.validate_settings(step.settings, settings)
-    answers = jobs._options(step, options)
-    jobs._resources(step, resources)
+    parameters = reviewed_parameters(step, inputs, settings, resources, options)
     config = jobs._environment()
     directory = jobs._remote_dir(config, root, run_id)
-    jobs._inputs(step, inputs, (config['root'] + '/refdata', config['source'] + '/example', directory))
+    jobs._inputs(step, inputs, jobs._input_roots(config, root, directory))
 
     # Consume the card under the submission lock before contacting the scheduler.
-    parameters = {'inputs': inputs, 'settings': reviewed, 'resources': resources}
-    if answers:
-        parameters['options'] = answers
     record.update(state='confirmed', parameters=parameters)
     _write(root, step_name, record)
     try:
-        result = jobs.submit(run_id, step_name, inputs, resources, answers, settings_override=settings)
+        result = jobs.submit(run_id, step_name, inputs, resources, parameters.get('options'), settings_override=settings)
     except jobs.StepError:
         record['state'] = 'submission_error'
         _write(root, step_name, record)

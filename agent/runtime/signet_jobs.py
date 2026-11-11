@@ -452,6 +452,8 @@ def analysis_view(root, cohort, records, *, include_attempts=True):
                     phase = 'validating'
             flag = STEPS[name].flag if name in STEPS else '-v'
             stage = {'step': name, 'flag': flag, 'phase': phase}
+            if record and record.get('reused_from'):
+                stage['reused_from'] = record['reused_from']
             if include_attempts:
                 stage['attempts'] = attempts
             elif record:
@@ -469,9 +471,12 @@ def analysis_view(root, cohort, records, *, include_attempts=True):
                 if progress:
                     stage['progress'] = progress
             stages.append(stage)
-    return {'session': analysis_session(root), 'steps': stages,
+    view = {'session': analysis_session(root), 'steps': stages,
             'completed_steps': sum(step['phase'] == 'completed' for step in stages),
             'total_steps': len(stages)}
+    if origin := _rerun_origin(root):
+        view['rerun'] = {key: origin[key] for key in ('source_run', 'from_step')}
+    return view
 
 
 @_one_at_a_time
@@ -650,6 +655,18 @@ def _inputs(step, values, allowed):
             raise StepError('invalid_request', f'{key} must be inside ' + ', '.join(allowed) + '.')
         checked[key] = (value, root)
     return checked
+
+
+def _rerun_origin(root):
+    try:
+        return json.loads((root / 'rerun.json').read_text())
+    except FileNotFoundError:
+        return {}
+
+
+def _input_roots(config, root, directory):
+    return (config['root'] + '/refdata', config['source'] + '/example', directory,
+            *_rerun_origin(root).get('input_roots', ()))
 
 
 def _chromosome_key(step):
@@ -926,7 +943,7 @@ def submit(run_id, name, inputs, resources=None, options=None, *, settings_overr
     _check_current(step, {**current, **overrides})
     config = _environment()
     directory = _remote_dir(config, root, run_id)
-    checked = _inputs(step, inputs, (config['root'] + '/refdata', config['source'] + '/example', directory))
+    checked = _inputs(step, inputs, _input_roots(config, root, directory))
     if previous:
         _ensure_stopped(previous)  # before uploading config.ini or touching any old result
         archived = _attempt_path(root, name, attempt - 1)

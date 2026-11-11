@@ -63,6 +63,7 @@ Workflow panel / AI tool
 - Before retrying, a successful scheduler query must confirm that the previous job and this run's child jobs have stopped. This check happens before uploading a new configuration.
 - A retry moves the step's previous result folder, remotely and locally, to `steps/<step>.attempt<N>.results`. Earlier steps' results stay in place; only fresh outputs can complete the new attempt.
 - A `completed` step is not rerun in place: later steps may already have read its results. Compute it again in a new run.
+- In a linked chat, **Rerun stage** prepares a new run from a completed step after the source analysis is idle. It reuses completed stages outside the selected step’s dependency chain. The old run and its downloads remain available.
 - A step that is still active or `unknown` cannot be resubmitted; check its status first.
 
 **One active step per run.** While a step of a run is active, no other step of that run can be submitted and its settings cannot change. Two steps of one run would otherwise share one `config.ini`.
@@ -343,6 +344,13 @@ aliases for the `genotype` proposal actions.
   shown in the card. The server checks ordering and rejects stale settings. It consumes the
   approval under the run's submission lock before contacting the scheduler. A repeat returns
   409 even if the first reply was lost.
+
+`POST /signet/runs/{run_id}/steps/{step}/rerun/prepare` accepts the owning `session` and returns
+the completed step's parameters, its resource limits, and the steps to rerun or reuse. It queues no
+job. `POST /signet/runs/{run_id}/steps/{step}/rerun/confirm` accepts the normal confirmation body
+and consumes that proposal once. It creates a separate run in the same chat, copies the reusable
+outputs locally and on HPC3, and submits only the selected step. The new run's progress identifies
+its source and which stages reuse earlier results. Dependent stages require their own confirmation.
 
 ### 5.13 Graph and results
 

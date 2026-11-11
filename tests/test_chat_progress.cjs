@@ -18,6 +18,8 @@ class Element {
   replaceChildren(...children){this.children=[];this.append(...children);}
   after(child){child.parentElement=this.parentElement;const siblings=this.parentElement.children;siblings.splice(siblings.indexOf(this)+1,0,child);}
   reportValidity(){return true;}
+  showModal(){this.open=true;}
+  close(){this.open=false;this.events.close?.();}
   click(){if(this.tag==='a')activatedLinks.push(this.href);else this.events.click?.();}
   remove(){if(this.parentElement)this.parentElement.children=this.parentElement.children.filter(c=>c!==this);}
   get lastChild(){return this.children.at(-1);}
@@ -320,6 +322,7 @@ function setup(initial={}, analysisApi) {
     visualize:{inputs:{},settings:{freq:'0.5',ntop:'1'}}
   };
   const graphDraws=[];
+  const rerunCalls=[];
   const sequenceApi=async (path, options)=>{
     const step=stageNames[nextIndex];
     if(path==='/signet/progress?session='+session)return json({analyses:[{
@@ -334,6 +337,16 @@ function setup(initial={}, analysisApi) {
       assert.deepEqual(JSON.parse(options.body),{session});
       return json({url:'/signet/result-download?ticket=example-ticket'});
     }
+    if(path.startsWith('/signet/runs/same-run/steps/adjust/rerun/')){
+      const action=path.split('/').at(-1);
+      rerunCalls.push({action, body:JSON.parse(options.body)});
+      if(action==='prepare') return json({id:'rerun-adjust',parameters:submitted.adjust,
+        affected_steps:['cis','network','visualize'],reused_steps:['genotype','expression']});
+      return json({run_id:'child-run',state:'submitted'});
+    }
+    if(path==='/signet/runs/same-run/steps/genotype/rerun/prepare') return json({id:'rerun-genotype',
+      parameters:{settings:{'restrict.tcga.geno':'1'}}, affected_steps:['adjust','cis','network','visualize'],
+      reused_steps:['expression'], chromosome_pair:{setting:'restrict.tcga.geno',stage:'expression'}});
     const endpoint='/signet/runs/same-run/steps/'+step;
     if(path===endpoint)return json({state:activePhase});
     assert.ok(path.startsWith(endpoint+'/proposal/'),path);
@@ -376,7 +389,8 @@ function setup(initial={}, analysisApi) {
     const cards=stageCards(sequenceLog);
     assert.equal(cards.length,i+1,'only the next stage adds a card');
     assert.deepEqual(cards.slice(0,i),retained,'all previous card elements stay in place');
-    assert.ok(retained.every(card=>!card.hidden && card.querySelectorAll('button').length===0));
+    assert.ok(retained.every(card=>!card.hidden && card.querySelectorAll('button')
+      .filter(button=>!button.hidden).every(button=>button.textContent==='重新執行')));
     const sequenceReview=cards[i];
     retained.push(sequenceReview);
     const reviewButton=text=>sequenceReview.querySelectorAll('button').find(el=>el.textContent===text);
@@ -402,7 +416,8 @@ function setup(initial={}, analysisApi) {
   assert.equal(confirmations.find(item=>item.step==='network').body.settings.walltime,'1:00:00');
   assert.equal(confirmations.find(item=>item.step==='visualize').body.settings.freq,.5);
   assert.deepEqual(stageCards(sequenceLog),retained);
-  assert.ok(retained.every(card=>!card.hidden && card.querySelectorAll('button').length===0));
+  assert.ok(retained.every(card=>!card.hidden && card.querySelectorAll('button')
+    .filter(button=>!button.hidden).map(button=>button.textContent).join() === '重新執行'));
   assert.match(retained[2].querySelectorAll('details')[0].textContent,/主成分數2/);
   assert.equal(sequenceLog.children.filter(el=>el.className==='analysis-progress-card').length,1);
   const resultCard=sequenceLog.children.find(el=>el.className.startsWith('analysis-result-card'));
@@ -417,6 +432,39 @@ function setup(initial={}, analysisApi) {
   resultCard.querySelectorAll('button')[0].click();
   await new Promise(setImmediate);
   assert.equal(activatedLinks.at(-1),'/signet/result-download?ticket=example-ticket');
+  const previousAdjust=retained[2];
+  assert.match(previousAdjust.textContent,/輸入檔案.*clinical\.tsv.*查看完整路徑.*分析參數.*運算資源/);
+  assert.match(previousAdjust.querySelectorAll('details')[1].textContent,/\/demo\/clinical.tsv/);
+  const rerunButton=previousAdjust.querySelectorAll('button').find(button=>button.textContent==='重新執行');
+  rerunButton.click();
+  await new Promise(setImmediate);
+  let rerunDialog=previousAdjust.querySelectorAll('dialog')[0];
+  assert.ok(rerunDialog.open);
+  assert.match(rerunDialog.textContent,/需要重跑.*第 4 階段.*第 5 階段.*第 6 階段.*可沿用.*第 1 階段.*第 2 階段/);
+  assert.ok(rerunDialog.querySelectorAll('input').some(input=>input.value===2));
+  rerunDialog.querySelectorAll('button').find(button=>button.textContent==='取消').click();
+  assert.deepEqual(rerunCalls.map(call=>call.action),['prepare']);
+  rerunButton.click();
+  await new Promise(setImmediate);
+  rerunDialog=previousAdjust.querySelectorAll('dialog')[0];
+  rerunDialog.querySelectorAll('label').find(label=>label.textContent==='主成分數').querySelectorAll('input')[0].value='4';
+  const confirmRerun=rerunDialog.querySelectorAll('button').find(button=>button.textContent==='確認重新送算');
+  confirmRerun.click();confirmRerun.click();
+  await new Promise(setImmediate);
+  assert.deepEqual(rerunCalls.map(call=>call.action),['prepare','prepare','confirm']);
+  assert.equal(rerunCalls.at(-1).body.options.npc,4);
+  assert.equal(rerunCalls.at(-1).body.proposal_id,'rerun-adjust');
+  assert.equal(previousAdjust.querySelectorAll('dialog').length,0);
+  assert.match(previousAdjust.querySelectorAll('details')[0].textContent,/主成分數2/);
+  retained[0].querySelectorAll('button').find(button=>button.textContent==='重新執行').click();
+  await new Promise(setImmediate);
+  const genotypeRerun=retained[0].querySelectorAll('dialog')[0];
+  assert.match(genotypeRerun.textContent,/可沿用第 2 階段/);
+  genotypeRerun.querySelectorAll('select')[0].value='2';
+  genotypeRerun.querySelectorAll('form')[0].events.change();
+  assert.match(genotypeRerun.textContent,/需要重跑第 2 階段/);
+  assert.doesNotMatch(genotypeRerun.textContent,/可沿用/);
+  genotypeRerun.close();
   const reopened=setup({session},sequenceApi);
   await new Promise(setImmediate);
   const restoredCards=stageCards(reopened.ids.get('messages'));

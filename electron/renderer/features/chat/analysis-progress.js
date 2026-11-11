@@ -44,6 +44,13 @@
     const id = node('small', 'analysis-progress-id');
     id.textContent = analysis.run_id;
     identity.append(id);
+    if (analysis.rerun) {
+      const origin = node('small', 'analysis-progress-id');
+      const source = node('span', '');
+      source.textContent = ` ${analysis.rerun.source_run}`;
+      origin.append(node('span', '', '重新執行自'), source);
+      identity.append(origin);
+    }
     const count = node('span', 'analysis-progress-count');
     const bar = node('progress', 'analysis-progress-bar');
     bar.setAttribute('aria-label', translateUI('已完成階段'));
@@ -72,8 +79,8 @@
     messages.append(root);
     if (atEnd) messages.scrollTop = messages.scrollHeight;
     const path = '/signet/runs/' + encodeURIComponent(analysis.run_id);
-    const review = createStepReview(root, (step, action, body, state) =>
-      request(path + '/steps/' + encodeURIComponent(step) + '/proposal/' + action,
+    const review = createStepReview(root, (step, action, body, state, rerun = false) =>
+      request(path + '/steps/' + encodeURIComponent(step) + (rerun ? '/rerun/' : '/proposal/') + action,
               state, {session, ...body}, 'POST'), poll, phases, active);
     const results = createAnalysisResults(path, session, request);
     return {root, count, bar, current, notice, stages, review, results, stale:false};
