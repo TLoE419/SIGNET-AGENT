@@ -10,8 +10,8 @@ const assets=new Map([
  ['/vendor/vis-network.min.js',['vendor/vis-network.min.js','text/javascript']],
 ]);
 const escapeHtml=value=>String(value).replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
-function headers(type,devMode){return {'Content-Type':type+'; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer',
- 'Content-Security-Policy':`default-src 'self'; script-src 'self'; style-src 'self'${devMode?" 'unsafe-inline'":''}; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`};}
+function headers(type,devMode,origin){return {'Content-Type':type+'; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer',
+ 'Content-Security-Policy':`default-src 'self'; script-src 'self'; style-src 'self'${devMode?" 'unsafe-inline'":''}; connect-src 'self'; frame-src ${origin}/signet/result-preview/; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`};}
 /** Serve only the renderer build allowlist. All API requests retain their HTTP origin. */
 function createRendererHandler({origin,fetch,devMode=false,directory=path.join(__dirname,'../../build/renderer')}){
  let pageToken;
@@ -39,11 +39,11 @@ function createRendererHandler({origin,fetch,devMode=false,directory=path.join(_
     pageToken=token;
     const template=await readFile(path.join(directory,'index.html'),'utf8');
     const values={__TOKEN__:escapeHtml(token),__MODEL__:escapeHtml(model),__INITIAL_CHAT__:JSON.stringify(initial).replace(/</g,'\\u003c')};
-    return new Response(template.replace(/__TOKEN__|__MODEL__|__INITIAL_CHAT__/g,key=>values[key]),{headers:headers('text/html',devMode)});
+    return new Response(template.replace(/__TOKEN__|__MODEL__|__INITIAL_CHAT__/g,key=>values[key]),{headers:headers('text/html',devMode,origin)});
    }
    const [file,type]=assets.get(url.pathname);
-   return new Response(await readFile(path.join(directory,file)),{headers:headers(type,devMode)});
-  }catch{return new Response('Renderer unavailable. Rebuild Electron and restart.',{status:503,headers:headers('text/plain',devMode)})}
+   return new Response(await readFile(path.join(directory,file)),{headers:headers(type,devMode,origin)});
+  }catch{return new Response('Renderer unavailable. Rebuild Electron and restart.',{status:503,headers:headers('text/plain',devMode,origin)})}
  };
 }
 module.exports={createRendererHandler};

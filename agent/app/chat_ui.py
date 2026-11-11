@@ -40,6 +40,7 @@ class ChatServer(ThreadingHTTPServer):
         self.active_session = None
         self.analysis_download_lock = threading.Lock()
         self.analysis_downloads = {}
+        self.analysis_previews = {}
         if self.state_file and self.state_file.exists():
             state = json.loads(self.state_file.read_text())
             self.token = state['token']
@@ -114,6 +115,8 @@ class ChatHandler(BaseHTTPRequestHandler):
         url = urlsplit(self.path)
         if url.path == '/signet/result-download':
             return signet_api.download_results(self, url)
+        if url.path.startswith('/signet/result-preview/'):
+            return signet_api.preview_result(self, url)
         if url.path.startswith('/signet/'):
             # Responses name the user's runs and HPC3 paths, so reads need the page token too.
             if not secrets.compare_digest(self.headers.get('X-Chat-Token', ''), self.server.token):

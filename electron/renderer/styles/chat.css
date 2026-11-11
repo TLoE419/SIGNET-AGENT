@@ -189,4 +189,5 @@
 .step-rerun-actions{justify-content:flex-end;margin-top:12px}
 .step-review-error-detail{display:block;overflow-wrap:anywhere}
 
-.analysis-result-graph{height:340px;margin:10px 0;border:1px solid var(--line);border-radius:8px;background:white}
+.analysis-result-graph{display:block;width:100%;height:clamp(340px,48vh,620px);margin:10px 0;border:1px solid var(--line);border-radius:8px;background:white}
+.analysis-result-picker{margin-top:8px}

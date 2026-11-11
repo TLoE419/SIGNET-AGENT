@@ -354,9 +354,10 @@ its source and which stages reuse earlier results. Dependent stages require thei
 
 ### 5.13 Graph and results
 
-Once all six stages complete, the chat draws the graph from the same run’s downloaded edge
-table. Large graphs show a bounded selection of nodes and edges. The result download contains
-all recorded outputs from the six stages, including the official HTML and its companion files.
+Once all six stages complete, the results response includes the graph data and a `previews`
+list with the subnetwork number and a local URL for each official HTML export. The chat embeds
+the original widget in a sandboxed frame. Each preview URL and its companion files use a
+five-minute ticket scoped to the completed analysis. The result ZIP contains all recorded outputs.
 
 The download request accepts `{"session": "..."}` and returns a local URL with a single-use
 ticket expiring after one minute. The browser retrieves the ZIP from that URL. Both the graph

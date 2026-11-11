@@ -321,7 +321,8 @@ function setup(initial={}, analysisApi) {
     network:{inputs:{},settings:{nboots:'2',walltime:'1:00:00'}},
     visualize:{inputs:{},settings:{freq:'0.5',ntop:'1'}}
   };
-  const graphDraws=[];
+  const previewUrl=(number, ticket='a'.repeat(32))=>`/signet/result-preview/${ticket}/signet_top${number}_freq0.5.html`;
+  let resultsReads=0;
   const rerunCalls=[];
   const sequenceApi=async (path, options)=>{
     const step=stageNames[nextIndex];
@@ -330,9 +331,13 @@ function setup(initial={}, analysisApi) {
       steps:stageNames.map((name,index)=>({step:name,phase:index<nextIndex?'completed':index===nextIndex?activePhase:'not_started',
         parameters:submitted[name]}))
     }]});
-    if(path==='/signet/runs/same-run/results?session='+session)return json({graph:{
-      display_nodes:['A','B'], edges:[{source:'A',target:'B'}], counts:{genes:2,connections:1}
-    }});
+    if(path==='/signet/runs/same-run/results?session='+session) {
+      const ticket=(++resultsReads===1?'a':'b').repeat(32);
+      return json({graph:{counts:{genes:2,connections:1}},previews:[
+        {subnetwork:1,url:previewUrl(1,ticket)}, {subnetwork:2,url:previewUrl(2,ticket)},
+        {subnetwork:3,url:'https://example.test/plot.html'}
+      ]});
+    }
     if(path==='/signet/runs/same-run/results/download') {
       assert.deepEqual(JSON.parse(options.body),{session});
       return json({url:'/signet/result-download?ticket=example-ticket'});
@@ -372,12 +377,6 @@ function setup(initial={}, analysisApi) {
     return json({state:'submitted'});
   };
   const sequence=setup({session},sequenceApi);
-  sequence.context.vis={Network:class {
-    constructor(el, data, options){this.data=data;this.physics=options.physics.enabled ?? true;graphDraws.push(this);}
-    once(event, callback){this[event]=callback;}
-    setOptions(options){this.physics=options.physics.enabled;}
-    destroy(){}
-  }};
   await new Promise(setImmediate);
   const sequenceLog=sequence.ids.get('messages');
   const sequenceProgress=sequenceLog.children.find(el=>el.className==='analysis-progress-card');
@@ -423,12 +422,15 @@ function setup(initial={}, analysisApi) {
   const resultCard=sequenceLog.children.find(el=>el.className.startsWith('analysis-result-card'));
   assert.equal(sequenceLog.children[sequenceLog.children.indexOf(retained[5])+1],resultCard);
   assert.match(resultCard.textContent,/2 個基因 · 1 條連線/);
-  assert.equal(graphDraws.length,1);
-  const network=graphDraws[0];
-  assert.equal(network.data.edges[0].to,'B');
-  assert.equal(network.physics,true,'the renderer lays out the graph first');
-  network.stabilizationIterationsDone?.();
-  assert.equal(network.physics,false,'nodes must stop moving after initial layout');
+  const [frame]=resultCard.querySelectorAll('iframe');
+  assert.equal(frame.src,previewUrl(1));
+  assert.equal(frame.attributes.sandbox,'allow-scripts');
+  const [subnetworkPicker]=resultCard.querySelectorAll('select');
+  assert.deepEqual(subnetworkPicker.children.map(option=>option.value),['1','2']);
+  subnetworkPicker.value='2';
+  await subnetworkPicker.events.change();
+  assert.equal(frame.src,previewUrl(2,'b'.repeat(32)),'switching subnetworks refreshes the grant');
+  assert.equal(resultCard.querySelectorAll('iframe').length,1);
   resultCard.querySelectorAll('button')[0].click();
   await new Promise(setImmediate);
   assert.equal(activatedLinks.at(-1),'/signet/result-download?ticket=example-ticket');

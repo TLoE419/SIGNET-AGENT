@@ -235,6 +235,7 @@ class SignetApiTest(unittest.TestCase):
         expression.write_text('example expression')
         (self.hpc / 'ws/refdata/gencode.v22.genes.gtf').write_text('annotation')
         edges = 'source_gene_symbol,target_gene_symbol,frequency,coefficient\nA,B,0.75,0.2\n'
+        original_plot = '<html><head></head><body>Original SIGNET widget</body></html>'
 
         submitted = {}
         for index, step in enumerate(jobs.ANALYSIS_STEPS):
@@ -287,7 +288,8 @@ class SignetApiTest(unittest.TestCase):
             for name in [*outputs, *extra]:
                 file = self.remote_dir / 'work' / name
                 file.parent.mkdir(parents=True, exist_ok=True)
-                file.write_text(edges if name.endswith('signet-edges.csv') else step)
+                content = {'signet-edges.csv': edges, 'signet_top1_freq0.75.html': original_plot}
+                file.write_text(content.get(file.name, step))
             (self.remote_dir / f'steps/{step}.done').write_text('0 2026-11-01T10:00:00\n')
             self.slurm(sacct='COMPLETED')
             if step == 'visualize':
@@ -318,14 +320,32 @@ class SignetApiTest(unittest.TestCase):
 
         self.assertEqual(sum('sbatch --parsable' in command for command in self.calls), 6)
         self.assertEqual(self.call('GET', run + '/results?session=' + other)[0], 404)
-        graph = self.call('GET', results)[1]['graph']
+        response = self.call('GET', results)[1]
+        graph = response['graph']
         self.assertEqual(graph['edges'], [{'source': 'A', 'target': 'B', 'frequency': .75, 'coefficient': .2}])
+        self.assertEqual([plot['subnetwork'] for plot in response['previews']], [1])
+        preview = response['previews'][0]['url']
+        status, embedded = self.call('GET', preview, headers={})
+        self.assertEqual(status, 200)
+        self.assertIn('<body>Original SIGNET widget</body>', embedded)
+        self.assertIn('stabilizationIterationsDone', embedded)
+        base = preview.rsplit('/', 1)[0]
+        assets = base + '/signet_top1_freq0.75_files/'
+        self.assertEqual(self.call('GET', assets + 'widget.js', headers={}), (200, 'visualize'))
+        self.assertEqual(self.call('GET', base + '/signet-edges.csv', headers={})[0], 404)
+        self.assertEqual(self.call('GET', assets + '../signet-edges.csv', headers={})[0], 404)
+        self.assertEqual(self.call('GET', assets + 'unrecorded.js', headers={})[0], 404)
+        self.assertEqual(self.call('GET', '/signet/result-preview/' + 'x' * 32 +
+                                   '/signet_top1_freq0.75.html', headers={})[0], 403)
+        with patch('agent.app.signet_api.time.monotonic', return_value=float('inf')):
+            self.assertEqual(self.call('GET', preview, headers={})[0], 403)
         self.assertEqual(self.call('POST', download, {'session': other})[0], 404)
         ticket = self.call('POST', download, {'session': session})[1]['url']
         status, payload = self.call('GET', ticket, headers={})
         self.assertEqual(status, 200, payload)
         with ZipFile(io.BytesIO(payload)) as archive:
             self.assertEqual(archive.read('work/res/resv/signet-edges.csv').decode(), edges)
+            self.assertEqual(archive.read('work/res/resv/signet_top1_freq0.75.html').decode(), original_plot)
             self.assertIn('work/res/resv/signet_top1_freq0.75_files/widget.js', archive.namelist())
             self.assertIn('work/res/resg/signet_Geno', archive.namelist())
         self.assertEqual(self.call('GET', ticket, headers={})[0], 403)

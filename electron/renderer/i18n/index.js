@@ -52,8 +52,10 @@ const uiEnglish = {
   "無法開啟重新執行設定，請重新整理分析進度。": "Could not open rerun settings. Refresh analysis progress.",
   "分析結果": "Analysis results",
   "基因調控網路圖": "Gene regulatory network",
+  "原版基因調控網路圖": "Original SIGNET gene regulatory network",
+  "選擇子網路": "Choose a subnetwork",
+  "找不到原版互動圖。": "The original interactive network is unavailable.",
   "下載分析結果": "Download analysis results",
-  "圖中顯示部分連線，完整結果可下載。": "Only part of the network is shown. Download the complete results.",
   "暫時無法載入網路圖。": "Unable to load the network graph.",
   "無法下載結果，請再試一次。": "Could not download the results. Try again.",
   "第 1 階段 · 基因型前處理": "Stage 1 · Genotype preprocessing",
@@ -300,6 +302,7 @@ function translateUI(source, language = uiLanguage) {
   }
   const patterns = [
     [/^(\d+) 個基因 · (\d+) 條連線$/, '$1 genes · $2 edges'],
+    [/^子網路 (\d+)$/, 'Subnetwork $1'],
     [/^已完成 (\d+)\/(\d+) 階段$/, '$1/$2 stages complete'],
     [/^第 (\d+) 組：(\d+)\/(\d+)$/, 'Batch $1: $2/$3'],
     [/^模型請求失敗（(.*)）。$/, 'Model request failed ($1).'],
@@ -337,7 +340,7 @@ function applyLanguage(language) {
   uiLanguage = language === 'zh-Hant' ? 'zh-Hant' : 'en';
   document.documentElement.lang = uiLanguage;
   document.querySelectorAll('[data-i18n]').forEach(el => { el.textContent = translateUI(el.dataset.i18n); });
-  for (const [key, attr] of [['i18nAria','aria-label'],['i18nPlaceholder','placeholder'],['i18nPrompt','data-prompt']]) {
+  for (const [key, attr] of [['i18nAria','aria-label'],['i18nTitle','title'],['i18nPlaceholder','placeholder'],['i18nPrompt','data-prompt']]) {
     document.querySelectorAll(`[data-${key.replace(/[A-Z]/g, ch=>'-'+ch.toLowerCase())}]`).forEach(el => {
       el.setAttribute(attr, translateUI(el.dataset[key]));
     });

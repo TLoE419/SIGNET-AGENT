@@ -2,15 +2,20 @@ function createAnalysisResults(path, session, request) {
   const card = node('article', 'analysis-result-card step-review-card');
   const status = node('p', 'step-review-notice');
   status.setAttribute('role', 'status');
-  const graph = node('div', 'analysis-result-graph');
-  graph.setAttribute('aria-label', translateUI('基因調控網路圖'));
-  graph.dataset.i18nAria = '基因調控網路圖';
+  const graph = node('iframe', 'analysis-result-graph');
+  graph.setAttribute('title', translateUI('原版基因調控網路圖'));
+  graph.dataset.i18nTitle = '原版基因調控網路圖';
+  graph.setAttribute('sandbox', 'allow-scripts');
+  graph.setAttribute('referrerpolicy', 'no-referrer');
   const controls = node('div', 'step-review-actions');
   const download = node('button', '', '下載分析結果');
   download.type = 'button';
   controls.append(download);
-  card.append(node('strong', '', '分析結果'), status, graph, controls);
-  let network, loading = false, drawn = false, polling, removed = false;
+  card.append(node('strong', '', '分析結果'), status, controls);
+  let loading = false, drawn = false, polling, removed = false;
+  const resultsPath = path + '/results?session=' + encodeURIComponent(session);
+  const originalPlots = result => (result.previews || []).filter(({url}) =>
+    /^\/signet\/result-preview\/[A-Za-z0-9_-]{32}\/signet_top[1-9][0-9]*_freq[0-9.eE+-]+\.html$/.test(url));
 
   download.addEventListener('click', async () => {
     if (!polling || download.disabled) return;
@@ -39,34 +44,44 @@ function createAnalysisResults(path, session, request) {
     loading = true;
     if (!card.parentElement) lastStageCard.after(card);
     try {
-      const result = await request(path + '/results?session=' + encodeURIComponent(session), state);
+      const result = await request(resultsPath, state);
       if (state.controller.signal.aborted || removed) return;
-      const {display_nodes: names, edges, counts} = result.graph;
-      // Keep interactive layout responsive on large graphs. The ZIP retains the full exports.
-      const selected = new Set(names);
-      const visible = new Set();
-      const connections = [];
-      for (const edge of edges) {
-        if (!selected.has(edge.source) || !selected.has(edge.target)) continue;
-        const newNodes = new Set([edge.source, edge.target].filter(name => !visible.has(name)));
-        if (visible.size + newNodes.size > 500 || connections.length === 3000) continue;
-        for (const name of newNodes) visible.add(name);
-        connections.push(edge);
-      }
-      const clipped = visible.size !== selected.size || connections.length === 3000;
-      const nodes = [...visible].map(name => ({id:name, label:name, color:'#38795b'}));
-      const links = connections.map(edge => ({from:edge.source, to:edge.target, arrows:'to'}));
-      if (window.vis) {
-        network = new window.vis.Network(graph, {nodes, edges:links}, {
-          nodes:{shape:'dot', size:6, font:{size:12}},
-          edges:{color:{color:'#889b90'}, smooth:false},
-          physics:{stabilization:{iterations:120}}
+      const {counts} = result.graph;
+      const previews = originalPlots(result);
+      uiText(status, `${counts.genes} 個基因 · ${counts.connections} 條連線`);
+      if (previews.length > 1) {
+        const picker = node('select', 'analysis-result-picker');
+        picker.setAttribute('aria-label', translateUI('選擇子網路'));
+        picker.dataset.i18nAria = '選擇子網路';
+        for (const {subnetwork} of previews) {
+          const option = node('option', '', `子網路 ${subnetwork}`);
+          option.value = String(subnetwork);
+          picker.append(option);
+        }
+        picker.addEventListener('change', async () => {
+          const selected = picker.value;
+          const state = polling;
+          try {
+            const available = originalPlots(await request(resultsPath, state));
+            if (state.controller.signal.aborted || removed || picker.value !== selected) return;
+            const plot = available.find(item => String(item.subnetwork) === selected);
+            if (!plot) throw new Error('Missing original plot');
+            graph.src = plot.url;
+            uiText(status, `${counts.genes} 個基因 · ${counts.connections} 條連線`);
+          } catch (_) {
+            if (!state.controller.signal.aborted && !removed && picker.value === selected) {
+              uiText(status, '暫時無法載入網路圖。');
+            }
+          }
         });
-        // The iteration limit ends the initial layout, but the library keeps simulating afterward.
-        network.once('stabilizationIterationsDone', () => network.setOptions({physics:{enabled:false}}));
+        status.after(picker);
+        picker.after(graph);
+      } else if (previews.length) {
+        status.after(graph);
+      } else {
+        status.after(node('p', 'step-review-notice', '找不到原版互動圖。'));
       }
-      uiText(status, `${counts.genes} 個基因 · ${counts.connections} 條連線` +
-        (clipped ? '\n圖中顯示部分連線，完整結果可下載。' : ''));
+      if (previews.length) graph.src = previews[0].url;
       drawn = true;
     } catch (_) {
       if (!state.controller.signal.aborted && !removed) uiText(status, '暫時無法載入網路圖。');
@@ -75,5 +90,5 @@ function createAnalysisResults(path, session, request) {
     }
   }
 
-  return {show, remove() {removed = true; network?.destroy(); card.remove();}};
+  return {show, remove() {removed = true; card.remove();}};
 }

@@ -9,8 +9,8 @@ rules: every check on run names, paths, settings and resources happens in the
 service, so the app's buttons and any future AI tool share one code path.
 
 Security comes from ChatHandler before a request reaches this module: the Host
-must be 127.0.0.1:<port>, and requests must carry X-Chat-Token except for ZIP
-retrieval with a single-use ticket. POST/PATCH must come from the app's
+must be 127.0.0.1:<port>, and requests must carry X-Chat-Token except for
+ticketed result downloads and preview files. POST/PATCH must come from the app's
 Origin. Bodies are JSON objects of at most 32 KB.
 
 Every error reply is {"error": "<message for the user>", "code": "<machine code>"}:
@@ -23,6 +23,8 @@ Every error reply is {"error": "<message for the user>", "code": "<machine code>
   500 internal_error    an unexpected error in this app (details go to the backend log only)
   502 remote_failed     an SSH or Slurm command on HPC3 failed
 """
+from base64 import b64encode
+from hashlib import sha256
 import json
 import re
 import secrets
@@ -46,6 +48,29 @@ _RUN_NAME = r'[A-Za-z0-9][A-Za-z0-9_-]{0,63}'  # same rule as agent.tools.signet
 _RUN = rf'(?P<run_id>{_RUN_NAME})'
 _STEP = r'(?P<step>[a-z_]{1,32})'
 _SESSION = re.compile(r'[a-f0-9-]{36}')  # same session IDs accepted by ChatHandler
+_PREVIEW = re.compile(r'/signet/result-preview/(?P<ticket>[A-Za-z0-9_-]{32})/(?P<name>[A-Za-z0-9_.+/-]+)')
+_NETWORK_HTML = re.compile(r'signet_top([1-9][0-9]*)_freq[0-9.eE+-]+\.html')
+_PREVIEW_TYPES = {'.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
+                  '.css': 'text/css; charset=utf-8', '.png': 'image/png'}
+_EMBED_STYLE = b'''<style>
+html,body,#htmlwidget_container{height:100%;margin:0!important;padding:0!important}
+html,body{overflow:hidden}
+.visNetwork.html-widget{height:100%!important}
+</style>'''
+_EMBED_SCRIPT = b'''
+window.addEventListener('load', () => {
+  const widget = document.querySelector('.visNetwork.html-widget');
+  const network = widget && document.getElementById('graph' + widget.id)?.chart;
+  if (!network) return;
+  const freeze = () => {
+    clearTimeout(timer);
+    network.setOptions({physics:{enabled:false}});
+  };
+  const timer = setTimeout(freeze, 4000);
+  network.once('stabilizationIterationsDone', freeze);
+});
+'''
+_EMBED_HASH = b64encode(sha256(_EMBED_SCRIPT).digest()).decode('ascii')
 
 
 class ApiError(Exception):
@@ -250,7 +275,83 @@ def get_results(handler, url, run_id):
     root, records = _finished_analysis(run_id, session)
     settings = records['visualize']['settings']
     graph = read_graph(root / jobs.STEPS['visualize'].download / 'signet-edges.csv', int(settings['ntop']))
-    return 200, {'graph': graph}
+    previews = _issue_previews(handler.server, root, records['visualize'].get('outputs', ()))
+    return 200, {'graph': graph, 'previews': previews}
+
+
+def _issue_previews(server, root, outputs):
+    directory = jobs.STEPS['visualize'].download
+    paths = []
+    for name in outputs:
+        path = Path(name)
+        if path.is_relative_to(directory) and '..' not in path.parts:
+            paths.append(path.relative_to(directory))
+    plots = []
+    for path in paths:
+        match = _NETWORK_HTML.fullmatch(path.name)
+        if path.parent == Path('.') and match:
+            try:
+                if signet._no_links(root / directory / path).is_file():
+                    plots.append((int(match[1]), path))
+            except ValueError:
+                continue
+    if not plots:
+        return []
+    assets = {plot.stem + '_files' for _, plot in plots}
+    files = {plot.as_posix(): plot for _, plot in plots}
+    for path in paths:
+        if path.parts and path.parts[0] in assets and path.suffix in ('.js', '.css', '.png'):
+            files[path.as_posix()] = path
+    ticket = secrets.token_urlsafe(24)
+    with server.analysis_download_lock:
+        now = time.monotonic()
+        server.analysis_previews = {
+            key: grant for key, grant in server.analysis_previews.items() if grant[0] > now
+        }
+        server.analysis_previews[ticket] = (now + 300, root / directory, files)
+    return [{'subnetwork': number, 'url': f'/signet/result-preview/{ticket}/{plot.name}'}
+            for number, plot in sorted(plots)]
+
+
+def preview_result(handler, url):
+    """Serve an exported widget and its recorded dependencies to a sandboxed frame."""
+    try:
+        _query(url, ())
+        match = _PREVIEW.fullmatch(url.path)
+        with handler.server.analysis_download_lock:
+            grant = handler.server.analysis_previews.get(match['ticket']) if match else None
+        if grant is None or grant[0] <= time.monotonic():
+            raise ApiError(403, 'forbidden', 'Open the analysis results again to load the original graph.')
+        _, directory, files = grant
+        relative = files.get(match['name'])
+        if relative is None:
+            raise ApiError(404, 'not_found', 'No such preview file.')
+        path = signet._no_links(directory / relative)
+        data = path.read_bytes()
+        if path.suffix == '.html':
+            data = data.replace(b'</head>', _EMBED_STYLE + b'<script>' + _EMBED_SCRIPT + b'</script></head>', 1)
+        origin = f'http://127.0.0.1:{handler.server.server_port}'
+        asset_source = f"{origin}/signet/result-preview/{match['ticket']}/"
+        handler.send_response(200)
+        handler.send_header('Content-Type', _PREVIEW_TYPES[path.suffix])
+        handler.send_header('Content-Length', str(len(data)))
+        handler.send_header('Cache-Control', 'no-store')
+        handler.send_header('X-Content-Type-Options', 'nosniff')
+        handler.send_header('Referrer-Policy', 'no-referrer')
+        # The upstream widget evaluates JavaScript inside this opaque-origin frame.
+        handler.send_header('Content-Security-Policy',
+                            f"sandbox allow-scripts; default-src 'none'; "
+                            f"script-src {asset_source} 'unsafe-eval' 'sha256-{_EMBED_HASH}'; "
+                            f"style-src {asset_source} 'unsafe-inline'; img-src {asset_source} data:; "
+                            f"frame-ancestors {origin}; base-uri 'none'; form-action 'none'")
+        handler.end_headers()
+        handler.wfile.write(data)
+    except (BrokenPipeError, ConnectionResetError):
+        return
+    except ApiError as error:
+        return _reply(handler, error.status, error.code, str(error))
+    except (OSError, ValueError):
+        return _reply(handler, 404, 'not_found', 'The recorded preview file is unavailable.')
 
 
 def issue_download(handler, url, run_id):
