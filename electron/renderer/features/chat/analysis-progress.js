@@ -93,8 +93,8 @@
     const path = '/signet/runs/' + encodeURIComponent(analysis.run_id);
     const review = createStepReview(root, (step, action, body, state) =>
       request(path + '/steps/' + encodeURIComponent(step) + '/proposal/' + action,
-              state, {session, ...body}, 'POST'), poll);
-    const results = createAnalysisResults(root, path, session, request);
+              state, {session, ...body}, 'POST'), poll, phases, active);
+    const results = createAnalysisResults(path, session, request);
     return {root, count, bar, current, notice, stages, review, results, stale:false};
   }
 
@@ -176,8 +176,8 @@
       }
       for (const analysis of linked) {
         const card = updateCard(analysis);
-        card.review.update(analysis, state);
-        if (analysis.completed_steps === 6) card.results.show(state);
+        const lastStageCard = card.review.update(analysis, state);
+        if (analysis.completed_steps === 6) card.results.show(state, lastStageCard);
         const step = analysis.steps.find(item => active.has(item.phase));
         if (step) {
           delay = 5000;

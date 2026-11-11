@@ -445,6 +445,10 @@ def analysis_view(root, cohort, records, *, include_attempts=True):
             if include_attempts:
                 stage['attempts'] = attempts
             elif record:
+                parameters = {key: record[key] for key in ('inputs', 'settings', 'resources', 'options')
+                              if record.get(key)}
+                if parameters:
+                    stage['parameters'] = parameters
                 progress = dict(record.get('progress', {}))
                 if phase == 'completed' and name == 'expression':
                     progress['expression_outputs'] = '2 2'

@@ -1,22 +1,49 @@
 // The model proposes; only a click on this card can send reviewed values.
-function createStepReview(progressCard, request, poll) {
-  const panel = node('article', 'step-review-card');
-  panel.hidden = true;
-  const title = node('strong', '');
-  const controls = node('div', 'step-review-controls');
-  const notice = node('p', 'step-review-notice');
-  notice.setAttribute('role', 'status');
-  notice.hidden = true;
-  panel.append(title, controls, notice);
-  progressCard.after(panel);
-  let latest, polling, key, busy = false;
+function createStepReview(progressCard, request, poll, phases, active) {
+  const cards = new Map();
 
+  function update(analysis, state) {
+    const idle = !analysis.steps.some(step => active.has(step.phase));
+    let anchor = progressCard;
+    for (const step of analysis.steps) {
+      const current = step.step === analysis.next_step;
+      const proposal = current ? analysis.proposal : null;
+      const canPrepare = current && idle && ['not_started', 'failed', 'cancelled'].includes(step.phase);
+      let card = cards.get(step.step);
+      if (!card) {
+        if (!proposal && !canPrepare && ['not_started', 'untracked'].includes(step.phase)) continue;
+        card = createStageCard(step.step, request, poll, phases);
+        anchor.after(card.panel);
+        cards.set(step.step, card);
+      }
+      card.update({step, proposal, canPrepare, resourceLimits:analysis.resource_limits}, state);
+      anchor = card.panel;
+    }
+    return anchor;
+  }
+
+  return {update, remove() {for (const card of cards.values()) card.panel.remove();}};
+}
+
+function createStageCard(name, request, poll, phases) {
+  const panel = node('article', 'step-review-card');
+  panel.dataset.step = name;
   const names = {
     genotype:'第 1 階段 · 基因型前處理', expression:'第 2 階段 · 基因表現前處理',
     adjust:'第 3 階段 · 樣本調整', cis:'第 4 階段 · 尋找附近變異',
     network:'第 5 階段 · 建構調控網路', visualize:'第 6 階段 · 畫出網路圖'
   };
-  const attempted = new Set();
+  const title = node('strong', '', names[name]);
+  const phase = node('p', 'step-review-notice step-review-phase');
+  const history = node('details', 'step-review-history');
+  const savedValues = node('dl', 'step-review-grid');
+  history.append(node('summary', '', '本次送算設定'), savedValues);
+  const controls = node('div', 'step-review-controls');
+  const notice = node('p', 'step-review-notice');
+  notice.setAttribute('role', 'status');
+  notice.hidden = true;
+  panel.append(title, phase, history, controls, notice);
+  let latest, polling, key, parametersKey, busy = false, attempted = false;
   const inputs = {'gexp.file':'基因表現資料', 'pmap.file':'基因註解', 'cli.file':'臨床資料表',
     'ped.file':'基因型資料（PED）', 'map.file':'基因型位置（MAP）',
     ref:'補值參考檔前綴', gmap:'遺傳圖譜前綴'};
@@ -34,6 +61,7 @@ function createStepReview(progressCard, request, poll) {
   const resources = {cpus:['運算核心數', 1, 32, 1], mem_gb:['記憶體（GB）', 1, 128, 1],
     hours:['時間上限（小時）', .25, 24, 'any']};
   const options = {npc:['主成分數', 0, 10, 1]};
+  const schemas = {inputs, settings, resources, options};
   const summaries = {declined:'已選擇先不要。尚未送出運算。', confirmed:'已確認，正在送算。',
     sent:'已送算，請查看上方進度。', unknown:'送算狀態未知，請查看上方進度。',
     stale:'確認卡已過期，請重新準備設定。', submission_error:'這次送算未能完成，請查看上方進度或重新準備設定。'};
@@ -76,25 +104,39 @@ function createStepReview(progressCard, request, poll) {
     return input;
   }
 
-  function render(analysis, state) {
-    latest = analysis;
+  function render(review, state) {
+    latest = review;
     polling = state;
+    const {step, proposal, canPrepare, resourceLimits} = review;
+    const label = phases[step.phase] || phases.unknown;
+    phase.hidden = step.phase === 'not_started';
+    if (phase.dataset.i18n !== label) uiText(phase, label);
+    history.hidden = !step.parameters;
+    const nextParameters = JSON.stringify(step.parameters);
+    if (parametersKey !== nextParameters) {
+      parametersKey = nextParameters;
+      savedValues.replaceChildren();
+      for (const [group, schema] of Object.entries(schemas)) {
+        for (const [key, spec] of Object.entries(schema)) {
+          const value = step.parameters?.[group]?.[key];
+          if (value === undefined) continue;
+          const item = node('div', 'step-review-field');
+          const [label, kind] = Array.isArray(spec) ? spec : [spec];
+          const allChromosomes = kind === 'chromosome' && value === 'no';
+          const text = allChromosomes
+            ? node('dd', '', '所有設定的染色體') : node('dd', '');
+          if (!allChromosomes) text.textContent = value;
+          item.append(node('dt', '', label), text);
+          savedValues.append(item);
+        }
+      }
+    }
     if (busy) return;
-    const name = analysis.next_step;
-    const proposal = analysis.proposal;
-    const step = analysis.steps.find(item => item.step === name);
-    const canPrepare = ['not_started', 'failed', 'cancelled'].includes(step?.phase)
-      && !analysis.steps.some(item => ['submitting', 'submitted', 'queued', 'running', 'validating',
-        'downloading', 'cancelling', 'unknown'].includes(item.phase));
-    panel.hidden = !proposal && !canPrepare;
-    const next = JSON.stringify([name, proposal?.id, proposal?.state, canPrepare]);
+    const next = JSON.stringify([proposal?.id, proposal?.state, canPrepare]);
     if (next === key) return;
     key = next;
     controls.replaceChildren();
     say('');
-    if (!name) return;
-    uiText(title, names[name]);
-
     if (proposal?.state === 'pending') {
       if (!canPrepare) {
         say('分析已開始，這張確認卡不能再送算。');
@@ -107,7 +149,7 @@ function createStepReview(progressCard, request, poll) {
         fields.append(node('p', 'step-review-notice', '請選用含樣本編號、種族與性別欄位的相容臨床表。'));
       }
       const values = {};
-      for (const [group, schema] of Object.entries({inputs, settings, resources, options})) {
+      for (const [group, schema] of Object.entries(schemas)) {
         const entries = Object.entries(proposal.parameters[group] || {});
         if (!entries.length) {
           if (group !== 'options') values[group] = {};
@@ -116,7 +158,7 @@ function createStepReview(progressCard, request, poll) {
         const grid = node('div', group === 'inputs' ? 'step-review-grid step-review-inputs' : 'step-review-grid');
         values[group] = Object.fromEntries(entries.map(([key, value]) => {
           const spec = schema[key];
-          const limits = group === 'resources' && analysis.resource_limits?.[key];
+          const limits = group === 'resources' && resourceLimits?.[key];
           const config = limits ? [...limits, spec[3]] : Array.isArray(spec) ? spec.slice(1) : undefined;
           return [key, field(grid, Array.isArray(spec) ? spec[0] : spec, value, config)];
         }));
@@ -125,7 +167,7 @@ function createStepReview(progressCard, request, poll) {
       const actions = node('div', 'step-review-actions');
       const accept = button('同意，開始這一步', confirm);
       accept.className = 'step-review-accept';
-      const decline = button('先不要', () => void act(name, 'decline', {proposal_id:proposal.id}, fields));
+      const decline = button('先不要', () => void act('decline', {proposal_id:proposal.id}, fields));
       actions.append(accept, decline);
       fields.append(actions);
       form.append(fields);
@@ -137,7 +179,7 @@ function createStepReview(progressCard, request, poll) {
             name, input.type === 'text' ? input.value.trim() : input.value === 'no' ? 'no' : Number(input.value)
           ]))
         ]));
-        void act(name, 'confirm', {proposal_id:proposal.id, ...payload}, fields);
+        void act('confirm', {proposal_id:proposal.id, ...payload}, fields);
       }
       controls.append(form);
     } else {
@@ -145,22 +187,22 @@ function createStepReview(progressCard, request, poll) {
       if (canPrepare && proposal?.state !== 'confirmed') {
         const actions = node('div', 'step-review-actions');
         const prepare = button(name === 'genotype' ? '設定第一階段' : '準備本階段設定',
-          () => void act(name, 'prepare', name === 'genotype' ? {mode:'custom'} : {}, actions));
+          () => void act('prepare', name === 'genotype' ? {mode:'custom'} : {}, actions));
         actions.append(prepare);
         if (name === 'genotype' || name === 'expression') {
-          actions.append(button('使用官方示範資料', () => void act(name, 'prepare', {mode:'example'}, actions)));
+          actions.append(button('使用官方示範資料', () => void act('prepare', {mode:'example'}, actions)));
         }
         controls.append(actions);
-        if (name !== 'genotype' && step.phase === 'not_started' && !proposal && !attempted.has(name)) {
-          attempted.add(name);
-          void act(name, 'prepare', {}, actions);
+        if (name !== 'genotype' && step.phase === 'not_started' && !proposal && !attempted) {
+          attempted = true;
+          void act('prepare', {}, actions);
         }
       }
     }
   }
 
-  async function act(name, action, body, section) {
-    if (busy || !polling || polling.controller.signal.aborted) return;
+  async function act(action, body, section) {
+    if (busy || !latest.canPrepare || !polling || polling.controller.signal.aborted) return;
     const state = polling;
     busy = true;
     const buttons = Array.from(section.querySelectorAll('button'));
@@ -172,10 +214,10 @@ function createStepReview(progressCard, request, poll) {
     try {
       const result = await request(name, action, body, state);
       if (state.controller.signal.aborted) return;
-      if (latest.next_step === name) {
+      if (latest.canPrepare) {
         const proposal = action === 'confirm'
           ? {...latest.proposal, state:result.state === 'unknown' ? 'unknown' : 'sent'} : result;
-        latest = {...latest, proposal};
+        latest = {...latest, proposal, canPrepare:action !== 'confirm'};
       }
     } catch (error) {
       if (!state.controller.signal.aborted) {
@@ -202,5 +244,5 @@ function createStepReview(progressCard, request, poll) {
     }
   }
 
-  return {update:render, remove:() => panel.remove()};
+  return {panel, update:render};
 }

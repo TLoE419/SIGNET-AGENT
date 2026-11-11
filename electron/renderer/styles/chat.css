@@ -155,6 +155,11 @@
 .step-review-actions .step-review-accept{background:var(--accent);color:white}
 .step-review-actions button:disabled{opacity:.6;cursor:default}
 .step-review-notice{margin:8px 0 0;font-size:12px;color:var(--muted)}
+.step-review-phase{margin:0 0 6px}
+.step-review-history{margin:6px 0;font-size:12px;color:var(--muted)}
+.step-review-history summary{cursor:pointer;width:fit-content}
+.step-review-history dl{margin:8px 0 0}
+.step-review-history dd{margin:0;color:var(--ink);overflow-wrap:anywhere}
 .step-review-error-detail{display:block;overflow-wrap:anywhere}
 
 .analysis-result-graph{height:340px;margin:10px 0;border:1px solid var(--line);border-radius:8px;background:white}

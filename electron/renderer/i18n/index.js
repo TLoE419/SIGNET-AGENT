@@ -30,6 +30,7 @@ const uiEnglish = {
   "主成分數": "Principal components",
   "請選用含樣本編號、種族與性別欄位的相容臨床表。": "Use a compatible clinical table with submitter ID, race, and gender.",
   "準備本階段設定": "Prepare this stage",
+  "本次送算設定": "Submitted settings",
   "分析結果": "Analysis results",
   "基因調控網路圖": "Gene regulatory network",
   "下載分析結果": "Download analysis results",

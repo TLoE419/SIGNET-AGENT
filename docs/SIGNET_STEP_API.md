@@ -319,7 +319,8 @@ without starting or repeating any computation. The association is stored locally
 Returns `{"analyses": [...]}` for TCGA runs linked to this conversation. Each entry has
 `run_id`, `session`, `completed_steps`, `total_steps`, and the six ordered `steps` described in
 section 5.4. Each step has `step`, `flag`, `phase`, and measured `progress` when available.
-Attempt histories and recorded job inputs are omitted. `next_step` identifies the first
+Submitted steps include their latest job parameters so the chat can restore each stage card.
+Earlier attempts are available in the full analysis view. `next_step` identifies the first
 incomplete stage. Its current review is returned as `proposal`, with reviewed parameters. The separate `resource_limits` field describes the stage’s resource bounds. Both `next_step` and `proposal` are null after completion.
 
 In a saved chat, **Track an existing analysis** links an unassigned run. The chat updates one
@@ -329,7 +330,7 @@ last recorded phase visible. The card shows finished and total work units when t
 ### 5.12 Review and continue a linked analysis
 
 Ask the desktop assistant to prepare genotype preprocessing, or open the first stage from an
-existing linked analysis. After each successful stage, the chat prepares the next card. Every
+existing linked analysis. After each successful stage, the chat adds the next card below the completed ones. Every
 stage requires its own approval and uses the same run. The former genotype-only routes are
 aliases for the `genotype` proposal actions.
 

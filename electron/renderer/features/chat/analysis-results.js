@@ -1,4 +1,4 @@
-function createAnalysisResults(progressCard, path, session, request) {
+function createAnalysisResults(path, session, request) {
   const card = node('article', 'analysis-result-card step-review-card');
   const status = node('p', 'step-review-notice');
   status.setAttribute('role', 'status');
@@ -33,11 +33,11 @@ function createAnalysisResults(progressCard, path, session, request) {
     }
   });
 
-  async function show(state) {
+  async function show(state, lastStageCard) {
     polling = state;
     if (drawn || loading || removed) return;
     loading = true;
-    if (!card.parentElement) progressCard.after(card);
+    if (!card.parentElement) lastStageCard.after(card);
     try {
       const result = await request(path + '/results?session=' + encodeURIComponent(session), state);
       if (state.controller.signal.aborted || removed) return;

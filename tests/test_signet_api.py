@@ -232,6 +232,7 @@ class SignetApiTest(unittest.TestCase):
         (self.hpc / 'ws/refdata/gencode.v22.genes.gtf').write_text('annotation')
         edges = 'source_gene_symbol,target_gene_symbol,frequency,coefficient\nA,B,0.75,0.2\n'
 
+        submitted = {}
         for index, step in enumerate(jobs.ANALYSIS_STEPS):
             base = routes(step)
             if step != 'genotype':
@@ -260,6 +261,8 @@ class SignetApiTest(unittest.TestCase):
             status, record = self.call('POST', base + '/proposal/confirm', body)
             self.assertEqual(status, 202, record)
             self.assertEqual(record['run_id'], 'step_test')
+            submitted[step] = {key: record[key] for key in ('inputs', 'settings', 'resources', 'options')
+                               if record.get(key)}
             self.assertEqual(self.call('POST', base + '/proposal/confirm', body)[0], 409)
             if step == 'adjust':
                 self.assertEqual(record['options'], {'npc': 2})
@@ -287,6 +290,8 @@ class SignetApiTest(unittest.TestCase):
             self.assertEqual((status, completed['state']), (200, 'completed'), completed)
             analysis = self.call('GET', progress)[1]['analyses'][0]
             self.assertEqual(analysis['completed_steps'], index + 1)
+            self.assertEqual({stage['step']: stage['parameters'] for stage in analysis['steps']
+                              if stage['phase'] == 'completed'}, submitted)
             self.assertEqual(analysis['next_step'],
                              jobs.ANALYSIS_STEPS[index + 1] if index + 1 < len(jobs.ANALYSIS_STEPS) else None)
 
@@ -337,8 +342,10 @@ class SignetApiTest(unittest.TestCase):
                 snapshot = progress()
                 self.assertEqual(snapshot['run_id'], 'step_test')
                 self.assertEqual(snapshot['completed_steps'], 0)
-                self.assertEqual(snapshot['steps'][1],
-                                 {'step': 'expression', 'flag': '-t', 'phase': 'downloading'})
+                expression = snapshot['steps'][1]
+                self.assertEqual((expression['step'], expression['flag'], expression['phase']),
+                                 ('expression', '-t', 'downloading'))
+                self.assertIn('inputs', expression['parameters'])
                 self.assertEqual(snapshot['steps'][-1]['phase'], 'not_started')
             finally:
                 release.set()

@@ -309,6 +309,7 @@ function setup(initial={}, analysisApi) {
   assert.equal(genotypeMessages.children.filter(el=>el.className==='analysis-progress-card').length,1);
   let nextIndex=1, activePhase='not_started', nextProposal;
   const confirmations=[];
+  const submitted={genotype:{settings:{mind:'0.07'}}};
   const parameters={
     expression:{inputs:{'gexp.file':'/demo/expression','pmap.file':'/demo/annotation'},settings:{'restrict.tcga':'1'}},
     adjust:{inputs:{'cli.file':'/demo/clinical.tsv'},settings:{},options:{npc:3}},
@@ -321,7 +322,8 @@ function setup(initial={}, analysisApi) {
     const step=stageNames[nextIndex];
     if(path==='/signet/progress?session='+session)return json({analyses:[{
       run_id:'same-run',session,completed_steps:nextIndex,total_steps:6,next_step:step||null,proposal:nextProposal||null,
-      steps:stageNames.map((name,index)=>({step:name,phase:index<nextIndex?'completed':index===nextIndex?activePhase:'not_started'}))
+      steps:stageNames.map((name,index)=>({step:name,phase:index<nextIndex?'completed':index===nextIndex?activePhase:'not_started',
+        parameters:submitted[name]}))
     }]});
     if(path==='/signet/runs/same-run/results?session='+session)return json({graph:{
       display_nodes:['A','B'], edges:[{source:'A',target:'B'}], counts:{genes:2,connections:1}
@@ -349,6 +351,7 @@ function setup(initial={}, analysisApi) {
     assert.equal(action,'confirm');
     assert.equal(body.proposal_id,step);
     confirmations.push({step,body});
+    submitted[step]=body;
     activePhase='submitted';
     nextProposal={...nextProposal,state:'sent'};
     return json({state:'submitted'});
@@ -358,10 +361,18 @@ function setup(initial={}, analysisApi) {
   await new Promise(setImmediate);
   const sequenceLog=sequence.ids.get('messages');
   const sequenceProgress=sequenceLog.children.find(el=>el.className==='analysis-progress-card');
-  const sequenceReview=sequenceLog.children.find(el=>el.className==='step-review-card');
-  const reviewButton=text=>sequenceReview.querySelectorAll('button').find(el=>el.textContent===text);
+  const stageCards=log=>log.children.filter(el=>el.className==='step-review-card');
+  const retained=[stageCards(sequenceLog)[0]];
+  assert.match(retained[0].textContent,/已完成.*0\.07/);
   assert.deepEqual(confirmations,[],'preparing the next stage never submits it');
   for(let i=1;i<6;i++){
+    const cards=stageCards(sequenceLog);
+    assert.equal(cards.length,i+1,'only the next stage adds a card');
+    assert.deepEqual(cards.slice(0,i),retained,'all previous card elements stay in place');
+    assert.ok(retained.every(card=>!card.hidden && card.querySelectorAll('button').length===0));
+    const sequenceReview=cards[i];
+    retained.push(sequenceReview);
+    const reviewButton=text=>sequenceReview.querySelectorAll('button').find(el=>el.textContent===text);
     assert.match(sequenceReview.textContent,new RegExp('第 '+(i+1)+' 階段'));
     if(i===2){
       reviewButton('先不要').click();
@@ -383,15 +394,24 @@ function setup(initial={}, analysisApi) {
   assert.equal(confirmations.find(item=>item.step==='adjust').body.options.npc,2);
   assert.equal(confirmations.find(item=>item.step==='network').body.settings.walltime,'1:00:00');
   assert.equal(confirmations.find(item=>item.step==='visualize').body.settings.freq,.5);
-  assert.equal(sequenceReview.hidden,true);
+  assert.deepEqual(stageCards(sequenceLog),retained);
+  assert.ok(retained.every(card=>!card.hidden && card.querySelectorAll('button').length===0));
+  assert.match(retained[2].querySelectorAll('details')[0].textContent,/主成分數2/);
   assert.equal(sequenceLog.children.filter(el=>el.className==='analysis-progress-card').length,1);
   const resultCard=sequenceLog.children.find(el=>el.className.startsWith('analysis-result-card'));
+  assert.equal(sequenceLog.children[sequenceLog.children.indexOf(retained[5])+1],resultCard);
   assert.match(resultCard.textContent,/2 個基因 · 1 條連線/);
   assert.equal(graphDraws.length,1);
   assert.equal(graphDraws[0].edges[0].to,'B');
   resultCard.querySelectorAll('button')[0].click();
   await new Promise(setImmediate);
   assert.equal(activatedLinks.at(-1),'/signet/result-download?ticket=example-ticket');
+  const reopened=setup({session},sequenceApi);
+  await new Promise(setImmediate);
+  const restoredCards=stageCards(reopened.ids.get('messages'));
+  assert.deepEqual(restoredCards.map(card=>card.dataset.step),stageNames);
+  assert.match(restoredCards[2].querySelectorAll('details')[0].textContent,/主成分數2/);
+  assert.equal(confirmations.length,5,'restoring saved cards does not submit jobs');
   const metricSteps = [
     {step:'genotype',phase:'running',progress:{imputation:'35 36'}},
     {step:'expression',phase:'completed',progress:{expression_outputs:'2 2'}},
