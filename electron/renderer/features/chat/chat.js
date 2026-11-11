@@ -99,7 +99,6 @@ function createTurn() {
   root.append(head, steps, transport);
   $('activity').append(root);
   $('chat-progress').hidden = false;
-  $('chat-progress').open = true;
   return {root, steps, timer, transport:transport.lastChild, started:performance.now(), current:null, mode:null};
 }
 function card(turn, title, kind) {

@@ -104,33 +104,49 @@ def get_catalog(handler, url):
 
 # ---------- runs (local; includes signet -s) ----------
 
-def list_runs(handler, url):
-    """GET /signet/runs?session=<id> (filter optional)
-
-    Every local run under runs/, newest first, with its cohort and the state of
-    each step submitted to HPC3. Reads local files only; does not contact HPC3.
-    Response 200: {"runs": [{"run_id", "cohort", "created_at", "session", "steps": {"expression": "running"}}]}
-    """
-    session = _query(url, ('session',)).get('session')
-    if session is not None and not _SESSION.fullmatch(session):
-        raise ApiError(400, 'invalid_request', 'Invalid conversation session.')
-    runs = []
+def _runs(session):
+    """Yield valid local run roots, optionally limited to one saved conversation."""
     folder = signet.PROJECT / 'runs'
     for path in sorted(folder.iterdir() if folder.is_dir() else (), key=lambda p: p.name):
         manifest = path / 'manifest.json'
         if not re.fullmatch(_RUN_NAME, path.name) or path.is_symlink() or not manifest.is_file():
             continue
         try:
-            root = signet._run(path.name)
-        except ValueError:
-            continue
+            root = _run_root(path.name)
+        except ApiError as error:
+            if error.status == 404:
+                continue
+            raise
         linked = jobs.analysis_session(root)
-        if session is not None and linked != session:
-            continue
-        runs.append({'run_id': path.name, 'cohort': json.loads(manifest.read_text()).get('cohort'),
-                     'created_at': int(manifest.stat().st_mtime), 'session': linked, 'steps': jobs.run_steps(root.name)})
+        if session is None or linked == session:
+            yield root, manifest, linked
+
+
+def list_runs(handler, url):
+    """List local runs with their last saved step states."""
+    session = _query(url, ('session',)).get('session')
+    if session is not None and not _SESSION.fullmatch(session):
+        raise ApiError(400, 'invalid_request', 'Invalid conversation session.')
+    runs = [{'run_id': root.name, 'cohort': json.loads(manifest.read_text()).get('cohort'),
+             'created_at': int(manifest.stat().st_mtime), 'session': linked,
+             'steps': {name: record['state'] for name, record in jobs.run_records(root).items()}}
+            for root, manifest, linked in _runs(session)]
     runs.sort(key=lambda item: item['created_at'], reverse=True)
     return 200, {'runs': runs}
+
+
+def get_progress(handler, url):
+    """Read compact progress for one conversation, even during an HPC3 transfer."""
+    session = _query(url, ('session',)).get('session', '')
+    if not _SESSION.fullmatch(session):
+        raise ApiError(400, 'invalid_request', 'A valid conversation session is required.')
+    analyses = []
+    for root, manifest, _ in _runs(session):
+        cohort = json.loads(manifest.read_text()).get('cohort')
+        if cohort == 'TCGA':
+            analyses.append({'run_id': root.name,
+                             **jobs.analysis_view(root, cohort, jobs.run_records(root), include_attempts=False)})
+    return 200, {'analyses': analyses}
 
 
 def create_run(handler, url):
@@ -280,6 +296,7 @@ def get_log(handler, url, run_id, step):
 
 # Each path pattern maps HTTP methods to the function above that serves it.
 ROUTES = [
+    (re.compile(r'/signet/progress'), {'GET': get_progress}),
     (re.compile(r'/signet/catalog'), {'GET': get_catalog}),
     (re.compile(r'/signet/runs'), {'GET': list_runs, 'POST': create_run}),
     (re.compile(rf'/signet/runs/{_RUN}'), {'GET': get_run}),

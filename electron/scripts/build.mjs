@@ -10,7 +10,7 @@ for(const [source,output] of [['index.html','index.html'],['styles/chat.css','ch
  await copyFile(new URL('renderer/'+source,root),new URL('build/renderer/'+output,root));
 }
 // Existing chat/graph controllers share a lexical scope until their React migration.
-const workspace=await Promise.all(['i18n/index.js','features/chat/chat.js','features/stage6/stage6.js','workflow.js'].map(file=>readFile(new URL('renderer/'+file,root),'utf8')));
+const workspace=await Promise.all(['i18n/index.js','features/chat/chat.js','features/chat/analysis-progress.js','features/stage6/stage6.js','workflow.js'].map(file=>readFile(new URL('renderer/'+file,root),'utf8')));
 await writeFile(new URL('build/renderer/workspace.js',root),workspace.join('\n;\n'));
 
 await writeFile(new URL('build/renderer/chat.css',root),(await readFile(new URL('renderer/styles/chat.css',root),'utf8'))+'\n'+(await readFile(new URL('renderer/workflow.css',root),'utf8')));

@@ -131,6 +131,7 @@ Inside the API:
 | 8 | `POST /signet/runs/{run_id}/steps/{step}/cancel` | yes | Cancel the step's own job |
 | 9 | `GET /signet/runs/{run_id}/steps/{step}/log` | yes | Last lines of the job's stdout or stderr |
 | 10 | `PATCH /signet/runs/{run_id}/conversation` | no | Link an analysis to a saved conversation |
+| 11 | `GET /signet/progress?session=<id>` | no | Read current progress for a conversation’s linked analyses |
 
 ### 5.1 `GET /signet/catalog`
 
@@ -307,6 +308,21 @@ same pair again is safe, and changing a linked run to a different conversation r
 Invalid IDs return 400; unknown runs or conversations return 404. Existing runs can be linked
 without starting or repeating any computation. The association is stored locally in
 `runs/<run_id>/conversation.json`.
+
+
+### 5.11 `GET /signet/progress?session=<id>`
+
+Returns `{"analyses": [...]}` for TCGA runs linked to this conversation. Each entry has
+`run_id`, `session`, `completed_steps`, `total_steps`, and the six ordered `steps` described in
+section 5.4. Each step has `step`, `flag`, `phase`, and measured `progress` when available.
+Attempt histories, input paths and settings are omitted. A missing or malformed session is
+rejected; a valid session with no linked runs returns an empty list.
+
+In a saved chat, use **Track an existing analysis** to link an unassigned run. The chat updates
+one card per run using this local snapshot. It checks active jobs separately via route 7, so
+a long result download does not block the card or require another chat message. A lost connection
+leaves the last recorded phase visible. Completed-stage counts exclude untracked visualization;
+running steps only show work-unit counts reported by the backend.
 
 
 ## 6. Step reference

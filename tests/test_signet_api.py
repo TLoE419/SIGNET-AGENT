@@ -5,6 +5,7 @@ stand-in Slurm commands, reached through a patched SSH transport. These tests
 check what only the HTTP layer adds: token/Origin/Host checks on every route,
 status codes, error codes and JSON shapes.
 """
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 import http.client
 import io
@@ -60,7 +61,7 @@ class SignetApiTest(unittest.TestCase):
         return self.call('POST', f'/signet/runs/{run_id}/steps/expression', {'inputs': self.inputs})
 
     def test_every_route_needs_the_page_token_and_writes_need_the_origin(self):
-        routes = [('GET', '/signet/catalog'), ('GET', '/signet/runs'), ('POST', '/signet/runs'),
+        routes = [('GET', '/signet/progress'), ('GET', '/signet/catalog'), ('GET', '/signet/runs'), ('POST', '/signet/runs'),
                   ('GET', '/signet/runs/step_test'), ('PATCH', '/signet/runs/step_test/conversation'), ('PATCH', '/signet/runs/step_test/settings'),
                   ('POST', '/signet/runs/step_test/steps/expression'), ('GET', '/signet/runs/step_test/steps/expression'),
                   ('POST', '/signet/runs/step_test/steps/expression/cancel'),
@@ -115,6 +116,48 @@ class SignetApiTest(unittest.TestCase):
                          ['step_test'])
         self.assertEqual(self.call('GET', '/signet/runs?session=' + other)[1]['runs'], [])
         self.assertEqual(self.calls, [])
+
+    def test_progress_is_scoped_to_conversation_and_readable_while_downloading(self):
+        session = '12345678-1234-1234-1234-123456789abc'
+        other = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+        self.server.histories.update({session: [], other: []})
+        path = '/signet/runs/step_test'
+        self.assertEqual(self.call('GET', '/signet/progress')[0], 400)
+        self.assertEqual(self.call('PATCH', path + '/conversation', {'session': session})[0], 200)
+        self.assertEqual(self.call('GET', '/signet/progress?session=' + other)[1], {'analyses': []})
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.submit()[0], 202)
+        self.finish_job()
+
+        downloading, release = threading.Event(), threading.Event()
+
+        def remote(command, **kwargs):
+            if 'tar czf' in command:
+                downloading.set()
+                if not release.wait(10):
+                    raise TimeoutError('Test did not release the download.')
+            return self.remote(command, **kwargs)
+
+        def progress():
+            status, value = self.call('GET', '/signet/progress?session=' + session)
+            self.assertEqual(status, 200)
+            return value['analyses'][0]
+
+        with patch.object(ssh_transport, 'remote', side_effect=remote), ThreadPoolExecutor() as pool:
+            check = pool.submit(self.call, 'GET', path + '/steps/expression')
+            try:
+                self.assertTrue(downloading.wait(10))
+                snapshot = progress()
+                self.assertEqual(snapshot['run_id'], 'step_test')
+                self.assertEqual(snapshot['completed_steps'], 0)
+                self.assertEqual(snapshot['steps'][1],
+                                 {'step': 'expression', 'flag': '-t', 'phase': 'downloading'})
+                self.assertEqual(snapshot['steps'][-1]['phase'], 'untracked')
+            finally:
+                release.set()
+            self.assertEqual(check.result(timeout=10)[1]['state'], 'completed')
+        self.assertEqual(progress()['completed_steps'], 1)
+        self.assertEqual(sum('sbatch --parsable' in c for c in self.calls), 1)
 
     def test_analysis_reports_each_attempt_and_distinguishes_transfer_from_completion(self):
         path = '/signet/runs/step_test'

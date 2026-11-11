@@ -50,6 +50,15 @@ export function App({model}:{model:string}){
         <div id="messages" className="messages" role="log" aria-label="Conversation" data-i18n-aria="對話紀錄" aria-live="polite">
           <div id="welcome" className="welcome"><span className="welcome-mark">✳</span><h2><span data-i18n="今天想探索什麼？">What would you like to explore?</span></h2><p><span data-i18n="從一個研究問題開始。<br>聊天下方可查看執行過程，右側可比較網路結果。">Start with a research question.<br/>See chat activity below and compare networks on the right.</span></p><p><span data-i18n="此版本未附資料或分析結果。聊天需登入模型；科學分析另需來源、資料與執行環境。">No data or analysis results are bundled. Chat requires model sign-in; scientific analysis also requires source code, data and a configured runtime.</span></p><div className="suggestions"><button data-prompt="Introduce the available analyses and the data each requires. Do not run any analyses yet." data-i18n-prompt="先介紹目前可以做的分析，以及各自需要哪些資料，暫時不要執行分析。"><span data-i18n="了解分析能力">Explore analyses</span> <span>↗</span></button><button data-prompt="Review this project’s data files and existing run records. Do not run any analyses yet." data-i18n-prompt="幫我查看目前專案有哪些資料檔案，以及已有工作的記錄狀態，暫時不要執行分析。"><span data-i18n="檢查目前資料與工作">Review data and runs</span> <span>↗</span></button></div></div>
         </div>
+        <details id="analysis-tracking" className="analysis-tracking" hidden>
+          <summary><span data-i18n="追蹤既有分析">Track an existing analysis</span></summary>
+          <form id="analysis-link-form">
+            <label className="sr-only" htmlFor="analysis-run"><span data-i18n="選擇分析">Select analysis</span></label>
+            <select id="analysis-run" required></select>
+            <button type="submit" id="analysis-link" disabled><span data-i18n="連結到此對話">Link to this conversation</span></button>
+          </form>
+          <p id="analysis-link-status" role="status" hidden></p>
+        </details>
         <details id="chat-progress" className="chat-progress" hidden>
           <summary><span data-i18n="執行過程">Activity</span><span id="state" role="status" data-i18n="等待需求">Ready</span></summary>
           <div id="activity" className="activity"><div id="activity-empty" className="activity-empty"><div className="empty-path"><i></i><i></i><i></i></div><h3><span data-i18n="每一步，都有跡可循">Follow every step</span></h3><p><span data-i18n="送出需求後，這裡會依序顯示<br>模型回覆、選擇理由與工具結果。">After you send a request, see model responses,<br/>tool-selection notes and tool results here.</span></p><div className="legend"><span><span data-i18n="01 理解需求">01 Understand</span></span><span><span data-i18n="02 呼叫工具">02 Use tools</span></span><span><span data-i18n="03 整理結果">03 Summarize</span></span></div></div></div>

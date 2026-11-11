@@ -355,7 +355,13 @@ def _active_step(root):
 
 def run_records(root):
     """Read the current step records from disk without checking HPC3."""
-    return {path.stem: json.loads(path.read_text()) for path in _current_records(root)}
+    records = {}
+    for path in _current_records(root):
+        try:
+            records[path.stem] = json.loads(path.read_text())
+        except FileNotFoundError:
+            continue
+    return records
 
 
 def run_steps(run_id):
@@ -386,7 +392,7 @@ def link_conversation(run_id, session):
     return {'run_id': run_id, 'session': session}
 
 
-def analysis_view(root, cohort, records):
+def analysis_view(root, cohort, records, *, include_attempts=True):
     """Project stored records for chat without polling, downloading or starting a job."""
     stages = []
     if cohort == 'TCGA':
@@ -395,23 +401,29 @@ def analysis_view(root, cohort, records):
             phase = 'untracked' if name == 'visualize' else 'not_started'
             attempts = []
             if record is not None:
-                current = record.get('attempt', 1)
-                # A retry archives its predecessor before publishing the new current
-                # record. Only read archives older than the snapshot's current attempt.
-                for number in range(1, current):
-                    path = _attempt_path(root, name, number)
-                    try:
-                        attempts.append({**json.loads(path.read_text()), 'attempt': number})
-                    except FileNotFoundError:
-                        continue
-                attempts.append({**record, 'attempt': current})
+                if include_attempts:
+                    current = record.get('attempt', 1)
+                    # A retry archives its predecessor before publishing the new current
+                    # record. Only read archives older than the snapshot's current attempt.
+                    for number in range(1, current):
+                        path = _attempt_path(root, name, number)
+                        try:
+                            attempts.append({**json.loads(path.read_text()), 'attempt': number})
+                        except FileNotFoundError:
+                            continue
+                    attempts.append({**record, 'attempt': current})
                 phase = record['state']
                 if phase == 'pending':
                     phase = 'queued'
                 elif phase == 'validating' and record.get('download_pending'):
                     phase = 'downloading'
             flag = STEPS[name].flag if name in STEPS else '-v'
-            stages.append({'step': name, 'flag': flag, 'phase': phase, 'attempts': attempts})
+            stage = {'step': name, 'flag': flag, 'phase': phase}
+            if include_attempts:
+                stage['attempts'] = attempts
+            elif record and record.get('progress'):
+                stage['progress'] = record['progress']
+            stages.append(stage)
     return {'session': analysis_session(root), 'steps': stages,
             'completed_steps': sum(step['phase'] == 'completed' for step in stages),
             'total_steps': len(stages)}

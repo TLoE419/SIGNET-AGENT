@@ -26,7 +26,7 @@ class Element {
   focus(){}
 }
 
-function setup(initial={}) {
+function setup(initial={}, analysisApi) {
   const ids=new Map(), all=[], root=new Element('root'), stack=[root];
   // Use the shipped markup, so a hidden ancestor or closed details catches the real regression.
   const html=(fs.readFileSync('electron/renderer/app/App.tsx','utf8').replaceAll('className=', 'class=').replaceAll('htmlFor=', 'for=') + '<script id="initial-chat"></script>');
@@ -43,6 +43,12 @@ function setup(initial={}) {
   const gate=new Promise(resolve=>finish=resolve);
   const workspace={active:false,runs:[],baseline:null,comparison:null,proposals:[],graphs:{}};
   const events={};const storage=new Map();const navigation=[];
+  const timers=new Map();let nextTimer=0, now=0;
+  const timersApi=analysisApi ? {
+    setTimeout(fn, delay){const id=++nextTimer;timers.set(id,{fn,delay});return id;},
+    clearTimeout(id){timers.delete(id);},
+    Date:{now:()=>now}
+  } : {setTimeout,clearTimeout};
   const context=vm.createContext({document:{getElementById:id=>ids.get(id),createElement:tag=>new Element(tag),
     querySelector:selector=>selector.startsWith('meta')?{content:'token'}:find(selector),
     querySelectorAll:selector=>selector==='[data-tab]'?all.filter(e=>e.dataset.tab):[],addEventListener(){}},
@@ -51,8 +57,9 @@ function setup(initial={}) {
     Event:class {constructor(type){this.type=type;}},CustomEvent:class {constructor(type,options){this.type=type;this.detail=options.detail;}},
     addEventListener(name,fn){events[name]=fn;},dispatchEvent(event){events[event.type]?.(event);},
     sessionStorage:{getItem:k=>storage.get(k),setItem:(k,v)=>storage.set(k,v)},
-    setInterval(){return 1;},clearInterval(){},setTimeout,clearTimeout,
-    fetch:async path=>{
+    setInterval(){return 1;},clearInterval(){},...timersApi,AbortController,translateUI:text=>text,
+    fetch:async (path, options)=>{
+      if(path.startsWith('/signet/'))return analysisApi(path, options);
       if(path.startsWith('/stage6'))return {ok:true,json:async()=>structuredClone(workspace)};
       calls++;
       if(context.failRequest)return {ok:false,json:async()=>({error:'Controlled service failure'})};
@@ -70,6 +77,12 @@ function setup(initial={}) {
   context.window=context;
   vm.runInContext(fs.readFileSync('electron/renderer/features/chat/chat.js','utf8'),context);
   vm.runInContext(fs.readFileSync('electron/renderer/features/stage6/stage6.js','utf8'),context);
+  if(analysisApi)vm.runInContext(fs.readFileSync('electron/renderer/features/chat/analysis-progress.js','utf8'),context);
+  async function tick(){
+    const [id, timer]=timers.entries().next().value;
+    timers.delete(id);now+=timer.delay;timer.fn();
+    await new Promise(setImmediate);
+  }
   function visible(el){
     if(!el)return false;
     let child=el;
@@ -79,7 +92,7 @@ function setup(initial={}) {
     }
     return true;
   }
-  return {context,ids,events,visible,finish,workspace,navigation,calls:()=>calls};
+  return {context,ids,events,visible,finish,workspace,navigation,tick,timers,calls:()=>calls};
 }
 
 (async()=>{
@@ -90,7 +103,9 @@ function setup(initial={}) {
   assert.equal(savedLink.disabled,true);
   savedLink.events.click();
   assert.equal(app.navigation.length,0,'history must not navigate away during an active turn');
-  assert.equal(app.visible(app.ids.get('activity')),true,'ordinary chat progress must be visible without a Stage 6 baseline');
+  assert.equal(app.visible(app.ids.get('activity')),false,'tool details stay collapsed during an ordinary turn');
+  app.ids.get('chat-progress').open=true;
+  assert.equal(app.visible(app.ids.get('activity')),true,'ordinary chat activity can be opened without a Stage 6 baseline');
   assert.equal(app.visible(app.ids.get('state')),true,'live status must have no hidden ancestor');
   assert.match(app.ids.get('activity').textContent,/signet_catalog/);
   assert.equal(app.ids.get('stage6-pane').hidden,true,'chat must not activate visualization');
@@ -130,8 +145,98 @@ function setup(initial={}) {
   assert.equal(restored.navigation.at(-1),'/?new=1');
   const failed=setup();await new Promise(setImmediate);failed.context.failRequest=true;
   await vm.runInContext('send("Controlled error")',failed.context);
-  assert.equal(failed.visible(failed.ids.get('activity')),true,'failure details remain visible');
+  assert.equal(failed.visible(failed.ids.get('state')),true,'failure status remains visible when the log is closed');
+  failed.ids.get('chat-progress').open=true;
+  assert.equal(failed.visible(failed.ids.get('activity')),true,'failure details remain accessible');
   assert.match(failed.ids.get('activity').textContent,/Controlled service failure/);
   assert.equal(failed.ids.get('state').textContent,'需要確認');
+  const session='12345678-1234-1234-1234-123456789abc';
+  const other='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+  const stageNames=['genotype','expression','adjust','cis','network','visualize'];
+  let phase='queued', progress, interruption=false, snapshotDown=false, linked=true, resolveCheck;
+  const requests=[];
+  const json=value=>({ok:true,json:async()=>structuredClone(value)});
+  function snapshot(session, run_id){
+    return {session,run_id,total_steps:6,completed_steps:phase==='completed'?1:0,
+      steps:stageNames.map(step=>({step,phase:step==='network'?phase:step==='visualize'?'untracked':'not_started',
+        ...(step==='network'&&progress?{progress}:{})}))};
+  }
+  const api=async (path,options)=>{
+    requests.push({path,method:options.method||'GET',signal:options.signal});
+    assert.equal(options.headers['X-Chat-Token'],'token');
+    if(path==='/signet/progress?session='+session)
+      return snapshotDown ? {ok:false} : json({analyses:[...(linked?[snapshot(session,'real-run')]:[]), snapshot(other,'wrong-chat')]});
+    if(path==='/signet/runs/real-run/steps/network') {
+      if(interruption)return json({connection:'interrupted'});
+      return new Promise(resolve=>{resolveCheck=()=>resolve(json({state:'running'}));});
+    }
+    if(path==='/signet/runs')return json({runs:[
+      {run_id:'real-run',cohort:'TCGA',session:null},{run_id:'wrong-chat',cohort:'TCGA',session:other}
+    ]});
+    if(path==='/signet/runs/real-run/conversation'){
+      assert.equal(options.method,'PATCH');assert.deepEqual(JSON.parse(options.body),{session});
+      linked=true;return json({run_id:'real-run',session});
+    }
+    throw new Error('Unexpected path '+path);
+  };
+  const live=setup({session,messages:[{role:'assistant',text:'Saved research conversation'}]},api);
+  await new Promise(setImmediate);
+  const cards=()=>live.ids.get('messages').children.filter(el=>el.className==='analysis-progress-card');
+  assert.equal(cards().length,1,'a run linked to another conversation must not appear');
+  const original=cards()[0], bar=original.children[0].children[2], rows=original.children[1];
+  assert.equal(rows.children.length,6);
+  assert.match(original.textContent,/排隊中/);
+  assert.match(rows.children[5].textContent,/尚未追蹤/);
+  original.open=true;
+  phase='running';progress={stage1:'31 36',stage2:'20 10'};
+  await live.tick();
+  assert.equal(cards()[0],original,'live updates preserve the card and expanded state');
+  assert.equal(original.open,true);
+  assert.match(rows.children[4].textContent,/31\/36/);
+  assert.doesNotMatch(rows.children[4].textContent,/20\/10/);
+  assert.equal(bar.value,0,'completed-stage progress does not count a running step');
+  progress=undefined;
+  await live.tick();
+  assert.match(rows.children[4].textContent,/目前無分段進度/);
+  phase='downloading';
+  await live.tick();
+  assert.match(original.textContent,/正在下載結果/);
+  assert.equal(requests.filter(r=>r.path.endsWith('/steps/network')).length,1,'a slow refresh must not overlap itself');
+  resolveCheck();
+  await new Promise(setImmediate);
+  interruption=true;
+  await live.tick();
+  assert.match(original.textContent,/暫時無法向 HPC3 確認/);
+  assert.match(original.textContent,/正在下載結果/);
+  snapshotDown=true;
+  await live.tick();
+  assert.match(original.textContent,/暫時無法更新/);
+  assert.equal(cards()[0],original);
+  snapshotDown=false;phase='completed';
+  await live.tick();
+  assert.equal(cards()[0],original);
+  assert.equal(bar.value,1);
+  assert.match(rows.children[4].textContent,/已完成/);
+  assert.equal(original.children[0].children.at(-1).hidden,true,'successful status clears the stale notice');
+  assert.ok(requests.every(r=>r.method==='GET'),'watching a run cannot submit a job');
+  live.events.pagehide();
+  assert.equal(live.timers.size,0);
+  assert.equal(requests.at(-1).signal.aborted,true);
+
+  linked=false;
+  const unlinked=setup({session},api);await new Promise(setImmediate);
+  const tracker=unlinked.ids.get('analysis-tracking');
+  tracker.open=true;tracker.events.toggle();
+  await new Promise(setImmediate);
+  const picker=unlinked.ids.get('analysis-run');
+  assert.deepEqual(picker.children.map(option=>option.value),['real-run']);
+  picker.value='real-run';unlinked.ids.get('analysis-link').disabled=false;
+  await unlinked.ids.get('analysis-link-form').events.submit({preventDefault(){}});
+  await new Promise(setImmediate);
+  assert.equal(unlinked.ids.get('messages').children.filter(el=>el.dataset.runId==='real-run').length,1);
+  assert.equal(tracker.open,false);
+  const blank=setup({},api);await new Promise(setImmediate);
+  assert.equal(blank.ids.get('analysis-tracking').hidden,true);
+  assert.equal(blank.timers.size,0);
   console.log('Chat progress visibility, status, history, errors and Stage 6 independence passed.');
 })().catch(error=>{console.error(error);process.exitCode=1;});
