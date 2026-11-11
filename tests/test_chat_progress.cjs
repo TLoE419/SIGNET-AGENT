@@ -359,7 +359,12 @@ function setup(initial={}, analysisApi) {
     return json({state:'submitted'});
   };
   const sequence=setup({session},sequenceApi);
-  sequence.context.vis={Network:class {constructor(el, data){graphDraws.push(data);} destroy(){}}};
+  sequence.context.vis={Network:class {
+    constructor(el, data, options){this.data=data;this.physics=options.physics.enabled ?? true;graphDraws.push(this);}
+    once(event, callback){this[event]=callback;}
+    setOptions(options){this.physics=options.physics.enabled;}
+    destroy(){}
+  }};
   await new Promise(setImmediate);
   const sequenceLog=sequence.ids.get('messages');
   const sequenceProgress=sequenceLog.children.find(el=>el.className==='analysis-progress-card');
@@ -404,7 +409,11 @@ function setup(initial={}, analysisApi) {
   assert.equal(sequenceLog.children[sequenceLog.children.indexOf(retained[5])+1],resultCard);
   assert.match(resultCard.textContent,/2 個基因 · 1 條連線/);
   assert.equal(graphDraws.length,1);
-  assert.equal(graphDraws[0].edges[0].to,'B');
+  const network=graphDraws[0];
+  assert.equal(network.data.edges[0].to,'B');
+  assert.equal(network.physics,true,'the renderer lays out the graph first');
+  network.stabilizationIterationsDone?.();
+  assert.equal(network.physics,false,'nodes must stop moving after initial layout');
   resultCard.querySelectorAll('button')[0].click();
   await new Promise(setImmediate);
   assert.equal(activatedLinks.at(-1),'/signet/result-download?ticket=example-ticket');

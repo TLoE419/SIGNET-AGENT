@@ -62,6 +62,8 @@ function createAnalysisResults(path, session, request) {
           edges:{color:{color:'#889b90'}, smooth:false},
           physics:{stabilization:{iterations:120}}
         });
+        // The iteration limit ends the initial layout, but the library keeps simulating afterward.
+        network.once('stabilizationIterationsDone', () => network.setOptions({physics:{enabled:false}}));
       }
       uiText(status, `${counts.genes} 個基因 · ${counts.connections} 條連線` +
         (clipped ? '\n圖中顯示部分連線，完整結果可下載。' : ''));
