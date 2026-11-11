@@ -62,12 +62,26 @@ window.addEventListener('load', () => {
   const widget = document.querySelector('.visNetwork.html-widget');
   const network = widget && document.getElementById('graph' + widget.id)?.chart;
   if (!network) return;
+  let draggingNode = false;
   const freeze = () => {
     clearTimeout(timer);
+    network.off('stabilizationIterationsDone', freeze);
     network.setOptions({physics:{enabled:false}});
   };
-  const timer = setTimeout(freeze, 4000);
+  let timer = setTimeout(freeze, 4000);
   network.once('stabilizationIterationsDone', freeze);
+  network.on('dragStart', ({nodes}) => {
+    if (!nodes.length) return;
+    draggingNode = true;
+    clearTimeout(timer);
+    network.off('stabilizationIterationsDone', freeze);
+    network.setOptions({physics:{enabled:true}});
+  });
+  network.on('dragEnd', () => {
+    if (!draggingNode) return;
+    draggingNode = false;
+    timer = setTimeout(freeze, 350);
+  });
 });
 '''
 _EMBED_HASH = b64encode(sha256(_EMBED_SCRIPT).digest()).decode('ascii')
