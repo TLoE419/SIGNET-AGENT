@@ -18,6 +18,7 @@ from agent.core.conversation import MODEL, run_conversation
 from agent.core.model_timing import ModelRequestTiming
 from agent.paths import PROJECT_ROOT
 from agent.providers import PROVIDERS, create_provider_adapter
+from agent.runtime.genotype_proposal import CHAT_SESSION
 from agent.stage6.workspace import Workspace, CHAT_CONTEXT
 from agent.tools.ui import UI_CHANNEL
 
@@ -221,6 +222,7 @@ class ChatHandler(BaseHTTPRequestHandler):
                 timing = ModelRequestTiming()
                 with self.server.client_factory(timing) as client:
                     context_token = CHAT_CONTEXT.set((self.server.stage6, session))
+                    genotype_token = CHAT_SESSION.set(session)
                     # Panel requests from show_panel go straight to this page as they happen.
                     ui_token = UI_CHANNEL.set(lambda request: emit('ui', request))
                     try:
@@ -229,6 +231,7 @@ class ChatHandler(BaseHTTPRequestHandler):
                                                   language=language)
                     finally:
                         UI_CHANNEL.reset(ui_token)
+                        CHAT_SESSION.reset(genotype_token)
                         CHAT_CONTEXT.reset(context_token)
                 emit('workspace', self.server.stage6.view(session))
                 emit('answer', answer)

@@ -14,6 +14,8 @@ class Element {
   }
   append(...children){for(const child of children){child.parentElement=this;this.children.push(child);}}
   replaceChildren(...children){this.children=[];this.append(...children);}
+  after(child){child.parentElement=this.parentElement;const siblings=this.parentElement.children;siblings.splice(siblings.indexOf(this)+1,0,child);}
+  reportValidity(){return true;}
   remove(){if(this.parentElement)this.parentElement.children=this.parentElement.children.filter(c=>c!==this);}
   get lastChild(){return this.children.at(-1);}
   set textContent(value){this._text=String(value);this.children=[];}
@@ -22,7 +24,7 @@ class Element {
   setAttribute(key,value){this.attributes[key]=value;}
   addEventListener(name,fn){this.events[name]=fn;}
   querySelector(){return null;}
-  querySelectorAll(){return [];}
+  querySelectorAll(tag){return this.children.flatMap(child=>[...(child.tag===tag?[child]:[]),...child.querySelectorAll(tag)]);}
   focus(){}
 }
 
@@ -77,7 +79,8 @@ function setup(initial={}, analysisApi) {
   context.window=context;
   vm.runInContext(fs.readFileSync('electron/renderer/features/chat/chat.js','utf8'),context);
   vm.runInContext(fs.readFileSync('electron/renderer/features/stage6/stage6.js','utf8'),context);
-  if(analysisApi)vm.runInContext(fs.readFileSync('electron/renderer/features/chat/analysis-progress.js','utf8'),context);
+  if(analysisApi)for(const file of ['genotype-review.js','analysis-progress.js'])
+    vm.runInContext(fs.readFileSync('electron/renderer/features/chat/'+file,'utf8'),context);
   async function tick(){
     const [id, timer]=timers.entries().next().value;
     timers.delete(id);now+=timer.delay;timer.fn();
@@ -238,5 +241,68 @@ function setup(initial={}, analysisApi) {
   const blank=setup({},api);await new Promise(setImmediate);
   assert.equal(blank.ids.get('analysis-tracking').hidden,true);
   assert.equal(blank.timers.size,0);
+  let review={id:'first-review',state:'pending',mode:'example',parameters:{
+    inputs:{'ped.file':'/remote/study.ped','map.file':'/remote/study.map',ref:'/remote/ref/chr',gmap:'/remote/gmap/chr'},
+    settings:{'restrict.tcga.geno':'1',mind:'0.1',geno:'0.1',hwe:'0.001',int:'5000000'},
+    resources:{cpus:8,mem_gb:32,hours:4}
+  }};
+  let genotypePhase='not_started', finishSubmission;
+  const actions=[];
+  const genotypeApi=async (path, options)=>{
+    if(path==='/signet/progress?session='+session)
+      return json({analyses:[{...snapshot(session,'genotype-run'),completed_steps:0,genotype_proposal:review,
+        steps:stageNames.map(step=>({step,phase:step==='genotype'?genotypePhase:step==='visualize'?'untracked':'not_started'}))}]});
+    if(path==='/signet/runs/genotype-run/steps/genotype')return json({state:genotypePhase});
+    assert.equal(options.method,'POST');
+    const action=path.split('/').at(-1);
+    actions.push({action,body:JSON.parse(options.body)});
+    if(action==='decline'){
+      review={...review,state:'declined'};
+      return json(review);
+    }
+    if(action==='prepare'){
+      review={...review,id:'new-review',state:'pending'};
+      return json(review);
+    }
+    if(action==='confirm')return new Promise(resolve=>{
+      finishSubmission=()=>{
+        review={...review,state:'sent'};
+        genotypePhase='submitted';
+        resolve(json({state:'submitted',job_id:'123'}));
+      };
+    });
+    throw new Error('Unexpected path '+path);
+  };
+  const genotypeApp=setup({session},genotypeApi);await new Promise(setImmediate);
+  const genotypeMessages=genotypeApp.ids.get('messages');
+  const genotypeCard=genotypeMessages.children.find(el=>el.className==='genotype-review-card');
+  const genotypeProgress=genotypeMessages.children.find(el=>el.className==='analysis-progress-card');
+  const actionButton=text=>genotypeCard.querySelectorAll('button').find(el=>el.textContent===text);
+  assert.equal(genotypeCard.hidden,false,'a draft created in chat is restored from the linked analysis');
+  assert.deepEqual(actions,[],'rendering the draft never sends work');
+  genotypeCard.querySelectorAll('form')[0].events.submit({preventDefault(){}});
+  assert.deepEqual(actions,[],'Enter in a field does not approve');
+  actionButton('先不要').events.click();
+  await new Promise(setImmediate);
+  assert.deepEqual(actions.map(item=>item.action),['decline']);
+  assert.match(genotypeCard.textContent,/尚未送出運算/);
+  assert.equal(actionButton('同意，開始這一步'),undefined);
+  actionButton('使用官方示範資料').events.click();
+  await new Promise(setImmediate);
+  const inputs=genotypeCard.querySelectorAll('input');
+  inputs.find(el=>el.value==='0.1').value='0.07';
+  inputs.find(el=>el.value===8).value='3';
+  const confirm=actionButton('同意，開始這一步');
+  confirm.events.click();confirm.events.click();
+  assert.equal(confirm.disabled,true);
+  assert.deepEqual(actions.map(item=>item.action),['decline','prepare','confirm']);
+  assert.equal(actions.at(-1).body.settings.mind,.07);
+  assert.equal(actions.at(-1).body.resources.cpus,3);
+  assert.equal(actions.at(-1).body.proposal_id,'new-review');
+  finishSubmission();
+  await new Promise(setImmediate);
+  assert.match(genotypeCard.textContent,/已送算/);
+  assert.match(genotypeProgress.textContent,/已送出/);
+  assert.equal(genotypeMessages.children.filter(el=>el.className==='analysis-progress-card').length,1);
   console.log('Chat progress visibility, status, history, errors and Stage 6 independence passed.');
 })().catch(error=>{console.error(error);process.exitCode=1;});

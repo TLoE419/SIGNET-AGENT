@@ -19,15 +19,18 @@
   };
   let polling;
 
-  async function request(path, state, body) {
+  async function request(path, state, body, method = 'PATCH') {
     const headers = {'X-Chat-Token': document.querySelector('meta[name="chat-token"]').content};
     const options = {headers, signal:state.controller.signal};
     if (body) {
       headers['Content-Type'] = 'application/json';
-      Object.assign(options, {method:'PATCH', body:JSON.stringify(body)});
+      Object.assign(options, {method, body:JSON.stringify(body)});
     }
     const response = await fetch(path, options);
-    if (!response.ok) throw new Error('Analysis request failed');
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw Object.assign(new Error(error.error || 'Analysis request failed'), {code:error.code});
+    }
     return response.json();
   }
 
@@ -82,7 +85,10 @@
     const atEnd = messages.scrollHeight - messages.scrollTop - messages.clientHeight < 80;
     messages.append(root);
     if (atEnd) messages.scrollTop = messages.scrollHeight;
-    return {root, count, bar, current, notice, stages, stale:false};
+    const review = createGenotypeReview(root, (action, body, state) =>
+      request(`/signet/runs/${encodeURIComponent(analysis.run_id)}/genotype-proposal/${action}`,
+              state, {session, ...body}, 'POST'), poll);
+    return {root, count, bar, current, notice, stages, review, stale:false};
   }
 
   function note(card, localUnavailable) {
@@ -152,12 +158,14 @@
       for (const [run, card] of cards) {
         if (!present.has(run)) {
           card.root.remove();
+          card.review.remove();
           cards.delete(run);
           state.nextCheck.delete(run);
         }
       }
       for (const analysis of linked) {
         const card = updateCard(analysis);
+        card.review.update(analysis, state);
         const step = analysis.steps.find(item => active.has(item.phase));
         if (step) {
           delay = 5000;

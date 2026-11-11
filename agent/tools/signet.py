@@ -122,7 +122,7 @@ def signet_catalog() -> dict:
     from agent.tools.registry import ALL_TOOLS
     return {'status': 'ok', 'revision': INVENTORY['revision'], 'analysis_script_files': 138,
             'source_entries': 16, 'internal_scripts': 121, 'development_files': 3,
-            'analysis_tools': 15, 'signet_tools': 23, 'all_tools_including_list_files': len(ALL_TOOLS),
+            'analysis_tools': 15, 'signet_tools': len(SIGNET_TOOLS), 'all_tools_including_list_files': len(ALL_TOOLS),
             'general_tools': [fn.__name__ for fn in GENERAL_TOOLS], 'hpc_tools': [fn.__name__ for fn in HPC_TOOLS],
             'scripts': INVENTORY['scripts'],
             'prepare_only': ['prepare_network', 'prepare_visualization'],
@@ -588,7 +588,25 @@ def propose_visualization_change(frequency: float = -1, top_networks: int = 0) -
     return propose(frequency, top_networks)
 
 
-SIGNET_TOOLS = [signet_catalog,configure_signet,get_signet_settings,genotype_tcga,genotype_gtex,
+def propose_hpc3_genotype(run_id: str, use_example: bool = False) -> dict:
+    """Prepare the first-stage HPC3 genotype review card for an existing TCGA run.
+
+    Use example inputs only when requested. The researcher can edit the card
+    and must click to approve. This tool never submits a job.
+    """
+    from agent.runtime import genotype_proposal
+    from agent.runtime.signet_jobs import StepError
+    session = genotype_proposal.CHAT_SESSION.get()
+    if session is None:
+        return {'status': 'unavailable', 'executed': False, 'reason': 'Open the desktop chat to review a proposal.'}
+    try:
+        genotype_proposal.prepare(run_id, session, 'example' if use_example else 'custom', allow_unlinked=True)
+    except StepError as error:
+        return {'status': error.code, 'executed': False, 'error': str(error)}
+    return {'status': 'awaiting_confirmation', 'executed': False, 'run_id': run_id}
+
+
+SIGNET_TOOLS = [signet_catalog,configure_signet,propose_hpc3_genotype,get_signet_settings,genotype_tcga,genotype_gtex,
                 expression_tcga,expression_gtex,adjust_tcga,adjust_gtex,cis_eqtl,prepare_network,
                 submit_network,get_network_status,cancel_network,
                 prepare_visualization,run_visualization,get_visualization_workspace,propose_visualization_change,run_pca,plot_pca,combine_covariates,adjust_expression,normalize_expression]
@@ -601,6 +619,12 @@ def dispatch_tool(name, arguments):
     try:
         if name not in functions or not isinstance(arguments, dict):
             raise ValueError('Unsupported tool or argument object.')
+        if name in ('genotype_tcga', 'genotype_gtex'):
+            from agent.runtime.genotype_proposal import CHAT_SESSION
+            if CHAT_SESSION.get() is not None:
+                return {'status': 'awaiting_confirmation', 'executed': False,
+                        'reason': 'First-stage execution from desktop chat uses the TCGA HPC3 confirmation card. '
+                                  'Use propose_hpc3_genotype; the model cannot confirm it.'}
         if name == 'run_visualization':
             from agent.stage6.workspace import CHAT_CONTEXT
             if CHAT_CONTEXT.get() is not None:

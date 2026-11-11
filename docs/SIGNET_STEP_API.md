@@ -132,6 +132,9 @@ Inside the API:
 | 9 | `GET /signet/runs/{run_id}/steps/{step}/log` | yes | Last lines of the job's stdout or stderr |
 | 10 | `PATCH /signet/runs/{run_id}/conversation` | no | Link an analysis to a saved conversation |
 | 11 | `GET /signet/progress?session=<id>` | no | Read current progress for a conversation’s linked analyses |
+| 12 | `POST /signet/runs/{run_id}/genotype-proposal/prepare` | no job | Open the first-stage review in the linked chat |
+| 13 | `POST /signet/runs/{run_id}/genotype-proposal/decline` | no | Close the review without submitting |
+| 14 | `POST /signet/runs/{run_id}/genotype-proposal/confirm` | yes | Submit the exact reviewed first-stage parameters once |
 
 ### 5.1 `GET /signet/catalog`
 
@@ -315,7 +318,8 @@ without starting or repeating any computation. The association is stored locally
 Returns `{"analyses": [...]}` for TCGA runs linked to this conversation. Each entry has
 `run_id`, `session`, `completed_steps`, `total_steps`, and the six ordered `steps` described in
 section 5.4. Each step has `step`, `flag`, `phase`, and measured `progress` when available.
-Attempt histories, input paths and settings are omitted. A missing or malformed session is
+Attempt histories and job input paths are omitted. A linked genotype review is returned as
+`genotype_proposal` with its own proposed or reviewed parameters, or `null` if there is none. A missing or malformed session is
 rejected; a valid session with no linked runs returns an empty list.
 
 In a saved chat, use **Track an existing analysis** to link an unassigned run. The chat updates
@@ -323,6 +327,27 @@ one card per run using this local snapshot. It checks active jobs separately via
 a long result download does not block the card or require another chat message. A lost connection
 leaves the last recorded phase visible. Completed-stage counts exclude untracked visualization;
 running steps only show work-unit counts reported by the backend.
+
+
+### 5.12 First-stage genotype review
+
+Ask the desktop assistant to prepare genotype preprocessing on an existing TCGA run, or ask it to
+create a fresh analysis first. The model can create the review and link the run to the conversation;
+it cannot confirm. To open a review without the model, link a run using **Track an existing analysis**
+and choose **Configure stage 1** or **Use official example** below its progress card.
+
+- `prepare`: body `{"session": "...", "mode": "custom"}`, or mode `"example"`. The example
+  fills paths under the prepared chromosome 1 reference folder. It does not install or convert
+  missing data. Preparation leaves the run settings and scheduler unchanged.
+- `decline`: body `{"session": "...", "proposal_id": "..."}`. The card is marked declined.
+  Preparing again is an explicit action and gets a new ID.
+- `confirm`: body contains `session`, `proposal_id`, and the reviewed `inputs`, `settings` and
+  `resources` objects. These contain the genotype catalog's exact input and setting keys and the
+  three resource values. Settings use numbers, or `"no"` for all configured chromosomes. The
+  request is rejected if the run settings or prior attempt changed since review. On acceptance,
+  the ID is consumed under the run's submission lock before the scheduler is contacted.
+  A repeat or stale confirmation returns 409, including after a lost submission reply.
+  The normal genotype step record becomes the source of truth for the existing progress card.
 
 
 ## 6. Step reference

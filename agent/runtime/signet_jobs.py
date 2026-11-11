@@ -436,15 +436,17 @@ def update_settings(run_id, values):
     if not isinstance(values, dict) or not values:
         raise StepError('invalid_request', 'values must be a non-empty object.')
     rules = {key: rule for step in STEPS.values() for key, rule in step.settings.items()}
-    checked = {}
-    for key, value in values.items():
-        if key not in rules:
-            raise StepError('invalid_request', f'{key} cannot be changed here.')
-        checked[key] = _setting(key, rules[key], value)
+    checked = validate_settings(rules, values)
     if _active_step(root) or (root / '.active').exists():
         raise StepError('conflict', 'A step of this run is still active; wait for it to finish.')
     signet._update(root, checked)
     return signet._settings(root)
+
+
+def validate_settings(rules, values):
+    if not isinstance(values, dict) or set(values) - set(rules):
+        raise StepError('invalid_request', 'Allowed settings: ' + ', '.join(rules) + '.')
+    return {key: _setting(key, rules[key], value) for key, value in values.items()}
 
 
 def _setting(key, rule, value):
@@ -827,14 +829,15 @@ def _ensure_stopped(record):
 # ---------- the four operations ----------
 
 @_one_at_a_time
-def submit(run_id, name, inputs, resources=None, options=None):
+def submit(run_id, name, inputs, resources=None, options=None, *, settings_override=None):
     """Submit one step of a run as a Slurm job and return its record (state "submitted" with job_id).
 
     options answers the step's SIGNET prompts (see Step.prompts); missing ones take their default.
     """
     step = _step(name)
     root = _root(run_id)
-    if signet._settings(root).get('cohort') != step.cohort:
+    current = signet._settings(root)
+    if current.get('cohort') != step.cohort:
         raise StepError('invalid_request', f'Step {name} needs a {step.cohort} run.')
     request = _resources(step, resources)
     answers = _options(step, options)
@@ -848,7 +851,8 @@ def submit(run_id, name, inputs, resources=None, options=None):
     if active:
         raise StepError('conflict', f'Step {active} of this run is still active.')
     _prerequisites(root, step)
-    _check_current(step, signet._settings(root))
+    overrides = validate_settings(step.settings, {} if settings_override is None else settings_override)
+    _check_current(step, {**current, **overrides})
     config = _environment()
     directory = _remote_dir(config, root, run_id)
     checked = _inputs(step, inputs, (config['root'] + '/refdata', config['source'] + '/example', directory))
@@ -866,10 +870,9 @@ def submit(run_id, name, inputs, resources=None, options=None):
     try:
         # Inputs, plus the keys this step reads from earlier results of the run (as local work/
         # paths; the upload rewrites them to the run's HPC3 folder).
-        current = signet._settings(root)
         fixed = {key: value.replace('{image}', config['image']).replace('{partition}', config['partition'])
                  for key, value in step.fixed.items()}
-        signet._update(root, {**{key: path for key, (path, _) in checked.items()},
+        signet._update(root, {**overrides, **{key: path for key, (path, _) in checked.items()},
                               **{key: str(root / 'work' / _resolve(rel, current)) for key, rel in step.links.items()},
                               **fixed})
         token = _owner(root, directory)

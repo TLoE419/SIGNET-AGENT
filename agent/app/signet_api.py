@@ -29,6 +29,7 @@ import sys
 import traceback
 from urllib.parse import parse_qs
 
+from agent.runtime import genotype_proposal
 from agent.runtime import signet_jobs as jobs
 import agent.tools.signet as signet
 
@@ -144,7 +145,7 @@ def get_progress(handler, url):
     for root, manifest, _ in _runs(session):
         cohort = json.loads(manifest.read_text()).get('cohort')
         if cohort == 'TCGA':
-            analyses.append({'run_id': root.name,
+            analyses.append({'run_id': root.name, 'genotype_proposal': genotype_proposal.view(root),
                              **jobs.analysis_view(root, cohort, jobs.run_records(root), include_attempts=False)})
     return 200, {'analyses': analyses}
 
@@ -195,6 +196,25 @@ def link_conversation(handler, url, run_id):
     if session not in server.histories and session not in server.stage6.sessions:
         raise ApiError(404, 'not_found', 'No such conversation.')
     return 200, jobs.link_conversation(run_id, session)
+
+
+def genotype_action(handler, url, run_id, action):
+    """Create, decline, or consume a conversation's genotype confirmation."""
+    _query(url, ())
+    required = {
+        'prepare': ('session', 'mode'),
+        'decline': ('session', 'proposal_id'),
+        'confirm': ('session', 'proposal_id', 'inputs', 'settings', 'resources'),
+    }[action]
+    body = _body(handler, required, required=required)
+    session = body.pop('session')
+    if not isinstance(session, str) or not _SESSION.fullmatch(session):
+        raise ApiError(400, 'invalid_request', 'Invalid conversation session.')
+    if action == 'prepare':
+        return 200, genotype_proposal.prepare(run_id, session, body['mode'])
+    if action == 'decline':
+        return 200, genotype_proposal.decline(run_id, session, body['proposal_id'])
+    return 202, genotype_proposal.confirm(run_id, session, **body)
 
 
 def update_settings(handler, url, run_id):
@@ -301,6 +321,7 @@ ROUTES = [
     (re.compile(r'/signet/runs'), {'GET': list_runs, 'POST': create_run}),
     (re.compile(rf'/signet/runs/{_RUN}'), {'GET': get_run}),
     (re.compile(rf'/signet/runs/{_RUN}/conversation'), {'PATCH': link_conversation}),
+    (re.compile(rf'/signet/runs/{_RUN}/genotype-proposal/(?P<action>prepare|decline|confirm)'), {'POST': genotype_action}),
     (re.compile(rf'/signet/runs/{_RUN}/settings'), {'PATCH': update_settings}),
     (re.compile(rf'/signet/runs/{_RUN}/steps/{_STEP}'), {'GET': get_step, 'POST': submit_step}),
     (re.compile(rf'/signet/runs/{_RUN}/steps/{_STEP}/cancel'), {'POST': cancel_step}),

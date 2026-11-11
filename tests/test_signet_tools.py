@@ -81,7 +81,8 @@ class ToolsTest(unittest.TestCase):
     def test_inventory_and_source_hashes(self):
         self.assertEqual(len(st.INVENTORY['scripts']), 138)
         self.assertEqual(sum(x['category']=='entry' for x in st.INVENTORY['scripts']),16)
-        self.assertEqual(len(st.SIGNET_TOOLS),23)
+        self.assertEqual(len(st.SIGNET_TOOLS),24)
+        self.assertIn(st.propose_hpc3_genotype, st.SIGNET_TOOLS)
         st._verify_source()
         self.assertEqual(self.call('signet_catalog')['internal_scripts'],121)
 

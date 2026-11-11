@@ -18,6 +18,7 @@ from unittest.mock import patch
 
 import agent.app.chat_ui as chat_ui
 import agent.runtime.ssh_transport as ssh_transport
+from agent.tools.signet import dispatch_tool
 import test_signet_jobs
 
 
@@ -27,6 +28,7 @@ class SignetApiTest(unittest.TestCase):
     remote = test_signet_jobs.StepsTest.remote
     slurm = test_signet_jobs.StepsTest.slurm
     finish_job = test_signet_jobs.StepsTest.finish_job
+    genotype_inputs = test_signet_jobs.StepsTest.genotype_inputs
 
     def setUp(self):
         self.setUp_hpc()
@@ -53,7 +55,7 @@ class SignetApiTest(unittest.TestCase):
             conn.request(method, path, body=data, headers=headers)
             result = conn.getresponse()
             text = result.read().decode()
-            return result.status, json.loads(text) if text.startswith('{') else text
+            return result.status, json.loads(text) if result.getheader('Content-Type', '').startswith('application/json') else text
         finally:
             conn.close()
 
@@ -62,6 +64,9 @@ class SignetApiTest(unittest.TestCase):
 
     def test_every_route_needs_the_page_token_and_writes_need_the_origin(self):
         routes = [('GET', '/signet/progress'), ('GET', '/signet/catalog'), ('GET', '/signet/runs'), ('POST', '/signet/runs'),
+                  ('POST', '/signet/runs/step_test/genotype-proposal/prepare'),
+                  ('POST', '/signet/runs/step_test/genotype-proposal/confirm'),
+                  ('POST', '/signet/runs/step_test/genotype-proposal/decline'),
                   ('GET', '/signet/runs/step_test'), ('PATCH', '/signet/runs/step_test/conversation'), ('PATCH', '/signet/runs/step_test/settings'),
                   ('POST', '/signet/runs/step_test/steps/expression'), ('GET', '/signet/runs/step_test/steps/expression'),
                   ('POST', '/signet/runs/step_test/steps/expression/cancel'),
@@ -116,6 +121,86 @@ class SignetApiTest(unittest.TestCase):
                          ['step_test'])
         self.assertEqual(self.call('GET', '/signet/runs?session=' + other)[1]['runs'], [])
         self.assertEqual(self.calls, [])
+
+    def genotype_review(self):
+        session = '12345678-1234-1234-1234-123456789abc'
+        self.server.histories[session] = []
+        self.genotype_inputs()
+        run = '/signet/runs/step_test'
+        path = run + '/genotype-proposal/'
+        self.assertEqual(self.call('PATCH', run + '/conversation', {'session': session})[0], 200)
+        status, draft = self.call('POST', path + 'prepare', {'session': session, 'mode': 'example'})
+        self.assertEqual(status, 200)
+        self.assertEqual(draft['state'], 'pending')
+        settings = {key: ('no' if value == 'no' else float(value) if key in ('mind', 'geno', 'hwe') else int(value))
+                    for key, value in draft['parameters']['settings'].items()}
+        return path, {'session': session, 'proposal_id': draft['id'], **draft['parameters'],
+                      'settings': settings}
+
+    def test_chat_proposes_genotype_without_running_and_waits_for_the_card(self):
+        session = '12345678-1234-1234-1234-123456789abc'
+        self.genotype_inputs()
+
+        def conversation(client, text, history, **kwargs):
+            proposed = dispatch_tool('propose_hpc3_genotype', {'run_id': 'step_test', 'use_example': True})
+            bypass = dispatch_tool('genotype_tcga', {})
+            self.assertEqual((proposed['status'], proposed['executed']), ('awaiting_confirmation', False))
+            self.assertEqual((bypass['status'], bypass['executed']), ('awaiting_confirmation', False))
+            return 'Review the genotype settings.'
+
+        with patch.object(chat_ui, 'run_conversation', side_effect=conversation):
+            status, stream = self.call('POST', '/chat', {'text': 'Use the official example', 'session': session})
+        self.assertEqual(status, 200)
+        self.assertIn('Review the genotype settings.', stream)
+        progress = self.call('GET', '/signet/progress?session=' + session)[1]['analyses'][0]
+        self.assertEqual(progress['genotype_proposal']['state'], 'pending')
+        self.assertEqual(progress['steps'][0]['phase'], 'not_started')
+        self.assertEqual(self.calls, [])
+
+    def test_genotype_decline_cross_session_and_stale_review_do_not_submit(self):
+        path, body = self.genotype_review()
+        before = (self.root / 'work/config.ini').read_bytes()
+        other = {**body, 'session': 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'}
+        self.assertEqual(self.call('POST', path + 'confirm', other)[0], 404)
+        identity = {key: body[key] for key in ('session', 'proposal_id')}
+        self.assertEqual(self.call('POST', path + 'decline', identity)[1]['state'], 'declined')
+        self.assertEqual(self.call('POST', path + 'confirm', body)[0], 409)
+        self.assertEqual((self.root / 'work/config.ini').read_bytes(), before)
+        draft = self.call('POST', path + 'prepare', {'session': body['session'], 'mode': 'example'})[1]
+        self.assertNotEqual(draft['id'], body['proposal_id'])
+        self.assertEqual(self.call('PATCH', '/signet/runs/step_test/settings', {'values': {'mind': .2}})[0], 200)
+        self.assertEqual(self.call('POST', path + 'confirm', {**body, 'proposal_id': draft['id']})[0], 409)
+        self.assertEqual(self.calls, [])
+
+    def test_genotype_confirm_uses_edited_settings_and_only_submits_once(self):
+        path, body = self.genotype_review()
+        before = (self.root / 'work/config.ini').read_bytes()
+        body['settings']['mind'] = 2
+        self.assertEqual(self.call('POST', path + 'confirm', body)[0], 400)
+        self.assertEqual((self.root / 'work/config.ini').read_bytes(), before)
+        self.assertEqual(self.calls, [])
+        body['settings']['mind'] = .07
+        body['resources']['cpus'] = 3
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            responses = list(pool.map(lambda _: self.call('POST', path + 'confirm', body), range(2)))
+        self.assertEqual(sorted(status for status, _ in responses), [202, 409])
+        record = next(record for status, record in responses if status == 202)
+        self.assertEqual((record['step'], record['state'], record['job_id']), ('genotype', 'submitted', '12345'))
+        self.assertEqual((record['settings']['mind'], record['resources']['cpus']), ('0.07', 3))
+        self.assertIn('mind = 0.07', (self.remote_dir / 'work/config.ini').read_text())
+        self.assertEqual(sum('sbatch --parsable' in command for command in self.calls), 1)
+        progress = self.call('GET', '/signet/progress?session=' + body['session'])[1]['analyses'][0]
+        self.assertEqual(progress['genotype_proposal']['state'], 'sent')
+        self.assertEqual(progress['steps'][0]['phase'], 'submitted')
+
+    def test_unknown_genotype_submission_cannot_reuse_approval(self):
+        path, body = self.genotype_review()
+        self.lose_connection_on = 'sbatch --parsable'
+        status, record = self.call('POST', path + 'confirm', body)
+        self.assertEqual((status, record['state']), (202, 'unknown'))
+        self.assertEqual(self.call('POST', path + 'confirm', body)[0], 409)
+        self.assertEqual(self.call('POST', path + 'prepare', {'session': body['session'], 'mode': 'example'})[0], 409)
+        self.assertEqual(sum('sbatch --parsable' in command for command in self.calls), 1)
 
     def test_progress_is_scoped_to_conversation_and_readable_while_downloading(self):
         session = '12345678-1234-1234-1234-123456789abc'
