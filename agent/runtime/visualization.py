@@ -16,6 +16,47 @@ PACKAGES = ('igraph', 'dnet', 'visNetwork', 'STRINGdb', 'TFutils', 'shiny',
             'DT', 'circlize', 'ggthemes', 'fmsb')
 
 
+def read_graph(path, top_networks):
+    edges = []
+    with path.open() as stream:
+        for row in csv.DictReader(stream):
+            source, target = row['source_gene_symbol'], row['target_gene_symbol']
+            freq, coef = float(row['frequency']), float(row['coefficient'])
+            if not source or not target or not 0 <= freq <= 1 or not math.isfinite(coef):
+                raise ValueError('Invalid exported edge.')
+            edges.append({'source': source, 'target': target, 'frequency': freq, 'coefficient': coef})
+    if not edges:
+        raise ValueError('The exported network has no edges.')
+    neighbors = {}
+    for edge in edges:
+        a, b = edge['source'], edge['target']
+        neighbors.setdefault(a, set()).add(b)
+        neighbors.setdefault(b, set()).add(a)
+    seen, groups = set(), []
+    for node in sorted(neighbors):
+        if node in seen:
+            continue
+        stack, group = [node], set()
+        while stack:
+            current = stack.pop()
+            if current not in group:
+                group.add(current)
+                stack.extend(neighbors[current] - group)
+        seen.update(group)
+        groups.append(group)
+    group_by_node = {node: index for index, group in enumerate(groups) for node in group}
+    edge_counts = [0] * len(groups)
+    for edge in edges:
+        edge_counts[group_by_node[edge['source']]] += 1
+    groups = [groups[index] for index in sorted(range(len(groups)),
+              key=lambda index: (-edge_counts[index], min(groups[index])))]
+    selected = set().union(*groups[:top_networks]) if groups else set()
+    return {'nodes': sorted(neighbors), 'edges': edges,
+            'display_nodes': sorted(selected),
+            'counts': {'connections': len(edges), 'genes': len(neighbors), 'subnetworks': len(groups),
+                       'displayed': min(top_networks, len(groups))}}
+
+
 def validate_inputs(settings):
     matrices = []
     for key in INPUT_KEYS[:2]:

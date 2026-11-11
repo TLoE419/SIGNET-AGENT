@@ -18,7 +18,7 @@ from agent.core.conversation import MODEL, run_conversation
 from agent.core.model_timing import ModelRequestTiming
 from agent.paths import PROJECT_ROOT
 from agent.providers import PROVIDERS, create_provider_adapter
-from agent.runtime.genotype_proposal import CHAT_SESSION
+from agent.runtime.step_proposal import CHAT_SESSION
 from agent.stage6.workspace import Workspace, CHAT_CONTEXT
 from agent.tools.ui import UI_CHANNEL
 
@@ -38,6 +38,8 @@ class ChatServer(ThreadingHTTPServer):
         self.state_file = Path(state_file) if state_file else None
         self.pending_history = []
         self.active_session = None
+        self.analysis_download_lock = threading.Lock()
+        self.analysis_downloads = {}
         if self.state_file and self.state_file.exists():
             state = json.loads(self.state_file.read_text())
             self.token = state['token']
@@ -110,6 +112,8 @@ class ChatHandler(BaseHTTPRequestHandler):
         if not self._local_request():
             return self._error(403, '僅允許本機介面。')
         url = urlsplit(self.path)
+        if url.path == '/signet/result-download':
+            return signet_api.download_results(self, url)
         if url.path.startswith('/signet/'):
             # Responses name the user's runs and HPC3 paths, so reads need the page token too.
             if not secrets.compare_digest(self.headers.get('X-Chat-Token', ''), self.server.token):

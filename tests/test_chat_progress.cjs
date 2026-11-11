@@ -3,6 +3,8 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const {TextDecoder} = require('node:util');
 
+const activatedLinks=[];
+
 class Element {
   constructor(tag, attrs='') {
     this.tag=tag; this.children=[]; this.events={}; this.dataset={}; this.attributes={};
@@ -16,6 +18,7 @@ class Element {
   replaceChildren(...children){this.children=[];this.append(...children);}
   after(child){child.parentElement=this.parentElement;const siblings=this.parentElement.children;siblings.splice(siblings.indexOf(this)+1,0,child);}
   reportValidity(){return true;}
+  click(){if(this.tag==='a')activatedLinks.push(this.href);else this.events.click?.();}
   remove(){if(this.parentElement)this.parentElement.children=this.parentElement.children.filter(c=>c!==this);}
   get lastChild(){return this.children.at(-1);}
   set textContent(value){this._text=String(value);this.children=[];}
@@ -79,7 +82,7 @@ function setup(initial={}, analysisApi) {
   context.window=context;
   vm.runInContext(fs.readFileSync('electron/renderer/features/chat/chat.js','utf8'),context);
   vm.runInContext(fs.readFileSync('electron/renderer/features/stage6/stage6.js','utf8'),context);
-  if(analysisApi)for(const file of ['genotype-review.js','analysis-progress.js'])
+  if(analysisApi)for(const file of ['step-review.js','analysis-results.js','analysis-progress.js'])
     vm.runInContext(fs.readFileSync('electron/renderer/features/chat/'+file,'utf8'),context);
   async function tick(){
     const [id, timer]=timers.entries().next().value;
@@ -160,7 +163,7 @@ function setup(initial={}, analysisApi) {
   const requests=[];
   const json=value=>({ok:true,json:async()=>structuredClone(value)});
   function snapshot(session, run_id){
-    return {session,run_id,total_steps:6,completed_steps:phase==='completed'?1:0,
+    return {session,run_id,total_steps:6,next_step:'genotype',proposal:null,completed_steps:phase==='completed'?1:0,
       steps:stageNames.map(step=>({step,phase:step==='network'?phase:step==='visualize'?'untracked':'not_started',
         ...(step==='network'&&progress?{progress}:{})}))};
   }
@@ -250,7 +253,7 @@ function setup(initial={}, analysisApi) {
   const actions=[];
   const genotypeApi=async (path, options)=>{
     if(path==='/signet/progress?session='+session)
-      return json({analyses:[{...snapshot(session,'genotype-run'),completed_steps:0,genotype_proposal:review,
+      return json({analyses:[{...snapshot(session,'genotype-run'),completed_steps:0,proposal:review,
         steps:stageNames.map(step=>({step,phase:step==='genotype'?genotypePhase:step==='visualize'?'untracked':'not_started'}))}]});
     if(path==='/signet/runs/genotype-run/steps/genotype')return json({state:genotypePhase});
     assert.equal(options.method,'POST');
@@ -275,7 +278,7 @@ function setup(initial={}, analysisApi) {
   };
   const genotypeApp=setup({session},genotypeApi);await new Promise(setImmediate);
   const genotypeMessages=genotypeApp.ids.get('messages');
-  const genotypeCard=genotypeMessages.children.find(el=>el.className==='genotype-review-card');
+  const genotypeCard=genotypeMessages.children.find(el=>el.className==='step-review-card');
   const genotypeProgress=genotypeMessages.children.find(el=>el.className==='analysis-progress-card');
   const actionButton=text=>genotypeCard.querySelectorAll('button').find(el=>el.textContent===text);
   assert.equal(genotypeCard.hidden,false,'a draft created in chat is restored from the linked analysis');
@@ -304,5 +307,90 @@ function setup(initial={}, analysisApi) {
   assert.match(genotypeCard.textContent,/已送算/);
   assert.match(genotypeProgress.textContent,/已送出/);
   assert.equal(genotypeMessages.children.filter(el=>el.className==='analysis-progress-card').length,1);
+  let nextIndex=1, activePhase='not_started', nextProposal;
+  const confirmations=[];
+  const parameters={
+    expression:{inputs:{'gexp.file':'/demo/expression','pmap.file':'/demo/annotation'},settings:{'restrict.tcga':'1'}},
+    adjust:{inputs:{'cli.file':'/demo/clinical.tsv'},settings:{},options:{npc:3}},
+    cis:{inputs:{},settings:{'alpha.cis':'0.05'}},
+    network:{inputs:{},settings:{nboots:'2',walltime:'1:00:00'}},
+    visualize:{inputs:{},settings:{freq:'0.5',ntop:'1'}}
+  };
+  const graphDraws=[];
+  const sequenceApi=async (path, options)=>{
+    const step=stageNames[nextIndex];
+    if(path==='/signet/progress?session='+session)return json({analyses:[{
+      run_id:'same-run',session,completed_steps:nextIndex,total_steps:6,next_step:step||null,proposal:nextProposal||null,
+      steps:stageNames.map((name,index)=>({step:name,phase:index<nextIndex?'completed':index===nextIndex?activePhase:'not_started'}))
+    }]});
+    if(path==='/signet/runs/same-run/results?session='+session)return json({graph:{
+      display_nodes:['A','B'], edges:[{source:'A',target:'B'}], counts:{genes:2,connections:1}
+    }});
+    if(path==='/signet/runs/same-run/results/download') {
+      assert.deepEqual(JSON.parse(options.body),{session});
+      return json({url:'/signet/result-download?ticket=example-ticket'});
+    }
+    const endpoint='/signet/runs/same-run/steps/'+step;
+    if(path===endpoint)return json({state:activePhase});
+    assert.ok(path.startsWith(endpoint+'/proposal/'),path);
+    const action=path.split('/').at(-1);
+    const body=JSON.parse(options.body);
+    assert.equal(body.session,session);
+    if(action==='prepare'){
+      nextProposal={id:step,state:'pending',mode:'example',parameters:{
+        ...parameters[step],resources:{cpus:2,mem_gb:16,hours:2}
+      }};
+      return json(nextProposal);
+    }
+    if(action==='decline'){
+      nextProposal={...nextProposal,state:'declined'};
+      return json(nextProposal);
+    }
+    assert.equal(action,'confirm');
+    assert.equal(body.proposal_id,step);
+    confirmations.push({step,body});
+    activePhase='submitted';
+    nextProposal={...nextProposal,state:'sent'};
+    return json({state:'submitted'});
+  };
+  const sequence=setup({session},sequenceApi);
+  sequence.context.vis={Network:class {constructor(el, data){graphDraws.push(data);} destroy(){}}};
+  await new Promise(setImmediate);
+  const sequenceLog=sequence.ids.get('messages');
+  const sequenceProgress=sequenceLog.children.find(el=>el.className==='analysis-progress-card');
+  const sequenceReview=sequenceLog.children.find(el=>el.className==='step-review-card');
+  const reviewButton=text=>sequenceReview.querySelectorAll('button').find(el=>el.textContent===text);
+  assert.deepEqual(confirmations,[],'preparing the next stage never submits it');
+  for(let i=1;i<6;i++){
+    assert.match(sequenceReview.textContent,new RegExp('第 '+(i+1)+' 階段'));
+    if(i===2){
+      reviewButton('先不要').click();
+      await new Promise(setImmediate);
+      assert.equal(confirmations.length,1);
+      assert.match(sequenceReview.textContent,/尚未送出運算/);
+      reviewButton('準備本階段設定').click();
+      await new Promise(setImmediate);
+      sequenceReview.querySelectorAll('input').find(el=>el.value===3).value='2';
+    }
+    const approve=reviewButton('同意，開始這一步');
+    approve.click();approve.click();
+    await new Promise(setImmediate);
+    assert.equal(confirmations.length,i);
+    assert.match(sequenceProgress.textContent,/已送出/);
+    nextIndex++;activePhase='not_started';nextProposal=null;
+    await sequence.tick();
+  }
+  assert.equal(confirmations.find(item=>item.step==='adjust').body.options.npc,2);
+  assert.equal(confirmations.find(item=>item.step==='network').body.settings.walltime,'1:00:00');
+  assert.equal(confirmations.find(item=>item.step==='visualize').body.settings.freq,.5);
+  assert.equal(sequenceReview.hidden,true);
+  assert.equal(sequenceLog.children.filter(el=>el.className==='analysis-progress-card').length,1);
+  const resultCard=sequenceLog.children.find(el=>el.className.startsWith('analysis-result-card'));
+  assert.match(resultCard.textContent,/2 個基因 · 1 條連線/);
+  assert.equal(graphDraws.length,1);
+  assert.equal(graphDraws[0].edges[0].to,'B');
+  resultCard.querySelectorAll('button')[0].click();
+  await new Promise(setImmediate);
+  assert.equal(activatedLinks.at(-1),'/signet/result-download?ticket=example-ticket');
   console.log('Chat progress visibility, status, history, errors and Stage 6 independence passed.');
 })().catch(error=>{console.error(error);process.exitCode=1;});

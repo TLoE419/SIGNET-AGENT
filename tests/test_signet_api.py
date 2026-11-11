@@ -15,9 +15,11 @@ import tarfile
 import threading
 import unittest
 from unittest.mock import patch
+from zipfile import ZipFile
 
 import agent.app.chat_ui as chat_ui
 import agent.runtime.ssh_transport as ssh_transport
+from agent.runtime import signet_jobs as jobs
 from agent.tools.signet import dispatch_tool
 import test_signet_jobs
 
@@ -54,8 +56,12 @@ class SignetApiTest(unittest.TestCase):
         try:
             conn.request(method, path, body=data, headers=headers)
             result = conn.getresponse()
-            text = result.read().decode()
-            return result.status, json.loads(text) if result.getheader('Content-Type', '').startswith('application/json') else text
+            data = result.read()
+            mime = result.getheader('Content-Type', '')
+            if mime == 'application/zip':
+                return result.status, data
+            text = data.decode()
+            return result.status, json.loads(text) if mime.startswith('application/json') else text
         finally:
             conn.close()
 
@@ -67,6 +73,9 @@ class SignetApiTest(unittest.TestCase):
                   ('POST', '/signet/runs/step_test/genotype-proposal/prepare'),
                   ('POST', '/signet/runs/step_test/genotype-proposal/confirm'),
                   ('POST', '/signet/runs/step_test/genotype-proposal/decline'),
+                  ('GET', '/signet/runs/step_test/results'),
+                  ('POST', '/signet/runs/step_test/results/download'),
+                  ('POST', '/signet/runs/step_test/steps/expression/proposal/prepare'),
                   ('GET', '/signet/runs/step_test'), ('PATCH', '/signet/runs/step_test/conversation'), ('PATCH', '/signet/runs/step_test/settings'),
                   ('POST', '/signet/runs/step_test/steps/expression'), ('GET', '/signet/runs/step_test/steps/expression'),
                   ('POST', '/signet/runs/step_test/steps/expression/cancel'),
@@ -202,6 +211,99 @@ class SignetApiTest(unittest.TestCase):
         self.assertEqual(self.call('POST', path + 'prepare', {'session': body['session'], 'mode': 'example'})[0], 409)
         self.assertEqual(sum('sbatch --parsable' in command for command in self.calls), 1)
 
+    def test_six_reviewed_steps_share_one_run_and_download_its_results(self):
+        path, body = self.genotype_review()
+        session = body['session']
+        run = '/signet/runs/step_test'
+        progress = '/signet/progress?session=' + session
+        routes = lambda step: run + '/steps/' + step
+        results = run + '/results?session=' + session
+        download = run + '/results/download'
+        other = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+
+        self.assertEqual(self.call('POST', routes('expression') + '/proposal/prepare', {'session': session})[0], 409)
+        self.assertEqual(self.call('GET', results)[0], 409)
+        self.assertEqual(self.call('POST', download, {'session': session})[0], 409)
+        clinical = self.hpc / 'ws/refdata/clinical-compatible.tsv'
+        clinical.write_text('submitter_id\trace\tgender\nTCGA-AB-0001\tasian\tfemale\n')
+        expression = self.hpc / 'ws/signet/example/gexp/example_gexp'
+        expression.parent.mkdir(exist_ok=True)
+        expression.write_text('example expression')
+        (self.hpc / 'ws/refdata/gencode.v22.genes.gtf').write_text('annotation')
+        edges = 'source_gene_symbol,target_gene_symbol,frequency,coefficient\nA,B,0.75,0.2\n'
+
+        for index, step in enumerate(jobs.ANALYSIS_STEPS):
+            base = routes(step)
+            if step != 'genotype':
+                endpoint = base + '/proposal/prepare'
+                status, draft = self.call('POST', endpoint, {'session': session})
+                self.assertEqual(status, 200, draft)
+                self.assertEqual(self.call('GET', progress)[1]['analyses'][0]['proposal']['id'], draft['id'])
+                self.assertEqual(draft['mode'], 'example')
+                parameters = draft['parameters']
+                rules = jobs.STEPS[step].settings
+                parameters['settings'] = {
+                    name: value if value == 'no' or rules[name] == 'hms' else
+                    float(value) if rules[name] in ('alpha', 'fraction') else int(value)
+                    for name, value in parameters['settings'].items()
+                }
+                body = {'session': session, 'proposal_id': draft['id'], **parameters}
+                if step == 'adjust':
+                    self.assertEqual(body['inputs']['cli.file'], '')
+                    body['inputs']['cli.file'] = str(clinical)
+                    body['options']['npc'] = 2
+                if step == 'visualize':
+                    body['settings']['freq'] = .75
+
+            self.assertEqual(sum('sbatch --parsable' in command for command in self.calls), index)
+            self.slurm(sbatch_reply=str(4000 + index), sacct='', squeue='')
+            status, record = self.call('POST', base + '/proposal/confirm', body)
+            self.assertEqual(status, 202, record)
+            self.assertEqual(record['run_id'], 'step_test')
+            self.assertEqual(self.call('POST', base + '/proposal/confirm', body)[0], 409)
+            if step == 'adjust':
+                self.assertEqual(record['options'], {'npc': 2})
+            if step == 'visualize':
+                script = (self.remote_dir / 'steps/visualize.sbatch').read_text()
+                self.assertIn('bash ./signet -v', script)
+                self.assertIn('cloud=T', script)
+                self.assertIn('signet-edges.csv', script)
+                config = (self.remote_dir / 'work/config.ini').read_text()
+                self.assertIn('freq = 0.75', config)
+                self.assertIn('Afreq = ' + str(self.remote_dir / 'work/res/resn/signet_Afreq'), config)
+            outputs = record.get('required_outputs') or jobs.STEPS[step].required
+            extra = {
+                'genotype': ['tmp/tmpg/impute/impute_Genotype.sizes'],
+                'visualize': ['res/resv/signet_top1_freq0.75.html',
+                              'res/resv/signet_top1_freq0.75_files/widget.js'],
+            }.get(step, [])
+            for name in [*outputs, *extra]:
+                file = self.remote_dir / 'work' / name
+                file.parent.mkdir(parents=True, exist_ok=True)
+                file.write_text(edges if name.endswith('signet-edges.csv') else step)
+            (self.remote_dir / f'steps/{step}.done').write_text('0 2026-11-01T10:00:00\n')
+            self.slurm(sacct='COMPLETED')
+            status, completed = self.call('GET', base + '?refresh=1')
+            self.assertEqual((status, completed['state']), (200, 'completed'), completed)
+            analysis = self.call('GET', progress)[1]['analyses'][0]
+            self.assertEqual(analysis['completed_steps'], index + 1)
+            self.assertEqual(analysis['next_step'],
+                             jobs.ANALYSIS_STEPS[index + 1] if index + 1 < len(jobs.ANALYSIS_STEPS) else None)
+
+        self.assertEqual(sum('sbatch --parsable' in command for command in self.calls), 6)
+        self.assertEqual(self.call('GET', run + '/results?session=' + other)[0], 404)
+        graph = self.call('GET', results)[1]['graph']
+        self.assertEqual(graph['edges'], [{'source': 'A', 'target': 'B', 'frequency': .75, 'coefficient': .2}])
+        self.assertEqual(self.call('POST', download, {'session': other})[0], 404)
+        ticket = self.call('POST', download, {'session': session})[1]['url']
+        status, payload = self.call('GET', ticket, headers={})
+        self.assertEqual(status, 200, payload)
+        with ZipFile(io.BytesIO(payload)) as archive:
+            self.assertEqual(archive.read('work/res/resv/signet-edges.csv').decode(), edges)
+            self.assertIn('work/res/resv/signet_top1_freq0.75_files/widget.js', archive.namelist())
+            self.assertIn('work/res/resg/signet_Geno', archive.namelist())
+        self.assertEqual(self.call('GET', ticket, headers={})[0], 403)
+
     def test_progress_is_scoped_to_conversation_and_readable_while_downloading(self):
         session = '12345678-1234-1234-1234-123456789abc'
         other = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
@@ -237,7 +339,7 @@ class SignetApiTest(unittest.TestCase):
                 self.assertEqual(snapshot['completed_steps'], 0)
                 self.assertEqual(snapshot['steps'][1],
                                  {'step': 'expression', 'flag': '-t', 'phase': 'downloading'})
-                self.assertEqual(snapshot['steps'][-1]['phase'], 'untracked')
+                self.assertEqual(snapshot['steps'][-1]['phase'], 'not_started')
             finally:
                 release.set()
             self.assertEqual(check.result(timeout=10)[1]['state'], 'completed')
@@ -258,7 +360,7 @@ class SignetApiTest(unittest.TestCase):
         initial = analysis()
         self.assertEqual([s['step'] for s in initial['steps']],
                          ['genotype', 'expression', 'adjust', 'cis', 'network', 'visualize'])
-        self.assertEqual(initial['steps'][-1]['phase'], 'untracked')
+        self.assertEqual(initial['steps'][-1]['phase'], 'not_started')
         self.assertEqual(self.submit()[0], 202)
         self.slurm(squeue='PENDING')
         self.assertEqual(self.call('GET', status_path)[1]['state'], 'pending')
@@ -491,7 +593,7 @@ class SignetApiTest(unittest.TestCase):
     def test_step_errors_map_to_status_codes(self):
         self.assertEqual(self.call('POST', '/signet/runs/step_test/steps/expression', {'inputs': {'gexp.file': '/etc/passwd'}})[0], 400)
         self.assertEqual(self.call('POST', '/signet/runs/step_test/steps/expression', {})[0], 400)
-        self.assertEqual(self.call('POST', '/signet/runs/step_test/steps/visualize', {'inputs': self.inputs})[0], 404)
+        self.assertEqual(self.call('POST', '/signet/runs/step_test/steps/visualize', {'inputs': {}})[0], 400)
         self.assertEqual(self.call('GET', '/signet/runs/step_test/steps/expression')[0], 404)
         for query in ('refresh=2', 'stream=out&stream=err', 'other=1'):
             self.assertEqual(self.call('GET', f'/signet/runs/step_test/steps/expression?{query}')[0], 400, query)

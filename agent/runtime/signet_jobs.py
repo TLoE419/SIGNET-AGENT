@@ -242,8 +242,23 @@ STEPS = {
         failures=('Some jobs are incomplete', 'Cannot find the container', "doesn't exist", 'Please reset'),
         description='TCGA network construction (signet -n): two-stage penalized least squares on bootstrap '
                     'data; SIGNET submits its own Slurm jobs, this step drives and follows them.'),
+    'visualize': Step(
+        flag='-v', cohort='TCGA', inputs=(),
+        settings={'freq': 'alpha', 'ntop': 'subnetworks'},
+        requires=('network',),
+        links={'Afreq': 'res/resn/signet_Afreq', 'coef': 'res/resn/signet_CoeffMat0',
+               'vis.genepos': 'res/resn/signet_net.genepos'},
+        needs=('res/resn/signet_Afreq', 'res/resn/signet_CoeffMat0', 'res/resn/signet_net.genepos'),
+        required=('res/resv/signet-edges.csv', 'res/resv/signet_count_vs_freq.pdf'),
+        download='work/res/resv',
+        resources={'cpus': 2, 'mem_gb': 16, 'hours': 2},
+        limits={'cpus': (1, 8), 'mem_gb': (1, 64), 'hours': (0.25, 12)},
+        env={'cloud': 'T', 'OPENBLAS_NUM_THREADS': '1', 'OMP_NUM_THREADS': '1'},
+        description='Export SIGNET network graphs and tables from this run’s network results.'),
 }
 
+
+ANALYSIS_STEPS = ('genotype', 'expression', 'adjust', 'cis', 'network', 'visualize')
 
 def catalog():
     """Describe every step so a form can be built without hard-coding: inputs, settings, resources, outputs."""
@@ -396,9 +411,9 @@ def analysis_view(root, cohort, records, *, include_attempts=True):
     """Project stored records for chat without polling, downloading or starting a job."""
     stages = []
     if cohort == 'TCGA':
-        for name in ('genotype', 'expression', 'adjust', 'cis', 'network', 'visualize'):
+        for name in ANALYSIS_STEPS:
             record = records.get(name)
-            phase = 'untracked' if name == 'visualize' else 'not_started'
+            phase = 'not_started'
             attempts = []
             if record is not None:
                 if include_attempts:
@@ -470,6 +485,10 @@ def _setting(key, rule, value):
         if number and 0 < value <= 1:
             return str(value)
         raise StepError('invalid_request', f'{key} must be a number above 0 and at most 1.')
+    if rule == 'subnetworks':
+        if type(value) is int and 1 <= value <= 20:
+            return str(value)
+        raise StepError('invalid_request', 'ntop must be a whole number from 1 to 20.')
     if rule == 'count':      # number of permutations
         if isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 100_000:
             return str(value)
@@ -709,6 +728,22 @@ export SINGULARITY_BIND={q(bind)} APPTAINER_BIND={q(bind)}
         env = f"--env {q(','.join(f'{k}={v}' for k, v in step.env.items()))} " if step.env else ''
         run = (f"{q(config['executor'])} exec --cleanenv --no-home {env}--bind {q(bind)} {q(config['image'])} "
                f"bash ./signet {step.flag} {stdin}")
+    if name == 'visualize':
+        # Change only the uploaded script. Use R's own frequency formatting for
+        # upstream filenames, and publish the graph CSV only after exports exist.
+        run = """sed -i '1i Sys.setenv(freq=trimws(Sys.getenv("freq")))' script/netvis/netshiny.R
+cat >> script/netvis/netshiny.R <<'SIGNET_EXPORT_CHECK'
+frequency <- as.numeric(Sys.getenv("freq"))
+prefix <- Sys.getenv("resv")
+indices <- seq_len(as.integer(Sys.getenv("ntop")))
+expected <- c(paste0(prefix, "_top", indices, "_freq", frequency, ".html"),
+              paste0(prefix, "_circular_top", indices, "_freq", Sys.getenv("freq"), ".pdf"))
+stopifnot(all(file.exists(expected)), all(file.info(expected)$size > 0))
+edges <- paste0(prefix, "_edgelist_", frequency, ".txt")
+stopifnot(file.exists(edges), file.info(edges)$size > 0)
+stopifnot(file.copy(edges, file.path(dirname(prefix), "signet-edges.csv")))
+SIGNET_EXPORT_CHECK
+""" + run
     return f'''#!/bin/bash
 #SBATCH --job-name=signet-{name}-{run_id}
 #SBATCH --output={directory}/steps/{name}.out
@@ -1099,6 +1134,14 @@ def _finish(root, record, step, done, missing, hints):
             return
         record['outputs'] = sorted(str(path.relative_to(root)) for path in
                                    (root / step.download).rglob('*') if path.is_file())
+    if record['step'] == 'visualize':
+        from agent.runtime.visualization import read_graph
+        try:
+            read_graph(root / step.download / 'signet-edges.csv', int(record['settings']['ntop']))
+        except (OSError, ValueError, KeyError) as error:
+            record.pop('download_pending', None)
+            _change(record, 'failed', finished_at=_now(), reason=f'Invalid visualization output: {error}')
+            return
     record.pop('download_pending', None)
     _change(record, 'completed', finished_at=_now(), missing_outputs=[], failure_hints=[],
             reason='Outputs present and logs clean. This is not scientific validation; review the results.')

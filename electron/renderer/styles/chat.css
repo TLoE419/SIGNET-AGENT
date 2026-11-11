@@ -142,17 +142,19 @@
 .analysis-progress-count::after{content:" ▾";color:var(--muted)}
 .analysis-progress-card[open] .analysis-progress-count::after{content:" ▴"}
 
-.genotype-review-card{width:min(100%,46rem);margin:0 0 16px;align-self:flex-start;border:1px solid var(--line);border-radius:12px;background:#fcfdfa;padding:14px 16px;color:var(--ink)}
-.genotype-review-card>strong{display:block;margin-bottom:8px}
-.genotype-review-fields{border:0;margin:0;padding:0;min-width:0}
-.genotype-review-fields legend{font-size:13px;color:var(--muted);padding:0;margin:0 0 8px}
-.genotype-review-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:8px;margin-bottom:10px}
-.genotype-review-inputs{grid-template-columns:repeat(auto-fit,minmax(225px,1fr))}
-.genotype-review-field{display:grid;gap:3px;min-width:0;font-size:12px}
-.genotype-review-field input,.genotype-review-field select{min-width:0;width:100%;font:inherit;color:var(--ink);background:white;border:1px solid var(--line);border-radius:6px;padding:6px}
-.genotype-review-actions{display:flex;flex-wrap:wrap;gap:8px}
-.genotype-review-actions button{font:inherit;font-size:13px;background:#f1f6ee;color:var(--ink);border:1px solid var(--line);padding:6px 10px;border-radius:6px}
-.genotype-review-actions .genotype-review-accept{background:var(--accent);color:white}
-.genotype-review-actions button:disabled{opacity:.6;cursor:default}
-.genotype-review-notice{margin:8px 0 0;font-size:12px;color:var(--muted)}
-.genotype-review-error-detail{display:block;overflow-wrap:anywhere}
+.step-review-card{width:min(100%,46rem);margin:0 0 16px;align-self:flex-start;border:1px solid var(--line);border-radius:12px;background:#fcfdfa;padding:14px 16px;color:var(--ink)}
+.step-review-card>strong{display:block;margin-bottom:8px}
+.step-review-fields{border:0;margin:0;padding:0;min-width:0}
+.step-review-fields legend{font-size:13px;color:var(--muted);padding:0;margin:0 0 8px}
+.step-review-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:8px;margin-bottom:10px}
+.step-review-inputs{grid-template-columns:repeat(auto-fit,minmax(225px,1fr))}
+.step-review-field{display:grid;gap:3px;min-width:0;font-size:12px}
+.step-review-field input,.step-review-field select{min-width:0;width:100%;font:inherit;color:var(--ink);background:white;border:1px solid var(--line);border-radius:6px;padding:6px}
+.step-review-actions{display:flex;flex-wrap:wrap;gap:8px}
+.step-review-actions button{font:inherit;font-size:13px;background:#f1f6ee;color:var(--ink);border:1px solid var(--line);padding:6px 10px;border-radius:6px}
+.step-review-actions .step-review-accept{background:var(--accent);color:white}
+.step-review-actions button:disabled{opacity:.6;cursor:default}
+.step-review-notice{margin:8px 0 0;font-size:12px;color:var(--muted)}
+.step-review-error-detail{display:block;overflow-wrap:anywhere}
+
+.analysis-result-graph{height:340px;margin:10px 0;border:1px solid var(--line);border-radius:8px;background:white}

@@ -594,13 +594,13 @@ def propose_hpc3_genotype(run_id: str, use_example: bool = False) -> dict:
     Use example inputs only when requested. The researcher can edit the card
     and must click to approve. This tool never submits a job.
     """
-    from agent.runtime import genotype_proposal
+    from agent.runtime import step_proposal
     from agent.runtime.signet_jobs import StepError
-    session = genotype_proposal.CHAT_SESSION.get()
+    session = step_proposal.CHAT_SESSION.get()
     if session is None:
         return {'status': 'unavailable', 'executed': False, 'reason': 'Open the desktop chat to review a proposal.'}
     try:
-        genotype_proposal.prepare(run_id, session, 'example' if use_example else 'custom', allow_unlinked=True)
+        step_proposal.prepare(run_id, session, 'example' if use_example else 'custom', allow_unlinked=True)
     except StepError as error:
         return {'status': error.code, 'executed': False, 'error': str(error)}
     return {'status': 'awaiting_confirmation', 'executed': False, 'run_id': run_id}
@@ -619,12 +619,18 @@ def dispatch_tool(name, arguments):
     try:
         if name not in functions or not isinstance(arguments, dict):
             raise ValueError('Unsupported tool or argument object.')
-        if name in ('genotype_tcga', 'genotype_gtex'):
-            from agent.runtime.genotype_proposal import CHAT_SESSION
-            if CHAT_SESSION.get() is not None:
+        genotype_tools = ('genotype_tcga', 'genotype_gtex')
+        downstream_tools = ('expression_tcga', 'expression_gtex', 'adjust_tcga', 'adjust_gtex',
+                            'cis_eqtl', 'submit_network')
+        if name in genotype_tools + downstream_tools:
+            from agent.runtime.step_proposal import CHAT_SESSION
+            from agent.runtime.signet_jobs import analysis_session
+            run_id = arguments.get('run_id')
+            if CHAT_SESSION.get() is not None and (name in genotype_tools or (
+                    isinstance(run_id, str) and analysis_session(_run(run_id)) is not None)):
                 return {'status': 'awaiting_confirmation', 'executed': False,
-                        'reason': 'First-stage execution from desktop chat uses the TCGA HPC3 confirmation card. '
-                                  'Use propose_hpc3_genotype; the model cannot confirm it.'}
+                        'reason': 'Linked HPC3 analyses require the chat confirmation card. '
+                                  'The next card follows each completed step.'}
         if name == 'run_visualization':
             from agent.stage6.workspace import CHAT_CONTEXT
             if CHAT_CONTEXT.get() is not None:

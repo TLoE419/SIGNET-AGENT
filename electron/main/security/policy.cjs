@@ -8,6 +8,9 @@ function localURL(value, origin) {
 function navigationAllowed(value, origin) {
   if (!localURL(value, origin)) return false;
   const url = new URL(value);
-  return url.pathname === '/' || url.pathname === '/stage6/file';
+  return url.pathname === '/' || resultDownloadPath(url.pathname);
 }
-module.exports = {localURL, navigationAllowed};
+function resultDownloadPath(pathname) {
+  return pathname === '/stage6/file' || pathname === '/signet/result-download';
+}
+module.exports = {localURL, navigationAllowed, resultDownloadPath};

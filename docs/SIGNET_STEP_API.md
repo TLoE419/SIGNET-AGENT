@@ -1,6 +1,6 @@
 # SIGNET Step API
 
-This document specifies the local HTTP API under `/signet/` that runs SIGNET steps on HPC3 as Slurm jobs. The workflow panel and any future AI tool call these routes. They never build shell or R commands themselves: every rule lives in one service, `agent/runtime/signet_jobs.py`, and the routes in `agent/app/signet_api.py` only translate HTTP into calls to it.
+This document specifies the local HTTP API under `/signet/` that runs SIGNET steps on HPC3 as Slurm jobs. The desktop chat uses these routes to review, run, and display one linked analysis. They never build shell or R commands themselves: every rule lives in one service, `agent/runtime/signet_jobs.py`, and the routes in `agent/app/signet_api.py` only translate HTTP into calls to it.
 
 Steps available now (TCGA cohort only):
 
@@ -11,8 +11,9 @@ Steps available now (TCGA cohort only):
 | `adjust` | `signet -a` | Match expression and genotype samples, filter rare SNPs, compute genotype PCs, regress out race, gender and PCs |
 | `cis` | `signet -c` | cis-eQTL mapping: each gene's significant nearby SNPs (common, low-frequency, rare), used later as instrumental variables |
 | `network` | `signet -n` | Gene regulatory network by two-stage penalized least squares on bootstrap data; SIGNET submits its own Slurm jobs (section 6.4) |
+| `visualize` | `signet -v` | Export the network graph and tables from this run’s completed network step |
 
-The chat tool `cis_eqtl` still runs `signet -c` through the older `remote.execute_cis()` path on the login node; the `cis` step here is the Slurm replacement.
+Linked chat analyses use the ordered confirmation flow for all six stages. The older local analysis tools remain separate.
 
 ## Contents
 
@@ -81,7 +82,7 @@ The API is served by the app's local Python backend on `127.0.0.1:<port>`. `agen
 | Check | Applies to | Failure |
 |---|---|---|
 | `Host` is `127.0.0.1:<port>` | every request | 403 |
-| `X-Chat-Token` equals the page token | every request, **GET included** (responses name the user's runs and HPC3 paths) | 403 |
+| `X-Chat-Token` equals the page token | all routes except ZIP retrieval, which uses a single-use ticket | 403 |
 | `Origin` is `http://127.0.0.1:<port>` | POST and PATCH | 403 |
 
 - The page obtains the token from `GET /bootstrap`. Developer scripts can do the same; see [Worked example](#9-worked-example--t--g--a-in-one-run).
@@ -132,9 +133,9 @@ Inside the API:
 | 9 | `GET /signet/runs/{run_id}/steps/{step}/log` | yes | Last lines of the job's stdout or stderr |
 | 10 | `PATCH /signet/runs/{run_id}/conversation` | no | Link an analysis to a saved conversation |
 | 11 | `GET /signet/progress?session=<id>` | no | Read current progress for a conversation’s linked analyses |
-| 12 | `POST /signet/runs/{run_id}/genotype-proposal/prepare` | no job | Open the first-stage review in the linked chat |
-| 13 | `POST /signet/runs/{run_id}/genotype-proposal/decline` | no | Close the review without submitting |
-| 14 | `POST /signet/runs/{run_id}/genotype-proposal/confirm` | yes | Submit the exact reviewed first-stage parameters once |
+| 12 | `POST /signet/runs/{run_id}/steps/{step}/proposal/{action}` | confirm only | Prepare, decline, or submit reviewed settings |
+| 13 | `GET /signet/runs/{run_id}/results?session=<id>` | no | Read the completed graph |
+| 14 | `POST /signet/runs/{run_id}/results/download` | no | Request a one-time result download |
 
 ### 5.1 `GET /signet/catalog`
 
@@ -209,7 +210,7 @@ The step states here are the last recorded ones. Use route 7 for a fresh state.
 
 - `attempts` is the archived and current records, oldest first, with an explicit attempt number. New records also snapshot the step's editable settings at submission. Older records are read as-is; an absent attempt number means 1, and absent settings are not reconstructed from today's configuration.
 - `phase` preserves the job state except that scheduler `pending` is reported as `queued` and a validated job whose results have not finished transferring is `downloading`. A transfer error leaves the same attempt in this phase; poll route 7 to resume checking it.
-- `not_started` means no attempt exists. Visualization is `untracked` because the separate visualization workspace does not yet publish a record for the HPC3 analysis. It does not count as complete. This view does not create drafts or claim a step is awaiting approval.
+- `not_started` means no attempt exists. All six stages use the same status records, including visualization.
 - This view reads saved state only. Use route 7 to refresh scheduler status and collect results.
 
 - 404: unknown run.
@@ -318,36 +319,39 @@ without starting or repeating any computation. The association is stored locally
 Returns `{"analyses": [...]}` for TCGA runs linked to this conversation. Each entry has
 `run_id`, `session`, `completed_steps`, `total_steps`, and the six ordered `steps` described in
 section 5.4. Each step has `step`, `flag`, `phase`, and measured `progress` when available.
-Attempt histories and job input paths are omitted. A linked genotype review is returned as
-`genotype_proposal` with its own proposed or reviewed parameters, or `null` if there is none. A missing or malformed session is
-rejected; a valid session with no linked runs returns an empty list.
+Attempt histories and recorded job inputs are omitted. `next_step` identifies the first
+incomplete stage. Its current review is returned as `proposal`, with reviewed parameters. The separate `resource_limits` field describes the stage’s resource bounds. Both `next_step` and `proposal` are null after completion.
 
-In a saved chat, use **Track an existing analysis** to link an unassigned run. The chat updates
-one card per run using this local snapshot. It checks active jobs separately via route 7, so
-a long result download does not block the card or require another chat message. A lost connection
-leaves the last recorded phase visible. Completed-stage counts exclude untracked visualization;
-running steps only show work-unit counts reported by the backend.
+In a saved chat, **Track an existing analysis** links an unassigned run. The chat updates one
+progress card per run and checks active jobs separately via route 7. A lost connection leaves the
+last recorded phase visible. Running stages only show work-unit counts reported by the backend.
 
+### 5.12 Review and continue a linked analysis
 
-### 5.12 First-stage genotype review
+Ask the desktop assistant to prepare genotype preprocessing, or open the first stage from an
+existing linked analysis. After each successful stage, the chat prepares the next card. Every
+stage requires its own approval and uses the same run. The former genotype-only routes are
+aliases for the `genotype` proposal actions.
 
-Ask the desktop assistant to prepare genotype preprocessing on an existing TCGA run, or ask it to
-create a fresh analysis first. The model can create the review and link the run to the conversation;
-it cannot confirm. To open a review without the model, link a run using **Track an existing analysis**
-and choose **Configure stage 1** or **Use official example** below its progress card.
+- `prepare`: send `{"session": "..."}`. An optional `mode` selects `"example"` or `"custom"`.
+  The selected mode carries forward from genotype when omitted. Example expression uses the
+  installed expression matrix and collapsed GENCODE annotation. Adjustment requires a compatible
+  clinical table supplied by the researcher. Preparation does not change settings or submit jobs.
+- `decline`: send `session` and `proposal_id`. The same stage can be opened again with a new ID.
+- `confirm`: send `session`, `proposal_id`, `inputs`, `settings`, `resources` and any `options`
+  shown in the card. The server checks ordering and rejects stale settings. It consumes the
+  approval under the run's submission lock before contacting the scheduler. A repeat returns
+  409 even if the first reply was lost.
 
-- `prepare`: body `{"session": "...", "mode": "custom"}`, or mode `"example"`. The example
-  fills paths under the prepared chromosome 1 reference folder. It does not install or convert
-  missing data. Preparation leaves the run settings and scheduler unchanged.
-- `decline`: body `{"session": "...", "proposal_id": "..."}`. The card is marked declined.
-  Preparing again is an explicit action and gets a new ID.
-- `confirm`: body contains `session`, `proposal_id`, and the reviewed `inputs`, `settings` and
-  `resources` objects. These contain the genotype catalog's exact input and setting keys and the
-  three resource values. Settings use numbers, or `"no"` for all configured chromosomes. The
-  request is rejected if the run settings or prior attempt changed since review. On acceptance,
-  the ID is consumed under the run's submission lock before the scheduler is contacted.
-  A repeat or stale confirmation returns 409, including after a lost submission reply.
-  The normal genotype step record becomes the source of truth for the existing progress card.
+### 5.13 Graph and results
+
+Once all six stages complete, the chat draws the graph from the same run’s downloaded edge
+table. Large graphs show a bounded selection of nodes and edges. The result download contains
+all recorded outputs from the six stages, including the official HTML and its companion files.
+
+The download request accepts `{"session": "..."}` and returns a local URL with a single-use
+ticket expiring after one minute. The browser retrieves the ZIP from that URL. Both the graph
+and ticket are scoped to the run’s linked conversation.
 
 
 ## 6. Step reference
@@ -375,6 +379,12 @@ Input notes:
 - The name of the main `-c` result contains `alpha.cis` (for example `signet_all.sig.pValue_0.05`). The required output names are fixed in the step record (`required_outputs`) at submit, so a later settings change cannot alter how that attempt is judged.
 - `cis` runs R with `OPENBLAS_NUM_THREADS`, `OMP_NUM_THREADS` and `MKL_NUM_THREADS` set to 1, because ParaFly already runs one R job per CPU.
 - `cli.file` is a tab-separated clinical file with at least `submitter_id`, `race` and `gender` (see section 10 for SIGNET's race handling). Samples are matched on the third part of the TCGA barcode.
+
+The `visualize` step consumes the frequency matrix, coefficient matrix and gene positions
+from this run’s `network` output. The card reviews minimum edge frequency (`freq`), subnetwork
+count (`ntop`) and job resources. The HPC3 job runs the official exports with the interactive
+server disabled. It publishes the edge table only after the requested HTML and circular
+plots exist. The local service validates the downloaded edge table before recording completion.
 
 ### 6.2 Prefix inputs
 
@@ -556,4 +566,4 @@ If `adjust` fails (for example because of the clinical file), fix the cause and 
 - **No job confirmed.** A step that ends `unknown` without a job ID has no way out yet other than inspecting the HPC3 folder: it cannot be retried, and it blocks the run's other steps and settings.
 - **One run per analysis.** Results are never taken from another run. Copying `-t` or `-g` results between runs would also need `-g`'s `tmp/tmpg/impute/` and a check that both runs used the same samples.
 - **`network` holds a control job for hours.** It needs 1–2 CPUs while SIGNET's jobs run; a control job that hits its wall time stops SIGNET, and its remaining jobs are cancelled by the next status call.
-- **Not yet steps:** `-v` (visualization) and all GTEx steps. The chat tool `cis_eqtl` still uses the older login-node path.
+- **Cohort:** The six-stage HPC3 chat workflow currently supports TCGA.

@@ -9,8 +9,8 @@ rules: every check on run names, paths, settings and resources happens in the
 service, so the app's buttons and any future AI tool share one code path.
 
 Security comes from ChatHandler before a request reaches this module: the Host
-must be 127.0.0.1:<port>, every request (GET included, since responses name the
-user's files) must carry X-Chat-Token, and POST/PATCH must come from the app's
+must be 127.0.0.1:<port>, and requests must carry X-Chat-Token except for ZIP
+retrieval with a single-use ticket. POST/PATCH must come from the app's
 Origin. Bodies are JSON objects of at most 32 KB.
 
 Every error reply is {"error": "<message for the user>", "code": "<machine code>"}:
@@ -25,12 +25,19 @@ Every error reply is {"error": "<message for the user>", "code": "<machine code>
 """
 import json
 import re
+import secrets
+import shutil
+import tempfile
+import time
+from pathlib import Path
+from zipfile import ZipFile
 import sys
 import traceback
 from urllib.parse import parse_qs
 
-from agent.runtime import genotype_proposal
+from agent.runtime import step_proposal
 from agent.runtime import signet_jobs as jobs
+from agent.runtime.visualization import read_graph
 import agent.tools.signet as signet
 
 MAX_BODY = 32768
@@ -145,8 +152,13 @@ def get_progress(handler, url):
     for root, manifest, _ in _runs(session):
         cohort = json.loads(manifest.read_text()).get('cohort')
         if cohort == 'TCGA':
-            analyses.append({'run_id': root.name, 'genotype_proposal': genotype_proposal.view(root),
-                             **jobs.analysis_view(root, cohort, jobs.run_records(root), include_attempts=False)})
+            records = jobs.run_records(root)
+            upcoming = step_proposal.next_step(records)
+            analyses.append({'run_id': root.name, 'next_step': upcoming,
+                             'proposal': step_proposal.view(root, upcoming) if upcoming else None,
+                             'resource_limits': jobs.STEPS[upcoming].limits if upcoming else None,
+                             'genotype_proposal': step_proposal.view(root),
+                             **jobs.analysis_view(root, cohort, records, include_attempts=False)})
     return 200, {'analyses': analyses}
 
 
@@ -198,23 +210,103 @@ def link_conversation(handler, url, run_id):
     return 200, jobs.link_conversation(run_id, session)
 
 
-def genotype_action(handler, url, run_id, action):
-    """Create, decline, or consume a conversation's genotype confirmation."""
+def step_action(handler, url, run_id, action, step='genotype'):
+    """Create, decline, or consume a conversation’s confirmation."""
     _query(url, ())
     required = {
-        'prepare': ('session', 'mode'),
+        'prepare': ('session',),
         'decline': ('session', 'proposal_id'),
         'confirm': ('session', 'proposal_id', 'inputs', 'settings', 'resources'),
     }[action]
-    body = _body(handler, required, required=required)
+    optional = {'prepare': ('mode',), 'decline': (), 'confirm': ('options',)}[action]
+    body = _body(handler, required + optional, required=required)
     session = body.pop('session')
     if not isinstance(session, str) or not _SESSION.fullmatch(session):
         raise ApiError(400, 'invalid_request', 'Invalid conversation session.')
     if action == 'prepare':
-        return 200, genotype_proposal.prepare(run_id, session, body['mode'])
+        return 200, step_proposal.prepare(run_id, session, body.get('mode'), step_name=step)
     if action == 'decline':
-        return 200, genotype_proposal.decline(run_id, session, body['proposal_id'])
-    return 202, genotype_proposal.confirm(run_id, session, **body)
+        return 200, step_proposal.decline(run_id, session, body['proposal_id'], step_name=step)
+    return 202, step_proposal.confirm(run_id, session, **body, step_name=step)
+
+
+def _finished_analysis(run_id, session):
+    if not isinstance(session, str) or not _SESSION.fullmatch(session):
+        raise ApiError(400, 'invalid_request', 'Invalid conversation session.')
+    root = _run_root(run_id)
+    step_proposal.require_owner(root, session)
+    records = jobs.run_records(root)
+    if step_proposal.next_step(records) is not None:
+        raise ApiError(409, 'conflict', 'Complete all six analysis stages first.')
+    return root, records
+
+
+def get_results(handler, url, run_id):
+    session = _query(url, ('session',)).get('session')
+    root, records = _finished_analysis(run_id, session)
+    settings = records['visualize']['settings']
+    graph = read_graph(root / jobs.STEPS['visualize'].download / 'signet-edges.csv', int(settings['ntop']))
+    return 200, {'graph': graph}
+
+
+def issue_download(handler, url, run_id):
+    _query(url, ())
+    session = _body(handler, ('session',), required=('session',))['session']
+    _finished_analysis(run_id, session)
+    ticket = secrets.token_urlsafe(24)
+    server = handler.server
+    with server.analysis_download_lock:
+        now = time.monotonic()
+        server.analysis_downloads = {
+            key: value for key, value in server.analysis_downloads.items() if value[0] > now
+        }
+        if len(server.analysis_downloads) >= 32:
+            raise ApiError(409, 'conflict', 'Too many pending downloads.')
+        server.analysis_downloads[ticket] = (now + 60, run_id, session)
+    return 200, {'url': '/signet/result-download?ticket=' + ticket}
+
+
+def download_results(handler, url):
+    """Stream a local ZIP using a single-use ticket from the authenticated chat."""
+    try:
+        ticket = _query(url, ('ticket',)).get('ticket')
+        with handler.server.analysis_download_lock:
+            grant = handler.server.analysis_downloads.pop(ticket, None)
+        if grant is None or grant[0] <= time.monotonic():
+            raise ApiError(403, 'forbidden', 'Request a new result download from the chat.')
+        _, run_id, session = grant
+        root, records = _finished_analysis(run_id, session)
+        with tempfile.TemporaryFile() as archive:
+            with ZipFile(archive, 'w') as zip_file:
+                for stage in jobs.ANALYSIS_STEPS:
+                    for name in records[stage].get('outputs', ()):
+                        relative = Path(name)
+                        if (relative.is_absolute() or '..' in relative.parts or chr(92) in name
+                                or not relative.is_relative_to(jobs.STEPS[stage].download)):
+                            raise ApiError(409, 'conflict', 'A recorded result path is invalid.')
+                        path = signet._no_links(root / relative)
+                        if not path.is_file():
+                            raise ApiError(409, 'conflict', 'A recorded result file is missing.')
+                        zip_file.write(path, relative.as_posix())
+            size = archive.tell()
+            archive.seek(0)
+            handler.send_response(200)
+            handler.send_header('Content-Type', 'application/zip')
+            handler.send_header('Content-Disposition', f'attachment; filename="{run_id}-results.zip"')
+            handler.send_header('Content-Length', str(size))
+            handler.send_header('Cache-Control', 'no-store')
+            handler.send_header('X-Content-Type-Options', 'nosniff')
+            handler.end_headers()
+            try:
+                shutil.copyfileobj(archive, handler.wfile)
+            except (BrokenPipeError, ConnectionResetError):
+                return
+    except jobs.StepError as error:
+        return _reply(handler, STATUS[error.code], error.code, str(error))
+    except ApiError as error:
+        return _reply(handler, error.status, error.code, str(error))
+    except (OSError, ValueError):
+        return _reply(handler, 409, 'conflict', 'Could not read the recorded results.')
 
 
 def update_settings(handler, url, run_id):
@@ -321,7 +413,10 @@ ROUTES = [
     (re.compile(r'/signet/runs'), {'GET': list_runs, 'POST': create_run}),
     (re.compile(rf'/signet/runs/{_RUN}'), {'GET': get_run}),
     (re.compile(rf'/signet/runs/{_RUN}/conversation'), {'PATCH': link_conversation}),
-    (re.compile(rf'/signet/runs/{_RUN}/genotype-proposal/(?P<action>prepare|decline|confirm)'), {'POST': genotype_action}),
+    (re.compile(rf'/signet/runs/{_RUN}/genotype-proposal/(?P<action>prepare|decline|confirm)'), {'POST': step_action}),
+    (re.compile(rf'/signet/runs/{_RUN}/steps/{_STEP}/proposal/(?P<action>prepare|decline|confirm)'), {'POST': step_action}),
+    (re.compile(rf'/signet/runs/{_RUN}/results'), {'GET': get_results}),
+    (re.compile(rf'/signet/runs/{_RUN}/results/download'), {'POST': issue_download}),
     (re.compile(rf'/signet/runs/{_RUN}/settings'), {'PATCH': update_settings}),
     (re.compile(rf'/signet/runs/{_RUN}/steps/{_STEP}'), {'GET': get_step, 'POST': submit_step}),
     (re.compile(rf'/signet/runs/{_RUN}/steps/{_STEP}/cancel'), {'POST': cancel_step}),

@@ -1,9 +1,7 @@
 """Session-bound Stage 6 proposals, explicit approvals and immutable result comparisons."""
 from contextvars import ContextVar
-import csv
 import hashlib
 import json
-import math
 from pathlib import Path
 import secrets
 import shutil
@@ -11,7 +9,7 @@ import threading
 import time
 
 import agent.tools.signet as st
-from agent.runtime.visualization import validate_inputs
+from agent.runtime.visualization import read_graph, validate_inputs
 
 CHAT_CONTEXT = ContextVar('stage6_chat_context', default=None)
 
@@ -22,37 +20,7 @@ def graph(root, settings):
     if not path.resolve().is_relative_to(root / 'work/res'):
         raise ValueError('Result path is outside the run.')
     st._no_links(path)
-    edges = []
-    with path.open() as stream:
-        for row in csv.DictReader(stream):
-            source, target = row['source_gene_symbol'], row['target_gene_symbol']
-            freq, coef = float(row['frequency']), float(row['coefficient'])
-            if not source or not target or not math.isfinite(freq) or not math.isfinite(coef):
-                raise ValueError('Invalid exported edge.')
-            edges.append({'source': source, 'target': target, 'frequency': freq, 'coefficient': coef})
-    neighbors = {}
-    for edge in edges:
-        a, b = edge['source'], edge['target']
-        neighbors.setdefault(a, set()).add(b)
-        neighbors.setdefault(b, set()).add(a)
-    seen, groups = set(), []
-    for node in sorted(neighbors):
-        if node in seen:
-            continue
-        stack, group = [node], set()
-        while stack:
-            current = stack.pop()
-            if current not in group:
-                group.add(current)
-                stack.extend(neighbors[current] - group)
-        seen.update(group)
-        groups.append(group)
-    groups.sort(key=lambda group: (-sum(e['source'] in group for e in edges), sorted(group)))
-    selected = set().union(*groups[:int(settings['ntop'])]) if groups else set()
-    return {'nodes': sorted(neighbors), 'edges': edges,
-            'display_nodes': sorted(selected),
-            'counts': {'connections': len(edges), 'genes': len(neighbors), 'subnetworks': len(groups),
-                       'displayed': min(int(settings['ntop']), len(groups))}}
+    return read_graph(path, int(settings['ntop']))
 
 
 def load_run(run_id):

@@ -85,7 +85,7 @@ class StepsTest(unittest.TestCase):
         self.calls.append(command if command != 'bash -s' else input.decode())
         if self.lose_connection_on and self.lose_connection_on in self.calls[-1]:
             raise OSError('Electron SSH transport is unavailable.')
-        env = {'PATH': f'{self.fake}/bin:/usr/bin:/bin', 'FAKE': str(self.fake), 'LANG': 'C'}
+        env = {'PATH': f'{self.fake}/bin:/usr/bin:/bin', 'FAKE': str(self.fake), 'LANG': 'C', 'COPYFILE_DISABLE': '1'}
         return subprocess.run(['bash', '-c', command], input=input or b'', capture_output=True,
                               timeout=timeout, env=env)
 
@@ -160,7 +160,7 @@ class StepsTest(unittest.TestCase):
         self.assertEqual(self.code_of(steps.submit, 'step_test', 'expression', self.inputs), 'conflict')
         st.configure_signet('gtex_run', cohort='GTEx')
         self.assertEqual(self.code_of(steps.submit, 'gtex_run', 'expression', self.inputs), 'invalid_request')
-        self.assertEqual(self.code_of(steps.submit, 'step_test', 'visualize', self.inputs), 'not_found')
+        self.assertEqual(self.code_of(steps.submit, 'step_test', 'unknown_step', {}), 'not_found')
         self.assertEqual(self.code_of(steps.status, 'missing_run', 'expression'), 'not_found')
 
     # ---------- retrying a failed step in the same run ----------

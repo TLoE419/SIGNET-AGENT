@@ -85,10 +85,12 @@
     const atEnd = messages.scrollHeight - messages.scrollTop - messages.clientHeight < 80;
     messages.append(root);
     if (atEnd) messages.scrollTop = messages.scrollHeight;
-    const review = createGenotypeReview(root, (action, body, state) =>
-      request(`/signet/runs/${encodeURIComponent(analysis.run_id)}/genotype-proposal/${action}`,
+    const path = '/signet/runs/' + encodeURIComponent(analysis.run_id);
+    const review = createStepReview(root, (step, action, body, state) =>
+      request(path + '/steps/' + encodeURIComponent(step) + '/proposal/' + action,
               state, {session, ...body}, 'POST'), poll);
-    return {root, count, bar, current, notice, stages, review, stale:false};
+    const results = createAnalysisResults(root, path, session, request);
+    return {root, count, bar, current, notice, stages, review, results, stale:false};
   }
 
   function note(card, localUnavailable) {
@@ -159,6 +161,7 @@
         if (!present.has(run)) {
           card.root.remove();
           card.review.remove();
+          card.results.remove();
           cards.delete(run);
           state.nextCheck.delete(run);
         }
@@ -166,6 +169,7 @@
       for (const analysis of linked) {
         const card = updateCard(analysis);
         card.review.update(analysis, state);
+        if (analysis.completed_steps === 6) card.results.show(state);
         const step = analysis.steps.find(item => active.has(item.phase));
         if (step) {
           delay = 5000;
