@@ -198,12 +198,14 @@ function setup(initial={}, analysisApi) {
   await live.tick();
   assert.equal(cards()[0],original,'live updates preserve the card and expanded state');
   assert.equal(original.open,true);
-  assert.match(rows.children[4].textContent,/31\/36/);
-  assert.doesNotMatch(rows.children[4].textContent,/20\/10/);
+  const networkCard=live.ids.get('messages').children.find(el=>el.dataset.step==='network');
+  assert.deepEqual(networkCard.querySelectorAll('progress').map(el=>[el.value,el.max]),[[31,36]]);
+  assert.doesNotMatch(original.textContent,/31\/36/,'work units belong to their stage card');
   assert.equal(bar.value,0,'completed-stage progress does not count a running step');
   progress=undefined;
   await live.tick();
-  assert.match(rows.children[4].textContent,/目前無分段進度/);
+  assert.match(rows.children[4].textContent,/執行中/);
+  assert.equal(networkCard.querySelectorAll('progress').length,0,'unknown work units do not show a bar');
   phase='downloading';
   await live.tick();
   assert.match(original.textContent,/正在下載結果/);
@@ -430,12 +432,19 @@ function setup(initial={}, analysisApi) {
   await new Promise(setImmediate);
   const measuredCard=measuredApp.ids.get('messages').children.find(el=>el.className==='analysis-progress-card');
   assert.match(measuredCard.children[0].textContent,/第 1 階段 · 基因型前處理/);
-  assert.match(measuredCard.children[0].textContent,/補值分段 · 已完成 35\/36/,'the collapsed card displays current segment progress');
-  const measuredRows=measuredCard.children[1].children;
+  assert.doesNotMatch(measuredCard.textContent,/35\/36/);
+  const measuredStages=stageCards(measuredApp.ids.get('messages'));
+  assert.deepEqual(measuredStages[0].querySelectorAll('progress').map(el=>[el.value,el.max]),[[35,36]]);
   for(const [index, text] of ['補值分段','表現前處理步驟','染色體變異篩選','低頻變異分段','建網第一組','子網路圖'].entries()){
-    assert.ok(measuredRows[index].textContent.includes(text), text);
+    assert.ok(measuredStages[index].textContent.includes(text), text);
   }
-  assert.match(measuredRows[3].textContent,/罕見變異分段/);
-  assert.match(measuredRows[4].textContent,/建網第二組/);
+  assert.match(measuredStages[3].textContent,/罕見變異分段/);
+  assert.equal(measuredStages[3].querySelectorAll('progress').length,2);
+  assert.match(measuredStages[4].textContent,/建網第二組/);
+  assert.equal(measuredStages[4].querySelectorAll('progress').length,2);
+  metricSteps[0].progress={imputation:'36 36'};
+  await measuredApp.tick();
+  assert.equal(stageCards(measuredApp.ids.get('messages'))[0],measuredStages[0]);
+  assert.equal(measuredStages[0].querySelectorAll('progress')[0].value,36);
   console.log('Chat progress visibility, status, history, errors and Stage 6 independence passed.');
 })().catch(error=>{console.error(error);process.exitCode=1;});

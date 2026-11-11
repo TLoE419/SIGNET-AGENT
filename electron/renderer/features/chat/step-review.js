@@ -1,3 +1,9 @@
+const stageMetricLabels = {
+  imputation:'補值分段', expression_outputs:'表現前處理步驟', variant_filter:'染色體變異篩選',
+  low_frequency:'低頻變異分段', rare_variants:'罕見變異分段',
+  stage1:'建網第一組', stage2:'建網第二組', subnetworks:'子網路圖'
+};
+
 // The model proposes; only a click on this card can send reviewed values.
 function createStepReview(progressCard, request, poll, phases, active) {
   const cards = new Map();
@@ -35,6 +41,7 @@ function createStageCard(name, request, poll, phases) {
   };
   const title = node('strong', '', names[name]);
   const phase = node('p', 'step-review-notice step-review-phase');
+  const progress = node('div', 'step-review-progress');
   const history = node('details', 'step-review-history');
   const savedValues = node('dl', 'step-review-grid');
   history.append(node('summary', '', '本次送算設定'), savedValues);
@@ -42,8 +49,8 @@ function createStageCard(name, request, poll, phases) {
   const notice = node('p', 'step-review-notice');
   notice.setAttribute('role', 'status');
   notice.hidden = true;
-  panel.append(title, phase, history, controls, notice);
-  let latest, polling, key, parametersKey, busy = false, attempted = false;
+  panel.append(title, phase, progress, history, controls, notice);
+  let latest, polling, key, progressKey, parametersKey, busy = false, attempted = false;
   const inputs = {'gexp.file':'基因表現資料', 'pmap.file':'基因註解', 'cli.file':'臨床資料表',
     'ped.file':'基因型資料（PED）', 'map.file':'基因型位置（MAP）',
     ref:'補值參考檔前綴', gmap:'遺傳圖譜前綴'};
@@ -104,6 +111,31 @@ function createStageCard(name, request, poll, phases) {
     return input;
   }
 
+  function showProgress(metrics) {
+    const next = JSON.stringify(metrics);
+    if (progressKey === next) return;
+    progressKey = next;
+    const rows = [];
+    for (const [key, count] of Object.entries(metrics || {})) {
+      const label = stageMetricLabels[key];
+      const values = /^(\d+)\s+(\d+)$/.exec(count);
+      if (!label || !values) continue;
+      const done = Number(values[1]), total = Number(values[2]);
+      if (!Number.isSafeInteger(total) || !Number.isSafeInteger(done) || total <= 0 || done > total) continue;
+      const bar = node('progress', 'step-review-bar');
+      bar.max = total;
+      bar.value = done;
+      bar.setAttribute('aria-label', translateUI(label));
+      bar.dataset.i18nAria = label;
+      const metric = node('div', 'step-review-metric');
+      const countText = node('span', '');
+      countText.textContent = `${done}/${total}`;
+      metric.append(node('span', '', label), countText, bar);
+      rows.push(metric);
+    }
+    progress.replaceChildren(...rows);
+  }
+
   function render(review, state) {
     latest = review;
     polling = state;
@@ -111,6 +143,7 @@ function createStageCard(name, request, poll, phases) {
     const label = phases[step.phase] || phases.unknown;
     phase.hidden = step.phase === 'not_started';
     if (phase.dataset.i18n !== label) uiText(phase, label);
+    showProgress(step.progress);
     history.hidden = !step.parameters;
     const nextParameters = JSON.stringify(step.parameters);
     if (parametersKey !== nextParameters) {

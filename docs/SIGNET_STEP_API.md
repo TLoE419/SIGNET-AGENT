@@ -325,7 +325,7 @@ incomplete stage. Its current review is returned as `proposal`, with reviewed pa
 
 In a saved chat, **Track an existing analysis** links an unassigned run. The chat updates one
 progress card per run and checks active jobs separately via route 7. A lost connection leaves the
-last recorded phase visible. The card shows finished and total work units when the job has measurable records. Genotype counts imputation segments. Expression counts the two completed preprocessing operations. Adjustment counts chromosome filtering jobs. Cis mapping counts low-frequency and rare-variant batches. Network construction keeps the two ParaFly batch counts separate, and visualization counts completed subnetwork plots. These counts do not replace the six-stage completion bar.
+last recorded phase visible. Each stage card shows a bar and finished and total work units when measured records exist. Genotype counts imputation segments. Expression counts the two completed preprocessing operations. Adjustment counts chromosome filtering jobs. Cis mapping counts low-frequency and rare-variant batches. Network construction keeps the two ParaFly batch counts separate, and visualization counts completed subnetwork plots.
 
 ### 5.12 Review and continue a linked analysis
 

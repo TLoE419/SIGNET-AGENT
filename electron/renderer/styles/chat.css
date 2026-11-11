@@ -132,7 +132,6 @@
 .analysis-progress-phase{color:var(--muted);font-size:12px;text-align:right}
 .analysis-progress-step[data-phase="completed"] .analysis-progress-phase{color:var(--accent)}
 .analysis-progress-step[data-phase="failed"] .analysis-progress-phase{color:#933b2c}
-.analysis-progress-units{grid-column:2/-1;white-space:pre-line;color:var(--muted)}
 .analysis-tracking{flex:none;margin:0 22px 10px;color:var(--muted);font-size:12px}
 .analysis-tracking summary{cursor:pointer;width:fit-content}
 .analysis-tracking form{display:flex;align-items:center;gap:8px;margin:7px 0}
@@ -156,6 +155,8 @@
 .step-review-actions button:disabled{opacity:.6;cursor:default}
 .step-review-notice{margin:8px 0 0;font-size:12px;color:var(--muted)}
 .step-review-phase{margin:0 0 6px}
+.step-review-metric{display:grid;grid-template-columns:1fr auto;gap:5px 12px;margin:0 0 8px;font-size:12px;color:var(--muted)}
+.step-review-bar{grid-column:1/-1;width:100%;height:8px;accent-color:var(--accent)}
 .step-review-history{margin:6px 0;font-size:12px;color:var(--muted)}
 .step-review-history summary{cursor:pointer;width:fit-content}
 .step-review-history dl{margin:8px 0 0}
