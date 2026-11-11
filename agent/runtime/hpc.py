@@ -180,6 +180,13 @@ def _check_script(root):
     # Match EnvironmentService.sourceCheck: the installed archive has no Git metadata.
     source_hashes = ''.join(f"{item['sha256']}  {item['path']}\n"
                             for item in SOURCE_INVENTORY['scripts'] + SOURCE_INVENTORY['support_files'])
+    example_hashes = ''.join(f"{item['sha256']}  {item['path']}\n" for item in SOURCE_INVENTORY.get('example_files', []))
+    example = f'''  if [ ! -d "$S/example" ]; then say signet_example missing
+  elif (cd "$S" && sha256sum -c - >/dev/null 2>&1 <<'SIGNET_EXAMPLE_HASHES'
+{example_hashes}SIGNET_EXAMPLE_HASHES
+  ); then say signet_example verified
+  else say signet_example mismatch; fi
+''' if example_hashes else ''
     files = ' '.join(f'{key}:{path}' for key, path in _checked_files().items())
     return _prelude(root) + f'''
 say user "$(id -un)"
@@ -200,7 +207,7 @@ else
     say signet_integrity verified
     say signet_revision {SOURCE_INVENTORY['revision']}
   else say signet_integrity mismatch; fi
-fi
+{example}fi
 for item in {files}; do
   key="${{item%%:*}}"; rel="${{item#*:}}"
   if [ "$key" = container ]; then rel="$I"; else rel="$W/$rel"; fi
@@ -497,8 +504,12 @@ def _checks(values, revision):
         add('signet_source', *(_step_status(values, 'signet') or ('missing', 'SIGNET has not been installed in the remote environment.')))
     elif signet != 'yes' or values.get('signet_integrity') != 'verified' or values.get('signet_revision') != revision:
         add('signet_source', 'problem', f'Audited source verification failed for revision {revision[:12]}; files may be missing or modified. Recheck HPC3 settings.')
+    elif values.get('signet_example') == 'missing':
+        add('signet_source', 'missing', 'The SIGNET example data has not been installed; press Install to add it.')
+    elif values.get('signet_example') == 'mismatch':
+        add('signet_source', 'problem', 'The SIGNET example data differs from the pinned revision; move the example folder aside, then install again.')
     else:
-        add('signet_source', 'ok', f'Audited script and support-file hashes match pinned revision {revision[:12]}.')
+        add('signet_source', 'ok', f'Audited script, support-file and example-data hashes match pinned revision {revision[:12]}.')
     for key, path in _checked_files().items():
         value = values.get(f'file_{key}', 'no')
         item = {'container': 'container', 'prepare': 'imputation_reference'}.get(key, f'reference_{key}')
