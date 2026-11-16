@@ -1,5 +1,6 @@
 """Loopback-only Python API for the Electron client and standalone backend development."""
 import argparse
+import csv
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
@@ -114,6 +115,8 @@ class ChatHandler(BaseHTTPRequestHandler):
             if not secrets.compare_digest(self.headers.get('X-Chat-Token', ''), self.server.token):
                 return self._error(403, 'Page token required.')
             return signet_api.handle(self, 'GET', url)
+        if url.path == '/stage6/results':
+            return self.stage6_results_get(url)
         if url.path in ('/stage6', '/stage6/file'):
             return self.stage6_get(url)
         if url.path != '/bootstrap':
@@ -296,6 +299,19 @@ class ChatHandler(BaseHTTPRequestHandler):
         if action is None:
             return self._error(404, '找不到此操作。')
         return self.json_response(action())
+
+    def stage6_results_get(self, url):
+        if not secrets.compare_digest(self.headers.get('X-Chat-Token', ''), self.server.token):
+            return self._error(403, 'Workspace token required.')
+        query = parse_qs(url.query, keep_blank_values=True)
+        if not query:
+            return self.json_response({'runs': self.server.stage6.completed_runs()})
+        if set(query) != {'run'} or len(query['run']) != 1:
+            return self._error(400, 'Provide a single run ID.')
+        try:
+            return self.json_response(self.server.stage6.completed_result(query['run'][0]))
+        except (OSError, ValueError, KeyError, TypeError, csv.Error):
+            return self._error(400, 'No readable completed Stage 6 result for this run.')
 
     def stage6_get(self, url):
         query = parse_qs(url.query)

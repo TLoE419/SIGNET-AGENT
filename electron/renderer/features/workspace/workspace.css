@@ -235,6 +235,16 @@ code:not(pre code) {
   transform: scale(var(--s6-zoom, 1)); transform-origin: center;
 }
 :is(#lens-stage6, .ml-history-network) .s6-gene[data-gene="MEGF6"] .s6-name { font-weight: 750; }
+#lens-stage6 #ml-stage6-run {
+  width: 100%; min-width: 0; height: 18px; padding: 0; border: 0;
+  color: inherit; background: transparent; font: inherit; text-overflow: ellipsis;
+}
+#lens-stage6[data-dense-network] .s6-edge[data-kind="all"] { opacity: .27; stroke-width: .8; }
+#lens-stage6[data-dense-network] .s6-edge[data-kind="context"] { opacity: .07; }
+#lens-stage6[data-dense-network] .s6-name { font-size: 9px; }
+#lens-stage6[data-dense-network] .s6-gene[aria-pressed="true"] .s6-name,
+#lens-stage6[data-dense-network] .s6-gene[data-gene="MEGF6"] .s6-name { font-size: 13px; }
+
 :is(#lens-stage3, #lens-stage6, .ml-stage-snapshot, .ml-history-network) .ml-result-dock {
   position: absolute; bottom: 0; left: 50%; transform: translateX(-50%);
   width: min(660px, calc(100% - 38px));

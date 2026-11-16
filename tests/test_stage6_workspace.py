@@ -112,6 +112,74 @@ class WorkspaceTest(unittest.TestCase):
         self.assertEqual((self.root/'work/res/resv/signet_edgelist_1.txt').read_bytes(),before)
         self.assertEqual(len(self.server.histories['s1']),2)
 
+    def test_completed_results_are_read_only_and_include_archived_exports(self):
+        from agent.app.chat_ui import ChatServer
+        import http.client
+
+        archive = self.project / 'data/stage6-results/archived'
+        archive.mkdir(parents=True)
+        report = {'run': 'archived', 'jobs': {'visualize': {
+            'state': 'completed', 'settings': {'freq': '0.45', 'ntop': '1'}}},
+            'graph': {'connections': 2, 'genes': 3, 'subnetworks': 1, 'displayed': 1}}
+        metadata = archive / 'verification.json'
+        metadata.write_text(json.dumps(report))
+        edges = archive / 'signet_edgelist_0.45.txt'
+        edges.write_text('source_gene_symbol,target_gene_symbol,frequency,coefficient\n'
+                         'MEGF6,B,0.45,0.25\nB,C,0.9,-0.5\n')
+        saved = self.w.path.read_bytes()
+        with ChatServer(('127.0.0.1', 0), Mock()) as server:
+            server.stage6 = self.w
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+
+            def request(path, authenticated=True):
+                conn = http.client.HTTPConnection('127.0.0.1', server.server_port, timeout=3)
+                try:
+                    headers = {'X-Chat-Token': server.token} if authenticated else {}
+                    conn.request('GET', '/stage6/results' + path, headers=headers)
+                    response = conn.getresponse()
+                    return response.status, json.loads(response.read())
+                finally:
+                    conn.close()
+
+            try:
+                self.assertEqual(request('', authenticated=False)[0], 403)
+                self.assertEqual(request('?run=archived', authenticated=False)[0], 403)
+                status, listing = request('')
+                self.assertEqual(status, 200)
+                self.assertEqual([run['run_id'] for run in listing['runs']], ['baseline', 'archived'])
+                self.assertEqual(request('?run=baseline')[1]['graph']['counts']['connections'], 2)
+                status, result = request('?run=archived')
+                self.assertEqual(status, 200)
+                self.assertEqual(result['source'], 'archive')
+                self.assertEqual(result['graph']['counts'], report['graph'])
+                self.assertEqual(result['graph']['edges'][0], {
+                    'source': 'MEGF6', 'target': 'B', 'frequency': 0.45, 'coefficient': 0.25})
+                self.assertEqual(request('?run=../archived')[0], 400)
+                status, error = request('?run=missing')
+                self.assertEqual(status, 400)
+                self.assertEqual(error, {'error': 'No readable completed Stage 6 result for this run.'})
+                self.assertEqual(request('?run=archived&run=baseline')[0], 400)
+                self.assertEqual(self.w.path.read_bytes(), saved)
+                self.assertEqual(set(self.w.sessions), {'s1'})
+                self.assertEqual([run['run_id'] for run in self.w.available()], ['baseline'])
+                report['graph']['connections'] = 1
+                metadata.write_text(json.dumps(report))
+                self.assertEqual(request('?run=archived')[0], 400)
+                valid_report = metadata.read_text()
+                del report['graph']
+                metadata.write_text(json.dumps(report))
+                self.assertEqual(request('?run=archived')[0], 400)
+                self.assertEqual([run['run_id'] for run in request('')[1]['runs']], ['baseline'])
+                metadata.write_text(valid_report)
+                edges.unlink()
+                edges.symlink_to(self.root / 'work/res/resv/signet_edgelist_1.txt')
+                self.assertEqual(request('?run=archived')[0], 400)
+                self.assertEqual([run['run_id'] for run in request('')[1]['runs']], ['baseline'])
+            finally:
+                server.shutdown()
+                thread.join()
+
     def test_workspace_http_guards_duplicate_and_cross_session_confirmations(self):
         import agent.app.chat_ui as chat_ui
         import http.client

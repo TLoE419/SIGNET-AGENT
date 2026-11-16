@@ -398,7 +398,7 @@
     ["送出時間", "Submitted"],
     ["完成時間", "Finished"],
     ["分配資源", "Allocated resources"],
-    ["開啟原型的分析結果", "Open results in analysis view"],
+    ["開啟第 6 階段結果選擇器", "Open the Stage 6 result picker"],
     ["助理", "Agent"],
     ["對話", "Conversation"],
     ["新增對話", "New conversation"],
@@ -417,6 +417,7 @@
     ["第 1 號染色體", "Chromosome 1"],
     ["模擬分析", "Simulated run"],
     ["階段", "Stage"],
+    ["從已完成的執行開啟網路圖與連線表。", "Open a completed run to see its network and connections."],
     ["設定", "Settings"],
     ["輸出", "Output"],
     ["資料", "Data"],
@@ -623,7 +624,7 @@
     const number = index + 1;
     const expanded = number === stageData.length;
     return `<li class="ml-stage-entry">
-      <p class="ml-stage-note"><span class="ml-stage-marker" aria-hidden="true"><i data-lucide="message-square-text"></i></span>${note}</p>
+      <p class="ml-stage-note"><span class="ml-stage-marker" aria-hidden="true"><i data-lucide="message-square-text"></i></span>${expanded ? "從已完成的執行開啟網路圖與連線表。" : note}</p>
       <button type="button" class="ml-stage-button" data-stage="${number}" aria-expanded="${expanded}" aria-controls="ml-stage-detail-${number}" ${expanded ? 'aria-current="step"' : ''}>
         <span class="ml-stage-title">
           <span class="ml-stage-marker" aria-hidden="true"><i data-lucide="list"></i></span>
@@ -636,8 +637,8 @@
         </span>
       </button>
       <dl class="ml-stage-detail" id="ml-stage-detail-${number}" ${expanded ? "" : "hidden"}>
-        <dt>設定</dt><dd>${settings}</dd>
-        <dt>輸出</dt><dd>${output}</dd>
+        <dt>設定</dt>${expanded ? '<dd id="ml-stage6-settings" data-live-language></dd>' : `<dd>${settings}</dd>`}
+        <dt>輸出</dt>${expanded ? '<dd id="ml-stage6-output" data-live-language></dd>' : `<dd>${output}</dd>`}
       </dl>
     </li>`;
   }).join("");
@@ -666,7 +667,7 @@
     GBP2: [15, 86], KDM1A: [35, 78], LGALS8: [88, 31], DAP3: [75, 94]
   };
 
-  function mountNetwork(stage, nodes, edges) {
+  function mountNetwork(stage, initialNodes, initialEdges, { simulated = true } = {}) {
     const zoom = stage.querySelector(".s6-zoom input");
     const frame = stage.querySelector(".s6-graph-frame");
     function updateZoom() {
@@ -680,78 +681,99 @@
     const nodeLayer = graph.querySelector(".s6-genes");
     const [arrow, selectedArrow] = graph.querySelectorAll("marker");
     const summary = stage.querySelector(".s6-summary");
-    const reset = stage.querySelector(".s6-reset");
+    const reset = stage.querySelector("[data-s6-clear]");
     const table = stage.querySelector(".ml-result-dock");
     const tableViewport = stage.querySelector(".ml-result-table");
     const rows = table.querySelector("tbody");
     const rowCount = table.querySelector(".s6-row-count");
 
 
-    const positions = Object.fromEntries(Object.entries(nodes).map(([name, [x, y]]) =>
-      [name, [16 + 5.9 * x, 18 + 2.91 * y]]));
     const graphMeta = stage.querySelector(".s6-graph-meta");
-    const geneCount = Object.keys(nodes).length;
-    graphMeta.textContent = `節錄 ${geneCount} 個基因 · ${edges.length} 條連線`;
-    graphMeta.dataset.enText = `${geneCount} genes · ${edges.length} edges shown`;
+    graphMeta.setAttribute("data-live-language", "");
     const svg = (tag, attributes) => {
       const element = document.createElementNS("http://www.w3.org/2000/svg", tag);
       for (const [key, value] of Object.entries(attributes)) element.setAttribute(key, value);
       return element;
     };
 
-    const edgeElements = edges.map(([source, target]) => {
-      const [x1, y1] = positions[source];
-      const [x2, y2] = positions[target];
-      const direction = Math.atan2(y2 - y1, x2 - x1);
-      const reciprocal = edges.some(([a, b]) => a === target && b === source);
-      const bend = reciprocal ? 18 : 0;
-      const cx = (x1 + x2) / 2 - Math.sin(direction) * bend;
-      const cy = (y1 + y2) / 2 + Math.cos(direction) * bend;
-      const angle = Math.atan2(y2 - cy, x2 - cx);
-      const endX = x2 - 10 * Math.cos(angle);
-      const endY = y2 - 10 * Math.sin(angle);
-      return svg("path", {
-        class: "s6-edge",
-        d: `M${x1} ${y1} Q${cx} ${cy} ${endX} ${endY}`,
-        "data-source": source,
-        "data-target": target
+    let nodes, edges, nodeElements, edgeElements;
+    function setNetwork(nextNodes, nextEdges, selectedGene = null) {
+      nodes = nextNodes;
+      edges = nextEdges;
+      const positions = Object.fromEntries(Object.entries(nodes).map(([name, [x, y]]) =>
+        [name, [16 + 5.9 * x, 18 + 2.91 * y]]));
+      const connections = new Set(edges.map(([source, target]) => JSON.stringify([source, target])));
+      edgeElements = edges.map(([source, target]) => {
+        const [x1, y1] = positions[source];
+        const [x2, y2] = positions[target];
+        const direction = Math.atan2(y2 - y1, x2 - x1);
+        const reciprocal = connections.has(JSON.stringify([target, source]));
+        const bend = reciprocal ? 18 : 0;
+        const cx = (x1 + x2) / 2 - Math.sin(direction) * bend;
+        const cy = (y1 + y2) / 2 + Math.cos(direction) * bend;
+        const angle = Math.atan2(y2 - cy, x2 - cx);
+        const endX = x2 - 10 * Math.cos(angle);
+        const endY = y2 - 10 * Math.sin(angle);
+        const path = source === target
+          ? `M${x1 + 5} ${y1 - 4} C${x1 + 29} ${y1 - 23} ${x1 - 29} ${y1 - 23} ${x1 - 6} ${y1 - 6}`
+          : `M${x1} ${y1} Q${cx} ${cy} ${endX} ${endY}`;
+        return svg("path", {
+          class: "s6-edge",
+          d: path,
+          "data-source": source,
+          "data-target": target
+        });
       });
-    });
-    edgeLayer.append(...edgeElements);
+      const edgeFragment = document.createDocumentFragment();
+      for (const edge of edgeElements) edgeFragment.append(edge);
+      edgeLayer.replaceChildren(edgeFragment);
 
-    const nodeElements = Object.entries(positions).map(([gene, [x, y]]) => {
-      const node = svg("g", {
-        class: "s6-gene",
-        transform: `translate(${x} ${y})`,
-        role: "button",
-        tabindex: "0",
-        "data-gene": gene,
-        "aria-label": `查看 ${gene} 的調控關係`,
-        "data-en-aria-label": `View connections for ${gene}`,
+      nodeElements = Object.entries(positions).map(([gene, [x, y]]) => {
+        const node = svg("g", {
+          class: "s6-gene",
+          transform: `translate(${x} ${y})`,
+          role: "button",
+          tabindex: "0",
+          "data-gene": gene,
+        });
+        const name = svg("text", { class: "s6-name", y: "21" });
+        name.textContent = gene;
+        node.append(
+          svg("circle", {class: "s6-focus-ring", r: "13"}),
+          svg("circle", {class: "s6-dot", r: gene === "MEGF6" ? "7" : "6"}),
+          name
+        );
+        node.addEventListener("click", () => select(gene));
+        node.addEventListener("keydown", (event) => {
+          if (event.key !== "Enter" && event.key !== " ") return;
+          event.preventDefault();
+          select(gene);
+        });
+        return node;
       });
-      const name = svg("text", { class: "s6-name", y: "21" });
-      name.textContent = gene;
-      node.append(
-        svg("circle", {class: "s6-focus-ring", r: "13"}),
-        svg("circle", {class: "s6-dot", r: gene === "MEGF6" ? "7" : "6"}),
-        name
-      );
-      node.addEventListener("click", () => select(gene));
-      node.addEventListener("keydown", (event) => {
-        if (event.key !== "Enter" && event.key !== " ") return;
-        event.preventDefault();
-        select(gene);
-      });
-      return node;
-    });
-    nodeLayer.append(...nodeElements);
+      const nodeFragment = document.createDocumentFragment();
+      for (const node of nodeElements) nodeFragment.append(node);
+      nodeLayer.replaceChildren(nodeFragment);
+      stage.toggleAttribute("data-dense-network", edges.length > 100);
+      const gene = Object.hasOwn(nodes, selectedGene) ? selectedGene : null;
+      stage.dataset.selectedGene = gene ?? "";
+      if (gene) table.open = true;
+      render(gene);
+    }
 
     const edgesFor = (gene) => gene ? edges.filter(([source, target]) => gene === source || gene === target) : edges;
     function updateReadout(gene, matched) {
       const inEnglish = stage.closest("[lang]").lang === "en";
+      graphMeta.textContent = inEnglish
+        ? `${nodeElements.length} genes · ${edges.length} edges${simulated ? " shown" : ""}`
+        : `${simulated ? "節錄 " : ""}${nodeElements.length} 個基因 · ${edges.length} 條連線`;
+      for (const node of nodeElements) {
+        const { gene: label } = node.dataset;
+        node.setAttribute("aria-label", inEnglish ? `View connections for ${label}` : `查看 ${label} 的調控關係`);
+      }
       if (gene) {
         const incoming = matched.filter(([, target]) => target === gene).length;
-        const outgoing = matched.length - incoming;
+        const outgoing = matched.filter(([source]) => source === gene).length;
         const name = document.createElement("strong");
         name.textContent = gene;
         summary.replaceChildren(name, inEnglish
@@ -788,7 +810,8 @@
       updateReadout(gene, matched);
       reset.hidden = !gene;
 
-      const resultRows = matched.map(([source, target, frequency, coefficient]) => {
+      const resultRows = document.createDocumentFragment();
+      for (const [source, target, frequency, coefficient] of matched) {
         const row = document.createElement("tr");
         const coefficientText = Number(coefficient.toFixed(5)).toString();
         for (const value of [source, target, frequency.toFixed(2), coefficientText]) {
@@ -796,9 +819,9 @@
           cell.textContent = value;
           if (value === gene) cell.dataset.focused = "true";
         }
-        return row;
-      });
-      rows.replaceChildren(...resultRows);
+        resultRows.append(row);
+      }
+      rows.replaceChildren(resultRows);
       tableViewport.scrollTop = 0;
     }
 
@@ -826,7 +849,8 @@
       const gene = stage.dataset.selectedGene || null;
       updateReadout(gene, edgesFor(gene));
     });
-    render(null);
+    setNetwork(initialNodes, initialEdges);
+    return setNetwork;
   }
 
   const edgesByRun = JSON.parse(byId("run-edges").textContent);
@@ -855,6 +879,12 @@
     panel.className = "ml-nav-workspace ml-history-network";
     panel.hidden = true;
     for (const style of panel.querySelectorAll("style")) style.remove();
+    const sourceLabel = panel.querySelector("[data-s6-run-label]");
+    sourceLabel.removeAttribute("data-live-language");
+    sourceLabel.textContent = "資料";
+    panel.querySelector("[data-s6-run-value]").textContent = "第 1 號染色體 · 模擬結果節錄";
+    panel.querySelector(".s6-result-status").remove();
+    panel.querySelector("#ml-stage6-retry").remove();
     for (const element of panel.querySelectorAll("[id]")) element.id = panel.id + "-" + element.id;
     for (const element of [panel, ...panel.querySelectorAll("[aria-labelledby]")]) {
       element.setAttribute("aria-labelledby", panel.id + "-" + element.getAttribute("aria-labelledby"));
@@ -876,7 +906,7 @@
     mountNetwork(panel, nodes, edges);
     return panel;
   });
-  mountNetwork(analysisNetwork, networkNodes, edgesByRun[savedRuns[0].id]);
+  const setLiveNetwork = mountNetwork(analysisNetwork, {}, [], {simulated: false});
 
   runList.innerHTML = savedRuns.map((run, index) => `
     <button class="ml-nav-list-item" type="button" data-run-target="${index}" aria-controls="ml-run-${index}" aria-pressed="${index === 0}">
@@ -933,7 +963,7 @@
         </dl>
       </details>
       <ol class="ml-run-timeline" aria-label="六階段執行時間線">${stages}</ol>
-      ${index === 0 ? '<button type="button" class="ml-nav-action" data-open-stage="6">開啟原型的分析結果</button>' : ''}
+      ${index === 0 ? '<button type="button" class="ml-nav-action" data-open-stage="6">開啟第 6 階段結果選擇器</button>' : ''}
     </article>`;
   }).join("");
 
@@ -941,6 +971,137 @@
   const initialChat = JSON.parse(document.getElementById("initial-chat").textContent);
   const chatToken = document.querySelector('meta[name="chat-token"]').content;
   const chatModel = document.querySelector('meta[name="model-label"]').content;
+
+  const stage6RunSelect = byId("stage6-run");
+  const stage6Retry = byId("stage6-retry");
+  const stage6Source = analysisNetwork.querySelector("[data-s6-run-label]");
+  const stage6Status = analysisNetwork.querySelector(".s6-result-status");
+  const stage6Summary = analysisNetwork.querySelector(".s6-summary");
+  const stage6Labels = {
+    listing: ["讀取已完成的執行…", "Finding completed runs…"],
+    empty: ["目前沒有可檢視的第 6 階段結果。", "No Stage 6 results are available."],
+    choose: ["選擇一筆已完成的執行。", "Choose a completed run."],
+    loading: ["讀取網路圖和連線表…", "Loading network and connections…"],
+    "list-error": ["無法讀取已完成的執行。", "Could not load completed runs."],
+    "load-error": ["無法讀取這筆執行的結果。", "Could not load this run’s results."],
+    "no-edges": ["這筆執行沒有匯出的連線。", "This run has no exported edges."],
+  };
+  const selectedStage6Genes = new Map();
+  let stage6RunList = [];
+  let stage6Result = null;
+  let stage6Request;
+  analysisNetwork.dataset.runState = "listing";
+
+  function renderStage6Status() {
+    const language = root.lang === "en" ? 1 : 0;
+    const state = analysisNetwork.dataset.runState;
+    const run = stage6RunList.find(({run_id}) => run_id === stage6RunSelect.value);
+    const [counts, frequency, topNetworks] = [stage6Result?.graph.counts, stage6Result?.frequency, stage6Result?.top_networks];
+    const empty = stage6Result?.graph.edges.length === 0;
+    stage6Source.textContent = (run?.source === "archive" ? ["封存執行", "Archived run"] : ["執行", "Run"])[language];
+    stage6RunSelect.options[0].textContent = ["選擇執行", "Select a run"][language];
+    stage6RunSelect.title = stage6RunSelect.selectedOptions[0]?.textContent || "";
+    stage6Status.hidden = state === "ready" && !empty;
+    stage6Status.textContent = (stage6Labels[empty ? "no-edges" : state] ?? ["", ""])[language];
+    stage6Summary.hidden = !stage6Status.hidden;
+    stage6Retry.hidden = !["empty", "list-error", "load-error"].includes(state);
+    byId("stage6-settings").textContent = Number.isFinite(frequency) && Number.isInteger(topNetworks)
+      ? [`頻率門檻 ${frequency} · 顯示前 ${topNetworks} 個子網路`, `Frequency threshold ${frequency} · Top ${topNetworks} subnetworks`][language]
+      : "—";
+    byId("stage6-output").textContent = counts ? networkOutput([counts.genes, counts.connections])[language] : "—";
+  }
+
+  function setStage6RunState(state) {
+    analysisNetwork.dataset.runState = state;
+    const ready = state === "ready";
+    analysisNetwork.querySelectorAll(".s6-zoom input, .s6-zoom button").forEach(control => {
+      control.disabled = !ready;
+    });
+    renderStage6Status();
+  }
+
+  async function getStage6Results(path, options = {}) {
+    const response = await fetch(path, {...options, headers: {"X-Chat-Token": chatToken}});
+    if (!response.ok) throw new Error("Stage 6 result request failed");
+    return response.json();
+  }
+
+  function layoutStage6(genes) {
+    const columns = Math.ceil(Math.sqrt(genes.length * 1.35));
+    const rows = Math.ceil(genes.length / columns);
+    const cells = genes.map((_, index) => {
+      const row = Math.floor(index / columns);
+      const column = index % columns;
+      const rowCells = Math.min(columns, genes.length - row * columns);
+      return [
+        columns > 1 ? 50 + (column - (rowCells - 1) / 2) * (86 / (columns - 1)) : 50,
+        rows > 1 ? 10 + row * (79 / (rows - 1)) : 50,
+      ];
+    });
+    const hub = genes.indexOf("MEGF6");
+    if (hub !== -1) {
+      const distance = ([x, y]) => (x - 50) ** 2 + (y - 50) ** 2;
+      const center = cells.reduce((nearest, cell, index) =>
+        distance(cell) < distance(cells[nearest]) ? index : nearest, 0);
+      [cells[hub], cells[center]] = [cells[center], cells[hub]];
+    }
+    return Object.fromEntries(genes.map((gene, index) => [gene, cells[index]]));
+  }
+
+  async function loadStage6Run(runId) {
+    stage6Request?.abort();
+    stage6Result = null;
+    delete analysisNetwork.dataset.runId;
+    setLiveNetwork({}, []);
+    if (!runId) {
+      setStage6RunState(stage6RunList.length ? "choose" : "empty");
+      return;
+    }
+    const request = new AbortController();
+    stage6Request = request;
+    setStage6RunState("loading");
+    try {
+      const query = new URLSearchParams({run: runId});
+      const result = await getStage6Results("/stage6/results?" + query, {signal: request.signal});
+      if (request.signal.aborted) return;
+      if (result.run_id !== runId) throw new Error("Stage 6 result belongs to a different run");
+      const {nodes, edges} = result.graph;
+      setLiveNetwork(layoutStage6(nodes), edges.map(({source, target, frequency, coefficient}) =>
+        [source, target, frequency, coefficient]), selectedStage6Genes.get(runId));
+      stage6Result = result;
+      analysisNetwork.dataset.runId = runId;
+      setStage6RunState("ready");
+    } catch {
+      if (!request.signal.aborted) {
+        setLiveNetwork({}, []);
+        setStage6RunState("load-error");
+      }
+    }
+  }
+
+  async function loadStage6Runs() {
+    stage6RunSelect.disabled = true;
+    setStage6RunState("listing");
+    try {
+      const {runs} = await getStage6Results("/stage6/results");
+      stage6RunList = runs;
+      for (const run of runs) stage6RunSelect.add(new Option(run.label ?? run.run_id, run.run_id));
+      stage6RunSelect.disabled = !runs.length;
+      setStage6RunState(runs.length ? "choose" : "empty");
+    } catch {
+      setStage6RunState("list-error");
+    }
+  }
+
+  stage6RunSelect.addEventListener("change", () => void loadStage6Run(stage6RunSelect.value));
+  stage6Retry.addEventListener("click", () => {
+    if (analysisNetwork.dataset.runState === "load-error") void loadStage6Run(stage6RunSelect.value);
+    else void loadStage6Runs();
+  });
+  analysisNetwork.addEventListener("lens:gene-selected", ({detail}) => {
+    if (stage6Result) selectedStage6Genes.set(stage6Result.run_id, detail.gene);
+  });
+
   const newChatTitle = ["新對話", "New chat"];
   const idleChatStatus = ["SIGNET Agent · 本機服務已啟動", "SIGNET Agent · Local service ready"];
   const chatRecords = [];
@@ -1200,6 +1361,7 @@
     for (const network of [analysisNetwork, ...historyNetworks]) {
       network.dispatchEvent(new Event("lens:language-changed"));
     }
+    renderStage6Status();
     renderRemoteSettings();
     renderDatasetLabels();
     syncInputFiles();
@@ -1480,4 +1642,5 @@
   updateHistoryView();
   updateAnalysisView();
   globalThis.lucide?.createIcons();
+  void loadStage6Runs();
 })();

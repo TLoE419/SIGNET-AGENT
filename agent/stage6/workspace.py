@@ -21,9 +21,12 @@ def graph(root, settings):
     path = Path(settings['resv'] + '_edgelist_' + label + '.txt')
     if not path.resolve().is_relative_to(root / 'work/res'):
         raise ValueError('Result path is outside the run.')
-    st._no_links(path)
+    return _read_graph(path, int(settings['ntop']))
+
+
+def _read_graph(path, top_networks):
     edges = []
-    with path.open() as stream:
+    with st._no_links(path).open() as stream:
         for row in csv.DictReader(stream):
             source, target = row['source_gene_symbol'], row['target_gene_symbol']
             freq, coef = float(row['frequency']), float(row['coefficient'])
@@ -48,22 +51,52 @@ def graph(root, settings):
         seen.update(group)
         groups.append(group)
     groups.sort(key=lambda group: (-sum(e['source'] in group for e in edges), sorted(group)))
-    selected = set().union(*groups[:int(settings['ntop'])]) if groups else set()
+    selected = set().union(*groups[:top_networks]) if groups else set()
     return {'nodes': sorted(neighbors), 'edges': edges,
             'display_nodes': sorted(selected),
             'counts': {'connections': len(edges), 'genes': len(neighbors), 'subnetworks': len(groups),
-                       'displayed': min(int(settings['ntop']), len(groups))}}
+                       'displayed': min(top_networks, len(groups))}}
 
 
 def load_run(run_id):
     root = st._run(run_id)
     record = json.loads((root / 'visualization.json').read_text())
-    if record.get('status') != 'verified_completed':
+    if not isinstance(record, dict) or record.get('status') != 'verified_completed':
         raise ValueError('Select a Stage 6 run with verified completed outputs.')
     settings = st._settings(root)
     for key in ('Afreq', 'coef', 'vis.genepos'):
         settings[key] = st._input(settings[key])
     return root, settings, record
+
+
+def _completed_run_summary(run_id, settings, record):
+    return {'run_id': run_id, 'frequency': float(settings['freq']),
+            'top_networks': int(settings['ntop']), 'status': record['status']}
+
+
+def _archive_directory():
+    return st.PROJECT / 'data/stage6-results'
+
+
+def _load_archive(run_id):
+    directory = st._no_links(_archive_directory() / st._name(run_id))
+    record = json.loads(st._no_links(directory / 'verification.json').read_text())
+    job = record['jobs']['visualize']
+    if record['run'] != run_id or job['state'] != 'completed':
+        raise ValueError('Select a completed archived Stage 6 result.')
+    frequency = float(job['settings']['freq'])
+    top_networks = int(job['settings']['ntop'])
+    st._number(frequency, 0, 1)
+    st._number(top_networks, 1, 100, integer=True)
+    path = st._no_links(directory / f'signet_edgelist_{frequency:.15g}.txt')
+    if not path.is_file():
+        raise ValueError('Missing archived Stage 6 edge list.')
+    counts = record['graph']
+    if (not isinstance(counts, dict) or set(counts) != {'connections', 'genes', 'subnetworks', 'displayed'}
+            or any(type(count) is not int or count < 1 for count in counts.values())):
+        raise ValueError('Missing or invalid archived Stage 6 graph counts.')
+    return ({'run_id': run_id, 'frequency': frequency, 'top_networks': top_networks,
+             'status': 'completed', 'source': 'archive'}, path, counts)
 
 
 def fingerprint(settings):
@@ -101,11 +134,35 @@ class Workspace:
         for path in sorted((st.PROJECT / 'runs').glob('*/visualization.json')):
             try:
                 _, settings, record = load_run(path.parent.name)
-                result.append({'run_id': path.parent.name, 'frequency': float(settings['freq']),
-                               'top_networks': int(settings['ntop']), 'status': record['status']})
+                result.append(_completed_run_summary(path.parent.name, settings, record))
             except (OSError, ValueError, KeyError, TypeError):
                 continue
         return result
+
+    def completed_runs(self):
+        runs = {result['run_id']: result for result in self.available()}
+        for path in sorted(_archive_directory().glob('*/verification.json')):
+            run_id = path.parent.name
+            if run_id in runs:
+                continue
+            try:
+                runs[run_id], _, _ = _load_archive(run_id)
+            except (OSError, ValueError, KeyError, TypeError):
+                continue
+        return list(runs.values())
+
+    def completed_result(self, run_id):
+        try:
+            root, settings, record = load_run(run_id)
+        except (OSError, ValueError, KeyError, TypeError):
+            summary, path, counts = _load_archive(run_id)
+            result = _read_graph(path, summary['top_networks'])
+            if result['counts'] != counts:
+                raise ValueError('Archived edge list counts do not match the verification record.')
+        else:
+            summary = _completed_run_summary(run_id, settings, record)
+            result = graph(root, settings)
+        return {**summary, 'graph': result}
 
     def state(self, session):
         return self.sessions.setdefault(session, {'baseline': None, 'comparison': None, 'proposals': []})

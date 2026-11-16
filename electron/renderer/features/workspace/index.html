@@ -308,12 +308,17 @@
     </header>
     <dl class="ml-result-context">
       <dt>階段</dt><dd>第 6 階段</dd>
-      <dt>資料</dt><dd>第 1 號染色體 · 模擬結果節錄</dd>
+      <dt data-s6-run-label data-live-language>執行</dt>
+      <dd data-s6-run-value><select id="ml-stage6-run" aria-label="已完成的執行" data-en-aria-label="Completed run" disabled>
+        <option value="">選擇執行</option>
+      </select></dd>
       <dt>圖中範圍</dt><dd class="s6-graph-meta"></dd>
     </dl>
   <div class="s6-selection">
+    <div class="s6-result-status" role="status" data-live-language></div>
+    <button class="s6-reset" id="ml-stage6-retry" type="button" data-en-text="Refresh results" hidden>重新整理結果</button>
     <div class="s6-summary" aria-live="polite" data-live-language>點選基因查看相連的調控關係。</div>
-    <button class="s6-reset" type="button" hidden>清除選取</button>
+    <button class="s6-reset" data-s6-clear type="button" hidden>清除選取</button>
   </div>
   </aside>
 

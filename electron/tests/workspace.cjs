@@ -21,7 +21,7 @@ writeFileSync(stateFile, JSON.stringify({token: randomBytes(32).toString('hex'),
   active_session: existingSession, histories: {[existingSession]: [{role: 'user', parts: [{text: existingMessage}]}]},
   events: {[existingSession]: [[existingActivity]]}}));
 
-// Run the real local service and provider adapter. Only the CLI subprocess is a fixture.
+// Exercise the original Agent with a deterministic local model CLI.
 writeFileSync(path.join(temporary, 'codex'), `#!/usr/bin/env python3
 import json, os, sys
 
@@ -41,20 +41,51 @@ emit({'type': 'turn.completed', 'usage': {'input_tokens': 30, 'output_tokens': 1
 process.env.PATH = [temporary, process.env.PATH].filter(Boolean).join(path.delimiter);
 process.env.SIGNET_WORKSPACE_TEST_CAPTURE = captureFile;
 
+const archiveDir = path.resolve(__dirname, '../../data/stage6-results');
+const useArchivedRun = process.argv.includes('--archived-run');
+let fixtureDir;
+const stage6Example = useArchivedRun
+  ? {run: 'official-example-chr1-20261111', connections: 731, genes: 95, incident: 13}
+  : {connections: 4, genes: 4, incident: 3, pairs: [['ABCD3', 'MEGF6'], ['MEGF6', 'ABCD3'], ['MEGF6', 'LRRC40']]};
+
+function cleanup() {
+  clearTimeout(deadline);
+  if (fixtureDir) rmSync(fixtureDir, {recursive: true, force: true});
+  rmSync(temporary, {recursive: true, force: true});
+}
+
 function fail(error) {
   console.error(error);
-  clearTimeout(deadline);
-  rmSync(temporary, {recursive: true, force: true});
+  cleanup();
   app.exit(1);
 }
 
 const deadline = setTimeout(() => fail(Error('Workspace startup and chat test timed out')), 45000);
-app.on('will-quit', () => {
-  clearTimeout(deadline);
-  rmSync(temporary, {recursive: true, force: true});
-});
+app.on('will-quit', cleanup);
 
-function verifyWorkspace() {
+try {
+  if (!useArchivedRun) {
+    mkdirSync(archiveDir, {recursive: true});
+    fixtureDir = mkdtempSync(path.join(archiveDir, 'workspace-test-'));
+    stage6Example.run = path.basename(fixtureDir);
+    const {run, connections, genes} = stage6Example;
+    writeFileSync(path.join(fixtureDir, 'verification.json'), JSON.stringify({
+      run,
+      jobs: {visualize: {state: 'completed', settings: {freq: '0.45', ntop: '1'}}},
+      graph: {connections, genes, subnetworks: 1, displayed: 1},
+    }));
+    writeFileSync(path.join(fixtureDir, 'signet_edgelist_0.45.txt'), [
+      'source_gene_symbol,target_gene_symbol,frequency,coefficient',
+      'MEGF6,LRRC40,0.5,0.1',
+      'ABCD3,MEGF6,1,-0.2',
+      'MEGF6,ABCD3,1,0.03',
+      'LRRC40,CLK2,0.5,0.25',
+      '',
+    ].join('\n'));
+  }
+} catch (error) { fail(error); }
+
+async function verifyWorkspace({run, connections, genes, incident, pairs}) {
   const find = selector => {
     const element = document.querySelector(selector);
     if (!element) throw new Error(`Workspace is missing ${selector}`);
@@ -75,13 +106,40 @@ function verifyWorkspace() {
   const archiveFiles = () => [...find(archive).querySelectorAll('code')].map(file => file.textContent);
   const selectGene = panel => find(`${panel} [data-gene="MEGF6"]`).dispatchEvent(new MouseEvent('click', {bubbles: true}));
 
-  selectGene('#lens-stage6');
-  check(countRows('#lens-stage6') === 13, 'MEGF6 filtering failed in the analysis workspace');
+  const waitFor = async (condition, description) => {
+    const end = Date.now() + 10000;
+    while (!condition()) {
+      check(Date.now() < end, description);
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+  };
+  const stage6 = find('#lens-stage6');
+  const resultPicker = find('#ml-stage6-run');
   click('#ml-stage-tab');
+  click('[data-stage="6"]');
+  await waitFor(() => [...resultPicker.options].some(option => option.value === run), 'Completed run was not listed');
+  check(resultPicker.value === '' && stage6.dataset.runState === 'choose', 'Stage 6 should wait for the reader to select a run');
+  check(!stage6.querySelector('[data-gene]') && countRows('#lens-stage6') === 0, 'Unselected Stage 6 showed a network or edges');
+
+  resultPicker.value = run;
+  resultPicker.dispatchEvent(new Event('change', {bubbles: true}));
+  await waitFor(() => stage6.dataset.runState === 'ready', 'Selected Stage 6 result did not load');
+  check(stage6.querySelectorAll('[data-gene]').length === genes, 'The graph did not render the selected run genes');
+  check(visible('#lens-stage6 [data-gene="MEGF6"]') && countRows('#lens-stage6') === connections,
+    'The graph or table did not display the selected run connections');
+
+  selectGene('#lens-stage6');
+  const selectedPairs = [...stage6.querySelectorAll('tbody tr')].map(row => [row.cells[0].textContent, row.cells[1].textContent]);
+  check(visible('#lens-stage6 .ml-result-table') && selectedPairs.length === incident &&
+    selectedPairs.every(pair => pair.includes('MEGF6')),
+    'MEGF6 filtering did not retain exactly the incident edges');
+  if (pairs) check(JSON.stringify(selectedPairs.sort()) === JSON.stringify(pairs.sort()),
+    'MEGF6 filtering lost or replaced a directed edge');
   click('[data-stage="3"]');
   check(visible('#lens-stage3') && !visible('#lens-stage6'), 'Stage 3 did not show its PCA result');
   click('[data-stage="6"]');
-  check(visible('#lens-stage6') && countRows('#lens-stage6') === 13, 'Stage 6 lost its MEGF6 selection');
+  check(visible('#lens-stage6') && resultPicker.value === run && stage6.dataset.selectedGene === 'MEGF6' &&
+    countRows('#lens-stage6') === incident, 'Stage 6 lost its selected run or gene');
 
   go('data');
   click('#ml-input-genotype [data-input-replace]');
@@ -222,8 +280,8 @@ app.once('browser-window-created', (_event, window) => {
       assert.deepEqual(stored.histories[stored.active_session].map(message => message.parts[0].text),
         [firstMessage, 'Provider replied to: ' + firstMessage, nextMessage, 'Provider replied to: ' + nextMessage]);
       assert.deepEqual(stored.events[existingSession], [[existingActivity]]);
-      await window.webContents.executeJavaScript(`(${verifyWorkspace.toString()})()`);
-      console.log('PASS: default desktop workspace, exact frame geometry, original Agent transport and saved conversations, datasets, reruns, and language');
+      await window.webContents.executeJavaScript(`(${verifyWorkspace.toString()})(${JSON.stringify(stage6Example)})`);
+      console.log(`PASS: unchanged workspace geometry, Agent chat, datasets, demo run history, and Stage 6 saved result (${stage6Example.connections} edges, ${stage6Example.incident} incident to MEGF6)`);
       window.close();
     } catch (error) { fail(error); }
   }));

@@ -34,11 +34,21 @@ are bundled.
 ### Workspace
 
 The desktop opens directly to the bilingual workspace. The left chat uses the
-existing SIGNET Agent, model configuration, and saved conversations. Dataset
-choices, stage results, and run history in the new workspace use simulated data.
+existing SIGNET Agent, model configuration, and saved conversations. In
+**Analysis → Stage → Stage 6**, choose a completed run to load its network and
+edge table. Selecting a gene filters the table to edges entering or leaving
+that gene. Dataset choices, run history, and stages 1–5 still use simulated data.
 
-Use **View → Classic Interface** for model and SSH setup, live Stage 6 results,
-and the development terminal. **View → Workspace** returns to the new interface.
+Stage 6 lists verified local runs and saved read-only exports. For an archived
+HPC3 export, keep the original verification report as
+`data/stage6-results/<run-id>/verification.json` beside the exported
+`signet_edgelist_<frequency>.txt`. Use the frequency from the completed
+visualization job in the report. The branch ignores the local `data/` directory.
+Viewing an archive doesn't submit a job or change the saved run.
+
+Use **View → Classic Interface** for model and SSH setup, existing Stage 6
+tools, and the development terminal. **View → Workspace** returns to the new
+interface.
 
 ## Development terminal
 
