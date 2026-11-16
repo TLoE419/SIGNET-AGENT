@@ -3,12 +3,16 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; base-uri 'none'; form-action 'none'">
-  <title>SIGNET · Workspace Preview</title>
-  <link rel="stylesheet" href="./workspace.css">
-  <script defer src="./icons.js"></script>
-  <script defer src="./workspace.js"></script>
-  <script defer src="./interaction.js"></script>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'">
+  <meta name="chat-token" content="__TOKEN__">
+  <meta name="model-label" content="__MODEL__">
+  <title>SIGNET · Workspace</title>
+  <link rel="stylesheet" href="./workspace/workspace.css">
+  <script type="application/json" id="initial-chat">__INITIAL_CHAT__</script>
+  <script defer src="./workspace/icons.js"></script>
+  <script defer src="/chat-markdown.js"></script>
+  <script defer src="./workspace/workspace.js"></script>
+  <script defer src="./workspace/interaction.js"></script>
 </head>
 <body>
 <div id="signet-lens-left-preview" lang="zh-Hant">
@@ -51,12 +55,12 @@
         <div class="ml-thread" id="ml-thread" aria-label="Conversation">
           <section class="ml-chat-drawer" id="ml-chat-list" aria-labelledby="ml-chat-list-toggle" hidden>
             <h3 data-en-text="Saved conversations">已存對話</h3>
+            <p id="ml-empty-chats" class="ml-saved-reply" data-en-text="No saved conversations yet.">目前沒有已存對話。</p>
             <div class="ml-nav-list" id="ml-chat-records" data-live-language></div>
           </section>
           <section class="ml-chat-drawer" id="ml-chat-activity" aria-labelledby="ml-chat-activity-toggle" hidden>
             <div class="ml-chat-drawer-title">
               <h3 data-en-text="Execution activity">執行活動</h3>
-              <span data-en-text="Simulated">模擬</span>
             </div>
             <div id="ml-chat-events" data-live-language></div>
           </section>
@@ -69,16 +73,16 @@
           </div>
         </div>
         <form class="ml-composer" id="ml-composer" aria-label="Write a message">
-          <textarea id="ml-input" rows="1" maxlength="280" aria-label="Type your message" placeholder="Type your message..."></textarea>
+          <textarea id="ml-input" rows="1" maxlength="8000" aria-label="Type your message" placeholder="Type your message..."></textarea>
           <div class="ml-composer-toolbar">
             <div class="ml-chips" aria-hidden="true">
               <span class="ml-chip"><i data-lucide="code"></i>Code Mode (beta)<i class="ml-chip-chevron" data-lucide="chevron-down"></i></span>
-              <span class="ml-chip"><i data-lucide="bot"></i><span id="ml-model-chip">Gemini</span><i class="ml-chip-chevron" data-lucide="chevron-down"></i></span>
+              <span class="ml-chip"><i data-lucide="bot"></i><span id="ml-model-chip" data-live-language></span><i class="ml-chip-chevron" data-lucide="chevron-down"></i></span>
               <span class="ml-chip ml-chip-icon"><i data-lucide="sliders-horizontal"></i></span>
             </div>
             <div class="ml-composer-actions">
               <span class="ml-mention" aria-hidden="true"><i data-lucide="at-sign"></i></span>
-              <button id="ml-send" class="ml-icon-button ml-send" type="button" aria-label="Send message"><i data-lucide="send" aria-hidden="true"></i></button>
+              <button id="ml-send" class="ml-icon-button ml-send" type="submit" aria-label="Send message"><i data-lucide="send" aria-hidden="true"></i></button>
             </div>
           </div>
         </form>
@@ -144,10 +148,7 @@
         <section class="ml-settings-block" aria-labelledby="ml-model-title">
           <div class="ml-settings-model-row">
             <label id="ml-model-title" for="ml-model-select" data-en-text="Chat model">聊天模型</label>
-            <select id="ml-model-select">
-              <option value="gemini">Gemini</option>
-              <option value="codex">Codex</option>
-            </select>
+            <select id="ml-model-select" disabled data-live-language></select>
           </div>
         </section>
         <section class="ml-settings-block" aria-labelledby="ml-readiness-title">

@@ -938,17 +938,27 @@
   }).join("");
 
   const input = byId("input");
+  const initialChat = JSON.parse(document.getElementById("initial-chat").textContent);
+  const chatToken = document.querySelector('meta[name="chat-token"]').content;
+  const chatModel = document.querySelector('meta[name="model-label"]').content;
+  const newChatTitle = ["新對話", "New chat"];
+  const idleChatStatus = ["SIGNET Agent · 本機服務已啟動", "SIGNET Agent · Local service ready"];
   const chatRecords = [];
   const chatLabels = new Map();
-  let activeChat;
+  let activeChat, chatBusy = false;
 
   function renderChatLanguage() {
     for (const [node, labels] of chatLabels) node.textContent = labels[root.lang === "en" ? 1 : 0];
   }
 
-  function chatLabel(node, labels) {
-    chatLabels.set(node, labels);
-    node.textContent = labels[root.lang === "en" ? 1 : 0];
+  function chatLabel(node, label) {
+    if (Array.isArray(label)) {
+      chatLabels.set(node, label);
+      node.textContent = label[root.lang === "en" ? 1 : 0];
+    } else {
+      chatLabels.delete(node);
+      node.textContent = label;
+    }
   }
 
   function createMessage(className, text) {
@@ -959,17 +969,20 @@
     return message;
   }
 
-  function appendChatEvent(record, title, result) {
+  function appendChatEvent(record, title, result, state) {
     const event = document.createElement("details");
     event.className = "ml-chat-event";
     event.open = !record.events.childElementCount;
     event.innerHTML = `<summary><i data-lucide="terminal" aria-hidden="true"></i><strong></strong>
       <span class="ml-chat-event-state"></span><i class="ml-chat-event-arrow" data-lucide="chevron-down" aria-hidden="true"></i></summary><p></p>`;
     chatLabel(event.querySelector("strong"), title);
-    chatLabel(event.querySelector(".ml-chat-event-state"), ["完成", "Completed"]);
-    chatLabel(event.querySelector("p"), result);
+    const status = event.querySelector(".ml-chat-event-state");
+    const log = event.querySelector("p");
+    chatLabel(status, state);
+    log.textContent = result;
     record.emptyEvents.hidden = true;
     record.events.append(event);
+    return {event, status, log};
   }
 
   const chatDrawers = ["chat-list", "chat-activity"];
@@ -985,73 +998,103 @@
   function openChat(record) {
     if (activeChat) activeChat.draft = input.value;
     activeChat = record;
-    activeDataset.chat = record;
     for (const chat of chatRecords) {
       const active = chat === record;
       chat.button.setAttribute("aria-pressed", String(active));
-      chat.button.hidden = chat.datasetId !== activeDataset.id;
       chat.transcript.hidden = chat.activity.hidden = !active;
     }
     chatLabel(byId("chat-title"), record.title);
+    chatLabel(byId("chat-status"), idleChatStatus);
     input.value = record.draft;
     showChatDrawer(null);
+    if (record.transcript.lastElementChild) {
+      byId("thread").scrollTop = byId("thread").scrollHeight;
+    }
   }
 
-  function createChat(title, question, reply, events = []) {
+  function createChat(saved) {
+    const title = saved?.title ?? newChatTitle;
     const button = document.createElement("button");
     button.type = "button";
     button.className = "ml-nav-list-item";
     button.innerHTML = '<i data-lucide="message-square" aria-hidden="true"></i><span><strong></strong><small></small></span>';
     chatLabel(button.querySelector("strong"), title);
-    chatLabel(button.querySelector("small"), question ? ["示範對話", "Example conversation"] : ["本次預覽", "This preview"]);
+    chatLabel(button.querySelector("small"), ["已存對話", "Saved conversation"]);
+    button.hidden = !saved;
     const transcript = document.createElement("div");
     transcript.id = `ml-chat-record-${chatRecords.length + 1}`;
     button.setAttribute("aria-controls", transcript.id);
-    if (question) transcript.append(createMessage("ml-message", question), createMessage("ml-saved-reply", reply));
     const activity = document.createElement("div");
     const emptyEvents = createMessage("ml-saved-reply", ["目前沒有執行活動。", "No activity yet."]);
     const eventList = document.createElement("div");
     eventList.className = "ml-chat-event-list";
     activity.append(emptyEvents, eventList);
-    const record = {datasetId: activeDataset.id, title, button, transcript, activity, events: eventList, emptyEvents, draft: ""};
+    const record = {session: saved?.session ?? crypto.randomUUID(), loaded: !saved, title, button, transcript,
+      activity, events: eventList, emptyEvents, draft: ""};
     chatRecords.push(record);
-    for (const [eventTitle, result] of events) appendChatEvent(record, eventTitle, result);
-    button.addEventListener("click", () => {
-      openChat(record);
-      byId("chat-list-toggle").focus({preventScroll: true});
-    });
+    button.addEventListener("click", () => void selectSavedChat(record));
     byId("chat-records").append(button);
     byId("chat-transcripts").append(transcript);
     byId("chat-events").append(activity);
     return record;
   }
 
-  const [demoGeneTotal, demoEdgeTotal] = savedRuns[0].network;
-  const [demoAdjustedSamples] = savedRuns[0].adjusted;
-  const demoMatchedSamples = savedRuns[0].matched;
-  const firstChat = createChat(
-    ["第 1 號染色體分析", "Chromosome 1 analysis"],
-    ["幫我看第 1 號染色體的網路結果。", "Show me the chromosome 1 network results."],
-    [`目前這筆模擬結果有 ${demoGeneTotal} 個基因與 ${demoEdgeTotal} 條連線。網路圖可點選基因來篩選連線表。`,
-      `This simulated run has ${demoGeneTotal} genes and ${demoEdgeTotal} edges. Select a gene in the graph to filter the edge table.`],
-    [
-      [["讀取第 6 階段結果", "Read Stage 6 results"], ["已載入封存的模擬網路結果。", "Loaded the archived simulation results."]],
-      [["整理基因與連線", "Summarize genes and edges"], [`原始輸出有 ${demoGeneTotal} 個基因、${demoEdgeTotal} 條連線。右側顯示其中的節錄。`,
-        `The original output has ${demoGeneTotal} genes and ${demoEdgeTotal} edges. The graph shows a subset.`]],
-    ],
-  );
-  createChat(
-    ["樣本配對與校正", "Sample matching and adjustment"],
-    ["配對後保留了多少樣本？", "How many samples were retained after matching?"],
-    [`原本配對 ${demoMatchedSamples} 人，校正後保留 ${demoAdjustedSamples} 人。可在第 3 階段查看樣本配對和主成分圖。`,
-      `${demoMatchedSamples} individuals matched and ${demoAdjustedSamples} were retained after adjustment. Stage 3 shows sample matching and the principal components plot.`],
-    [
-      [["讀取第 3 階段結果", "Read Stage 3 results"], [`配對 ${demoMatchedSamples} 人，校正後保留 ${demoAdjustedSamples} 人。`,
-        `${demoMatchedSamples} individuals matched and ${demoAdjustedSamples} were retained after adjustment.`]],
-      [["查閱校正參數", "Review adjustment settings"], ["這筆模擬分析使用 3 個主成分。", "The simulated run used 3 principal components."]],
-    ],
-  );
-  chatLabel(byId("chat-status"), ["示範模式 · 對話儲存在本次預覽", "Demo mode · Chats are kept in this preview"]);
+  function setChatBusy(busy) {
+    chatBusy = busy;
+    byId("send").disabled = byId("new").disabled = busy;
+    for (const {button} of chatRecords) button.disabled = busy;
+  }
+
+  function createAgentReply(record) {
+    const reply = document.createElement("div");
+    reply.className = "ml-saved-reply ml-live-reply";
+    record.transcript.append(reply);
+    return reply;
+  }
+
+  function renderAgentAnswer(reply, text) {
+    chatLabels.delete(reply);
+    reply.innerHTML = renderMarkdown(text);
+  }
+
+  async function readChatError(response) {
+    const {error} = await response.json().catch(() => ({}));
+    return error ?? (root.lang === "en" ? "The local service rejected the request." : "本機服務拒絕請求。");
+  }
+
+  function loadChat(record, saved) {
+    for (const {role, text} of saved.messages ?? []) {
+      if (role === "user") record.transcript.append(createMessage("ml-message", text));
+      else renderAgentAnswer(createAgentReply(record), text);
+    }
+    for (const events of saved.events ?? []) {
+      appendChatEvent(record, ["已存執行紀錄", "Saved activity"], events.join("\n"), ["已結束", "Ended"]);
+    }
+    record.loaded = true;
+  }
+
+  async function selectSavedChat(record) {
+    if (chatBusy) return;
+    setChatBusy(true);
+    try {
+      const response = await fetch("/bootstrap?" + new URLSearchParams({session: record.session}));
+      if (!response.ok) throw new Error(await readChatError(response));
+      const {initial} = await response.json();
+      if (!record.loaded) loadChat(record, initial);
+      openChat(record);
+      globalThis.lucide?.createIcons();
+      byId("chat-list-toggle").focus({preventScroll: true});
+    } catch (error) {
+      chatLabel(byId("chat-status"), error.message);
+    } finally {
+      setChatBusy(false);
+    }
+  }
+
+  for (const saved of initialChat.sessions ?? []) createChat(saved);
+  byId("empty-chats").hidden = chatRecords.length > 0;
+  const firstChat = chatRecords.find(({session}) => session === initialChat.session) ?? createChat();
+  loadChat(firstChat, initialChat);
   openChat(firstChat);
 
   for (const drawer of chatDrawers) {
@@ -1087,7 +1130,6 @@
   }
 
   const languageButton = byId("language");
-  const demoReply = () => root.lang === "en" ? "Demo message" : "示範回覆";
   const remoteSwitch = byId("remote-switch");
   const remoteStatus = byId("remote-status");
   const checkEnvironment = byId("check-environment");
@@ -1126,10 +1168,9 @@
     environmentChecked = true;
     renderRemoteSettings();
   });
-  const modelSelect = byId("model-select");
-  modelSelect.addEventListener("change", () => {
-    byId("model-chip").textContent = modelSelect.selectedOptions[0].textContent;
-  });
+  const modelChip = byId("model-chip");
+  modelChip.textContent = modelChip.title = chatModel;
+  byId("model-select").add(new Option(chatModel));
 
   const datasetSelect = byId("dataset-select");
   const datasetForm = byId("dataset-form");
@@ -1156,7 +1197,6 @@
     const inEnglish = lang === "en";
     for (const translate of translations) translate(inEnglish);
     renderChatLanguage();
-    for (const reply of root.querySelectorAll(".ml-reply")) reply.textContent = demoReply();
     for (const network of [analysisNetwork, ...historyNetworks]) {
       network.dispatchEvent(new Event("lens:language-changed"));
     }
@@ -1218,7 +1258,6 @@
     if (dataset !== activeDataset) {
       activeDataset = dataset;
       historyNetworkIndex = null;
-      openChat(dataset.chat ?? createChat(["新對話", "New chat"]));
       globalThis.lucide?.createIcons();
     }
     renderDatasetLabels();
@@ -1336,28 +1375,105 @@
     root.querySelector('[data-nav-target][aria-current="page"]').focus();
   });
   byId("new").addEventListener("click", () => {
-    openChat(createChat(["新對話", "New chat"]));
+    if (chatBusy) return;
+    openChat(createChat());
     globalThis.lucide?.createIcons();
     input.focus();
   });
 
-  function sendMessage() {
+  async function sendMessage() {
     const text = input.value.trim();
-    if (!text) return;
-    const reply = createMessage("ml-reply", demoReply());
-    activeChat.transcript.append(createMessage("ml-message", text), reply);
-    appendChatEvent(activeChat, ["加入示範回覆", "Add demo response"],
-      ["訊息和回覆已加入目前對話。", "The message and response were added to this chat."]);
+    if (chatBusy || !text) return;
+    const record = activeChat;
+    const status = byId("chat-status");
+    const needsReview = ["需要確認", "Needs review"];
+    const ended = ["已結束", "Ended"];
+    const turn = appendChatEvent(record, ["對話回合", "Conversation turn"], "", ["執行中", "Running"]);
+    turn.event.open = true;
+
+    setChatBusy(true);
+    chatLabel(status, ["等待 SIGNET Agent 回覆…", "Waiting for SIGNET Agent…"]);
+    record.transcript.append(createMessage("ml-message", text));
+    const reply = createAgentReply(record);
+    chatLabel(reply, ["處理中…進度可在「執行活動」查看。", "Working… Follow along in Activity."]);
     input.value = "";
     showChatDrawer(null);
     globalThis.lucide?.createIcons();
     reply.scrollIntoView({ block: "nearest" });
+
+    let done = false, failed = false, answered = false;
+    function consume(line) {
+      if (!line.trim()) return;
+      const event = JSON.parse(line);
+      if (["progress", "error", "done"].includes(event.type)) {
+        turn.log.textContent += (turn.log.textContent ? "\n" : "") + event.text;
+      }
+      if (event.type === "answer") {
+        renderAgentAnswer(reply, event.text);
+        answered = true;
+      }
+      if (event.type === "error") {
+        chatLabel(reply, event.text);
+        failed = true;
+      }
+      if (event.type === "done") done = true;
+    }
+
+    try {
+      const response = await fetch("/chat", {
+        method: "POST",
+        headers: {"Content-Type": "application/json", "X-Chat-Token": chatToken},
+        body: JSON.stringify({text, session: record.session, language: root.lang}),
+      });
+      if (!response.ok) throw new Error(await readChatError(response));
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      for (;;) {
+        const part = await reader.read();
+        buffer += decoder.decode(part.value, {stream: !part.done});
+        const lines = buffer.split("\n");
+        buffer = lines.pop();
+        lines.forEach(consume);
+        if (part.done) break;
+      }
+      consume(buffer);
+      if (!done) throw new TypeError();
+      if (record.button.hidden) {
+        record.title = Array.from(text.replace(/\s+/g, " ")).slice(0, 80).join("");
+        chatLabel(record.button.querySelector("strong"), record.title);
+        chatLabel(byId("chat-title"), record.title);
+        record.button.hidden = false;
+        byId("chat-records").prepend(record.button);
+        byId("empty-chats").hidden = true;
+      }
+      chatLabel(status, failed ? needsReview : ["回合結束", "Turn ended"]);
+      chatLabel(turn.status, failed ? needsReview : ended);
+    } catch (error) {
+      const lostConnection = ["連線中斷。已啟動的工具可能仍在執行，請先核對工作狀態。",
+        "Connection interrupted. Check any active jobs before retrying."];
+      const detail = error instanceof TypeError || error instanceof SyntaxError ? lostConnection : error.message;
+      if (answered || failed) reply.after(createMessage("ml-saved-reply", detail));
+      else chatLabel(reply, detail);
+      turn.log.textContent += (turn.log.textContent ? "\n" : "") + (Array.isArray(detail) ? detail[root.lang === "en" ? 1 : 0] : detail);
+      chatLabel(status, needsReview);
+      chatLabel(turn.status, needsReview);
+    } finally {
+      setChatBusy(false);
+      if (!byId("chat-transcripts").hidden && !byId("agent-view").hidden && !byId("chat-panel").hidden) {
+        input.focus({preventScroll: true});
+        byId("thread").scrollTop = byId("thread").scrollHeight;
+      }
+    }
   }
-  byId("send").addEventListener("click", sendMessage);
+  byId("composer").addEventListener("submit", (event) => {
+    event.preventDefault();
+    void sendMessage();
+  });
   input.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
       event.preventDefault();
-      sendMessage();
+      byId("composer").requestSubmit();
     }
   });
 

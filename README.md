@@ -2,7 +2,7 @@
 
 Use a local chat interface to explore SIGNET's analysis capabilities, inspect files you provide, and run operations through controlled tools. The interface supports English and Traditional Chinese, tool progress, and parameter proposals and comparisons for Stage 6 network results.
 
-**This version includes no study data, example datasets, reference datasets, or precomputed results.** After installation, you can open the Electron desktop client. With your own model sign-in configured, you can chat, query the analysis catalog, and list project files. Network visualization and comparison require your own analysis results that have passed the technical output checks; no example graph appears on first launch.
+The desktop opens to the bilingual workspace. Its example datasets, run history, plots, and tables are simulated. The chat uses the existing SIGNET Agent with your configured model and saved conversations. Use **View → Classic Interface** for live data and Stage 6 results, model setup, and remote connection controls.
 
 ## Replacing the Former Desktop Workbench
 

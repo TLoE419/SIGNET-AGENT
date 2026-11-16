@@ -5,7 +5,7 @@ import {SshControls} from '../features/ssh/SshControls';
 export function App({model}:{model:string}){
  return <>
   <aside className="rail">
-    <a className="brand" href="/" aria-label="SIGNET home" data-i18n-aria="SIGNET 首頁"><span className="logo">S</span><span>SIGNET<small><span data-i18n="研究工作台">Research workspace</span></small></span></a>
+    <a className="brand" href="/classic" aria-label="SIGNET home" data-i18n-aria="SIGNET 首頁"><span className="logo">S</span><span>SIGNET<small><span data-i18n="研究工作台">Research workspace</span></small></span></a>
     <button id="new-chat" className="new-chat"><span data-i18n="＋ 開始新對話">+ New chat</span></button>
     <div className="nav-label"><span data-i18n="工作空間">WORKSPACE</span></div>
     <div className="nav-item active"><span>◉</span> <span data-i18n="研究助手">Research assistant</span> <span className="nav-dot"></span></div>

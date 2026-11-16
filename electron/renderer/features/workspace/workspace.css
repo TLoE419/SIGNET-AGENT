@@ -412,7 +412,7 @@ code:not(pre code) {
   min-height: 28px; padding: 3px 8px; border: 1px solid var(--ml-control); border-radius: 5px;
   background: var(--ml-base); color: var(--ml-ink); font: inherit; cursor: pointer;
 }
-#signet-lens-left-preview .ml-settings-model-row select { min-width: 137px; }
+#signet-lens-left-preview .ml-settings-model-row select { min-width: 137px; max-width: 70%; cursor: default; }
 #signet-lens-left-preview .ml-settings-action:disabled { opacity: .55; cursor: default; }
 #signet-lens-left-preview .ml-settings-action:enabled:hover { background: var(--ml-tab); }
 #signet-lens-left-preview .ml-settings-note { margin: 8px 0 4px; color: var(--ml-muted); font-size: 12px; }
@@ -581,13 +581,14 @@ code:not(pre code) {
   background: transparent; color: #303a46; cursor: pointer;
 }
 #signet-lens-left-preview .ml-icon-button:hover { background: #edf1f3; }
+#signet-lens-left-preview .ml-icon-button:disabled { opacity: .55; cursor: default; }
 #signet-lens-left-preview .ml-thread {
   background: var(--ml-thread-bg); overflow-y: auto; overflow-x: clip;
 }
 #signet-lens-left-preview .ml-message {
   margin: 14px 14px 0 40px;
   min-height: 52px; padding: 11px 12px;
-  display: flex; align-items: center; overflow-wrap: anywhere;
+  display: flex; align-items: center; overflow-wrap: anywhere; white-space: pre-wrap;
   border: 1px solid #dbe4ea; border-radius: 5px; background: var(--ml-base);
   font: 16px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
   color: #182132;
@@ -609,7 +610,9 @@ code:not(pre code) {
 #signet-lens-left-preview .ml-chat-event-state { margin-left: auto; color: var(--ml-green); font-size: 12px; }
 #signet-lens-left-preview .ml-chat-event-arrow { --ml-icon-size: 13px; }
 #signet-lens-left-preview .ml-chat-event[open] .ml-chat-event-arrow { transform: rotate(180deg); }
-#signet-lens-left-preview .ml-chat-event p { margin: 0; padding: 6px 12px 9px; color: var(--ml-muted); }
+#signet-lens-left-preview .ml-chat-event p {
+  margin: 0; padding: 6px 12px 9px; color: var(--ml-muted); white-space: pre-wrap; overflow-wrap: anywhere;
+}
 #signet-lens-left-preview .ml-run-footer {
   border-block: 1px solid var(--ml-rule);
   display: grid; place-items: center;
@@ -641,6 +644,7 @@ code:not(pre code) {
 #signet-lens-left-preview .ml-chip:first-child { width: 166px; }
 #signet-lens-left-preview .ml-chip:nth-child(2) { width: 182px; }
 #signet-lens-left-preview .ml-chip-chevron { margin-left: auto; }
+#signet-lens-left-preview #ml-model-chip { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 #signet-lens-left-preview .ml-chip-icon {
   --ml-icon-size: 16px;
   width: 27px; border-color: transparent; padding: 0; justify-content: center;
@@ -651,7 +655,10 @@ code:not(pre code) {
 }
 #signet-lens-left-preview .ml-mention { color: #737c84; --ml-icon-size: 15px; }
 #signet-lens-left-preview .ml-send { color: #2264ae; }
-#signet-lens-left-preview :is(.ml-reply, .ml-saved-reply) { margin: 8px 14px; color: var(--ml-muted); }
+#signet-lens-left-preview .ml-saved-reply { margin: 8px 14px; color: var(--ml-muted); overflow-wrap: anywhere; }
+#signet-lens-left-preview .ml-live-reply > :first-child { margin-block-start: 0; }
+#signet-lens-left-preview .ml-live-reply > :last-child { margin-block-end: 0; }
+#signet-lens-left-preview .ml-live-reply pre { white-space: pre-wrap; }
 #signet-lens-left-preview .ml-stage-view {
   --ml-history-blue: #3676ad; --ml-history-line: #dbe2e8;
   padding: 20px 30px 18px 34px; overflow-y: auto;

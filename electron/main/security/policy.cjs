@@ -8,6 +8,6 @@ function localURL(value, origin) {
 function navigationAllowed(value, origin) {
   if (!localURL(value, origin)) return false;
   const url = new URL(value);
-  return url.pathname === '/' || url.pathname === '/stage6/file';
+  return ['/', '/classic', '/stage6/file'].includes(url.pathname);
 }
 module.exports = {localURL, navigationAllowed};

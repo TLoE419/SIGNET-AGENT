@@ -1,5 +1,6 @@
 'use strict';
 // Full local OpenSSH connection; remote software installation is deliberately simulated.
+const {once} = require('node:events');
 const assert=require('node:assert/strict');
 const {mkdtempSync,writeFileSync,rmSync}=require('node:fs');
 const path=require('node:path'),os=require('node:os');
@@ -39,6 +40,9 @@ async function until(check){for(let i=0;i<200;i++){if(await check())return;await
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));const port=server.address().port,userData=path.join(directory,'app');
  const trust=new HostKeyTrustStore(path.join(userData,'ssh')),blob=Buffer.from(host.public.split(' ')[1],'base64');await trust.load();await trust.trust({host:'127.0.0.1',port,algorithm:'ssh-ed25519',fingerprint:'SHA256:'+createHash('sha256').update(blob).digest('base64').replace(/=+$/,''),publicKey:blob.toString('base64')});
  running=await launch({devMode:true,visible:false,userData,stateFile:path.join(directory,'state.json')});const window=running.window,js=s=>window.webContents.executeJavaScript(s);
+ const classicLoaded = once(window.webContents, 'did-finish-load');
+ require('electron').Menu.getApplicationMenu().getMenuItemById('classic-view').click();
+ await classicLoaded;
  await until(()=>js('!!document.querySelector(".ssh-identity")'));
  await js(`window.envPhases=[];window.signetDesktop.environment.subscribe(s=>window.envPhases.push(s.phase));true;`);
  const saved=await js(`window.signetDesktop.ssh.saveProfile(${JSON.stringify({name:'Local mock',host:'127.0.0.1',port,username:'testuser',auth:{method:'private-key',privateKeyPath:keyPath}})})`);assert.ok(saved.ok);

@@ -1,4 +1,5 @@
 'use strict';
+const {once} = require('node:events');
 const assert=require('node:assert/strict');
 const {mkdtempSync,writeFileSync,rmSync}=require('node:fs');
 const path=require('node:path'),os=require('node:os'),net=require('node:net');
@@ -21,6 +22,9 @@ async function until(check){for(let attempt=0;attempt<150;attempt++){if(await ch
  });client.on('ready',()=>client.on('session',accept=>{const session=accept();session.on('pty',(acceptPty,_reject,info)=>{geometry=info;acceptPty?.()});session.on('window-change',(acceptResize,_reject,info)=>{resized=info;acceptResize?.()});session.on('shell',acceptShell=>{const stream=acceptShell();stream.write('\x1b[32mLocal SSH test shell ready\x1b[0m\r\n[testuser@login-test:~] $ ');stream.on('data',data=>{input+=data.toString();stream.write(data)});stream.on('close',()=>shellCloses++)});session.on('exec',(acceptExec,_reject,info)=>{const stream=acceptExec();if(info.command.includes('command -v sbatch')){stream.write('host=login-test\nuser=testuser\nslurm=yes\n');stream.exit(0);stream.end();return}stream.write('Scientific task running\n');stream.stderr.write('Progress: 100%\n');stream.exit(0);stream.end()})}))});
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));const port=server.address().port,userData=path.join(directory,'app data'),trust=new HostKeyTrustStore(path.join(userData,'ssh')),blob=Buffer.from(host.public.split(' ')[1],'base64');await trust.load();await trust.trust({host:'127.0.0.1',port,algorithm:'ssh-ed25519',fingerprint:'SHA256:'+createHash('sha256').update(blob).digest('base64').replace(/=+$/,''),publicKey:blob.toString('base64')});
  running=await launch({devMode:true,visible:false,userData,stateFile:path.join(directory,'state.json')});const {window,backend}=running;
+ const classicLoaded = once(window.webContents, 'did-finish-load');
+ require('electron').Menu.getApplicationMenu().getMenuItemById('classic-view').click();
+ await classicLoaded;
  const js=source=>window.webContents.executeJavaScript(source);
  await until(()=>js(`!!document.querySelector('.ssh-dev-launch')`));
  const duoProfile=await js(`window.signetDesktop.ssh.saveProfile(${JSON.stringify({name:'Local Duo test',host:'127.0.0.1',port,username:'testuser',auth:{method:'duo'}})})`);assert.equal(duoProfile.ok,true);

@@ -31,12 +31,14 @@ Python, its dependencies, Codex CLI when selected, and scientific prerequisites
 must still be installed. No scientific data, Python runtime or model credentials
 are bundled.
 
-### Workspace interface preview
+### Workspace
 
-Run `npm run workspace --prefix electron` to open the bilingual workspace design
-with simulated data, or choose **View → Workspace Preview** from the desktop app.
-The preview runs offline in its own window. File choices, connection checks, and
-chat actions stay in that preview session.
+The desktop opens directly to the bilingual workspace. The left chat uses the
+existing SIGNET Agent, model configuration, and saved conversations. Dataset
+choices, stage results, and run history in the new workspace use simulated data.
+
+Use **View → Classic Interface** for model and SSH setup, live Stage 6 results,
+and the development terminal. **View → Workspace** returns to the new interface.
 
 ## Development terminal
 
@@ -49,8 +51,8 @@ npm run dev --prefix electron -- --provider groq
 ```
 
 Quit an already-running SIGNET instance first; a second launch focuses the
-existing instance and does not change its mode. Before signing in, click
-**Dev terminal → Connection diagnostics** at the bottom right. Then use the
+existing instance and does not change its mode. Choose **View → Classic Interface**.
+Before signing in, click **Dev terminal → Connection diagnostics** at the bottom right. Then use the
 normal SSH controls to Connect; dev login/unlock dialogs also show the live log.
 
 - **Connection diagnostics** monitors local key unlock, system OpenSSH startup,

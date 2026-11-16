@@ -2,7 +2,13 @@
 const {readFile}=require('node:fs/promises');
 const path=require('node:path');
 const {localURL}=require('../security/policy.cjs');
+const pages = new Map([['/', 'workspace/index.html'], ['/classic', 'index.html']]);
 const assets=new Map([
+ ['/chat-markdown.js',['chat-markdown.js','text/javascript']],
+ ['/workspace/workspace.css',['workspace/workspace.css','text/css']],
+ ['/workspace/workspace.js',['workspace/workspace.js','text/javascript']],
+ ['/workspace/icons.js',['workspace/icons.js','text/javascript']],
+ ['/workspace/interaction.js',['workspace/interaction.js','text/javascript']],
  ['/renderer.js',['renderer.js','text/javascript']],
  ['/workspace.js',['workspace.js','text/javascript']],
  ['/chat.css',['chat.css','text/css']],
@@ -18,7 +24,7 @@ function createRendererHandler({origin,fetch,devMode=false,directory=path.join(_
  return async request=>{
   if(!localURL(request.url,origin))return new Response('Forbidden',{status:403});
   const url=new URL(request.url);
-  if(request.method!=='GET'||(url.pathname!=='/'&&!assets.has(url.pathname))){
+  if(request.method!=='GET'||(!pages.has(url.pathname)&&!assets.has(url.pathname))){
    if(!['GET','HEAD'].includes(request.method)){
     const suppliedOrigin=request.headers.get('Origin');
     if(suppliedOrigin&&suppliedOrigin!==origin)return new Response('Forbidden',{status:403});
@@ -32,12 +38,12 @@ function createRendererHandler({origin,fetch,devMode=false,directory=path.join(_
    return fetch(request,{bypassCustomProtocolHandlers:true});
   }
   try{
-   if(url.pathname==='/'){
+   if(pages.has(url.pathname)){
     const reply=await fetch(origin+'/bootstrap'+url.search,{bypassCustomProtocolHandlers:true});
     if(!reply.ok)return reply;
     const {token,model,initial}=await reply.json();
     pageToken=token;
-    const template=await readFile(path.join(directory,'index.html'),'utf8');
+    const template=await readFile(path.join(directory,pages.get(url.pathname)),'utf8');
     const values={__TOKEN__:escapeHtml(token),__MODEL__:escapeHtml(model),__INITIAL_CHAT__:JSON.stringify(initial).replace(/</g,'\\u003c')};
     return new Response(template.replace(/__TOKEN__|__MODEL__|__INITIAL_CHAT__/g,key=>values[key]),{headers:headers('text/html',devMode)});
    }

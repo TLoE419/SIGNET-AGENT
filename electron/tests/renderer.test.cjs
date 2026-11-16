@@ -14,9 +14,15 @@ test('Electron serves its renderer with escaped bootstrap data and strict produc
  assert.equal(calls[0].url,origin+'/bootstrap?new=1');
  assert.equal(calls[0].options.bypassCustomProtocolHandlers,true);
  assert.doesNotMatch(response.headers.get('content-security-policy'),/unsafe-inline/);
- assert.match(html,/\/renderer.js/);assert.doesNotMatch(html,/ssh-ui.js/);
- const script=await handler(new Request(origin+'/renderer.js'));
+ assert.match(html,/id="ml-composer"/);
+ assert.deepEqual(JSON.parse(html.match(/<script type="application\/json" id="initial-chat">(.*?)<\/script>/s)[1]), {
+  messages: [{text: '</script><img src=x>'}],
+ });
+ const script=await handler(new Request(origin+'/workspace/workspace.js'));
  assert.equal(script.status,200);assert.match(script.headers.get('content-type'),/javascript/);
+ const classic=await (await handler(new Request(origin+'/classic'))).text();
+ assert.match(classic,/\/renderer.js/);
+ assert.doesNotMatch(classic,/ssh-ui.js/);
 });
 test('renderer forwards streaming API requests without consuming their bodies and rejects foreign origins',async()=>{
  const request=new Request(origin+'/chat',{method:'POST',headers:{Origin:origin,'X-Chat-Token':'test'},body:'{"text":"question"}'});

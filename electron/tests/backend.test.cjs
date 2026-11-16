@@ -42,6 +42,7 @@ test('navigation and request policy reject other ports, schemes, credentials and
     assert.equal(localURL(url, origin), false, url);
   }
   assert.equal(navigationAllowed(origin + '/?session=abc', origin), true);
+  assert.equal(navigationAllowed(origin + '/classic?session=abc', origin), true);
   assert.equal(navigationAllowed(origin + '/stage6/file?name=result', origin), true);
   assert.equal(navigationAllowed(origin + '/chat', origin), false);
 });

@@ -57,7 +57,7 @@
     if(wasRunning && !running && data.proposals.at(-1)?.status!=='verified_completed') {tab='history';error(text('Visualization did not complete. The baseline is preserved; inspect the run history.', '視覺化尚未成功完成。基準結果仍保留，請查看執行紀錄。'));}
     if (running && !timer) timer = setInterval(refresh, 2500);
     if (!running && timer) {clearInterval(timer); timer = null;}
-    history.replaceState(null, '', '/?session=' + session);
+    history.replaceState(null, '', location.pathname + '?session=' + session);
     render();
   }
   async function action(path, payload) {
