@@ -129,7 +129,7 @@
       <div class="ml-nav-pane" data-nav-left="history" hidden>
         <div class="ml-nav-pane-title"><h3 id="ml-history-dataset-name" data-live-language>第 1 號染色體範例</h3><span data-en-text="Selected dataset">目前資料組</span></div>
         <div class="ml-nav-list" id="ml-run-list" aria-label="已保存的執行"></div>
-        <p class="ml-dataset-empty-note" id="ml-empty-run-list" data-en-text="No runs yet" hidden>尚無執行紀錄</p>
+        <p class="ml-dataset-empty-note" id="ml-empty-run-list" data-live-language role="status" hidden></p>
       </div>
       <div class="ml-nav-pane" data-nav-left="settings" hidden>
         <div class="ml-nav-pane-title"><h3>工作區設定</h3><span>原型預覽</span></div>
@@ -172,44 +172,12 @@
     <section class="ml-nav-workspace" data-nav-right="data" aria-label="輸入資料明細" hidden>
       <article class="ml-nav-detail" id="ml-input-genotype">
         <header class="ml-nav-detail-title"><i data-lucide="dna" aria-hidden="true"></i><h2>基因型資料</h2></header>
-        <div data-archived-input>
-          <h3 class="ml-input-archive-label" data-en-text="Archived run input">已保存執行的輸入</h3>
-          <dl class="ml-key-values">
-            <dt>原始檔案</dt><dd><code>example.ped</code><br><code>example.map</code></dd>
-            <dt>送算時的檔案</dt><dd><code>study.ped</code><br><code>study.map</code></dd>
-            <dt>原始樣本</dt><dd>563</dd>
-            <dt>第 1 階段保留的樣本</dt><dd>560</dd>
-            <dt>第 1 階段輸出的變異</dt><dd>2,983</dd>
-          </dl>
-          <button type="button" class="ml-nav-action" data-open-stage="1">查看第 1 階段</button>
-        </div>
       </article>
       <article class="ml-nav-detail" id="ml-input-expression" hidden>
         <header class="ml-nav-detail-title"><i data-lucide="table-2" aria-hidden="true"></i><h2>基因表現量資料</h2></header>
-        <div data-archived-input>
-          <h3 class="ml-input-archive-label" data-en-text="Archived run input">已保存執行的輸入</h3>
-          <dl class="ml-key-values">
-            <dt>輸入檔案</dt><dd><code>example_gexp</code></dd>
-            <dt>原始樣本</dt><dd>554</dd>
-            <dt>第 2 階段保留的樣本</dt><dd>554</dd>
-            <dt>第 2 階段輸出的基因</dt><dd>95</dd>
-          </dl>
-          <button type="button" class="ml-nav-action" data-open-stage="2">查看第 2 階段</button>
-        </div>
       </article>
       <article class="ml-nav-detail" id="ml-input-clinical" hidden>
         <header class="ml-nav-detail-title"><i data-lucide="clipboard-list" aria-hidden="true"></i><h2>臨床資料</h2></header>
-        <div data-archived-input>
-          <h3 class="ml-input-archive-label" data-en-text="Archived run input">已保存執行的輸入</h3>
-          <dl class="ml-key-values">
-            <dt>輸入檔案</dt><dd><code>official-demo-chr1-restart-clinical.tsv</code></dd>
-            <dt>資料來源</dt><dd>為示範分析整理的公開臨床資料</dd>
-            <dt>原始個體紀錄</dt><dd>522</dd>
-            <dt>初步配對</dt><dd>473</dd>
-            <dt>校正後保留</dt><dd>471</dd>
-          </dl>
-          <button type="button" class="ml-nav-action" data-open-stage="3">查看第 3 階段</button>
-        </div>
       </article>
       <template id="ml-current-files-template">
         <section class="ml-current-input">
@@ -254,8 +222,9 @@
     <section class="ml-nav-workspace" id="ml-run-details" aria-label="執行明細" hidden></section>
     <section class="ml-nav-workspace" id="ml-empty-history" aria-labelledby="ml-empty-history-title" hidden>
       <div class="ml-nav-detail">
-        <header class="ml-nav-detail-title"><i data-lucide="history" aria-hidden="true"></i><h2 id="ml-empty-history-title" data-en-text="No runs yet">尚無執行紀錄</h2></header>
-        <p class="ml-dataset-empty-note" data-en-text="Runs for the selected dataset will appear here.">這裡會顯示目前資料組的執行紀錄。</p>
+        <header class="ml-nav-detail-title"><i data-lucide="history" aria-hidden="true"></i><h2 id="ml-empty-history-title" data-live-language>尚無執行紀錄</h2></header>
+        <p class="ml-dataset-empty-note" id="ml-empty-history-note" data-live-language>這裡會顯示目前資料組的執行紀錄。</p>
+        <button type="button" id="ml-history-retry" class="ml-nav-action" data-en-text="Refresh run history" hidden>重新整理執行紀錄</button>
       </div>
     </section>
     <section class="ml-nav-workspace" id="ml-empty-analysis" aria-labelledby="ml-empty-analysis-title" hidden>
@@ -264,8 +233,6 @@
         <p class="ml-dataset-empty-note" data-en-text="Open Data to review the input files for this dataset.">可到「資料」檢查這組資料的輸入檔案。</p>
       </div>
     </section>
-    <script type="application/json" id="ml-saved-runs">[{"id":"official-example-chr1-20261111","date":"2026-11-11","jobs":[{"id":"59449045","start":"00:14:08","end":"00:42:32","cpu":8,"ram":32},{"id":"59449927","start":"00:44:40","end":"00:45:42","cpu":3,"ram":16},{"id":"59449940","start":"00:46:24","end":"00:47:26","cpu":3,"ram":16},{"id":"59449957","start":"00:47:57","end":"00:50:28","cpu":8,"ram":32},{"id":"59449990","start":"00:54:53","end":"01:03:56","cpu":2,"ram":16},{"id":"59450960","start":"01:04:38","end":"01:07:11","cpu":2,"ram":16}],"geno":[560,2983],"expression":[554,95],"matched":473,"adjusted":[471,1110],"cis":[156,35,15],"frequency":[394,337],"network":[95,731],"datasetId":"example-chr1","inputs":{"genotype":["study.ped","study.map"],"expression":"example_gexp","clinical":"official-demo-chr1-restart-clinical.tsv"}},{"id":"official-example-chr1-stage-cards-20261111","date":"2026-11-11","jobs":[{"id":"59452732","start":"01:25:30","end":"01:47:28","cpu":16,"ram":64},{"id":"59453869","start":"01:47:55","end":"01:48:56","cpu":3,"ram":16},{"id":"59454088","start":"01:49:41","end":"01:50:43","cpu":3,"ram":16},{"id":"59454201","start":"01:51:31","end":"01:54:03","cpu":8,"ram":32},{"id":"59454236","start":"01:54:45","end":"02:03:48","cpu":2,"ram":16},{"id":"59454368","start":"02:04:15","end":"02:07:23","cpu":2,"ram":16}],"geno":[560,2983],"expression":[554,95],"matched":473,"adjusted":[471,1112],"cis":[159,36,15],"frequency":[391,335],"network":[95,726],"datasetId":"example-chr1","inputs":{"genotype":["study.ped","study.map"],"expression":"example_gexp","clinical":"official-demo-chr1-restart-clinical.tsv"}},{"id":"official-example-chr1-english-20261111","date":"2026-11-11","jobs":[{"id":"59472053","start":"11:13:11","end":"11:28:46","cpu":16,"ram":64},{"id":"59476856","start":"11:30:46","end":"11:31:48","cpu":3,"ram":16},{"id":"59477055","start":"11:32:23","end":"11:33:26","cpu":3,"ram":16},{"id":"59477094","start":"11:33:54","end":"11:35:56","cpu":8,"ram":32},{"id":"59477376","start":"11:36:32","end":"11:45:05","cpu":2,"ram":16},{"id":"59478029","start":"11:45:42","end":"11:48:45","cpu":2,"ram":16}],"geno":[560,2983],"expression":[554,95],"matched":473,"adjusted":[471,1110],"cis":[155,35,14],"frequency":[372,334],"network":[95,706],"datasetId":"example-chr1","inputs":{"genotype":["study.ped","study.map"],"expression":"example_gexp","clinical":"official-demo-chr1-restart-clinical.tsv"}}]</script>
-    <script type="application/json" id="ml-run-edges">{"official-example-chr1-20261111":[["MEGF6","CYP4Z1",0.5,0.0],["MEGF6","LRRC40",0.5,0.0],["MEGF6","HSD17B7",0.5,0.0],["MEGF6","ATP1B1",1.0,0.0],["MEGF6","RABGAP1L",1.0,0.0],["MEGF6","LGALS8",0.5,0.0],["MEGF6","KDM1A",0.5,0.0],["MEGF6","GBP2",0.5,0.0],["MEGF6","C1orf159",1.0,0.373444624539445],["MEGF6","DAP3",0.5,0.0],["CHD5","MYSM1",1.0,-0.126503033055242],["CHD5","ABCD3",1.0,0.174922535752647],["CHD5","PGD",1.0,0.0],["MYSM1","LRRC40",1.0,0.274925935133582],["LRRC40","FRRS1",0.5,0.0],["ABCD3","MEGF6",0.5,-0.146241009080484],["FRRS1","PGD",1.0,0.0],["HSD17B7","MEGF6",1.0,0.129874449180318],["ATP1B1","RABGAP1L",1.0,0.0680704704001198],["PGD","KDM1A",1.0,0.00172745594572803],["C1orf159","MEGF6",1.0,0.292842608754999]],"official-example-chr1-stage-cards-20261111":[["MEGF6","CYP4Z1",0.5,0.0],["MEGF6","LRRC40",0.5,0.0],["MEGF6","HSD17B7",0.5,0.0],["MEGF6","ATP1B1",0.5,0.0],["MEGF6","KDM1A",0.5,0.0],["MEGF6","C1orf159",1.0,0.368443978174951],["MEGF6","DAP3",0.5,0.0],["CHD5","MYSM1",1.0,-0.123160572928125],["CHD5","ABCD3",1.0,0.170953748636747],["CHD5","PGD",1.0,0.0],["MYSM1","LRRC40",1.0,0.219989440171397],["LRRC40","FRRS1",0.5,0.0],["ABCD3","MEGF6",0.5,-0.150660186648427],["FRRS1","PGD",1.0,0.0],["HSD17B7","MEGF6",1.0,0.122773072469747],["ATP1B1","RABGAP1L",1.0,0.0376406556770439],["PGD","KDM1A",1.0,0.107248829004563],["C1orf159","MEGF6",1.0,0.30212624434984]],"official-example-chr1-english-20261111":[["MEGF6","CYP4Z1",0.5,0.0],["MEGF6","HSD17B7",0.5,0.0],["MEGF6","ATP1B1",1.0,0.0],["MEGF6","KDM1A",0.5,0.0],["MEGF6","C1orf159",1.0,0.366401780574142],["MEGF6","DAP3",0.5,0.0],["CHD5","MYSM1",1.0,-0.119056339277202],["CHD5","ABCD3",1.0,0.172441513468537],["CHD5","PGD",1.0,0.0],["MYSM1","LRRC40",1.0,0.211640254126925],["LRRC40","FRRS1",0.5,0.0],["ABCD3","MEGF6",0.5,-0.12986146474623],["FRRS1","PGD",0.5,0.0],["HSD17B7","MEGF6",1.0,0.13896395064525],["ATP1B1","RABGAP1L",1.0,0.0257047227464944],["PGD","KDM1A",0.5,0.130805640207893],["C1orf159","MEGF6",1.0,0.301102088002948]]}</script>
     <section class="ml-workspace" id="lens-stage6" data-selected-gene="" aria-labelledby="lens-stage6-title">
 
   <div class="ml-result-main">
@@ -311,7 +278,7 @@
       <dt data-s6-run-label data-live-language>執行</dt>
       <dd data-s6-run-value><select id="ml-stage6-run" aria-label="已完成的執行" data-en-aria-label="Completed run" disabled>
         <option value="">選擇執行</option>
-      </select></dd>
+      </select><span id="ml-stage6-history-run" hidden></span></dd>
       <dt>圖中範圍</dt><dd class="s6-graph-meta"></dd>
     </dl>
   <div class="s6-selection">
@@ -320,6 +287,7 @@
     <div class="s6-summary" aria-live="polite" data-live-language>點選基因查看相連的調控關係。</div>
     <button class="s6-reset" data-s6-clear type="button" hidden>清除選取</button>
   </div>
+    <button type="button" id="ml-stage6-back" class="ml-nav-action" data-run-back data-en-text="Back to run timeline" hidden>回到執行時間線</button>
   </aside>
 
 </section>

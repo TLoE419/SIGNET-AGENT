@@ -42,15 +42,13 @@ process.env.PATH = [temporary, process.env.PATH].filter(Boolean).join(path.delim
 process.env.SIGNET_WORKSPACE_TEST_CAPTURE = captureFile;
 
 const archiveDir = path.resolve(__dirname, '../../data/stage6-results');
-const useArchivedRun = process.argv.includes('--archived-run');
-let fixtureDir;
-const stage6Example = useArchivedRun
-  ? {run: 'official-example-chr1-20261111', connections: 731, genes: 95, incident: 13}
-  : {connections: 4, genes: 4, incident: 3, pairs: [['ABCD3', 'MEGF6'], ['MEGF6', 'ABCD3'], ['MEGF6', 'LRRC40']]};
+const datasetDir = path.resolve(archiveDir, '../datasets');
+const useArchivedRuns = process.argv.includes('--archived-run');
+const fixturePaths = [];
 
 function cleanup() {
   clearTimeout(deadline);
-  if (fixtureDir) rmSync(fixtureDir, {recursive: true, force: true});
+  for (const fixture of fixturePaths.reverse()) rmSync(fixture, {recursive: true, force: true});
   rmSync(temporary, {recursive: true, force: true});
 }
 
@@ -63,49 +61,90 @@ function fail(error) {
 const deadline = setTimeout(() => fail(Error('Workspace startup and chat test timed out')), 45000);
 app.on('will-quit', cleanup);
 
-try {
-  if (!useArchivedRun) {
-    mkdirSync(archiveDir, {recursive: true});
-    fixtureDir = mkdtempSync(path.join(archiveDir, 'workspace-test-'));
-    stage6Example.run = path.basename(fixtureDir);
-    const {run, connections, genes} = stage6Example;
-    writeFileSync(path.join(fixtureDir, 'verification.json'), JSON.stringify({
-      run,
-      jobs: {visualize: {state: 'completed', settings: {freq: '0.45', ntop: '1'}}},
+function createHistoryFixture() {
+  const name = path.basename(temporary);
+  const groups = [
+    {id: name + '-a', name: ['測試資料甲', 'Test dataset A'], inputs: {genotype: ['current-a.ped'], expression: ['current-a-expression'], clinical: []}},
+    {id: name + '-b', name: ['測試資料乙', 'Test dataset B'], inputs: {genotype: ['current-b.ped'], expression: [], clinical: []}},
+  ];
+  mkdirSync(datasetDir, {recursive: true});
+  mkdirSync(archiveDir, {recursive: true});
+  for (const dataset of groups) {
+    const filename = path.join(datasetDir, dataset.id + '.json');
+    writeFileSync(filename, JSON.stringify(dataset), {flag: 'wx'});
+    fixturePaths.push(filename);
+  }
+
+  const examples = [
+    {group: 0, pairs: [['MEGF6', 'LRRC40'], ['ABCD3', 'MEGF6'], ['MEGF6', 'ABCD3'], ['LRRC40', 'CLK2']]},
+    {group: 0, pairs: [['MEGF6', 'CYP4Z1'], ['CHD5', 'CYP4Z1']]},
+    {group: 1, pairs: [['MEGF6', 'PGD'], ['PGD', 'MEGF6']]},
+  ];
+  const runs = examples.map(({group, pairs}, index) => {
+    const run_id = name + '-run-' + index;
+    const snapshot = {
+      run_id, dataset_id: groups[group].id, name: ['封存執行 ' + index, 'Saved run ' + index],
+      inputs: {
+        genotype: ['archived-' + index + '.ped', 'archived-' + index + '.map'],
+        expression: ['archived-expression-' + index],
+        clinical: ['archived-clinical-' + index + '.tsv'],
+      },
+    };
+    const genes = new Set(pairs.flat()).size;
+    const connections = pairs.length;
+    const folder = path.join(archiveDir, run_id);
+    mkdirSync(folder);
+    fixturePaths.push(folder);
+    writeFileSync(path.join(folder, 'history.json'), JSON.stringify(snapshot));
+    writeFileSync(path.join(folder, 'verification.json'), JSON.stringify({
+      run: run_id,
+      jobs: {visualize: {state: 'completed', settings: {freq: '0.45', ntop: '1'},
+        submitted_at: '2026-11-11T01:04:38-0800', finished_at: '2026-11-11T01:07:11-0800'}},
       graph: {connections, genes, subnetworks: 1, displayed: 1},
     }));
-    writeFileSync(path.join(fixtureDir, 'signet_edgelist_0.45.txt'), [
+    writeFileSync(path.join(folder, 'signet_edgelist_0.45.txt'), [
       'source_gene_symbol,target_gene_symbol,frequency,coefficient',
-      'MEGF6,LRRC40,0.5,0.1',
-      'ABCD3,MEGF6,1,-0.2',
-      'MEGF6,ABCD3,1,0.03',
-      'LRRC40,CLK2,0.5,0.25',
+      ...pairs.map(pair => [...pair, 0.5, -0.2].join(',')),
       '',
     ].join('\n'));
-  }
+    const incidentPairs = pairs.filter(pair => pair.includes('MEGF6'));
+    return {...snapshot, genes, connections, incident: incidentPairs.length, incidentPairs};
+  });
+  return {groups, runs};
+}
+
+function readArchivedHistory() {
+  const read = filename => JSON.parse(readFileSync(filename, 'utf8'));
+  const groups = ['example-chr1', 'simulated-cohort-b'].map(id => read(path.join(datasetDir, id + '.json')));
+  const runs = [
+    ['official-example-chr1-20261111', 731, 13],
+    ['official-example-chr1-stage-cards-20261111', 726, 10],
+    ['official-example-chr1-english-20261111', 706, 9],
+  ].map(([run_id, connections, incident]) => ({
+    ...read(path.join(archiveDir, run_id, 'history.json')), genes: 95, connections, incident,
+  }));
+  return {groups, runs};
+}
+
+let history;
+try {
+  history = useArchivedRuns ? readArchivedHistory() : createHistoryFixture();
 } catch (error) { fail(error); }
 
-async function verifyWorkspace({run, connections, genes, incident, pairs}) {
+async function verifyWorkspace({groups, runs}) {
   const find = selector => {
     const element = document.querySelector(selector);
     if (!element) throw new Error(`Workspace is missing ${selector}`);
     return element;
   };
-  const click = selector => find(selector).click();
-  const go = view => click(`[data-nav-target="${view}"]`);
-  const visible = selector => Boolean(find(selector).getClientRects().length);
-  const countRows = selector => find(selector).querySelectorAll('tbody tr').length;
-  const selectDataset = value => {
-    const menu = find('#ml-dataset-select');
-    menu.value = value;
-    menu.dispatchEvent(new Event('change', {bubbles: true}));
+  const click = selector => {
+    const element = find(selector);
+    if (element instanceof HTMLElement) element.click();
+    else element.dispatchEvent(new MouseEvent('click', {bubbles: true}));
   };
+  const go = view => click(`[data-nav-target="${view}"]`);
   const check = (condition, message) => { if (!condition) throw new Error(message); };
-  const activeFiles = () => find('#ml-input-genotype [data-current-files]').textContent;
-  const archive = '#ml-run-1 .ml-run-inputs';
-  const archiveFiles = () => [...find(archive).querySelectorAll('code')].map(file => file.textContent);
-  const selectGene = panel => find(`${panel} [data-gene="MEGF6"]`).dispatchEvent(new MouseEvent('click', {bubbles: true}));
-
+  const visible = selector => Boolean(find(selector).getClientRects().length);
   const waitFor = async (condition, description) => {
     const end = Date.now() + 10000;
     while (!condition()) {
@@ -113,81 +152,107 @@ async function verifyWorkspace({run, connections, genes, incident, pairs}) {
       await new Promise(resolve => setTimeout(resolve, 25));
     }
   };
+  const datasetPicker = find('#ml-dataset-select');
   const stage6 = find('#lens-stage6');
   const resultPicker = find('#ml-stage6-run');
-  click('#ml-stage-tab');
-  click('[data-stage="6"]');
-  await waitFor(() => [...resultPicker.options].some(option => option.value === run), 'Completed run was not listed');
-  check(resultPicker.value === '' && stage6.dataset.runState === 'choose', 'Stage 6 should wait for the reader to select a run');
-  check(!stage6.querySelector('[data-gene]') && countRows('#lens-stage6') === 0, 'Unselected Stage 6 showed a network or edges');
+  const selectDataset = id => {
+    datasetPicker.value = id;
+    datasetPicker.dispatchEvent(new Event('change', {bubbles: true}));
+  };
+  const resultIds = () => [...resultPicker.options].map(option => option.value).filter(Boolean).sort();
+  const historyIds = () => [...document.querySelectorAll('#ml-run-list [data-run-target]')]
+    .filter(button => button.getClientRects().length).map(button => button.dataset.runTarget).sort();
+  const countRows = () => stage6.querySelectorAll('tbody tr').length;
+  const expectedList = group => runs.filter(run => run.dataset_id === group.id);
+  const stageButton = (stage) => `[data-stage="${stage}"]`;
+  function showStage(stage) {
+    if (!visible(stageButton(stage))) click('#ml-stage-tab');
+    click(stageButton(stage));
+  }
 
-  resultPicker.value = run;
-  resultPicker.dispatchEvent(new Event('change', {bubbles: true}));
-  await waitFor(() => stage6.dataset.runState === 'ready', 'Selected Stage 6 result did not load');
-  check(stage6.querySelectorAll('[data-gene]').length === genes, 'The graph did not render the selected run genes');
-  check(visible('#lens-stage6 [data-gene="MEGF6"]') && countRows('#lens-stage6') === connections,
-    'The graph or table did not display the selected run connections');
+  await waitFor(() => [...datasetPicker.options].some(option => option.value === groups[0].id),
+    'Dataset catalog failed to load');
+  for (const group of groups) {
+    const groupRuns = expectedList(group);
+    const runIds = groupRuns.map(run => run.run_id).sort();
+    go('data');
+    selectDataset(group.id);
+    check(datasetPicker.value === group.id, 'Could not select dataset ' + group.id);
+    const current = find('#ml-input-genotype [data-current-files]').textContent;
+    check(group.inputs.genotype.every(file => current.includes(file)), 'Dataset showed the wrong current files');
+    if (group.id === 'example-chr1') {
+      click('#ml-input-genotype [data-input-replace]');
+      click('#ml-file-picker input[value="1"]');
+      click('[data-input-apply]');
+      check(find('#ml-input-genotype [data-current-files]').textContent.includes('study-qc-preview.ped'),
+        'Could not select alternate draft files to test the saved history');
+    }
+    check(JSON.stringify(resultIds()) === JSON.stringify(runIds), 'Stage 6 picker showed another dataset’s runs');
 
-  selectGene('#lens-stage6');
-  const selectedPairs = [...stage6.querySelectorAll('tbody tr')].map(row => [row.cells[0].textContent, row.cells[1].textContent]);
-  check(visible('#lens-stage6 .ml-result-table') && selectedPairs.length === incident &&
-    selectedPairs.every(pair => pair.includes('MEGF6')),
-    'MEGF6 filtering did not retain exactly the incident edges');
-  if (pairs) check(JSON.stringify(selectedPairs.sort()) === JSON.stringify(pairs.sort()),
-    'MEGF6 filtering lost or replaced a directed edge');
-  click('[data-stage="3"]');
-  check(visible('#lens-stage3') && !visible('#lens-stage6'), 'Stage 3 did not show its PCA result');
-  click('[data-stage="6"]');
-  check(visible('#lens-stage6') && resultPicker.value === run && stage6.dataset.selectedGene === 'MEGF6' &&
-    countRows('#lens-stage6') === incident, 'Stage 6 lost its selected run or gene');
+    go('history');
+    check(JSON.stringify(historyIds()) === JSON.stringify(runIds), 'History showed another dataset’s runs');
+    if (!groupRuns.length) {
+      check(visible('#ml-empty-history') && !visible('#lens-stage6'), 'The unused dataset inherited a result');
+      continue;
+    }
+
+    for (const run of groupRuns) {
+      click(`[data-run-target="${run.run_id}"]`);
+      const detail = `#ml-run-${run.run_id}`;
+      const archive = find(`${detail} .ml-run-inputs`);
+      if (!archive.open) archive.querySelector('summary').click();
+      const names = [...archive.querySelectorAll('code')].map(file => file.textContent);
+      const original = ['genotype', 'expression', 'clinical'].flatMap(kind => run.inputs[kind]);
+      check(visible(detail) && JSON.stringify(names) === JSON.stringify(original),
+        'Run did not show its own saved input files: ' + run.run_id);
+
+      click(`[data-run-network="${run.run_id}"]`);
+      await waitFor(() => stage6.dataset.runState === 'ready' && stage6.dataset.runId === run.run_id,
+        'Could not load Stage 6 from history: ' + run.run_id);
+      check(visible('#lens-stage6') && stage6.querySelectorAll('[data-gene]').length === run.genes &&
+        countRows() === run.connections, 'History did not open the selected run’s graph and table');
+      click('#lens-stage6 [data-gene="MEGF6"]');
+      const selected = [...stage6.querySelectorAll('tbody tr')].map(row => [row.cells[0].textContent, row.cells[1].textContent]);
+      check(selected.length === run.incident && selected.every(pair => pair.includes('MEGF6')),
+        'MEGF6 did not filter to the selected run’s edges');
+      if (run.incidentPairs) {
+        check(JSON.stringify(selected.sort()) === JSON.stringify(run.incidentPairs.sort()),
+          'A selected run lost or replaced a directed edge');
+      }
+      click('#lens-stage6 [data-run-back]');
+      check(visible(detail) && !visible('#lens-stage6'), 'Back from Stage 6 did not restore the run detail');
+    }
+  }
 
   go('data');
-  click('#ml-input-genotype [data-input-replace]');
-  click('#ml-file-picker input[value="1"]');
-  click('[data-input-apply]');
-  check(activeFiles().includes('study-qc-preview.ped'), 'The replacement was not applied');
-
-  go('history');
-  click('[data-run-target="1"]');
-  click(`${archive} summary`);
-  const savedInputs = ['study.ped', 'study.map', 'example_gexp', 'official-demo-chr1-restart-clinical.tsv'];
-  check(visible(archive) && JSON.stringify(archiveFiles()) === JSON.stringify(savedInputs), 'The archived files were altered');
-  click('[data-run-network="1"]');
-  selectGene('#ml-run-network-1');
-  check(visible('#ml-run-network-1') && countRows('#ml-run-network-1') === 10, 'Stage-progress rerun returned the wrong edges');
-  click('[data-run-target="2"]');
-  click('[data-run-network="2"]');
-  selectGene('#ml-run-network-2');
-  check(visible('#ml-run-network-2') && countRows('#ml-run-network-2') === 9, 'English rerun returned the wrong edges');
-
-  go('data');
-  selectDataset('simulated-cohort-b');
-  check(activeFiles().includes('cohort-b.ped'), 'Switching datasets did not replace the active file list');
-  go('history');
-  check(visible('#ml-empty-history') && !visible('#ml-run-network-2'), 'The second dataset inherited run history');
+  selectDataset(groups[0].id);
   go('analysis');
-  click('#ml-stage-tab');
-  check(visible('#ml-empty-analysis') && visible('#ml-empty-stage') && !visible('#lens-stage6'), 'The second dataset inherited an analysis result');
+  showStage(6);
+  const first = runs.find(run => run.dataset_id === groups[0].id);
+  resultPicker.value = first.run_id;
+  resultPicker.dispatchEvent(new Event('change', {bubbles: true}));
+  await waitFor(() => stage6.dataset.runId === first.run_id && stage6.dataset.runState === 'ready',
+    'Stage 6 picker did not reopen the original run');
+  if (stage6.dataset.selectedGene !== 'MEGF6') click('#lens-stage6 [data-gene="MEGF6"]');
+  if (groups[0].id === 'example-chr1') {
+    showStage(3);
+    check(visible('#lens-stage3') && !visible('#lens-stage6'), 'Stage 3 did not show its result');
+    showStage(6);
+    check(visible('#lens-stage6') && stage6.dataset.runId === first.run_id &&
+      stage6.dataset.selectedGene === 'MEGF6' && countRows() === first.incident, 'Stage 6 lost the selected run or gene');
+  } else {
+    check(!visible(stageButton(3)), 'Another dataset inherited the example Stage 3 preview');
+  }
 
   go('data');
   click('#ml-dataset-add');
-  find('#ml-dataset-name').value = 'Third preview dataset';
+  find('#ml-dataset-name').value = 'Third workspace dataset';
   click('#ml-dataset-create');
-  check(find('#ml-dataset-select').selectedOptions[0]?.textContent === 'Third preview dataset' &&
-    activeFiles().includes('尚未選擇檔案'), 'A new dataset was not selected with empty inputs');
+  check(datasetPicker.selectedOptions[0]?.textContent === 'Third workspace dataset', 'New dataset was not selected');
   click('#ml-language');
-  check(find('#ml-dataset-select').options.length === 3 &&
-    find('#ml-dataset-select').selectedOptions[0]?.textContent === 'Third preview dataset' &&
-    activeFiles().includes('No files selected'), 'Changing language lost the new dataset');
-
-  selectDataset('example-chr1');
-  check(activeFiles().includes('study-qc-preview.ped'), 'Revisiting the example lost its pending files');
+  check(datasetPicker.selectedOptions[0]?.textContent === 'Third workspace dataset', 'Language change lost the new dataset');
   go('history');
-  click('[data-run-target="1"]');
-  check(visible(archive) && JSON.stringify(archiveFiles()) === JSON.stringify(savedInputs), 'Revisiting the archive changed its filenames');
-  click('[data-run-network="1"]');
-  check(countRows('#ml-run-network-1') === 10 && find('#ml-run-network-1 .s6-row-count').textContent === '10 edges',
-    'The English interface did not retain the rerun selection');
+  check(!historyIds().length && visible('#ml-empty-history') && !resultIds().length, 'New dataset inherited saved runs');
 }
 
 async function verifyChat({existingMessage, existingActivity, firstMessage, nextMessage}) {
@@ -280,8 +345,8 @@ app.once('browser-window-created', (_event, window) => {
       assert.deepEqual(stored.histories[stored.active_session].map(message => message.parts[0].text),
         [firstMessage, 'Provider replied to: ' + firstMessage, nextMessage, 'Provider replied to: ' + nextMessage]);
       assert.deepEqual(stored.events[existingSession], [[existingActivity]]);
-      await window.webContents.executeJavaScript(`(${verifyWorkspace.toString()})(${JSON.stringify(stage6Example)})`);
-      console.log(`PASS: unchanged workspace geometry, Agent chat, datasets, demo run history, and Stage 6 saved result (${stage6Example.connections} edges, ${stage6Example.incident} incident to MEGF6)`);
+      await window.webContents.executeJavaScript(`(${verifyWorkspace.toString()})(${JSON.stringify(history)})`);
+      console.log(`PASS: workspace geometry, Agent chat, scoped dataset history, frozen inputs, and Stage 6 (${history.runs.map(run => `${run.connections}/${run.incident}`).join(', ')} total/MEGF6 edges)`);
       window.close();
     } catch (error) { fail(error); }
   }));

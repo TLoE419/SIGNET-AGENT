@@ -46,36 +46,37 @@
   fitApp(root.getBoundingClientRect().width);
   new ResizeObserver(([entry]) => fitApp(entry.contentRect.width)).observe(root);
   const byId = (id) => root.querySelector("#ml-" + id);
-  // File selections edit a dataset's draft; saved run inputs are execution-time snapshots.
-  const savedRuns = JSON.parse(byId("saved-runs").textContent);
-  const simulatedFiles = {
-    genotype: [["cohort-b.ped", "cohort-b.map"], ["cohort-b-reviewed.ped", "cohort-b-reviewed.map"]],
-    expression: [["cohort-b-expression.tsv"], ["cohort-b-expression-review.tsv"]],
-    clinical: [["cohort-b-clinical.tsv"], ["cohort-b-clinical-review.tsv"]],
-  };
-  const datasets = [
-    {
-      id: "example-chr1",
-      name: ["第 1 號染色體範例", "Chromosome 1 example"],
-      folder: "/demo/signet/chr1",
-      files: {
-        genotype: [["study.ped", "study.map"], ["study-qc-preview.ped", "study-qc-preview.map"]],
-        expression: [["example_gexp"], ["expression-review.tsv"]],
-        clinical: [["official-demo-chr1-restart-clinical.tsv"], ["clinical-review.tsv"]],
-      },
-      selections: { genotype: 0, expression: 0, clinical: 0 },
-    },
-    {
-      id: "simulated-cohort-b",
-      name: ["模擬資料組 B", "Simulated dataset B"],
-      folder: "/demo/signet/cohort-b",
-      files: simulatedFiles,
-      selections: { genotype: 0, expression: 0, clinical: 0 },
-    },
+  const inputTypes = [
+    ["genotype", "基因型資料", "Genotype data"],
+    ["expression", "基因表現量資料", "Gene expression data"],
+    ["clinical", "臨床資料", "Clinical data"],
   ];
-  let activeDataset = datasets[0];
+  const draftAlternatives = {
+    "example-chr1": {
+      genotype: ["study-qc-preview.ped", "study-qc-preview.map"],
+      expression: ["expression-review.tsv"],
+      clinical: ["clinical-review.tsv"],
+    },
+    "simulated-cohort-b": {
+      genotype: ["cohort-b-reviewed.ped", "cohort-b-reviewed.map"],
+      expression: ["cohort-b-expression-review.tsv"],
+      clinical: ["cohort-b-clinical-review.tsv"],
+    },
+  };
+  function makeDataset({id, name, folder = "", inputs = {}}, draft = false) {
+    const files = Object.fromEntries(inputTypes.map(([key]) =>
+      [key, [inputs[key] ?? [], draftAlternatives[draft ? "simulated-cohort-b" : id]?.[key] ?? []]]));
+    const selections = Object.fromEntries(inputTypes.filter(([key]) => files[key][0].length)
+      .map(([key]) => [key, 0]));
+    return {id, name, folder, files, selections, draft};
+  }
+  const datasets = [];
+  let activeDataset = makeDataset({id: "", name: ["", ""]});
+  let historyRuns = [];
+  let historyState = "loading";
+  let historyNetworkRun = "";
   const localDatasetName = (dataset) => dataset.name[root.lang === "en" ? 1 : 0];
-  const runsForDataset = () => savedRuns.filter((run) => run.datasetId === activeDataset.id);
+  const runsForDataset = () => historyRuns.filter((run) => run.dataset_id === activeDataset.id);
   const tabs = [byId("agent-tab"), byId("stage-tab")];
   function selectTab(activeTab) {
     for (const tab of tabs) {
@@ -126,12 +127,13 @@
       const files = activeDataset.files[input.type][selection] ?? [];
       input.paths.replaceChildren(...files.map((file) => {
         const path = document.createElement("code");
-        path.textContent = `${activeDataset.folder}/${file}`;
+        path.textContent = file;
         return path;
       }));
       const none = root.lang === "en" ? "No files selected" : "尚未選擇檔案";
       if (!files.length) input.paths.textContent = none;
-      input.caption.textContent = files.length ? files.join(" · ") : none;
+      input.caption.textContent = files.length ? files.map((file) => file.split("/").at(-1)).join(" · ") : none;
+      input.replaceButton.disabled = !activeDataset.files[input.type].some((option) => option.length);
       input.resetButton.disabled = selection === 0 || selection === undefined;
     }
 
@@ -173,15 +175,18 @@
         activeInput = input;
         const selection = activeDataset.selections[input.type];
         for (const [index, radio] of radios.entries()) {
+          const files = activeDataset.files[input.type][index];
           radio.checked = index === selection;
-          optionPaths[index].textContent = activeDataset.files[input.type][index].join(" · ");
+          radio.disabled = !files.length;
+          radio.closest("label").hidden = !files.length;
+          optionPaths[index].textContent = files.join(" · ");
         }
         directory.textContent = activeDataset.folder;
         applyButton.disabled = selection === undefined;
         input.current.after(picker);
         picker.hidden = false;
         input.replaceButton.setAttribute("aria-expanded", "true");
-        radios[selection ?? 0].focus({ preventScroll: true });
+        (radios[selection] ?? radios.find((radio) => !radio.disabled))?.focus({ preventScroll: true });
       });
       input.resetButton.addEventListener("click", () => {
         if (activeInput === input) closePicker();
@@ -204,7 +209,7 @@
       event.preventDefault();
       closePicker();
     });
-    for (const button of root.querySelectorAll("[data-nav-target], [data-open-stage]")) {
+    for (const button of root.querySelectorAll("[data-nav-target]")) {
       button.addEventListener("click", () => closePicker(false));
     }
     return (datasetChanged = false) => {
@@ -398,7 +403,6 @@
     ["送出時間", "Submitted"],
     ["完成時間", "Finished"],
     ["分配資源", "Allocated resources"],
-    ["開啟第 6 階段結果選擇器", "Open the Stage 6 result picker"],
     ["助理", "Agent"],
     ["對話", "Conversation"],
     ["新增對話", "New conversation"],
@@ -660,14 +664,7 @@
     });
   }
 
-  const networkNodes = {
-    ABCD3: [17, 33], HSD17B7: [35, 14], C1orf159: [15, 65], MEGF6: [36, 45],
-    LRRC40: [54, 23], ATP1B1: [58, 67], RABGAP1L: [54, 90], CHD5: [64, 42],
-    MYSM1: [72, 15], PGD: [82, 58], FRRS1: [86, 78], CYP4Z1: [18, 12],
-    GBP2: [15, 86], KDM1A: [35, 78], LGALS8: [88, 31], DAP3: [75, 94]
-  };
-
-  function mountNetwork(stage, initialNodes, initialEdges, { simulated = true } = {}) {
+  function mountNetwork(stage) {
     const zoom = stage.querySelector(".s6-zoom input");
     const frame = stage.querySelector(".s6-graph-frame");
     function updateZoom() {
@@ -765,8 +762,8 @@
     function updateReadout(gene, matched) {
       const inEnglish = stage.closest("[lang]").lang === "en";
       graphMeta.textContent = inEnglish
-        ? `${nodeElements.length} genes · ${edges.length} edges${simulated ? " shown" : ""}`
-        : `${simulated ? "節錄 " : ""}${nodeElements.length} 個基因 · ${edges.length} 條連線`;
+        ? `${nodeElements.length} genes · ${edges.length} edges`
+        : `${nodeElements.length} 個基因 · ${edges.length} 條連線`;
       for (const node of nodeElements) {
         const { gene: label } = node.dataset;
         node.setAttribute("aria-label", inEnglish ? `View connections for ${label}` : `查看 ${label} 的調控關係`);
@@ -849,123 +846,99 @@
       const gene = stage.dataset.selectedGene || null;
       updateReadout(gene, edgesFor(gene));
     });
-    setNetwork(initialNodes, initialEdges);
+    setNetwork({}, []);
     return setNetwork;
   }
 
-  const edgesByRun = JSON.parse(byId("run-edges").textContent);
-  const runNames = ["本原型使用的執行", "重跑 · 階段進度驗證", "重跑 · 英文展示"];
   const runList = byId("run-list");
   const runDetails = byId("run-details");
-  const localNumber = (value) => countLabel.format(value);
   const networkOutput = ([genes, edges]) => [
     `${genes} 個基因 · ${edges} 條連線`,
     `${genes} genes · ${edges} edges`,
   ];
-  function jobDetails(job, settings, output, englishOutput) {
+  const historySteps = ["genotype", "expression", "adjust", "cis", "network", "visualize"];
+  const escapeHistory = (value) => String(value ?? "").replace(/[&<>"']/g, (char) =>
+    ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"})[char]);
+  const historyText = (chinese, english) =>
+    `<span data-history-zh="${escapeHistory(chinese)}" data-history-en="${escapeHistory(english)}"></span>`;
+  const historyLabel = (chinese) => historyText(chinese, englishLabel(chinese));
+  const clockTime = (value) => value?.match(/T(\d{2}:\d{2}:\d{2})/)?.[1] ?? "";
+  const fullTime = (value) => value?.replace("T", " ").replace(/([+-]\d{2})(\d{2})$/, " $1:$2") ?? "";
+  const notRecorded = () => historyText("未記錄", "Not recorded");
+
+  function historyJobDetails(job) {
+    const settings = Object.entries({...job.settings, ...job.options});
+    const fields = [
+      ["工作編號", job.job_id],
+      ["送出時間", fullTime(job.submitted_at)],
+      ["完成時間", fullTime(job.finished_at)],
+    ];
+    const {cpus, mem_gb: memory} = job.resources ?? {};
+    const resources = cpus && memory ? historyText(`${cpus} 核心 · ${memory} GB`, `${cpus} cores · ${memory} GB`) : notRecorded();
     return `<dl class="ml-key-values">
-      <dt>工作編號</dt><dd>${job.id}</dd>
-      <dt>送出時間</dt><dd>${job.start}</dd>
-      <dt>完成時間</dt><dd>${job.end}</dd>
-      <dt>分配資源</dt><dd data-en-text="${job.cpu} cores · ${job.ram} GB">${job.cpu} 核心 · ${job.ram} GB</dd>
-      <dt>設定</dt><dd>${settings}</dd>
-      <dt>輸出</dt><dd data-en-text="${englishOutput}">${output}</dd>
+      ${fields.map(([label, value]) => `<dt>${historyLabel(label)}</dt><dd>${value ? escapeHistory(value) : notRecorded()}</dd>`).join("")}
+      <dt>${historyLabel("分配資源")}</dt><dd>${resources}</dd>
+      <dt>${historyLabel("設定")}</dt><dd>${settings.length ? settings.map(([key, value]) =>
+        `<code>${escapeHistory(key)} = ${escapeHistory(typeof value === "object" ? JSON.stringify(value) : value)}</code>`).join("<br>") : notRecorded()}</dd>
     </dl>`;
   }
-  const analysisNetwork = root.querySelector("#lens-stage6");
-  const historyNetworks = savedRuns.map((run, index) => {
-    const panel = analysisNetwork.cloneNode(true);
-    panel.id = `ml-run-network-${index}`;
-    panel.className = "ml-nav-workspace ml-history-network";
-    panel.hidden = true;
-    for (const style of panel.querySelectorAll("style")) style.remove();
-    const sourceLabel = panel.querySelector("[data-s6-run-label]");
-    sourceLabel.removeAttribute("data-live-language");
-    sourceLabel.textContent = "資料";
-    panel.querySelector("[data-s6-run-value]").textContent = "第 1 號染色體 · 模擬結果節錄";
-    panel.querySelector(".s6-result-status").remove();
-    panel.querySelector("#ml-stage6-retry").remove();
-    for (const element of panel.querySelectorAll("[id]")) element.id = panel.id + "-" + element.id;
-    for (const element of [panel, ...panel.querySelectorAll("[aria-labelledby]")]) {
-      element.setAttribute("aria-labelledby", panel.id + "-" + element.getAttribute("aria-labelledby"));
-    }
 
-    const [fullOutput, englishFullOutput] = networkOutput(run.network);
-    const lastJob = run.jobs.at(-1);
-    panel.querySelector(".ml-result-context").insertAdjacentHTML("beforeend",
-      `<dt>執行</dt><dd>${runNames[index]}<br><time datetime="${run.date}T${lastJob.end}-08:00">${run.date} · ${lastJob.end}</time></dd>`);
-    panel.querySelector(".ml-result-inspector").insertAdjacentHTML("beforeend", `
-      <button type="button" class="ml-nav-action" data-run-back="${index}">回到執行時間線</button>
-      <details class="s6-run-job"><summary>執行明細</summary>
-        ${jobDetails(lastJob, stageData.at(-1).settings, fullOutput, englishFullOutput)}
-      </details>`);
-    analysisNetwork.before(panel);
-    const edges = edgesByRun[run.id];
-    const presentGenes = new Set(edges.flatMap(([source, target]) => [source, target]));
-    const nodes = Object.fromEntries(Object.entries(networkNodes).filter(([gene]) => presentGenes.has(gene)));
-    mountNetwork(panel, nodes, edges);
-    return panel;
-  });
-  const setLiveNetwork = mountNetwork(analysisNetwork, {}, [], {simulated: false});
-
-  runList.innerHTML = savedRuns.map((run, index) => `
-    <button class="ml-nav-list-item" type="button" data-run-target="${index}" aria-controls="ml-run-${index}" aria-pressed="${index === 0}">
-      <i data-lucide="circle-check" aria-hidden="true"></i>
-      <span><strong>${runNames[index]}</strong><small>${run.date} · ${run.jobs[0].start}</small></span>
-    </button>`).reverse().join("");
-  runDetails.innerHTML = savedRuns.map((run, index) => {
-    const [samples, variants] = run.geno.map(localNumber);
-    const [expressionSamples, expressionGenes] = run.expression.map(localNumber);
-    const [retained, adjustedVariants] = run.adjusted.map(localNumber);
-    const [common, low, rare] = run.cis.map(localNumber);
-    const [half, full] = run.frequency.map(localNumber);
-    const [genes, edges] = run.network.map(localNumber);
-    const outputPairs = [
-      [`${samples} 個樣本 × ${variants} 個變異`, `${samples} samples × ${variants} variants`],
-      [`${expressionSamples} 個樣本 × ${expressionGenes} 個基因`, `${expressionSamples} samples × ${expressionGenes} genes`],
-      [`配對 ${run.matched} 位 · 保留 ${retained} 位和 ${adjustedVariants} 個變異`, `${run.matched} matched · ${retained} individuals and ${adjustedVariants} variants retained`],
-      [`常見 ${common} 筆 · 低頻 ${low} 筆 · 罕見 ${rare} 筆`, `${common} common, ${low} low-frequency and ${rare} rare pairs`],
-      [`${half} 條連線出現 1 次 · ${full} 條出現 2 次`, `${half} edges in 1 run · ${full} in 2 runs`],
-    ];
-    const stages = run.jobs.map((job, offset) => {
-      const stage = stageData[offset];
-      if (offset === 5) {
-        return `<li>
-          <button type="button" class="ml-run-step-link" data-run-network="${index}" aria-controls="ml-run-network-${index}">
-            <i data-lucide="circle-check" aria-hidden="true"></i>
-            <span>第 6 階段</span><strong>${stage.name}</strong>
-            <time datetime="${run.date}T${job.end}-08:00">${job.end}</time>
-            <i data-lucide="arrow-right" aria-hidden="true"></i>
-          </button>
-        </li>`;
-      }
-      return `<li><details class="ml-run-step">
-        <summary>
-          <i data-lucide="circle-check" aria-hidden="true"></i>
-          <span>第 ${offset + 1} 階段</span><strong>${stage.name}</strong>
-          <time datetime="${run.date}T${job.end}-08:00">${job.end}</time>
-          <i data-lucide="chevron-down" class="ml-run-chevron" aria-hidden="true"></i>
-        </summary>
-        ${jobDetails(job, stage.settings, ...outputPairs[offset])}
-      </details></li>`;
+  function renderHistoryRecords() {
+    runList.innerHTML = historyRuns.map((run) => {
+      const id = escapeHistory(run.run_id);
+      const started = fullTime(run.jobs.genotype?.submitted_at || run.jobs.visualize.submitted_at);
+      return `<button class="ml-nav-list-item" type="button" data-run-target="${id}" aria-controls="ml-run-${id}" aria-pressed="false">
+        <i data-lucide="circle-check" aria-hidden="true"></i>
+        <span><strong>${historyText(...run.name)}</strong><small>${escapeHistory(started)}</small></span>
+      </button>`;
     }).join("");
-    return `<article class="ml-nav-detail" id="ml-run-${index}" ${index ? "hidden" : ""}>
-      <header class="ml-nav-detail-title"><i data-lucide="history" aria-hidden="true"></i><h2>${runNames[index]}</h2></header>
-      <p class="ml-run-overview">${run.date} · ${run.jobs[0].start}–${run.jobs.at(-1).end} (UTC−08:00)<br>
-        <span data-en-text="6 stages completed · ${genes} genes · ${edges} edges">完成 6 個階段 · ${genes} 個基因 · ${edges} 條連線</span>
-      </p>
-      <details class="ml-run-inputs">
-        <summary data-en-text="Input files at execution">執行時使用的檔案</summary>
-        <dl class="ml-key-values">
-          <dt>基因型資料</dt><dd>${run.inputs.genotype.map((file) => `<code>${file}</code>`).join("<br>")}</dd>
-          <dt>基因表現量資料</dt><dd><code>${run.inputs.expression}</code></dd>
-          <dt>臨床資料</dt><dd><code>${run.inputs.clinical}</code></dd>
-        </dl>
-      </details>
-      <ol class="ml-run-timeline" aria-label="六階段執行時間線">${stages}</ol>
-      ${index === 0 ? '<button type="button" class="ml-nav-action" data-open-stage="6">開啟第 6 階段結果選擇器</button>' : ''}
-    </article>`;
-  }).join("");
+    runDetails.innerHTML = historyRuns.map((run) => {
+      const id = escapeHistory(run.run_id);
+      const initialJob = run.jobs.genotype ?? run.jobs.visualize;
+      const stage6 = run.jobs.visualize;
+      const stages = historySteps.map((key, offset) => {
+        const job = run.jobs[key];
+        if (!job) return "";
+        const number = offset + 1;
+        const title = `<i data-lucide="circle-check" aria-hidden="true"></i>
+          ${historyText(`第 ${number} 階段`, `Stage ${number}`)}<strong>${historyLabel(stageData[offset].name)}</strong>
+          <time datetime="${escapeHistory(job.finished_at)}">${escapeHistory(clockTime(job.finished_at))}</time>`;
+        return key === "visualize" ? `<li><button type="button" class="ml-run-step-link" data-run-network="${id}" aria-controls="lens-stage6">
+          ${title}<i data-lucide="arrow-right" aria-hidden="true"></i>
+        </button></li>` : `<li><details class="ml-run-step"><summary>
+          ${title}<i data-lucide="chevron-down" class="ml-run-chevron" aria-hidden="true"></i>
+        </summary>${historyJobDetails(job)}</details></li>`;
+      }).join("");
+      const snapshot = inputTypes.map(([type, zh, en]) => {
+        const files = run.inputs[type] ?? [];
+        return `<dt>${historyText(zh, en)}</dt><dd>${files.length ? files.map((file) =>
+          `<code>${escapeHistory(file)}</code>`).join("<br>") : notRecorded()}</dd>`;
+      }).join("");
+      return `<article class="ml-nav-detail" id="ml-run-${id}" hidden>
+        <header class="ml-nav-detail-title"><i data-lucide="history" aria-hidden="true"></i><h2>${historyText(...run.name)}</h2></header>
+        <p class="ml-run-overview">${id}<br>${escapeHistory(fullTime(initialJob.submitted_at))} – ${escapeHistory(fullTime(stage6.finished_at))}<br>
+          ${historyText(...networkOutput([run.graph.genes, run.graph.connections]))}</p>
+        <details class="ml-run-inputs" open>
+          <summary>${historyText("執行時使用的檔案", "Input files at execution")}</summary>
+          <dl class="ml-key-values">${snapshot}</dl>
+        </details>
+        <ol class="ml-run-timeline" aria-label="${root.lang === "en" ? "Run timeline" : "執行時間線"}">${stages}</ol>
+      </article>`;
+    }).join("");
+    renderHistoryLanguage();
+    globalThis.lucide?.createIcons();
+  }
+
+  function renderHistoryLanguage() {
+    const key = root.lang === "en" ? "historyEn" : "historyZh";
+    for (const node of root.querySelectorAll("[data-history-zh]")) node.textContent = node.dataset[key];
+    for (const timeline of runDetails.querySelectorAll(".ml-run-timeline")) {
+      timeline.setAttribute("aria-label", root.lang === "en" ? "Run timeline" : "執行時間線");
+    }
+  }
+
+  const analysisNetwork = root.querySelector("#lens-stage6");
+  const setLiveNetwork = mountNetwork(analysisNetwork);
 
   const input = byId("input");
   const initialChat = JSON.parse(document.getElementById("initial-chat").textContent);
@@ -977,6 +950,8 @@
   const stage6Source = analysisNetwork.querySelector("[data-s6-run-label]");
   const stage6Status = analysisNetwork.querySelector(".s6-result-status");
   const stage6Summary = analysisNetwork.querySelector(".s6-summary");
+  const stage6Back = byId("stage6-back");
+  const stage6HistoryLabel = byId("stage6-history-run");
   const stage6Labels = {
     listing: ["讀取已完成的執行…", "Finding completed runs…"],
     empty: ["目前沒有可檢視的第 6 階段結果。", "No Stage 6 results are available."],
@@ -987,20 +962,23 @@
     "no-edges": ["這筆執行沒有匯出的連線。", "This run has no exported edges."],
   };
   const selectedStage6Genes = new Map();
-  let stage6RunList = [];
+  const analysisRunByDataset = new Map();
   let stage6Result = null;
   let stage6Request;
+  let requestedStage6Run = null;
   analysisNetwork.dataset.runState = "listing";
 
   function renderStage6Status() {
     const language = root.lang === "en" ? 1 : 0;
     const state = analysisNetwork.dataset.runState;
-    const run = stage6RunList.find(({run_id}) => run_id === stage6RunSelect.value);
+    const run = runsForDataset().find(({run_id}) => run_id === stage6RunSelect.value);
     const [counts, frequency, topNetworks] = [stage6Result?.graph.counts, stage6Result?.frequency, stage6Result?.top_networks];
     const empty = stage6Result?.graph.edges.length === 0;
     stage6Source.textContent = (run?.source === "archive" ? ["封存執行", "Archived run"] : ["執行", "Run"])[language];
     stage6RunSelect.options[0].textContent = ["選擇執行", "Select a run"][language];
-    stage6RunSelect.title = stage6RunSelect.selectedOptions[0]?.textContent || "";
+    stage6RunSelect.title = run?.run_id ?? "";
+    stage6HistoryLabel.textContent = run?.name[language] ?? "";
+    stage6HistoryLabel.title = run?.run_id ?? "";
     stage6Status.hidden = state === "ready" && !empty;
     stage6Status.textContent = (stage6Labels[empty ? "no-edges" : state] ?? ["", ""])[language];
     stage6Summary.hidden = !stage6Status.hidden;
@@ -1050,21 +1028,28 @@
 
   async function loadStage6Run(runId) {
     stage6Request?.abort();
+    requestedStage6Run = runId;
     stage6Result = null;
     delete analysisNetwork.dataset.runId;
     setLiveNetwork({}, []);
-    if (!runId) {
-      setStage6RunState(stage6RunList.length ? "choose" : "empty");
+    const matchingRuns = runsForDataset();
+    const run = matchingRuns.find(({run_id}) => run_id === runId);
+    if (!run) {
+      const state = historyState === "error" ? "list-error" : historyState === "loading" ? "listing"
+        : matchingRuns.length ? "choose" : "empty";
+      setStage6RunState(state);
       return;
     }
     const request = new AbortController();
     stage6Request = request;
     setStage6RunState("loading");
     try {
-      const query = new URLSearchParams({run: runId});
+      const query = new URLSearchParams({run: runId, source: run.source});
       const result = await getStage6Results("/stage6/results?" + query, {signal: request.signal});
       if (request.signal.aborted) return;
-      if (result.run_id !== runId) throw new Error("Stage 6 result belongs to a different run");
+      if (result.run_id !== runId || result.source !== run.source) {
+        throw new Error("Stage 6 result belongs to a different run");
+      }
       const {nodes, edges} = result.graph;
       setLiveNetwork(layoutStage6(nodes), edges.map(({source, target, frequency, coefficient}) =>
         [source, target, frequency, coefficient]), selectedStage6Genes.get(runId));
@@ -1079,24 +1064,33 @@
     }
   }
 
-  async function loadStage6Runs() {
-    stage6RunSelect.disabled = true;
-    setStage6RunState("listing");
-    try {
-      const {runs} = await getStage6Results("/stage6/results");
-      stage6RunList = runs;
-      for (const run of runs) stage6RunSelect.add(new Option(run.label ?? run.run_id, run.run_id));
-      stage6RunSelect.disabled = !runs.length;
-      setStage6RunState(runs.length ? "choose" : "empty");
-    } catch {
-      setStage6RunState("list-error");
-    }
+  function syncStage6Choice() {
+    if (stage6RunSelect.value !== requestedStage6Run) void loadStage6Run(stage6RunSelect.value);
+    else renderStage6Status();
   }
 
-  stage6RunSelect.addEventListener("change", () => void loadStage6Run(stage6RunSelect.value));
+  function syncStage6Picker(rebuild = false) {
+    const runs = runsForDataset();
+    if (rebuild) {
+      stage6RunSelect.replaceChildren(new Option("", ""), ...runs.map(({run_id}) => new Option(run_id, run_id)));
+      stage6RunSelect.disabled = !runs.length;
+    }
+    const inHistory = app.dataset.nav === "history" && Boolean(historyNetworkRun);
+    stage6RunSelect.hidden = inHistory;
+    stage6HistoryLabel.hidden = !inHistory;
+    stage6Back.hidden = !inHistory;
+    stage6RunSelect.value = inHistory ? historyNetworkRun : analysisRunByDataset.get(activeDataset.id) ?? "";
+    if (!stage6RunSelect.value) stage6RunSelect.value = "";
+    syncStage6Choice();
+  }
+
+  stage6RunSelect.addEventListener("change", () => {
+    analysisRunByDataset.set(activeDataset.id, stage6RunSelect.value);
+    syncStage6Choice();
+  });
   stage6Retry.addEventListener("click", () => {
     if (analysisNetwork.dataset.runState === "load-error") void loadStage6Run(stage6RunSelect.value);
-    else void loadStage6Runs();
+    else void loadWorkspaceHistory();
   });
   analysisNetwork.addEventListener("lens:gene-selected", ({detail}) => {
     if (stage6Result) selectedStage6Genes.set(stage6Result.run_id, detail.gene);
@@ -1347,7 +1341,8 @@
       return option;
     }));
     datasetSelect.value = activeDataset.id;
-    const label = localDatasetName(activeDataset);
+    datasetSelect.disabled = !datasets.length;
+    const label = localDatasetName(activeDataset) || (root.lang === "en" ? "Datasets" : "資料組");
     byId("history-dataset-name").textContent = label;
     byId("stage-dataset-title").textContent = label;
     datasetError.textContent = root.lang === "en" ? "Enter a dataset name." : "請輸入資料組名稱。";
@@ -1358,9 +1353,9 @@
     const inEnglish = lang === "en";
     for (const translate of translations) translate(inEnglish);
     renderChatLanguage();
-    for (const network of [analysisNetwork, ...historyNetworks]) {
-      network.dispatchEvent(new Event("lens:language-changed"));
-    }
+    analysisNetwork.dispatchEvent(new Event("lens:language-changed"));
+    renderHistoryLanguage();
+    renderHistoryStatus();
     renderStage6Status();
     renderRemoteSettings();
     renderDatasetLabels();
@@ -1377,36 +1372,92 @@
     app.toggleAttribute("data-chat-closed", !open);
   }
 
-  let historyNetworkIndex = null;
   const selectedRuns = new Map();
+  function renderHistoryStatus() {
+    const copy = historyState === "loading"
+      ? ["讀取執行紀錄…", "Loading run history…", "", ""]
+      : historyState === "error"
+        ? ["無法讀取執行紀錄", "Could not load run history", "", ""]
+        : ["尚無執行紀錄", "No runs yet", "這裡會顯示目前資料組的執行紀錄。", "Runs for the selected dataset will appear here."];
+    const language = root.lang === "en" ? 1 : 0;
+    byId("empty-run-list").textContent = byId("empty-history-title").textContent = copy[language];
+    byId("empty-history-note").textContent = copy[language + 2];
+    byId("history-retry").hidden = historyState !== "error";
+  }
+
   function updateHistoryView() {
     const inHistory = app.dataset.nav === "history";
     const matchingRuns = runsForDataset();
-    const selected = selectedRuns.get(activeDataset.id) ?? matchingRuns[0]?.id;
-    const showNetwork = historyNetworkIndex !== null && savedRuns[historyNetworkIndex].id === selected;
-    runDetails.hidden = !inHistory || !matchingRuns.length || showNetwork;
-    byId("empty-history").hidden = !inHistory || matchingRuns.length > 0;
-    byId("empty-run-list").hidden = matchingRuns.length > 0;
+    const previousSelection = selectedRuns.get(activeDataset.id);
+    const selected = matchingRuns.find(({run_id}) => run_id === previousSelection)?.run_id ?? matchingRuns[0]?.run_id;
+    const showNetwork = inHistory && Boolean(selected) && historyNetworkRun === selected;
+    runDetails.hidden = !inHistory || !selected || showNetwork;
+    byId("empty-history").hidden = !inHistory || Boolean(selected);
+    byId("empty-run-list").hidden = Boolean(selected);
     for (const button of runList.querySelectorAll("[data-run-target]")) {
-      const run = savedRuns[Number(button.dataset.runTarget)];
-      button.hidden = run.datasetId !== activeDataset.id;
-      button.setAttribute("aria-pressed", String(run.id === selected));
-      root.querySelector("#" + button.getAttribute("aria-controls")).hidden = run.id !== selected;
+      const id = button.dataset.runTarget;
+      button.hidden = !matchingRuns.some(({run_id}) => run_id === id);
+      button.setAttribute("aria-pressed", String(id === selected));
+      root.querySelector("#" + button.getAttribute("aria-controls")).hidden = id !== selected;
     }
-    historyNetworks.forEach((panel, index) => {
-      panel.hidden = !inHistory || !showNetwork || index !== historyNetworkIndex;
-    });
+
+    // One graph and table render the same run in both the analysis and history views.
+    analysisNetwork.classList.toggle("ml-workspace", !showNetwork);
+    analysisNetwork.classList.toggle("ml-nav-workspace", showNetwork);
+    analysisNetwork.hidden = inHistory ? !showNetwork : timeline.querySelector('[aria-current="step"]').dataset.stage !== "6";
+    renderHistoryStatus();
   }
 
   function updateAnalysisView() {
     const hasSavedResults = runsForDataset().length > 0;
-    app.toggleAttribute("data-no-analysis", !hasSavedResults);
-    byId("empty-analysis").hidden = hasSavedResults || !["analysis", "settings"].includes(app.dataset.nav);
+    app.toggleAttribute("data-no-analysis", !hasSavedResults && historyState === "ready");
+    byId("empty-analysis").hidden = hasSavedResults || historyState !== "ready" || !["analysis", "settings"].includes(app.dataset.nav);
     timeline.hidden = !hasSavedResults;
     byId("stage-header").querySelector("span").hidden = !hasSavedResults;
-    byId("empty-stage").hidden = hasSavedResults;
-    for (const details of root.querySelectorAll("[data-archived-input]")) details.hidden = !hasSavedResults;
+    byId("empty-stage").hidden = hasSavedResults || historyState !== "ready";
+    // Stages 1–5 in the analysis view are the original chromosome 1 walkthrough.
+    const showWalkthrough = activeDataset.id === "example-chr1";
+    if (!showWalkthrough) {
+      const lastStage = stageButtons[stageButtons.length - 1];
+      showStage(lastStage, true);
+    }
+    for (const button of stageButtons) {
+      button.closest(".ml-stage-entry").hidden = !showWalkthrough && button.dataset.stage !== "6";
+    }
   }
+
+  async function loadWorkspaceHistory() {
+    historyState = "loading";
+    updateHistoryView();
+    if (!stage6RunSelect.value) void loadStage6Run("");
+    try {
+      const {datasets: savedDatasets, runs} = await getStage6Results("/stage6/history");
+      const existing = new Map(datasets.map((dataset) => [dataset.id, dataset]));
+      const drafts = datasets.filter(({draft}) => draft);
+      datasets.splice(0, datasets.length, ...savedDatasets.map((record) => {
+        const dataset = makeDataset(record);
+        const previous = existing.get(record.id);
+        for (const [type] of inputTypes) {
+          if (previous?.selections[type] === 1 && dataset.files[type][1].length) dataset.selections[type] = 1;
+        }
+        return dataset;
+      }), ...drafts);
+      activeDataset = datasets.find(({id}) => id === activeDataset.id) ?? datasets[0] ?? activeDataset;
+      historyRuns = [...runs].sort((a, b) =>
+        (Date.parse(b.jobs.visualize.finished_at) || 0) - (Date.parse(a.jobs.visualize.finished_at) || 0));
+      historyState = "ready";
+      renderHistoryRecords();
+    } catch {
+      historyState = "error";
+    }
+    renderDatasetLabels();
+    syncInputFiles(true);
+    updateAnalysisView();
+    updateHistoryView();
+    requestedStage6Run = null;
+    syncStage6Picker(true);
+  }
+  byId("history-retry").addEventListener("click", () => void loadWorkspaceHistory());
 
   function closeDatasetForm() {
     datasetForm.hidden = true;
@@ -1416,16 +1467,17 @@
   }
 
   function selectDataset(dataset) {
+    if (!dataset) return;
     closeDatasetForm();
     if (dataset !== activeDataset) {
       activeDataset = dataset;
-      historyNetworkIndex = null;
-      globalThis.lucide?.createIcons();
+      historyNetworkRun = "";
     }
     renderDatasetLabels();
     syncInputFiles(true);
-    updateHistoryView();
     updateAnalysisView();
+    updateHistoryView();
+    syncStage6Picker(true);
   }
 
   datasetSelect.addEventListener("change", () => {
@@ -1451,13 +1503,11 @@
       datasetName.focus();
       return;
     }
-    const dataset = {
-      id: `dataset-${datasets.length + 1}`,
+    const dataset = makeDataset({
+      id: `draft-${crypto.randomUUID()}`,
       name: [name, name],
       folder: "/demo/signet/cohort-b",
-      files: simulatedFiles,
-      selections: {},
-    };
+    }, true);
     datasets.push(dataset);
     selectDataset(dataset);
     datasetSelect.focus();
@@ -1480,8 +1530,9 @@
     for (const panel of root.querySelectorAll("[data-nav-left], [data-nav-right]")) {
       panel.hidden = (panel.dataset.navLeft ?? panel.dataset.navRight) !== view;
     }
-    updateHistoryView();
     updateAnalysisView();
+    updateHistoryView();
+    syncStage6Picker();
     for (const button of navigation) {
       if (button.dataset.navTarget === view) button.setAttribute("aria-current", "page");
       else button.removeAttribute("aria-current");
@@ -1501,37 +1552,29 @@
       }
     });
   }
-  for (const button of runList.querySelectorAll("[data-run-target]")) {
-    button.addEventListener("click", () => {
-      selectedRuns.set(activeDataset.id, savedRuns[Number(button.dataset.runTarget)].id);
-      historyNetworkIndex = null;
-      updateHistoryView();
-    });
-  }
-  for (const button of root.querySelectorAll("[data-run-network]")) {
-    button.addEventListener("click", () => {
-      historyNetworkIndex = Number(button.dataset.runNetwork);
-      updateHistoryView();
-      historyNetworks[historyNetworkIndex].querySelector("[data-run-back]").focus({ preventScroll: true });
-    });
-  }
-  for (const button of root.querySelectorAll("[data-run-back]")) {
-    button.addEventListener("click", () => {
-      historyNetworkIndex = null;
-      updateHistoryView();
-      runDetails.querySelector(`[data-run-network="${button.dataset.runBack}"]`).focus({ preventScroll: true });
-    });
-  }
-  for (const button of root.querySelectorAll("[data-open-stage]")) {
-    button.addEventListener("click", () => {
-      openNavigation("analysis");
-      selectTab(byId("stage-tab"));
-      const stageButton = timeline.querySelector(`[data-stage="${button.dataset.openStage}"]`);
-      showStage(stageButton, true);
-      stageButton.focus({ preventScroll: true });
-    });
-  }
-
+  runList.addEventListener("click", (event) => {
+    const id = event.target.closest("[data-run-target]")?.dataset.runTarget;
+    if (!runsForDataset().some(({run_id}) => run_id === id)) return;
+    selectedRuns.set(activeDataset.id, id);
+    historyNetworkRun = "";
+    updateHistoryView();
+    syncStage6Picker();
+  });
+  runDetails.addEventListener("click", (event) => {
+    const id = event.target.closest("[data-run-network]")?.dataset.runNetwork;
+    if (!runsForDataset().some(({run_id}) => run_id === id)) return;
+    historyNetworkRun = id;
+    updateHistoryView();
+    syncStage6Picker();
+    stage6Back.focus({ preventScroll: true });
+  });
+  stage6Back.addEventListener("click", () => {
+    const id = historyNetworkRun;
+    historyNetworkRun = "";
+    updateHistoryView();
+    syncStage6Picker();
+    runDetails.querySelector(`[data-run-network="${CSS.escape(id)}"]`)?.focus({ preventScroll: true });
+  });
   byId("close").addEventListener("click", () => {
     setSidebarOpen(false);
     root.querySelector('[data-nav-target][aria-current="page"]').focus();
@@ -1639,8 +1682,8 @@
     }
   });
 
-  updateHistoryView();
   updateAnalysisView();
+  updateHistoryView();
   globalThis.lucide?.createIcons();
-  void loadStage6Runs();
+  void loadWorkspaceHistory();
 })();

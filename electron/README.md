@@ -34,17 +34,29 @@ are bundled.
 ### Workspace
 
 The desktop opens directly to the bilingual workspace. The left chat uses the
-existing SIGNET Agent, model configuration, and saved conversations. In
-**Analysis → Stage → Stage 6**, choose a completed run to load its network and
-edge table. Selecting a gene filters the table to edges entering or leaving
-that gene. Dataset choices, run history, and stages 1–5 still use simulated data.
+existing SIGNET Agent, model configuration, and saved conversations. Choose a
+dataset in **Data**, then open **Run history** to see that dataset's completed
+runs. A run shows its saved input filenames and job records. Open its Stage 6
+result to view the corresponding network and edge table. Selecting a gene
+filters the table to incoming and outgoing edges. The Stage 6 selector in
+**Analysis** also follows the selected dataset. The first five stage previews
+in **Analysis** still use simulated data.
 
-Stage 6 lists verified local runs and saved read-only exports. For an archived
-HPC3 export, keep the original verification report as
-`data/stage6-results/<run-id>/verification.json` beside the exported
-`signet_edgelist_<frequency>.txt`. Use the frequency from the completed
-visualization job in the report. The branch ignores the local `data/` directory.
-Viewing an archive doesn't submit a job or change the saved run.
+Archived HPC3 exports remain local. The application reads these records under
+the ignored `data/` directory:
+
+- `datasets/<dataset-id>.json` supplies `id`, `name` (Chinese and English),
+  and current `inputs` grouped as `genotype`, `expression`, and `clinical`
+  filename arrays.
+- `stage6-results/<run-id>/history.json` supplies `run_id`, `dataset_id`,
+  `name` (Chinese and English), and a separate `inputs` snapshot in the same
+  format. Record the filenames confirmed for that run.
+- Beside `history.json`, keep the original `verification.json` and
+  `signet_edgelist_<frequency>.txt` from the completed visualization. The
+  verification report supplies the run's timestamps, settings, and counts.
+
+Creating a dataset in the workspace adds a draft for the current session. An
+archive is a read-only result and remains tied to its saved input snapshot.
 
 Use **View → Classic Interface** for model and SSH setup, existing Stage 6
 tools, and the development terminal. **View → Workspace** returns to the new

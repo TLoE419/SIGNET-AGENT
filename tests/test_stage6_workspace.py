@@ -180,6 +180,94 @@ class WorkspaceTest(unittest.TestCase):
                 server.shutdown()
                 thread.join()
 
+    def test_archived_history_joins_by_dataset_and_uses_frozen_inputs(self):
+        from agent.app.chat_ui import ChatServer
+        import http.client
+
+        def write_json(path, value):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(value), encoding='utf-8')
+
+        catalog_path = self.project / 'data/datasets/chromosome-one.json'
+        current = {'genotype': ['new.ped', 'new.map'], 'expression': ['expression.tsv'],
+                   'clinical': ['current-clinical.tsv']}
+        recorded = {'genotype': ['original.ped', 'original.map'], 'expression': ['expression.tsv'],
+                    'clinical': []}
+        dataset = {'id': 'chromosome-one', 'name': ['第一號染色體', 'Chromosome one'], 'inputs': current}
+        empty = {'id': 'unrun', 'name': ['待執行', 'Unrun'], 'inputs': {}}
+        write_json(catalog_path, dataset)
+        write_json(catalog_path.with_name('unrun.json'), empty)
+        write_json(catalog_path.with_name('wrong-id.json'), empty)
+        catalog_path.with_name('linked.json').symlink_to(catalog_path)
+
+        archive = self.project / 'data/stage6-results/baseline'
+        snapshot = {'run_id': 'baseline', 'dataset_id': 'chromosome-one',
+                    'name': ['封存執行', 'Archived run'], 'inputs': recorded}
+        report = {'run': 'baseline', 'jobs': {'visualize': {
+            'job_id': '1234', 'state': 'completed', 'settings': {'freq': '0.45', 'ntop': '1'}}},
+            'graph': {'connections': 1, 'genes': 2, 'subnetworks': 1, 'displayed': 1}}
+        metadata = archive / 'history.json'
+        write_json(metadata, snapshot)
+        write_json(archive / 'verification.json', report)
+        (archive / 'signet_edgelist_0.45.txt').write_text(
+            'source_gene_symbol,target_gene_symbol,frequency,coefficient\nMEGF6,B,0.45,0.25\n')
+        write_json(archive.with_name('missing-output') / 'history.json',
+                   {**snapshot, 'run_id': 'missing-output'})
+        write_json(archive.with_name('no-dataset') / 'history.json',
+                   {**snapshot, 'run_id': 'no-dataset', 'dataset_id': 'missing'})
+        write_json(archive.with_name('no-dataset') / 'verification.json', {**report, 'run': 'no-dataset'})
+        (archive.with_name('no-dataset') / 'signet_edgelist_0.45.txt').write_bytes(
+            (archive / 'signet_edgelist_0.45.txt').read_bytes())
+
+        saved_state = self.w.path.read_bytes()
+        with ChatServer(('127.0.0.1', 0), Mock()) as server:
+            server.stage6 = self.w
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+
+            def request(path, authenticated=True):
+                conn = http.client.HTTPConnection('127.0.0.1', server.server_port, timeout=3)
+                try:
+                    headers = {'X-Chat-Token': server.token} if authenticated else {}
+                    conn.request('GET', path, headers=headers)
+                    response = conn.getresponse()
+                    return response.status, json.loads(response.read())
+                finally:
+                    conn.close()
+
+            try:
+                self.assertEqual(request('/stage6/history', authenticated=False)[0], 403)
+                self.assertEqual(request('/stage6/history?dataset=chromosome-one')[0], 400)
+                status, history = request('/stage6/history')
+                self.assertEqual(status, 200)
+                self.assertEqual(history['datasets'], [dataset, {
+                    **empty, 'inputs': {'genotype': [], 'expression': [], 'clinical': []},
+                }])
+                self.assertEqual(history['runs'], [{
+                    **snapshot, 'jobs': report['jobs'], 'graph': report['graph'],
+                    'frequency': 0.45, 'top_networks': 1, 'status': 'completed', 'source': 'archive',
+                }])
+                self.assertEqual(request('/stage6/results?run=baseline')[1]['graph']['counts']['connections'], 2)
+                status, archived = request('/stage6/results?run=baseline&source=archive')
+                self.assertEqual(status, 200)
+                self.assertEqual(archived['graph']['counts'], report['graph'])
+                self.assertEqual(archived['graph']['edges'][0]['source'], 'MEGF6')
+                self.assertEqual(request('/stage6/results?run=baseline&source=unknown')[0], 400)
+                self.assertEqual(request('/stage6/results?run=baseline&source=archive&source=archive')[0], 400)
+
+                dataset['inputs']['genotype'] = ['replacement.ped', 'replacement.map']
+                write_json(catalog_path, dataset)
+                refreshed = request('/stage6/history')[1]
+                self.assertEqual(refreshed['datasets'][0]['inputs']['genotype'], ['replacement.ped', 'replacement.map'])
+                self.assertEqual(refreshed['runs'][0]['inputs'], recorded)
+                self.assertEqual(json.loads(metadata.read_text()), snapshot)
+                self.assertEqual(json.loads((archive / 'verification.json').read_text()), report)
+                self.assertEqual(self.w.path.read_bytes(), saved_state)
+                self.assertEqual(set(self.w.sessions), {'s1'})
+            finally:
+                server.shutdown()
+                thread.join()
+
     def test_workspace_http_guards_duplicate_and_cross_session_confirmations(self):
         import agent.app.chat_ui as chat_ui
         import http.client

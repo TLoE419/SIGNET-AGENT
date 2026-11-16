@@ -96,7 +96,32 @@ def _load_archive(run_id):
             or any(type(count) is not int or count < 1 for count in counts.values())):
         raise ValueError('Missing or invalid archived Stage 6 graph counts.')
     return ({'run_id': run_id, 'frequency': frequency, 'top_networks': top_networks,
-             'status': 'completed', 'source': 'archive'}, path, counts)
+             'status': 'completed', 'source': 'archive'}, path, record)
+
+
+def _history_text(value, limit=4096):
+    if not isinstance(value, str) or not value.strip() or len(value) > limit or '\x00' in value:
+        raise ValueError('Invalid archive metadata text.')
+    return value
+
+
+def _history_name(value):
+    if not isinstance(value, list) or len(value) != 2:
+        raise ValueError('Archive names require a Chinese and an English label.')
+    return [_history_text(label, 240) for label in value]
+
+
+def _history_inputs(value):
+    if not isinstance(value, dict):
+        raise ValueError('Input snapshots require a list for each input type.')
+    snapshot = {}
+    for kind in ('genotype', 'expression', 'clinical'):
+        paths = value.get(kind, [])
+        if not isinstance(paths, list):
+            raise ValueError('Input snapshots require a list for each input type.')
+        # These are metadata for display. Never open a path from a snapshot.
+        snapshot[kind] = [_history_text(path) for path in paths]
+    return snapshot
 
 
 def fingerprint(settings):
@@ -151,18 +176,52 @@ class Workspace:
                 continue
         return list(runs.values())
 
-    def completed_result(self, run_id):
-        try:
-            root, settings, record = load_run(run_id)
-        except (OSError, ValueError, KeyError, TypeError):
-            summary, path, counts = _load_archive(run_id)
-            result = _read_graph(path, summary['top_networks'])
-            if result['counts'] != counts:
-                raise ValueError('Archived edge list counts do not match the verification record.')
-        else:
-            summary = _completed_run_summary(run_id, settings, record)
-            result = graph(root, settings)
+    def completed_result(self, run_id, *, archive_only=False):
+        if not archive_only:
+            try:
+                root, settings, record = load_run(run_id)
+            except (OSError, ValueError, KeyError, TypeError):
+                pass
+            else:
+                summary = _completed_run_summary(run_id, settings, record)
+                return {**summary, 'graph': graph(root, settings)}
+        summary, path, record = _load_archive(run_id)
+        result = _read_graph(path, summary['top_networks'])
+        if result['counts'] != record['graph']:
+            raise ValueError('Archived edge list counts do not match the verification record.')
         return {**summary, 'graph': result}
+
+    def archived_history(self):
+        datasets = {}
+        for path in sorted((st.PROJECT / 'data/datasets').glob('*.json')):
+            try:
+                record = json.loads(st._no_links(path).read_text(encoding='utf-8'))
+                dataset_id = st._name(record['id'])
+                if dataset_id != path.stem:
+                    continue
+                dataset = {'id': dataset_id, 'name': _history_name(record['name']),
+                           'inputs': _history_inputs(record['inputs'])}
+                if 'folder' in record:
+                    dataset['folder'] = _history_text(record['folder'])
+                datasets[dataset_id] = dataset
+            except (OSError, ValueError, KeyError, TypeError):
+                continue
+
+        runs = []
+        for path in sorted(_archive_directory().glob('*/history.json')):
+            try:
+                saved = json.loads(st._no_links(path).read_text(encoding='utf-8'))
+                run_id = st._name(saved['run_id'])
+                dataset_id = st._name(saved['dataset_id'])
+                if run_id != path.parent.name or dataset_id not in datasets:
+                    continue
+                summary, _, verification = _load_archive(run_id)
+                runs.append({**summary, 'dataset_id': dataset_id, 'name': _history_name(saved['name']),
+                             'inputs': _history_inputs(saved['inputs']), 'jobs': verification['jobs'],
+                             'graph': verification['graph']})
+            except (OSError, ValueError, KeyError, TypeError):
+                continue
+        return {'datasets': list(datasets.values()), 'runs': runs}
 
     def state(self, session):
         return self.sessions.setdefault(session, {'baseline': None, 'comparison': None, 'proposals': []})

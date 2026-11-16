@@ -117,6 +117,8 @@ class ChatHandler(BaseHTTPRequestHandler):
             return signet_api.handle(self, 'GET', url)
         if url.path == '/stage6/results':
             return self.stage6_results_get(url)
+        if url.path == '/stage6/history':
+            return self.stage6_history_get(url)
         if url.path in ('/stage6', '/stage6/file'):
             return self.stage6_get(url)
         if url.path != '/bootstrap':
@@ -306,12 +308,21 @@ class ChatHandler(BaseHTTPRequestHandler):
         query = parse_qs(url.query, keep_blank_values=True)
         if not query:
             return self.json_response({'runs': self.server.stage6.completed_runs()})
-        if set(query) != {'run'} or len(query['run']) != 1:
-            return self._error(400, 'Provide a single run ID.')
+        if (set(query) - {'run', 'source'} or len(query.get('run', [])) != 1
+                or ('source' in query and query['source'] != ['archive'])):
+            return self._error(400, 'Provide a single run ID and, optionally, the archived source.')
         try:
-            return self.json_response(self.server.stage6.completed_result(query['run'][0]))
+            return self.json_response(self.server.stage6.completed_result(
+                query['run'][0], archive_only='source' in query))
         except (OSError, ValueError, KeyError, TypeError, csv.Error):
             return self._error(400, 'No readable completed Stage 6 result for this run.')
+
+    def stage6_history_get(self, url):
+        if not secrets.compare_digest(self.headers.get('X-Chat-Token', ''), self.server.token):
+            return self._error(403, 'Workspace token required.')
+        if url.query:
+            return self._error(400, 'The Stage 6 history does not accept query parameters.')
+        return self.json_response(self.server.stage6.archived_history())
 
     def stage6_get(self, url):
         query = parse_qs(url.query)
