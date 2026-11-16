@@ -81,13 +81,21 @@
       .map(([key]) => [key, 0]));
     return {id, name, folder, files, selections, draft};
   }
-  const datasets = [];
-  let activeDataset = makeDataset({id: "", name: ["", ""]});
+  const exampleDataset = {
+    id: "example-chr1", name: ["第 1 號染色體範例", "Chromosome 1 example"],
+    inputs: {genotype: ["study.ped", "study.map"]},
+  };
+  const datasets = [makeDataset(exampleDataset)];
+  let activeDataset = datasets[0];
+  let genotypeRun;
+  let restoredGenotypeRun = false;
+  let historyRequest = 0;
   let historyRuns = [];
   let historyState = "loading";
   let historyResult = null;
   const localDatasetName = (dataset) => dataset.name[root.lang === "en" ? 1 : 0];
   const runsForDataset = () => historyRuns.filter((run) => run.dataset_id === activeDataset.id);
+  const stage6RunsForDataset = () => runsForDataset().filter((run) => run.source === "archive" && run.graph);
   const tabs = [byId("agent-tab"), byId("stage-tab")];
   function selectTab(activeTab) {
     for (const tab of tabs) {
@@ -250,9 +258,9 @@
 
   const stageData = [
     {
-      name: "基因型準備", note: "篩選第 1 號染色體的基因型資料。",
-      settings: "樣本及變異缺失率上限各 10%",
-      output: "560 個樣本 × 2,983 個變異",
+      name: "基因型準備", note: "確認第 1 號染色體範例後送出基因型前處理。",
+      settings: "在右側確認檔案與送算設定。",
+      output: "送出後可查看排隊、執行和輸出檢查進度。",
       icon: "grid-3x3",
       preview: matrixPreview(["05050000000000", "00050000000000", "00050000000000", "00000000000000"]),
     },
@@ -439,9 +447,9 @@
     ["第 1 號染色體 · 模擬結果", "Chromosome 1 · Simulated results"],
     ["第 1 號染色體 · 模擬結果節錄", "Chromosome 1 · Simulated results excerpt"],
     ["基因型準備", "Genotype preparation"],
-    ["篩選第 1 號染色體的基因型資料。", "Filter genotypes on chromosome 1."],
-    ["樣本及變異缺失率上限各 10%", "10% missingness limit for samples and variants"],
-    ["560 個樣本 × 2,983 個變異", "560 samples × 2,983 variants"],
+    ["確認第 1 號染色體範例後送出基因型前處理。", "Review the chromosome 1 example, then submit genotype preparation."],
+    ["在右側確認檔案與送算設定。", "Review files and submission settings on the right."],
+    ["送出後可查看排隊、執行和輸出檢查進度。", "After submission, follow the queue, job, and output checks."],
     ["基因表現量準備", "Gene expression preparation"],
     ["擷取第 1 號染色體上的基因表現量。", "Extract expression data for chromosome 1."],
     ["只保留第 1 號染色體", "Chromosome 1 only"],
@@ -661,6 +669,15 @@
   }).join("");
   const stageButtons = timeline.querySelectorAll(".ml-stage-button");
   const stageResults = root.querySelectorAll(".ml-workspace");
+  function syncGenotypeContext() {
+    genotypeRun?.setContext({
+      datasetId: activeDataset.id,
+      language: root.lang,
+      visible: app.dataset.nav === "analysis" &&
+        timeline.querySelector('[aria-current="step"]')?.dataset.stage === "1",
+    });
+  }
+
   function showStage(button, open) {
     for (const entry of stageButtons) {
       const expanded = entry === button && open;
@@ -670,6 +687,7 @@
     for (const panel of stageResults) panel.hidden = panel.id !== "lens-stage" + button.dataset.stage;
     timeline.querySelector('[aria-current="step"]').removeAttribute("aria-current");
     button.setAttribute("aria-current", "step");
+    syncGenotypeContext();
   }
   for (const button of stageButtons) {
     button.addEventListener("click", () => {
@@ -877,24 +895,45 @@
   const fullTime = (value) => value?.replace("T", " ").replace(/([+-]\d{2})(\d{2})$/, " $1:$2") ?? "";
   const notRecorded = () => historyText("未記錄", "Not recorded");
 
+  const genotypeHistoryStates = {
+    submitting: ["正在提交", "Submitting"],
+    submitted: ["已送出", "Submitted"],
+    pending: ["排隊中", "Queued"],
+    running: ["執行中", "Running"],
+    validating: ["正在檢查輸出", "Checking outputs"],
+    completed: ["已完成", "Completed"],
+    failed: ["失敗", "Failed"],
+    cancelling: ["正在取消", "Cancelling"],
+    cancelled: ["已取消", "Cancelled"],
+    unknown: ["待確認狀態", "Status unconfirmed"],
+  };
+  const genotypeHistoryState = (state) => genotypeHistoryStates[state] ?? ["尚未送出", "Not submitted"];
+  const historyJob = (run) => run.jobs.visualize ?? run.jobs.genotype;
+
   function renderHistoryRecords() {
     runList.innerHTML = historyRuns.map((run) => {
       const id = escapeHistory(run.run_id);
-      const started = fullTime(run.jobs.genotype?.submitted_at || run.jobs.visualize.submitted_at);
+      const started = fullTime(run.jobs.genotype?.submitted_at ?? historyJob(run)?.submitted_at);
+      const liveStatus = run.source === "live" ? historyText(...genotypeHistoryState(run.jobs.genotype?.state)) : "";
+      const icon = run.source === "live" && run.jobs.genotype?.state !== "completed" ? "history" : "circle-check";
       return `<button class="ml-nav-list-item" type="button" data-run-target="${id}" aria-controls="ml-run-${id}" aria-pressed="false">
-        <i data-lucide="circle-check" aria-hidden="true"></i>
-        <span><strong>${historyText(...run.name)}</strong><small>${escapeHistory(started)}</small></span>
+        <i data-lucide="${icon}" aria-hidden="true"></i>
+        <span><strong>${historyText(...run.name)}</strong><small>${escapeHistory(started)}${liveStatus ? " · " + liveStatus : ""}</small></span>
       </button>`;
     }).join("");
     runDetails.innerHTML = historyRuns.map((run) => {
       const id = escapeHistory(run.run_id);
-      const initialJob = run.jobs.genotype ?? run.jobs.visualize;
-      const stage6 = run.jobs.visualize;
+      const initialJob = run.jobs.genotype ?? historyJob(run);
+      const finished = fullTime(historyJob(run)?.finished_at);
+      const summary = run.graph
+        ? historyText(...networkOutput([run.graph.genes, run.graph.connections]))
+        : historyText(...genotypeHistoryState(run.jobs.genotype?.state));
       const stages = historySteps.map((key, offset) => {
         const job = run.jobs[key];
         if (!job) return "";
         const number = offset + 1;
-        const title = `<i data-lucide="circle-check" aria-hidden="true"></i>
+        const icon = job.state === "completed" ? "circle-check" : "history";
+        const title = `<i data-lucide="${icon}" aria-hidden="true"></i>
           ${historyText(`第 ${number} 階段`, `Stage ${number}`)}<strong>${historyLabel(stageData[offset].name)}</strong>
           <time datetime="${escapeHistory(job.finished_at)}">${escapeHistory(clockTime(job.finished_at))}</time>`;
         const panel = number === 3 ? "lens-history-stage3" : number === 6 ? "lens-stage6" : "lens-history-stage";
@@ -911,8 +950,8 @@
       }).join("");
       return `<article class="ml-nav-detail" id="ml-run-${id}" hidden>
         <header class="ml-nav-detail-title"><i data-lucide="history" aria-hidden="true"></i><h2>${historyText(...run.name)}</h2></header>
-        <p class="ml-run-overview">${id}<br>${escapeHistory(fullTime(initialJob.submitted_at))} – ${escapeHistory(fullTime(stage6.finished_at))}<br>
-          ${historyText(...networkOutput([run.graph.genes, run.graph.connections]))}</p>
+        <p class="ml-run-overview">${id}<br>${escapeHistory(fullTime(initialJob?.submitted_at))}${finished ? " – " + escapeHistory(finished) : ""}<br>
+          ${summary}</p>
         <details class="ml-run-inputs" open>
           <summary>${historyText("執行時使用的檔案", "Input files at execution")}</summary>
           <dl class="ml-key-values">${snapshot}</dl>
@@ -966,7 +1005,7 @@
   function renderStage6Status() {
     const language = root.lang === "en" ? 1 : 0;
     const state = analysisNetwork.dataset.runState;
-    const run = runsForDataset().find(({run_id}) => run_id === stage6RunSelect.value);
+    const run = stage6RunsForDataset().find(({run_id}) => run_id === stage6RunSelect.value);
     const [counts, frequency, topNetworks] = [stage6Result?.graph.counts, stage6Result?.frequency, stage6Result?.top_networks];
     const empty = stage6Result?.graph.edges.length === 0;
     stage6Source.textContent = (run?.source === "archive" ? ["封存執行", "Archived run"] : ["執行", "Run"])[language];
@@ -1029,7 +1068,7 @@
     stage6Result = null;
     delete analysisNetwork.dataset.runId;
     setLiveNetwork({}, []);
-    const matchingRuns = runsForDataset();
+    const matchingRuns = stage6RunsForDataset();
     const run = matchingRuns.find(({run_id}) => run_id === runId);
     if (!run) {
       const state = historyState === "error" ? "list-error" : historyState === "loading" ? "listing"
@@ -1067,7 +1106,7 @@
   }
 
   function syncStage6Picker(rebuild = false) {
-    const runs = runsForDataset();
+    const runs = stage6RunsForDataset();
     if (rebuild) {
       stage6RunSelect.replaceChildren(new Option("", ""), ...runs.map(({run_id}) => new Option(run_id, run_id)));
       stage6RunSelect.disabled = !runs.length;
@@ -1303,14 +1342,17 @@
       `<dt>${escapeHistory(label)}</dt><dd${identity}>${escapeHistory(recorded(value))}</dd>`;
 
     archivedStepPanel.querySelector("h2").textContent = language ? englishLabel(name) : name;
-    archivedStepStatus.textContent = savedStepStates[state]?.[language] ?? "";
+    const liveIncomplete = state === "empty" && run?.source === "live" && job?.state !== "completed";
+    archivedStepStatus.textContent = liveIncomplete
+      ? genotypeHistoryState(job?.state)[language] : savedStepStates[state]?.[language] ?? "";
     archivedStepStatus.hidden = !savedStepStates[state];
     archivedStepRetry.hidden = state !== "error";
     archivedStepChart.hidden = !view || !view.bars.length;
     archivedStepDock.hidden = !view;
     archivedStepMetrics.innerHTML = run ? [
       [local("階段", "Stage"), local(`第 ${stage} 階段`, `Stage ${stage}`)],
-      [local("封存執行", "Archived run"), run.name[language]],
+      [run.source === "live" ? local("執行", "Run") : local("封存執行", "Archived run"), run.name[language]],
+      ...(run.source === "live" ? [[local("狀態", "Status"), genotypeHistoryState(job?.state)[language]]] : []),
       ...(view?.metrics.map(([label, value]) => [label, countLabel.format(value)]) ?? []),
     ].map(([label, value]) => definition(label, value)).join("") : "";
 
@@ -1349,7 +1391,8 @@
   async function loadArchivedStep() {
     archivedStepRequest?.abort();
     const {runId, stage} = historyResult ?? {};
-    if (!archiveSteps.has(stage) || !runsForDataset().some(({run_id}) => run_id === runId)) return;
+    const run = runsForDataset().find(({run_id}) => run_id === runId);
+    if (!archiveSteps.has(stage) || !run) return;
     const request = new AbortController();
     archivedStepRequest = request;
     archivedStepResult = null;
@@ -1359,6 +1402,7 @@
     renderArchivedStep();
     try {
       const params = new URLSearchParams({run: runId, stage});
+      if (run.source === "live") params.set("source", "live");
       const result = await getArchivedResult("/stage/results?" + params, {signal: request.signal});
       if (request.signal.aborted) return;
       if (result.run_id !== runId || result.stage !== stage) throw new Error("Result does not match the selected run and stage");
@@ -1667,6 +1711,7 @@
     renderStage6Status();
     renderStage3History();
     renderArchivedStep();
+    syncGenotypeContext();
     renderRemoteSettings();
     renderDatasetLabels();
     syncInputFiles();
@@ -1722,29 +1767,36 @@
   }
 
   function updateAnalysisView() {
-    const hasSavedResults = runsForDataset().length > 0;
+    const isExample = activeDataset.id === exampleDataset.id;
+    const hasSavedResults = isExample || runsForDataset().length > 0;
     app.toggleAttribute("data-no-analysis", !hasSavedResults && historyState === "ready");
     byId("empty-analysis").hidden = hasSavedResults || historyState !== "ready" || !["analysis", "settings"].includes(app.dataset.nav);
     timeline.hidden = !hasSavedResults;
     byId("stage-header").querySelector("span").hidden = !hasSavedResults;
     byId("empty-stage").hidden = hasSavedResults || historyState !== "ready";
     // Stages 1–5 in the analysis view are the original chromosome 1 walkthrough.
-    const showWalkthrough = activeDataset.id === "example-chr1";
-    if (!showWalkthrough) {
+    const showWalkthrough = isExample && stage6RunsForDataset().length > 0;
+    const activeStage = timeline.querySelector('[aria-current="step"]').dataset.stage;
+    if (!isExample || (!showWalkthrough && !["1", "6"].includes(activeStage))) {
       const lastStage = stageButtons[stageButtons.length - 1];
       showStage(lastStage, true);
     }
     for (const button of stageButtons) {
-      button.closest(".ml-stage-entry").hidden = !showWalkthrough && button.dataset.stage !== "6";
+      button.closest(".ml-stage-entry").hidden = !showWalkthrough && button.dataset.stage !== "6" &&
+        !(isExample && button.dataset.stage === "1");
     }
+    syncGenotypeContext();
   }
 
   async function loadWorkspaceHistory() {
+    const request = ++historyRequest;
     historyState = "loading";
     updateHistoryView();
     if (!stage6RunSelect.value) void loadStage6Run("");
     try {
       const {datasets: savedDatasets, runs} = await getArchivedResult("/stage6/history");
+      if (request !== historyRequest) return;
+      if (!savedDatasets.some(({id}) => id === exampleDataset.id)) savedDatasets.unshift(exampleDataset);
       const existing = new Map(datasets.map((dataset) => [dataset.id, dataset]));
       const drafts = datasets.filter(({draft}) => draft);
       datasets.splice(0, datasets.length, ...savedDatasets.map((record) => {
@@ -1757,10 +1809,19 @@
       }), ...drafts);
       activeDataset = datasets.find(({id}) => id === activeDataset.id) ?? datasets[0] ?? activeDataset;
       historyRuns = [...runs].sort((a, b) =>
-        (Date.parse(b.jobs.visualize.finished_at) || 0) - (Date.parse(a.jobs.visualize.finished_at) || 0));
+        (Date.parse(historyJob(b)?.finished_at || historyJob(b)?.submitted_at) || 0) -
+        (Date.parse(historyJob(a)?.finished_at || historyJob(a)?.submitted_at) || 0));
       historyState = "ready";
       renderHistoryRecords();
+      if (genotypeRun && !restoredGenotypeRun) {
+        restoredGenotypeRun = true;
+        const active = historyRuns.find((run) => run.source === "live" &&
+          ["submitting", "submitted", "pending", "running", "validating", "cancelling", "unknown"]
+            .includes(run.jobs.genotype?.state));
+        if (active) genotypeRun.restore(active.run_id, active.jobs.genotype);
+      }
     } catch {
+      if (request !== historyRequest) return;
       historyState = "error";
     }
     renderDatasetLabels();
@@ -1771,6 +1832,16 @@
     syncStage6Picker(true);
   }
   byId("history-retry").addEventListener("click", () => void loadWorkspaceHistory());
+
+  async function openGenotypeHistory(runId) {
+    openNavigation("history");
+    await loadWorkspaceHistory();
+    if (app.dataset.nav !== "history" || !runsForDataset().some((run) => run.run_id === runId)) return;
+    selectedRuns.set(activeDataset.id, runId);
+    clearHistoryResult();
+    updateHistoryView();
+    runDetails.querySelector(`[data-run-stage="1"][data-run-id="${CSS.escape(runId)}"]`)?.focus({preventScroll: true});
+  }
 
   function closeDatasetForm() {
     datasetForm.hidden = true;
@@ -2006,6 +2077,12 @@
     }
   });
 
+  genotypeRun = globalThis.mountGenotypeRun({
+    panel: root.querySelector("#lens-stage1"),
+    token: chatToken,
+    onHistoryChanged: () => void loadWorkspaceHistory(),
+    onOpenHistory: (runId) => void openGenotypeHistory(runId),
+  });
   updateAnalysisView();
   updateHistoryView();
   globalThis.lucide?.createIcons();

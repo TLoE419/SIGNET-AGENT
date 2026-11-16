@@ -680,6 +680,16 @@ def _upload(root, directory, token):
         raise StepError('remote_failed', 'Could not upload the run to HPC3; nothing was submitted.')
 
 
+def _input_checks(files):
+    q = shlex.quote
+    # A file must be a real, non-empty file at exactly this path: no link may lead elsewhere.
+    return ''.join(
+        f'r="$(readlink -f -- {q(root)})"; f="$(readlink -f -- {q(path)})"\n'
+        f'if [ "$f" != "$r/{path[len(root) + 1:]}" ] || [ ! -f "$f" ] || [ ! -s "$f" ]; then '
+        f'say missing_input {q(key)}; say missing_file {q(path)}; exit 4; fi\n'
+        for key, path, root in files)
+
+
 def _submit_script(config, run_id, name, step, directory, files, resources, options=None, archive=None,
                    needs=None, settings=None):
     """Login-node script: check every input file and earlier result, write the job script, sbatch it, record the job ID.
@@ -702,12 +712,7 @@ def _submit_script(config, run_id, name, step, directory, files, resources, opti
     # Results of earlier steps must still be in this run's folder (nobody cleaned it up).
     needs = ''.join(f'if [ ! -s "$D/work/"{q(path)} ]; then say missing_prior {q(path)}; exit 4; fi\n'
                     for path in (step.needs if needs is None else needs))
-    # A file must be a real, non-empty file at exactly this path: no link may lead elsewhere.
-    checks = ''.join(
-        f'r="$(readlink -f -- {q(root)})"; f="$(readlink -f -- {q(path)})"\n'
-        f'if [ "$f" != "$r/{path[len(root) + 1:]}" ] || [ ! -f "$f" ] || [ ! -s "$f" ]; then '
-        f'say missing_input {q(key)}; say missing_file {q(path)}; exit 4; fi\n'
-        for key, path, root in files)
+    checks = _input_checks(files)
     job = _job_script(config, run_id, name, step, directory, binds, options, settings)
     sbatch = (f'sbatch --parsable --partition={config["partition"]} --cpus-per-task={resources["cpus"]} '
               f'--mem={resources["mem_gb"]}G --time={resources["time"]} "$D/steps/{name}.sbatch"')
@@ -807,6 +812,7 @@ def submit(run_id, name, inputs, resources=None, options=None):
         if answers:
             record['options'] = answers   # kept for reproducibility: the answers SIGNET was given
         settings = signet._settings(root)
+        record['settings'] = {key: settings[key] for key in step.settings}
         if any('{' in path for path in step.required):
             record['required_outputs'] = [_resolve(path, settings) for path in step.required]
         if previous:
@@ -830,6 +836,9 @@ def submit(run_id, name, inputs, resources=None, options=None):
                                                     archive=attempt - 1 if previous else None,
                                                     needs=[_resolve(path, settings) for path in step.needs],
                                                     settings=settings))
+            if code == 255:
+                # OpenSSH can lose the connection after the scheduler accepted the job.
+                raise OSError('OpenSSH did not confirm the submission.')
         except OSError as error:
             if record.get('state') != 'submitting':
                 raise StepError('remote_failed', 'HPC3 connection failed before anything was submitted.') from error

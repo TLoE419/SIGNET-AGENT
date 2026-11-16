@@ -30,6 +30,7 @@ import traceback
 from urllib.parse import parse_qs
 
 from agent.runtime import signet_jobs as jobs
+from agent.runtime import workspace_genotype
 import agent.tools.signet as signet
 
 MAX_BODY = 32768
@@ -99,6 +100,17 @@ def get_catalog(handler, url):
     """
     _query(url, ())
     return 200, jobs.catalog()
+
+
+def review_genotype_example(handler, url):
+    _query(url, ())
+    return 200, workspace_genotype.review_example()
+
+
+def submit_genotype_example(handler, url):
+    _query(url, ())
+    fields = ('run_id', 'inputs', 'settings', 'resources')
+    return 202, workspace_genotype.submit_example(**_body(handler, fields, required=fields))
 
 
 # ---------- runs (local; includes signet -s) ----------
@@ -263,6 +275,7 @@ def get_log(handler, url, run_id, step):
 # Each path pattern maps HTTP methods to the function above that serves it.
 ROUTES = [
     (re.compile(r'/signet/catalog'), {'GET': get_catalog}),
+    (re.compile(r'/signet/genotype/example'), {'GET': review_genotype_example, 'POST': submit_genotype_example}),
     (re.compile(r'/signet/runs'), {'GET': list_runs, 'POST': create_run}),
     (re.compile(rf'/signet/runs/{_RUN}'), {'GET': get_run}),
     (re.compile(rf'/signet/runs/{_RUN}/settings'), {'PATCH': update_settings}),

@@ -35,16 +35,30 @@ are bundled.
 
 The desktop opens directly to the bilingual workspace. The left chat uses the
 existing SIGNET Agent, model configuration, and saved conversations. Choose a
-dataset in **Data**, then open **Run history** to see that dataset's completed
-runs. A run shows its saved input filenames, and its six timeline stages open
-the results for that run. Stages 1 and 2 show genotype and expression outputs.
+dataset in **Data**, then open **Run history** to see that dataset's saved
+runs. Each run shows its saved input filenames and the timeline stages
+available for that run. Stages 1 and 2 show genotype and expression outputs.
 Stage 3 shows sample matching, the recorded principal component count, and the
 archived expression comparison. Stage 4 shows significant association pairs,
 and Stage 5 shows candidate edges grouped by their recorded bootstrap frequency.
 Stage 6 opens the network and edge table, with a filter for the selected gene.
 Each stage uses the settings preserved with its job. The Stage 6 selector in
-**Analysis** also follows the selected dataset. The first five stage previews
+**Analysis** also follows the selected dataset. The previews for Stages 2–5
 in **Analysis** still use simulated data.
+
+### Submit the chromosome 1 example
+
+Use **View → Classic Interface** for the existing HPC3 connection and environment
+preparation, then return to **View → Workspace**. In **Analysis → Stage → Stage 1**
+of the chromosome 1 example, check the four prepared input files. Review the
+fixed chromosome, thresholds, and resource settings, then select **Submit Stage 1**.
+The application tracks the saved job through the queue, execution, and output
+validation. From **Run history**, open the new run and select its Stage 1 result
+to read the collected data and the settings actually submitted.
+
+The local installation needs the audited SIGNET source, as described under
+[installation](../docs/INSTALL.md). The existing desktop SSH environment
+supplies the prepared files and scheduler for the submission.
 
 Archived HPC3 exports remain local. The application reads these records under
 the ignored `data/` directory:

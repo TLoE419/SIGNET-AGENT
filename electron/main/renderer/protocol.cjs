@@ -7,6 +7,7 @@ const assets=new Map([
  ['/chat-markdown.js',['chat-markdown.js','text/javascript']],
  ['/workspace/workspace.css',['workspace/workspace.css','text/css']],
  ['/workspace/workspace.js',['workspace/workspace.js','text/javascript']],
+ ['/workspace/genotype-run.js',['workspace/genotype-run.js','text/javascript']],
  ['/workspace/icons.js',['workspace/icons.js','text/javascript']],
  ['/workspace/interaction.js',['workspace/interaction.js','text/javascript']],
  ['/renderer.js',['renderer.js','text/javascript']],

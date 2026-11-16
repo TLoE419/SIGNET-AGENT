@@ -741,3 +741,80 @@ code:not(pre code) {
 }
 #signet-lens-left-preview .ml-stage-detail dt { color: #52697c; }
 #signet-lens-left-preview .ml-stage-detail dd { margin: 0; }
+
+#signet-lens-left-preview #lens-stage1 .ml-genotype-main {
+  overflow: auto;
+  padding: 33px 26px 24px 32px;
+}
+
+#signet-lens-left-preview #lens-stage1 .ml-genotype-main :is(h2, h3, p) { margin: 0; }
+#signet-lens-left-preview #lens-stage1 .ml-genotype-main h2 { margin-block: 3px; font-size: 19px; font-weight: 600; }
+#signet-lens-left-preview #lens-stage1 :is(.ml-genotype-eyebrow, [data-genotype-guidance]) { color: var(--ml-muted); }
+#signet-lens-left-preview #lens-stage1 .ml-genotype-main [data-genotype-readiness] { margin-top: 15px; font-weight: 600; }
+#signet-lens-left-preview #lens-stage1 .ml-genotype-main [data-genotype-guidance] { margin-top: 4px; }
+
+#signet-lens-left-preview #lens-stage1 [data-genotype-form] {
+  display: grid;
+  margin-top: 14px;
+  gap: 10px;
+}
+
+#signet-lens-left-preview #lens-stage1 [data-genotype-form] h3 { font-size: 13px; font-weight: 600; }
+#signet-lens-left-preview #lens-stage1 [data-genotype-form] code { overflow-wrap: anywhere; }
+#signet-lens-left-preview #lens-stage1 [data-genotype-fields] {
+  min-width: 0;
+  margin: 0;
+  padding: 7px 10px 10px;
+  border: 1px solid var(--ml-rule);
+  border-radius: 5px;
+}
+
+#signet-lens-left-preview #lens-stage1 [data-genotype-fields] legend { padding-inline: 4px; font-weight: 600; }
+#signet-lens-left-preview #lens-stage1 .ml-genotype-controls {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px 10px;
+}
+
+#signet-lens-left-preview #lens-stage1 .ml-genotype-controls label { display: grid; gap: 3px; color: var(--ml-muted); }
+#signet-lens-left-preview #lens-stage1 .ml-genotype-controls input {
+  width: 100%;
+  min-height: 28px;
+  padding-inline: 6px;
+  border: 1px solid var(--ml-rule);
+  border-radius: 4px;
+  background: #fff;
+  color: var(--ml-ink);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+}
+
+#signet-lens-left-preview #lens-stage1 .ml-genotype-controls input:read-only { background: #f5f7f8; }
+#signet-lens-left-preview #lens-stage1 .ml-genotype-submit {
+  justify-self: start;
+  margin: 2px 0 0;
+  border-color: #24618f;
+  background: #24618f;
+  color: #fff;
+}
+
+#signet-lens-left-preview #lens-stage1 .ml-genotype-submit:hover:not(:disabled) { background: #1e5179; }
+#signet-lens-left-preview #lens-stage1 .ml-nav-action:disabled { cursor: wait; opacity: .6; }
+#signet-lens-left-preview #lens-stage1 .ml-genotype-progress { padding: 16px 16px 16px 8px; overflow: auto; }
+#signet-lens-left-preview #lens-stage1 .ml-genotype-progress h3 { margin: 0; font-size: 13px; font-weight: 600; }
+#signet-lens-left-preview #lens-stage1 .ml-genotype-status {
+  color: #24618f;
+  margin: 13px 0 8px;
+  font-weight: 600;
+}
+
+#signet-lens-left-preview #lens-stage1 .ml-genotype-events {
+  color: var(--ml-ink);
+  margin: 12px 0 0;
+  padding: 0 0 0 13px;
+}
+
+#signet-lens-left-preview #lens-stage1 .ml-genotype-events li { margin: 6px 0; }
+#signet-lens-left-preview #lens-stage1 .ml-genotype-events time { display: block; color: var(--ml-muted); }
+#signet-lens-left-preview #lens-stage1 .ml-genotype-notice { color: #6b4a28; margin: 10px 0 0; overflow-wrap: anywhere; }
+#signet-lens-left-preview #lens-stage1 .ml-genotype-actions { display: grid; justify-items: start; }
