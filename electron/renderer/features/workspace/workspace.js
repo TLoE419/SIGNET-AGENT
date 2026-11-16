@@ -1637,44 +1637,6 @@
   }
 
   const languageButton = byId("language");
-  const remoteSwitch = byId("remote-switch");
-  const remoteStatus = byId("remote-status");
-  const checkEnvironment = byId("check-environment");
-  const checkSummary = byId("check-summary");
-  const readinessChecks = byId("environment-checks").querySelectorAll(".ml-settings-status");
-  let environmentChecked = false;
-
-  function renderRemoteSettings() {
-    const connected = remoteSwitch.getAttribute("aria-checked") === "true";
-    const english = root.lang === "en";
-    remoteStatus.textContent = connected ? (english ? "Simulated connection" : "模擬已連線") : (english ? "Disconnected" : "未連線");
-    remoteStatus.dataset.ready = String(connected);
-    checkEnvironment.disabled = !connected;
-    if (environmentChecked) {
-      checkSummary.textContent = english
-        ? `${readinessChecks.length}/${readinessChecks.length} ready in this preview.`
-        : `模擬檢查完成，${readinessChecks.length}/${readinessChecks.length} 項就緒。`;
-    } else {
-      checkSummary.textContent = connected
-        ? (english ? "Run the simulated readiness check." : "可執行模擬就緒檢查。")
-        : (english ? "Enable the simulated connection to check readiness." : "開啟模擬連線後可檢查。");
-    }
-    for (const check of readinessChecks) {
-      check.dataset.ready = String(environmentChecked);
-      check.textContent = environmentChecked ? (english ? "Ready" : "已就緒") : (english ? "Not checked" : "未檢查");
-    }
-  }
-
-  remoteSwitch.addEventListener("click", () => {
-    const connected = remoteSwitch.getAttribute("aria-checked") === "true";
-    remoteSwitch.setAttribute("aria-checked", String(!connected));
-    environmentChecked = false;
-    renderRemoteSettings();
-  });
-  checkEnvironment.addEventListener("click", () => {
-    environmentChecked = true;
-    renderRemoteSettings();
-  });
   const modelChip = byId("model-chip");
   modelChip.textContent = modelChip.title = chatModel;
   byId("model-select").add(new Option(chatModel));
@@ -1712,7 +1674,6 @@
     renderStage3History();
     renderArchivedStep();
     syncGenotypeContext();
-    renderRemoteSettings();
     renderDatasetLabels();
     syncInputFiles();
     languageButton.textContent = inEnglish ? "中文" : "EN";

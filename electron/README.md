@@ -48,8 +48,10 @@ in **Analysis** still use simulated data.
 
 ### Submit the chromosome 1 example
 
-Use **View → Classic Interface** for the existing HPC3 connection and environment
-preparation, then return to **View → Workspace**. In **Analysis → Stage → Stage 1**
+Connect to HPC3 from **Settings → Remote compute**. The same panel can check
+the remote resources and open the existing environment settings. Use **View →
+Classic Interface** when installing missing resources from its Workflow panel.
+In **Analysis → Stage → Stage 1**
 of the chromosome 1 example, check the four prepared input files. Review the
 fixed chromosome, thresholds, and resource settings, then select **Submit Stage 1**.
 The application tracks the saved job through the queue, execution, and output
@@ -97,9 +99,9 @@ those covariates plus the original genotype components.
 Creating a dataset in the workspace adds a draft for the current session. An
 archive is a read-only result and remains tied to its saved input snapshot.
 
-Use **View → Classic Interface** for model and SSH setup, existing Stage 6
-tools, and the development terminal. **View → Workspace** returns to the new
-interface.
+Use **View → Classic Interface** for model setup, existing Stage 6 tools, and
+the development terminal. **View → Workspace** returns to the new interface.
+Both interfaces share the same HPC3 connection.
 
 ## Development terminal
 

@@ -410,6 +410,11 @@ code:not(pre code) {
 #signet-lens-left-preview .ml-settings-connection { margin-top: 11px; }
 #signet-lens-left-preview .ml-settings-connection > svg { color: #51799e; }
 #signet-lens-left-preview .ml-settings-connection > .ml-settings-status { margin-left: auto; }
+#signet-lens-left-preview .ml-connection-details { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+#signet-lens-left-preview .ml-connection-details small {
+  flex: 1; min-width: 0; color: var(--ml-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+#signet-lens-left-preview .ml-connection-details button { flex: none; margin-left: auto; }
 #signet-lens-left-preview .ml-settings-status {
   display: inline-block; padding: 2px 7px; border-radius: 5px; white-space: nowrap;
   background: #eef3f6; color: var(--ml-muted); font-size: 12px;
@@ -420,6 +425,7 @@ code:not(pre code) {
   border: 0; border-radius: 16px; background: #758494; cursor: pointer;
 }
 #signet-lens-left-preview .ml-remote-switch[aria-checked="true"] { background: #397f53; justify-content: flex-end; }
+#signet-lens-left-preview .ml-remote-switch:disabled { opacity: .55; cursor: default; }
 #signet-lens-left-preview .ml-remote-switch span { width: 17px; height: 17px; border-radius: 50%; background: #fff; }
 #signet-lens-left-preview :is(.ml-settings-model-row, .ml-settings-check-heading) { justify-content: space-between; }
 #signet-lens-left-preview .ml-settings-model-row label { font-weight: 650; }
@@ -431,12 +437,14 @@ code:not(pre code) {
 #signet-lens-left-preview .ml-settings-action:disabled { opacity: .55; cursor: default; }
 #signet-lens-left-preview .ml-settings-action:enabled:hover { background: var(--ml-tab); }
 #signet-lens-left-preview .ml-settings-note { margin: 8px 0 4px; color: var(--ml-muted); font-size: 12px; }
+#signet-lens-left-preview .ml-settings-block p[role="alert"] { color: var(--ml-red); overflow-wrap: anywhere; }
 #signet-lens-left-preview .ml-settings-checks { margin: 0; padding: 0; list-style: none; }
 #signet-lens-left-preview .ml-settings-checks li {
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
   min-height: 34px; border-bottom: 1px solid var(--ml-rule);
 }
 #signet-lens-left-preview .ml-settings-checks li:last-child { border-bottom: 0; }
+#signet-lens-left-preview .ml-remote-readiness > button { margin-top: 8px; }
 #signet-lens-left-preview .ml-nav-pane-title {
   display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
   margin-bottom: 16px; color: var(--ml-muted);

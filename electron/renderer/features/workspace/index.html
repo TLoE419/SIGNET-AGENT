@@ -8,12 +8,14 @@
   <meta name="model-label" content="__MODEL__">
   <title>SIGNET · Workspace</title>
   <link rel="stylesheet" href="./workspace/workspace.css">
+  <link rel="stylesheet" href="./ssh.css">
   <script type="application/json" id="initial-chat">__INITIAL_CHAT__</script>
   <script defer src="./workspace/icons.js"></script>
   <script defer src="/chat-markdown.js"></script>
   <script defer src="./workspace/genotype-run.js"></script>
   <script defer src="./workspace/workspace.js"></script>
   <script defer src="./workspace/interaction.js"></script>
+  <script defer src="./renderer.js"></script>
 </head>
 <body>
 <div id="signet-lens-left-preview" lang="zh-Hant">
@@ -133,18 +135,10 @@
         <p class="ml-dataset-empty-note" id="ml-empty-run-list" data-live-language role="status" hidden></p>
       </div>
       <div class="ml-nav-pane" data-nav-left="settings" hidden>
-        <div class="ml-nav-pane-title"><h3>工作區設定</h3><span>原型預覽</span></div>
+        <div class="ml-nav-pane-title"><h3>工作區設定</h3></div>
         <section class="ml-settings-block" aria-labelledby="ml-remote-title">
           <h4 id="ml-remote-title" data-en-text="Remote compute">遠端運算</h4>
-          <div class="ml-settings-connection">
-            <i data-lucide="server" aria-hidden="true"></i>
-            <strong>HPC3</strong>
-            <span class="ml-settings-status" id="ml-remote-status" data-live-language role="status">未連線</span>
-            <button type="button" class="ml-remote-switch" id="ml-remote-switch" role="switch" aria-checked="false"
-              aria-label="遠端連線" data-en-aria-label="Remote connection">
-              <span aria-hidden="true"></span>
-            </button>
-          </div>
+          <div id="ml-remote-controls" data-live-language></div>
         </section>
         <section class="ml-settings-block" aria-labelledby="ml-model-title">
           <div class="ml-settings-model-row">
@@ -152,22 +146,7 @@
             <select id="ml-model-select" disabled data-live-language></select>
           </div>
         </section>
-        <section class="ml-settings-block" aria-labelledby="ml-readiness-title">
-          <div class="ml-settings-check-heading">
-            <h4 id="ml-readiness-title" data-en-text="Environment readiness">環境就緒檢查</h4>
-            <button type="button" class="ml-settings-action" id="ml-check-environment" data-en-text="Check again" disabled>重新檢查</button>
-          </div>
-          <p class="ml-settings-note" id="ml-check-summary" data-live-language role="status">開啟模擬連線後可檢查。</p>
-          <ul class="ml-settings-checks" id="ml-environment-checks">
-            <li><span data-en-text="SIGNET source code">SIGNET 程式碼</span><span class="ml-settings-status" data-live-language>未檢查</span></li>
-            <li><span data-en-text="SIGNET container">SIGNET 容器</span><span class="ml-settings-status" data-live-language>未檢查</span></li>
-            <li><span data-en-text="Reference panel">參考面板</span><span class="ml-settings-status" data-live-language>未檢查</span></li>
-            <li><span data-en-text="Genetic map">遺傳圖譜</span><span class="ml-settings-status" data-live-language>未檢查</span></li>
-            <li><span data-en-text="Gene annotation">基因註解</span><span class="ml-settings-status" data-live-language>未檢查</span></li>
-            <li><span data-en-text="Clinical data">臨床資料</span><span class="ml-settings-status" data-live-language>未檢查</span></li>
-            <li><span data-en-text="Imputation reference">補值參考檔</span><span class="ml-settings-status" data-live-language>未檢查</span></li>
-          </ul>
-        </section>
+        <div id="ml-environment-settings" data-live-language></div>
       </div>
     </section>
     <section class="ml-nav-workspace" data-nav-right="data" aria-label="輸入資料明細" hidden>
