@@ -115,6 +115,84 @@ def _update(root, values):
     config.write_text('\n'.join(lines) + '\n')
 
 
+# Facts the assistant states about this app. Keep them in step with agent/runtime/hpc.py,
+# agent/runtime/signet_jobs.py and the official SIGNET scripts they cite.
+HPC3_SETUP = [
+    {'step': 'Check the environment', 'tool': 'check_hpc_environment', 'button': 'Check environment (HPC3 settings)',
+     'what': 'Read-only check that HPC3 is ready: installation folder, Slurm, the container runtime, the pinned SIGNET '
+             'source and example data, the container, the four reference files and the imputation conversion.'},
+    {'step': 'Install SIGNET', 'tool': 'install_signet_source', 'button': '安裝',
+     'what': 'Installs the official SIGNET source at the pinned commit, with its example data, on the HPC3 '
+             'login node. Files are kept only if every hash matches; an existing installation is never replaced.'},
+    {'step': 'Download the container', 'tool': 'download_signet_container', 'button': '下載',
+     'what': 'Slurm job that downloads the SIGNET container provided by Prof. Zhang (about 6 GB) and keeps it only '
+             'if its size and checksum match.'},
+    {'step': 'Download reference files', 'tool': 'download_reference_file', 'button': '下載',
+     'what': 'One Slurm job per file: ref (1000 Genomes GRCh38 chromosome 1 genotypes), gmap (SHAPEIT4 GRCh38 '
+             'genetic map), gtf (GENCODE v22, collapsed to one record per gene for signet -t) and clinical '
+             '(TCGA-LUAD case IDs, race and sex at birth from GDC, saved as submitter_id, race and gender).'},
+    {'step': 'Choose your own reference file', 'tool': None, 'button': '選擇 HPC 檔案 (Workflow panel)',
+     'what': 'The researcher may choose a file on HPC3 instead of a download. The app checks its format and that '
+             'compute nodes can read it. Only the researcher can choose; the assistant never sees the path.'},
+    {'step': 'Convert ref and gmap for imputation', 'tool': 'prepare_imputation_reference', 'button': '轉檔',
+     'what': 'Slurm job that turns ref and gmap into IMPUTE2 inputs for the example study (chromosome 1): keeps '
+             'only study markers whose position and alleles match the reference, and reports a counts-only '
+             'summary with the match rate. Runs again when ref, gmap or the study change.'},
+    {'step': 'Read a setup log', 'tool': 'read_hpc_setup_log', 'button': None,
+     'what': 'Shows the last lines of one setup step\'s log, to explain a failure. Logs hold counts and messages, '
+             'no research data.'},
+]
+_HOW_TO_RUN = ('From the confirmation card in chat. The researcher reviews the inputs, settings and resources, '
+               'then confirms; the job runs on HPC3 through Slurm. The assistant cannot confirm a card.')
+ANALYSIS_STAGES = [
+    {'stage': 1, 'flag': '-g', 'name': 'Genotype preprocessing',
+     'purpose': 'Quality control with PLINK (removes samples and SNPs with too many missing calls, and SNPs that '
+                'fail Hardy-Weinberg equilibrium, using the mind, geno and hwe settings), then IMPUTE2 fills in '
+                'missing genotypes at the study\'s own SNPs. SIGNET runs IMPUTE2 with -include_snps empty '
+                '(script/geno_prep/imputation.sh), so no new SNPs are added.',
+     'inputs': 'Study genotypes (PED and MAP), the imputation reference (.gen) and genetic map (IMPUTE2 format). '
+               'The conversion setup step prepares the last two for the example study.',
+     'how_to_run': 'The assistant prepares the first card with propose_hpc3_genotype. ' + _HOW_TO_RUN},
+    {'stage': 2, 'flag': '-t', 'name': 'Expression preprocessing',
+     'purpose': 'Removes samples with fewer than 2.5 million total reads and genes with very low counts, applies '
+                'the DESeq2 variance-stabilizing transformation, and uses the GTF to keep protein-coding genes '
+                'and record each gene\'s position.',
+     'inputs': 'TCGA expression matrix, collapsed GENCODE v22 GTF.',
+     'how_to_run': _HOW_TO_RUN},
+    {'stage': 3, 'flag': '-a', 'name': 'Sample matching and covariate adjustment',
+     'purpose': 'Matches expression and genotype samples, keeps SNPs with a minor allele count of at least 5, '
+                'computes genotype principal components for population structure, and removes the effects of '
+                'race, gender and the chosen number of components from expression by regression. SIGNET\'s own '
+                'script treats race "not reported" as white and removes "american indian or alaska native".',
+     'inputs': 'Clinical table with submitter_id, race and gender columns; results of stages 1 and 2.',
+     'how_to_run': _HOW_TO_RUN},
+    {'stage': 4, 'flag': '-c', 'name': 'cis-eQTL mapping',
+     'purpose': 'For each gene, tests the SNPs within the upstream and downstream distance for association with '
+                'its expression. Common, low-frequency and rare variants are tested separately, the last two by '
+                'permutation (nperms). Gene-SNP pairs significant at alpha.cis become instruments for stage 5.',
+     'inputs': 'Results of stages 2 and 3.',
+     'how_to_run': _HOW_TO_RUN},
+    {'stage': 5, 'flag': '-n', 'name': 'Network construction',
+     'purpose': 'Builds the gene regulatory network with two-stage penalized least squares (2SPLS) on nboots '
+                'bootstrap data sets. How often an edge appears across bootstraps measures its robustness. '
+                'SIGNET submits its own Slurm jobs; this stage follows them.',
+     'inputs': 'Results of stage 4.',
+     'how_to_run': _HOW_TO_RUN},
+    {'stage': 6, 'flag': '-v', 'name': 'Network visualization',
+     'purpose': 'Keeps edges whose bootstrap frequency is at least freq, draws the top ntop subnetworks as '
+                'interactive HTML and circular PDF, and runs functional enrichment with the online STRING '
+                'database. Results are shown in chat and can be downloaded.',
+     'inputs': 'Results of stage 5.',
+     'how_to_run': _HOW_TO_RUN},
+]
+SCOPE = {
+    'cohort': 'The HPC3 chat workflow supports TCGA. GTEx tools exist only for the separate local workflow.',
+    'reference_data': 'Prepared for chromosome 1 only, matching the SIGNET example study (simulated TCGA-LUAD data).',
+    'genome_build': 'ref, gmap and GTF use GRCh38; study genotypes must use the same build.',
+    'results': 'A finished step means the expected files exist; it does not establish biological validity.',
+}
+
+
 def signet_catalog() -> dict:
     """List audited SIGNET scripts, analysis tools, phases and execution restrictions."""
     from agent.tools.general import GENERAL_TOOLS
@@ -128,6 +206,7 @@ def signet_catalog() -> dict:
             'prepare_only': ['prepare_network', 'prepare_visualization'],
             'network_execution': ['submit_network', 'get_network_status', 'cancel_network'],
             'visualization_execution': ['run_visualization'],
+            'hpc3_setup': HPC3_SETUP, 'analysis_stages': ANALYSIS_STAGES, 'scope': SCOPE,
             'note': 'Preparation is not execution. No scientific success is inferred from exit code alone.'}
 
 

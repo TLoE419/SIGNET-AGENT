@@ -13,7 +13,8 @@
   const items = [
     {id: 'hpc', label: 'HPC3 環境', parts: ['connection', 'workspace', 'slurm', 'apptainer'],
      hint: '請用右上角的 SSH 面板連線。'},
-    {id: 'signet_source', label: 'SIGNET 程式碼', button: '安裝', install: true},
+    {id: 'signet_source', label: 'SIGNET 程式碼', button: '安裝', action: 'signet',
+     confirm: 'This downloads the pinned SIGNET source and example data into your configured remote workspace.'},
     {id: 'container', label: 'SIGNET 容器', button: '下載', action: 'container'},
     {id: 'reference_ref', label: '參考面板（ref）', button: '下載', action: 'reference/ref', file: 'ref'},
     {id: 'reference_gmap', label: '遺傳圖譜（gmap）', button: '下載', action: 'reference/gmap', file: 'gmap'},
@@ -25,7 +26,7 @@
   const severity = ['ok', 'in_progress', 'missing', 'problem'];
   const bridge = window.signetDesktop.environment;
   const inProgress = ['checking', 'installing-source', 'verifying'];
-  let busy = false, checked = false, latest = null, generation = 0;
+  let busy = false, checked = false, latest = null, generation = 0, followUp = null, lastRecheck = 0;
   let environment = {phase: 'disconnected', message: ''};
   // Paths of files chosen on HPC3. They come from their own route and never reach the assistant.
   let selections = {};
@@ -55,14 +56,14 @@
   function actionButton(item) {
     const button = element('button', 'workflow-action', item.button);
     button.type = 'button';
-    if (busy || item.unavailable || !(item.action || item.install) || inProgress.includes(environment.phase)) {
+    if (busy || item.unavailable || !item.action || inProgress.includes(environment.phase)) {
       button.disabled = true;
       if (item.unavailable) {
         button.dataset.i18nTitle = item.unavailable;
         button.title = translateUI(item.unavailable);
       }
     } else {
-      button.addEventListener('click', () => item.install ? install(item) : run(item));
+      button.addEventListener('click', () => run(item));
     }
     return button;
   }
@@ -110,7 +111,7 @@
       if (item.file && selections[item.file]) text.append(Object.assign(element('span', 'workflow-item-detail workflow-item-path'), {textContent: selections[item.file]}));
       else if (status === 'unknown' && item.hint) text.append(element('span', 'workflow-item-detail', item.hint));
       row.append(element('span', 'workflow-badge', statusText[status] || status), text);
-      if (item.button && !selections[item.file] && (status === 'missing' || (status === 'problem' && !item.install))) row.append(actionButton(item));
+      if (item.button && !selections[item.file] && (status === 'missing' || status === 'problem')) row.append(actionButton(item));
       if (item.file && latest) row.append(...fileButtons(item, status));
       return row;
     }));
@@ -150,6 +151,7 @@
       const problem = environmentProblem();
       if (problem) say(problem, 'warning');
       else say(result.ready ? '環境已準備好。' : running ? '有步驟正在背景執行，稍後再按「重新檢查」。' : '');
+      afterInspect(result, current);
     } catch (error) {
       if (current === generation) say(error.message, 'error');
     } finally {
@@ -171,16 +173,26 @@
     if (!result.ok) say(result.error || '目前無法檢查 HPC3。', 'error');
   }
 
-  async function install(item) {
-    if (busy || !window.confirm('Install ' + translateUI(item.label) + '? This downloads the pinned source into your configured remote workspace.')) return;
-    say('正在安裝 SIGNET…');
-    const result = await bridge.install();
-    if (!result.ok) say(result.error || '目前無法檢查 HPC3。', 'error');
+  // The SIGNET installation runs on HPC3 for about a minute: follow it, then let the desktop
+  // re-verify the environment, which it last checked before SIGNET was there.
+  function afterInspect(result, current) {
+    clearTimeout(followUp);
+    const source = result.checks.find(item => item.item === 'signet_source');
+    if (source?.status === 'in_progress') {
+      followUp = setTimeout(() => { if (current === generation) void inspect(); }, 5000);
+      return;
+    }
+    const awaitsSource = (environment.missing || []).some(name => name.startsWith('SIGNET'));
+    // At most once a minute, so a disagreement between the two checks cannot loop.
+    if (source?.status === 'ok' && environment.phase === 'needs-install' && awaitsSource && Date.now() - lastRecheck > 60000) {
+      lastRecheck = Date.now();
+      setTimeout(() => { if (current === generation) void refresh(); }, 0);
+    }
   }
 
   async function run(item) {
     if (busy) return;
-    if (!window.confirm('Start ' + translateUI(item.label) + '? This writes to your configured remote workspace and may submit a Slurm job.')) return;
+    if (!window.confirm('Start ' + translateUI(item.label) + '? ' + (item.confirm || 'This writes to your configured remote workspace and may submit a Slurm job.'))) return;
     busy = true;
     render();
     const current = generation;
@@ -199,6 +211,7 @@
   }
 
   function observe(state) {
+    clearTimeout(followUp);
     environment = state;
     selections = {};
     generation++;
@@ -218,7 +231,10 @@
   window.addEventListener('remote-file-selected', () => { void inspect(); });
   // The assistant can open or collapse this panel through show_panel.
   window.addEventListener('panel-request', event => {
-    if (event.detail?.panel === 'workflow') panel.open = Boolean(event.detail.visible);
+    if (event.detail?.panel !== 'workflow') return;
+    panel.open = Boolean(event.detail.visible);
+    // The assistant started a setup step: show its row's progress.
+    if (event.detail.refresh) setTimeout(() => { void inspect(); }, 3000);
   });
   panel.addEventListener('toggle', () => { if (panel.open && !checked) inspect(); });
   window.addEventListener('languagechange', () => list.querySelectorAll('[data-i18n-title]').forEach(el => {

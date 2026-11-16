@@ -86,6 +86,20 @@ class ToolsTest(unittest.TestCase):
         st._verify_source()
         self.assertEqual(self.call('signet_catalog')['internal_scripts'],121)
 
+    def test_catalog_describes_setup_and_six_stages_for_the_assistant(self):
+        catalog = self.call('signet_catalog')
+        self.assertEqual([stage['flag'] for stage in catalog['analysis_stages']], ['-g', '-t', '-a', '-c', '-n', '-v'])
+        for stage in catalog['analysis_stages']:
+            self.assertTrue(all(stage[key] for key in ('name', 'purpose', 'inputs', 'how_to_run')), stage)
+        # SIGNET imputes only missing genotypes at the study's own SNPs (-include_snps empty).
+        self.assertIn('no new SNPs', catalog['analysis_stages'][0]['purpose'])
+        self.assertIn('gender', catalog['analysis_stages'][2]['inputs'])
+        from agent.tools.hpc import HPC_TOOLS
+        named = {step['tool'] for step in catalog['hpc3_setup']} - {None}
+        self.assertTrue(named <= {fn.__name__ for fn in HPC_TOOLS}, 'every named setup tool exists')
+        self.assertIn('check_hpc_environment', named)
+        self.assertIn('genome_build', catalog['scope'])
+
     def test_all_schemas_without_network(self):
         with genai.Client(api_key='fake-schema-key') as client:
             for fn in main.config.tools:

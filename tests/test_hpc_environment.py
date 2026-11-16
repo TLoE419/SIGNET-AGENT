@@ -85,15 +85,13 @@ class CheckTest(unittest.TestCase):
         self.assertEqual(result['not_ready'], ['container'])
         self.assertIn('images/signet-0.0.6.sif', self.item(result, 'container')['detail'])
 
-    def test_missing_or_modified_example_data_is_reported_on_the_source_row(self):
+    def test_missing_example_data_is_reported_on_the_source_row(self):
         result, remote = self.check(markers(**{**READY, 'signet_example': 'missing'}))
         source = self.item(result, 'signet_source')
         self.assertEqual(source['status'], 'missing')
         self.assertIn('example data', source['detail'])
-        self.assertIn('SIGNET_EXAMPLE_HASHES', remote.call_args.kwargs['input'].decode())
-        self.assertIn('example/geno/example.ped', remote.call_args.kwargs['input'].decode())
-        result, _ = self.check(markers(**{**READY, 'signet_example': 'mismatch'}))
-        self.assertEqual(self.item(result, 'signet_source')['status'], 'problem')
+        # The HPC3 settings check verifies the files by their hashes; this check does not repeat it.
+        self.assertNotIn('SIGNET_EXAMPLE_HASHES', remote.call_args.kwargs['input'].decode())
 
     def test_ready_environment_reports_every_item_ok_and_read_only(self):
         result, remote = self.check('Welcome banner\n' + markers(**READY))
@@ -105,7 +103,7 @@ class CheckTest(unittest.TestCase):
         self.assertIn('3.0 GB', self.item(result, 'container')['detail'])
         self.assertEqual(remote.call_args.args, ('bash -s',))
         script = remote.call_args.kwargs['input'].decode()
-        self.assertIn('sha256sum -c', script)
+        self.assertNotIn('sha256sum', script, 'source hashes are checked once, by the HPC3 settings check')
         self.assertNotIn('git -C', script)
         for reads_content in ('cat ', 'less ', 'grep ', 'sed ', 'awk ', 'tail '):
             self.assertNotIn(reads_content, script)
@@ -120,9 +118,8 @@ class CheckTest(unittest.TestCase):
                                                'imputation_reference'])
         self.assertEqual(self.item(result, 'workspace')['status'], 'missing')
 
-    def test_wrong_revision_modified_source_and_empty_files_are_problems(self):
-        for change, item in [({'signet_revision': 'a' * 40}, 'signet_source'), ({'signet_integrity': 'mismatch'}, 'signet_source'),
-                             ({'signet': 'invalid'}, 'signet_source'), ({'file_gtf': 'empty'}, 'reference_gtf'),
+    def test_invalid_source_path_and_empty_files_are_problems(self):
+        for change, item in [({'signet': 'invalid'}, 'signet_source'), ({'file_gtf': 'empty'}, 'reference_gtf'),
                              ({'workspace_writable': 'no'}, 'workspace'), ({'apptainer': 'no'}, 'apptainer')]:
             with self.subTest(change=change):
                 result, _ = self.check(markers(**{**READY, **change}))
@@ -148,13 +145,33 @@ class CheckTest(unittest.TestCase):
 
 
 class StepToolTest(unittest.TestCase):
-    def test_source_installation_stays_with_the_desktop_environment(self):
+    def test_workspace_has_no_separate_step(self):
         with patch.object(hpc.ssh_transport, 'remote') as remote:
-            for tool in (create_hpc_workspace, install_signet_source):
-                result = tool()
-                self.assertEqual((result['status'], result['executed']), ('blocked', False))
-                self.assertIn('Workflow panel', result['reason'])
+            result = create_hpc_workspace()
+        self.assertEqual((result['status'], result['executed']), ('blocked', False))
+        self.assertIn('Installing SIGNET creates the workspace', result['reason'])
         remote.assert_not_called()
+
+    def test_source_installation_runs_in_the_background_and_shows_the_workflow_panel(self):
+        from agent.tools.ui import UI_CHANNEL
+        requests = []
+        token = UI_CHANNEL.set(requests.append)
+        try:
+            with Remote(markers(workspace_path='/pub/tester/signet-agent', signet='started')) as remote:
+                result = install_signet_source()
+        finally:
+            UI_CHANNEL.reset(token)
+        self.assertEqual((result['status'], result['executed'], result['outcome']), ('ok', True, 'started'))
+        script = remote.call_args.kwargs['input'].decode()
+        self.assertIn(REVISION, script)
+        self.assertIn('git -C "$stage/repository" fetch -q --depth=1', script)
+        self.assertIn('sha256sum --check --status', script)
+        self.assertIn('nohup setsid', script, 'the login-node install is detached from the SSH command')
+        self.assertIn('/pub/tester/signet-agent/software/pinned', script, 'it installs where the desktop check looks')
+        self.assertEqual(requests, [{'panel': 'workflow', 'visible': True, 'refresh': True}])
+        with Remote(markers(workspace_path='/w', signet='existing')):
+            result = install_signet_source()
+        self.assertEqual((result['executed'], result['outcome']), (False, 'existing'))
 
     def test_container_download_is_refused_until_its_checksum_is_pinned(self):
         with patch.object(hpc, 'CONTAINER_SHA256', None), patch.object(hpc.ssh_transport, 'remote') as remote:

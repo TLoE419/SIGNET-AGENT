@@ -4,14 +4,14 @@ const {JSDOM}=require('jsdom');const {readFileSync}=require('node:fs');const pat
 const config={root:'/pub/u/signet-agent',partition:'standard'};
 function fixture(){
  const dom=new JSDOM('<meta name="chat-token" content="fixture"><details id="workflow" open><summary id="workflow-summary"></summary><span id="workflow-environment-status"></span><button id="workflow-check"></button><ul id="workflow-items"></ul><p id="workflow-message"></p></details>',{runScripts:'outside-only'});
- const w=dom.window;let listener;const calls=[],checks=[],installs=[];let reply=async()=>({status:'ok',checks:[]}),confirm=false;
+ const w=dom.window;let listener;const calls=[],checks=[];let reply=async()=>({status:'ok',checks:[]}),confirm=false;
  const settled={phase:'needs-install',message:'Installation required',config};
  w.uiText=(el,text)=>{el.textContent=text};w.translateUI=text=>text;w.confirm=()=>confirm;
  w.signetDesktop={environment:{subscribe:fn=>{listener=fn;return()=>{}},getSnapshot:async()=>({ok:true,value:{phase:'disconnected',message:''}}),
-  check:async(...args)=>{checks.push(args);listener(settled);return {ok:true,value:settled}},install:async()=>{installs.push(true);return {ok:true}}}};
+  check:async(...args)=>{checks.push(args);listener(settled);return {ok:true,value:settled}}}};
  w.fetch=async url=>{calls.push(url);return {ok:true,json:()=>reply(url)}};
  w.eval(readFileSync(path.join(__dirname,'../renderer/workflow.js'),'utf8'));
- return {dom,w,calls,checks,installs,snapshot:value=>listener(value),reply:fn=>{reply=fn},allow:()=>{confirm=true},text:id=>w.document.getElementById(id).textContent,click:()=>w.document.getElementById('workflow-check').click()};
+ return {dom,w,calls,checks,snapshot:value=>listener(value),reply:fn=>{reply=fn},allow:()=>{confirm=true},text:id=>w.document.getElementById(id).textContent,click:()=>w.document.getElementById('workflow-check').click()};
 }
 const settle=()=>new Promise(resolve=>setImmediate(resolve));
 test('workflow discards an in-flight readiness reply when SSH disconnects',async()=>{
@@ -42,14 +42,32 @@ test('an unconfigured environment is not described as a lost connection',async()
  f.snapshot({phase:'needs-install',message:'Installation required',config});await settle();await settle();
  assert.equal(f.text('workflow-summary'),'環境尚未就緒');assert.match(f.text('workflow-message'),/Checking remote paths/);f.dom.window.close();
 });
-test('SIGNET installs through the desktop only after confirmation; the container is a Slurm step',async()=>{
+test('SIGNET installs through the Python service only after confirmation; the container is a Slurm step',async()=>{
  const f=fixture();f.reply(async url=>url==='/hpc/check'?{status:'ok',checks:[{item:'signet_source',status:'missing',detail:'No source'},{item:'container',status:'missing',detail:'No image'}]}:url==='/hpc/files/selected'?{status:'ok',selected:{}}:{status:'ok',detail:'Started'});
  f.snapshot({phase:'needs-install',message:'',config});await settle();await settle();
  const buttons=()=>[...f.w.document.querySelectorAll('[data-status=missing] button')];
  assert.deepEqual(buttons().map(b=>b.textContent),['安裝','下載']);
- buttons()[0].click();await settle();assert.equal(f.installs.length,0);
- f.allow();buttons()[0].click();await settle();assert.equal(f.installs.length,1);
+ buttons()[0].click();await settle();assert.equal(f.calls.includes('/hpc/signet'),false);
+ f.allow();buttons()[0].click();await settle();assert.ok(f.calls.includes('/hpc/signet'));
+ assert.equal('install' in f.w.signetDesktop.environment,false,'the desktop bridge has no installer');
+ await new Promise(resolve=>setTimeout(resolve,3100));
  buttons()[1].click();await settle();assert.ok(f.calls.includes('/hpc/container'));f.dom.window.close();
+});
+test('once SIGNET is installed, the desktop re-verifies the environment that still lists it as missing',async()=>{
+ const f=fixture();f.reply(async url=>url==='/hpc/check'?{status:'ok',checks:[{item:'signet_source',status:'ok',detail:'Installed'}]}:{status:'ok',selected:{}});
+ f.snapshot({phase:'needs-install',message:'',config,missing:['SIGNET source','SIGNET container']});
+ for(let i=0;i<5;i++)await settle();
+ assert.deepEqual(f.checks,[['/pub/u/signet-agent','standard']],'one automatic recheck');
+ for(let i=0;i<5;i++)await settle();
+ assert.equal(f.checks.length,1,'the recheck does not repeat while the desktop still disagrees');f.dom.window.close();
+});
+test('a setup step started by the assistant opens the panel and refreshes it',async()=>{
+ const f=fixture();f.reply(async url=>url==='/hpc/check'?{status:'ok',checks:[]}:{status:'ok',selected:{}});
+ f.snapshot({phase:'needs-install',message:'',config});await settle();await settle();
+ const panel=f.w.document.getElementById('workflow');panel.open=false;const before=f.calls.filter(u=>u==='/hpc/check').length;
+ f.w.dispatchEvent(new f.w.CustomEvent('panel-request',{detail:{panel:'workflow',visible:true,refresh:true}}));
+ assert.equal(panel.open,true);await new Promise(resolve=>setTimeout(resolve,3100));await settle();
+ assert.ok(f.calls.filter(u=>u==='/hpc/check').length>before);f.dom.window.close();
 });
 test('a verification failure stays visible beside the per-item results',async()=>{
  const f=fixture();f.reply(async()=>({status:'ok',checks:[{item:'container',status:'ok',detail:'6 GB'}]}));

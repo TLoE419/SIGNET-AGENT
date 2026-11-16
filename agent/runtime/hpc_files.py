@@ -128,7 +128,7 @@ def _clinical_problem(path):
     if header.endswith('\r\n'):
         return 'This file has Windows line endings, which R would keep in the last column. Convert it first.'
     columns = header.rstrip('\n').split('\t')
-    missing = [name for name in ('submitter_id', 'race') if name not in columns]
+    missing = [name for name in ('submitter_id', 'race', 'gender') if name not in columns]
     return ('This clinical file needs tab-separated columns: ' + ', '.join(missing) + '.') if missing else None
 def format_problem(key, path):
     try:

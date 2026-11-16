@@ -318,9 +318,10 @@ and root launcher files; no stored data or wire protocol changed.
 
 ## Remote environment setup
 
-After SSH connects, the status block shows environment checks and installation
-progress. The **Workflow** panel lists what is ready or missing, even before the
-environment is verified, and offers the SIGNET install and container download.
+After SSH connects, the status block shows environment checks. The **Workflow**
+panel lists what is ready or missing, even before the environment is verified, and
+offers the SIGNET install and container download; both run through the Python service,
+which the assistant also uses. After SIGNET is installed, the panel re-runs this check.
 **HPC3 settings** (or the status block's environment row) chooses the installation
 root and partition. The default root is `/pub/<user>/signet-agent` when that folder
 is writable, otherwise `~/.local/share/signet-agent`.

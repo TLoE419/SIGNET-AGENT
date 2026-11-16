@@ -230,7 +230,10 @@ class GroqTest(unittest.TestCase):
         responses = [(200, completion(summary, [call()])), (200, completion('查詢完成。')),
                      (200, completion('接續上一輪。'))]
         history, events = [], []
-        with self.client(responses) as client, patch.object(main, 'dispatch_tool', return_value=signet_catalog()) as dispatch:
+        # A small result keeps this test about call IDs; the full catalog's size is covered below.
+        evidence = {key: value for key, value in signet_catalog().items()
+                    if key not in ('hpc3_setup', 'analysis_stages', 'scope')}
+        with self.client(responses) as client, patch.object(main, 'dispatch_tool', return_value=evidence) as dispatch:
             self.assertEqual(main.run_conversation(client, '查詢能力', history, progress=events.append), '查詢完成。')
             self.assertEqual(main.run_conversation(client, '繼續', history), '接續上一輪。')
         dispatch.assert_called_once_with('signet_catalog', {})
@@ -248,6 +251,14 @@ class GroqTest(unittest.TestCase):
         self.assertEqual(self.requests[2]['messages'][-1], {'role':'user', 'content':'繼續'})
         self.assertEqual(self.send_times, [0, 0, 0])
         self.assertEqual(self.pauses, [])
+
+    def test_full_catalog_over_the_free_budget_is_answered_without_new_tools(self):
+        responses = [(200, completion('', [call()])), (200, completion('能力說明。'))]
+        with self.client(responses) as client, patch.object(main, 'dispatch_tool', return_value=signet_catalog()):
+            self.assertEqual(main.run_conversation(client, '你可以做什麼', []), '能力說明。')
+        second = self.requests[1]
+        self.assertNotIn('tools', second, 'the over-budget round drops only new-call capability')
+        self.assertIn('analysis_stages', json.dumps(second['messages'], ensure_ascii=False), 'catalog evidence is kept')
 
     def test_non_catalog_evidence_is_not_truncated(self):
         result = {'status':'unavailable', 'executed':False, 'missing_dependencies':['Rscript'], 'value':'x'*2000}

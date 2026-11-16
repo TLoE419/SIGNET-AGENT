@@ -8,10 +8,14 @@ independent: missing Slurm or software blocks environment readiness, not SSH log
 
 The user chooses a writable root accessible to compute jobs and a Slurm partition.
 Missing components are offered in the Workflow panel, each with its own confirmation.
-The source installation also extracts the official `example/` data listed under
-`example_files` in the inventory, verified by hash; an installation made before
-that is offered the example data alone, without replacing anything. Source installation fetches the inventory commit and archives only
-its audited scripts/support files plus licenses, verifying SHA-256 hashes. The
+This module checks and verifies the environment; it does not install anything. The
+SIGNET source is installed by the Python service (`agent/runtime/hpc.py`), so the
+Workflow button and the assistant share one installer. It fetches the inventory commit,
+archives only its audited scripts/support files, licenses and official `example/` data,
+and publishes them only after their SHA-256 hashes match; an installation made before
+the example data existed gains the example folder alone. After it finishes, the
+Workflow panel asks this module to check again. This module's check is the one place
+that hashes the installed source; the Python readiness check does not repeat it. The
 container is downloaded by a Slurm job (`agent/runtime/hpc.py`), not on the login node,
 and is published only after its size and checksum match, without replacing an existing
 file; the next check then verifies it. No study data or shell
