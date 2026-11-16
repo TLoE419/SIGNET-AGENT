@@ -31,6 +31,13 @@ Python, its dependencies, Codex CLI when selected, and scientific prerequisites
 must still be installed. No scientific data, Python runtime or model credentials
 are bundled.
 
+### Workspace interface preview
+
+Run `npm run workspace --prefix electron` to open the bilingual workspace design
+with simulated data, or choose **View → Workspace Preview** from the desktop app.
+The preview runs offline in its own window. File choices, connection checks, and
+chat actions stay in that preview session.
+
 ## Development terminal
 
 Start explicitly in development mode from the repository root:

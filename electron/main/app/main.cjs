@@ -6,6 +6,7 @@ const {GeminiKeyStore, ModelController, installModelHandlers} = require('../mode
 const {randomBytes} = require('node:crypto');
 const {Backend} = require('../backend/backend.cjs');
 const {createRendererHandler} = require('../renderer/protocol.cjs');
+const {openWorkspacePreview} = require('./workspace-preview.cjs');
 const {localURL, navigationAllowed} = require('../security/policy.cjs');
 const {SshConnectionService, SshProfileRepository, HostKeyTrustStore, AppManagedKeyStore, installSshHandlers, installDevTerminal, EnvironmentService, installEnvironmentHandlers} = require('../../build/ssh/index.cjs');
 const {SshBroker} = require('../ssh/ipc/broker.cjs');
@@ -111,7 +112,14 @@ async function launch({provider, visible = true, userData, stateFile, startupMs,
   Menu.setApplicationMenu(Menu.buildFromTemplate([
     ...(process.platform === 'darwin' ? [{role: 'appMenu'}] : []),
     {role: 'fileMenu'}, {role: 'editMenu'},
-    {label: 'View', submenu: [{role: 'reload'}, {role: 'resetZoom'}, {role: 'zoomIn'}, {role: 'zoomOut'}, {role: 'togglefullscreen'}]},
+    {label: 'View', submenu: [
+      {label: 'Workspace Preview', click: () => {
+        void openWorkspacePreview().catch(error => {
+          dialog.showErrorBox('SIGNET could not load the workspace preview', error.message);
+        });
+      }},
+      {type: 'separator'}, {role: 'reload'}, {role: 'resetZoom'}, {role: 'zoomIn'}, {role: 'zoomOut'}, {role: 'togglefullscreen'},
+    ]},
     {role: 'windowMenu'},
   ]));
   try {
