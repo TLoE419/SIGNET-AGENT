@@ -84,9 +84,10 @@ _SLURM_FAILED = ('FAILED', 'OUT_OF_MEMORY', 'TIMEOUT', 'NODE_FAIL', 'PREEMPTED',
 class StepError(Exception):
     """A refused or failed request; `code` is one of the API error codes in spec §10."""
 
-    def __init__(self, code, message):
+    def __init__(self, code, message, details=None):
         super().__init__(message)
         self.code = code
+        self.details = details   # counts-only context for the page, e.g. a clinical table review
 
 
 @dataclass(frozen=True)
@@ -457,7 +458,7 @@ def analysis_view(root, cohort, records, *, include_attempts=True):
             if include_attempts:
                 stage['attempts'] = attempts
             elif record:
-                parameters = {key: record[key] for key in ('inputs', 'settings', 'resources', 'options')
+                parameters = {key: record[key] for key in ('inputs', 'settings', 'resources', 'options', 'clinical')
                               if record.get(key)}
                 if parameters:
                     stage['parameters'] = parameters
@@ -721,6 +722,90 @@ def _say():
     return f"umask 077\nsay() {{ printf '{_MARKER}%s\\t%s\\n' \"$1\" \"$2\"; }}\n"
 
 
+# Input checks that run on the login node before sbatch (agent/runtime/jobs/step_inputs.py).
+_STEP_INPUTS_SOURCE = (Path(__file__).with_name('jobs') / 'step_inputs.py').read_text()
+# Where signet -a's clinical copy goes in the run's HPC3 folder (choices applied, Unix line endings).
+CLINICAL_COPY = 'clinical/clinical.signet.tsv'
+GENOTYPE_IDS = 'work/res/resg/signet_Genotype.sampleID'
+EXPRESSION_IDS = 'work/res/rest/signet_gexpID'
+
+
+def _input_check(name, files):
+    """Login-node shell that checks an input's format; on a problem it reports the checker's JSON and stops."""
+    q = shlex.quote
+    paths = {key: path for key, path, _ in files}
+    if name == 'expression':
+        args, ok = ['gtf', paths['pmap.file']], '*\'"problem": null\'*'
+    elif name == 'adjust':
+        args = ['clinical', paths['cli.file'], '$D/' + GENOTYPE_IDS, '$D/' + EXPRESSION_IDS, '{}']
+        ok = '*\'"needs_choice": []\'*\'"problems": []\'*'
+    else:
+        return ''
+    quoted = ' '.join(arg.replace('$D', '"$D"') if arg.startswith('$D/') else q(arg) for arg in args)
+    # The checker goes to a temporary file first: a here-document inside $( ) trips older bash on quotes.
+    return f'''check_py="$(mktemp)" || exit 4
+cat > "$check_py" <<'SIGNET_CHECK'
+{_STEP_INPUTS_SOURCE}SIGNET_CHECK
+checked="$(python3 "$check_py" {quoted})"; rm -f "$check_py"
+case "$checked" in {ok}) ;; *) say invalid_input "$checked"; exit 9;; esac
+'''
+
+
+CLINICAL_CHOICES = ('not_reported', 'exclude')
+
+
+def clinical_review(run_id, path, choices, write=False):
+    """Count what signet -a will meet in a clinical table, for this run's matched patients; on HPC3.
+
+    With write=True and nothing left to decide, writes the run's copy (CLINICAL_COPY) with the
+    choices applied. Returns the checker's counts-only report (agent/runtime/jobs/step_inputs.py).
+    """
+    step = STEPS['adjust']
+    root = _root(run_id)
+    if (not isinstance(choices, dict) or len(choices) > 20 or
+            any(not isinstance(key, str) or len(key) > 80 or value not in CLINICAL_CHOICES for key, value in choices.items())):
+        raise StepError('invalid_request', 'Each clinical choice must be not_reported or exclude.')
+    config = _environment()
+    directory = _remote_dir(config, root, run_id)
+    checked = _inputs(step, {'cli.file': path}, _input_roots(config, root, directory))
+    q = shlex.quote
+    args = ['clinical', checked['cli.file'][0], f'{directory}/{GENOTYPE_IDS}', f'{directory}/{EXPRESSION_IDS}',
+            json.dumps(choices)] + ([f'{directory}/{CLINICAL_COPY}'] if write else [])
+    script = _say() + f"""check_py="$(mktemp)" || exit 4
+cat > "$check_py" <<'SIGNET_CHECK'
+{_STEP_INPUTS_SOURCE}SIGNET_CHECK
+say report "$(python3 "$check_py" {' '.join(q(arg) for arg in args)})"; rm -f "$check_py"
+"""
+    try:
+        code, values, _ = _shell(script, timeout=120)
+    except OSError as error:
+        raise StepError('remote_failed', 'Could not reach HPC3 to check the clinical table.') from error
+    try:
+        report = json.loads(values.get('report', ''))
+    except ValueError:
+        report = {}
+    if code or report.get('status') != 'ok':
+        raise StepError('invalid_request', report.get('error') or
+                        'The clinical table could not be checked: genotype and expression results must be on HPC3.')
+    return report
+
+
+def _input_problem(name, report):
+    """A plain message for a failed input check (counts only; no rows or IDs)."""
+    try:
+        value = json.loads(report)
+    except ValueError:
+        return 'The input file could not be checked on HPC3.'
+    if value.get('status') != 'ok':
+        return value.get('error', 'The input file could not be checked on HPC3.')
+    if name == 'expression':
+        return value['problem']
+    if value.get('needs_choice'):
+        return ('The clinical table has race values SIGNET does not handle: ' + ', '.join(value['needs_choice']) +
+                '. Choose how to treat them on the confirmation card.')
+    return ' '.join(value.get('problems', [])) or 'The clinical table cannot be used by signet -a.'
+
+
 # Other features keep their own folders directly under workRoot (remote.py: cis/, network/);
 # runs/ holds the runs uploaded before 2026-11-07.
 RESERVED_RUN_IDS = ('cis', 'network', 'runs')
@@ -870,11 +955,12 @@ def _submit_script(config, run_id, name, step, directory, files, resources, opti
         f'if [ "$f" != "$r/{path[len(root) + 1:]}" ] || [ ! -f "$f" ] || [ ! -s "$f" ]; then '
         f'say missing_input {q(key)}; say missing_file {q(path)}; exit 4; fi\n'
         for key, path, root in files)
+    formats = _input_check(name, files)
     job = _job_script(config, run_id, name, step, directory, binds, options, settings)
     sbatch = (f'sbatch --parsable --partition={config["partition"]} --cpus-per-task={resources["cpus"]} '
               f'--mem={resources["mem_gb"]}G --time={resources["time"]} "$D/steps/{name}.sbatch"')
     return _say() + f'''D={q(directory)}
-{checks}{needs}if [ ! -s {q(config['image'])} ]; then say not_ready container; exit 5; fi
+{checks}{needs}{formats}if [ ! -s {q(config['image'])} ]; then say not_ready container; exit 5; fi
 if ! command -v sbatch >/dev/null 2>&1; then say not_ready sbatch; exit 5; fi
 {keep}if [ -e "$D/steps/{name}.job" ]; then say conflict submitted; exit 6; fi
 say attempt_started yes
@@ -917,7 +1003,7 @@ def _ensure_stopped(record):
 # ---------- the four operations ----------
 
 @_one_at_a_time
-def submit(run_id, name, inputs, resources=None, options=None, *, settings_override=None):
+def submit(run_id, name, inputs, resources=None, options=None, *, settings_override=None, clinical=None):
     """Submit one step of a run as a Slurm job and return its record (state "submitted" with job_id).
 
     options answers the step's SIGNET prompts (see Step.prompts); missing ones take their default.
@@ -970,6 +1056,8 @@ def submit(run_id, name, inputs, resources=None, options=None, *, settings_overr
                   'attempt': attempt}
         if answers:
             record['options'] = answers   # kept for reproducibility: the answers SIGNET was given
+        if clinical:
+            record['clinical'] = clinical   # the researcher's table and choices behind the run's clinical copy
         settings = signet._settings(root)
         if any('{' in path for path in step.required):
             record['required_outputs'] = [_resolve(path, settings) for path in step.required]
@@ -1023,6 +1111,8 @@ def submit(run_id, name, inputs, resources=None, options=None, *, settings_overr
             hint = (f' (looked for {values.get("missing_file")}; set {_chromosome_key(step)} to the chromosome you have'
                     ' files for)') if key in step.prefixes else ''
             raise StepError('invalid_request', f'{key} is missing, empty, or reached through a link on HPC3{hint}.')
+        if 'invalid_input' in values:
+            raise StepError('invalid_request', _input_problem(name, values['invalid_input']))
         if 'missing_prior' in values:
             raise StepError('invalid_request', f'{values["missing_prior"]} from an earlier step is missing in this '
                             'run\'s HPC3 folder; compute that step again in a new run.')

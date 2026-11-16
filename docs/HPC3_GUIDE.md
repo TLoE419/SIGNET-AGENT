@@ -89,6 +89,10 @@ If ref, gmap or the study changes, the panel marks the conversion as outdated an
 
 - **Genome build**: not detected directly; a low match rate is the signal.
 - **Strand**: opposite-strand markers are dropped, not flipped. A/T and C/G markers are kept as is.
-- **Clinical values**: blanks and `Unknown` are not changed. SIGNET itself maps race `not reported`
-  to `white` and drops `american indian or alaska native`.
+- **Clinical values**: the downloaded table keeps GDC's values. SIGNET itself maps race `not reported`
+  to `white`, drops `american indian or alaska native`, and stops unless exactly asian,
+  black or african american, and white remain. The `-a` card counts each value for the matched
+  patients and asks how to treat any other race value (such as `Unknown`, 5 patients in the
+  example): as `not reported`, or excluded. The choice is applied to a copy in the run's folder
+  and recorded with the step.
 - **Content errors**: reported by SIGNET or IMPUTE2 when the step runs.

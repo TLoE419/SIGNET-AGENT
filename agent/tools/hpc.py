@@ -57,7 +57,7 @@ def download_signet_container() -> dict:
 
 
 def download_reference_file(file: str) -> dict:
-    """Submit a Slurm job that downloads one public Phase 2 reference file into the HPC3 workspace: "ref" (1000 Genomes GRCh38 chr1 genotypes, about 950 MB), "gmap" (GRCh38 genetic map), "gtf" (GENCODE v22 gene annotation, collapsed for signet -t; needs the container) or "clinical" (TCGA-LUAD case IDs, race and sex at birth, saved as submitter_id, race and gender). Call only for the files the user's own message asks for or agrees to.
+    """Submit a Slurm job that downloads one public Phase 2 reference file into the HPC3 workspace: "ref" (1000 Genomes GRCh38 chr1 genotypes, about 950 MB), "gmap" (GRCh38 genetic map), "gtf" (GENCODE v22 gene annotation, collapsed for signet -t; needs the container) or "clinical" (TCGA-LUAD submitter_id, race, gender). Call only for the files the user's own message asks for or agrees to.
 
     Downloads only the raw file from a fixed source and records its URL, size
     and checksum in refdata/SOURCES.tsv; matching ref and gmap to a study
@@ -79,8 +79,7 @@ def prepare_imputation_reference() -> dict:
     in a copy; the original study is never changed. Needs SIGNET (for the example
     study), ref and gmap first. Returns immediately with the job ID; the log then
     shows a counts-only summary with the match rate, and a warning when the rate
-    is low enough to suggest different genome builds. Runs again when ref, gmap
-    or the study changed since the last conversion; the old result is kept.
+    is low enough to suggest different genome builds. Reruns when ref or gmap change.
     """
     return _show_progress(hpc.start_step('prepare'))
 
@@ -95,5 +94,11 @@ def read_hpc_setup_log(step: str) -> dict:
     return hpc.read_log(step)
 
 
+def summarize_reference_table(file: str) -> dict:
+    """Counts-only summary of the "clinical" table in use on HPC3: columns, rows, blanks, category value counts. No rows or IDs."""
+    return hpc.summarize_reference(file)
+
+
 HPC_TOOLS = [check_hpc_environment, create_hpc_workspace, install_signet_source,
-             download_signet_container, download_reference_file, prepare_imputation_reference, read_hpc_setup_log]
+             download_signet_container, download_reference_file, prepare_imputation_reference, read_hpc_setup_log,
+             summarize_reference_table]

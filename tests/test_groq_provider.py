@@ -215,13 +215,13 @@ class GroqTest(unittest.TestCase):
 
     def test_all_tools_have_required_and_optional_typed_schemas(self):
         schemas = [tool_schema(function) for function in main.config.tools]
-        self.assertEqual(len(schemas), 34)
+        self.assertEqual(len(schemas), 24)
         configure = next(x['function'] for x in schemas if x['function']['name'] == 'configure_signet')
         self.assertEqual(configure['parameters']['required'], ['run_id'])
         self.assertEqual(configure['parameters']['properties']['nchr'], {'type':'integer', 'default':22})
-        combine = next(x['function'] for x in schemas if x['function']['name'] == 'combine_covariates')
-        self.assertEqual(combine['parameters']['properties']['additional_covariates'],
-                         {'type':'array', 'items':{'type':'string'}, 'default':None})
+        cis = next(x['function'] for x in schemas if x['function']['name'] == 'cis_eqtl')
+        self.assertEqual(cis['parameters']['properties']['alpha']['default'], 0.05)
+        self.assertIn('alpha', set(cis['parameters']['properties']) - set(cis['parameters']['required']))
         files = next(x['function'] for x in schemas if x['function']['name'] == 'list_files')
         self.assertEqual(files['parameters']['properties']['folder'].get('enum'), [str(PROJECT)])
 
@@ -232,7 +232,7 @@ class GroqTest(unittest.TestCase):
         history, events = [], []
         # A small result keeps this test about call IDs; the full catalog's size is covered below.
         evidence = {key: value for key, value in signet_catalog().items()
-                    if key not in ('hpc3_setup', 'analysis_stages', 'scope')}
+                    if key not in ('hpc3_setup', 'analysis_stages', 'resources', 'scope')}
         with self.client(responses) as client, patch.object(main, 'dispatch_tool', return_value=evidence) as dispatch:
             self.assertEqual(main.run_conversation(client, '查詢能力', history, progress=events.append), '查詢完成。')
             self.assertEqual(main.run_conversation(client, '繼續', history), '接續上一輪。')
@@ -243,7 +243,7 @@ class GroqTest(unittest.TestCase):
         self.assertEqual(messages[-1]['role'], 'tool')
         compact = json.loads(messages[-1]['content'])
         self.assertNotIn('scripts', compact)
-        self.assertEqual(compact['all_tools_including_list_files'], 34)
+        self.assertEqual(compact['all_tools_including_list_files'], 24)
         self.assertTrue(compact['scripts_omitted'])
         self.assertIn('scripts', history[2].parts[0].function_response.response)
         self.assertIn(GROQ_MODEL, events[0])
@@ -263,7 +263,7 @@ class GroqTest(unittest.TestCase):
     def test_non_catalog_evidence_is_not_truncated(self):
         result = {'status':'unavailable', 'executed':False, 'missing_dependencies':['Rscript'], 'value':'x'*2000}
         content = types.Content(role='user', parts=[types.Part(function_response=types.FunctionResponse(
-            id='a', name='expression_tcga', response=result))])
+            id='a', name='cis_eqtl', response=result))])
         sent = groq_messages([content], 'rules')
         self.assertEqual(json.loads(sent[-1]['content']), result)
 

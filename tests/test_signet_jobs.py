@@ -61,7 +61,7 @@ class StepsTest(unittest.TestCase):
         self.gexp = self.hpc / 'ws/signet/example/example_gexp'
         self.gtf = self.hpc / 'ws/refdata/gencode.v22.annotation.gtf'
         self.gexp.write_text('counts')
-        self.gtf.write_text('genes')
+        self.gtf.write_text('chr1\tHAVANA\tgene\t1\t2\t.\t+\t.\tgene_id "A"; transcript_type "protein_coding";\n')
         self.config = {'root': str(self.hpc / 'ws'), 'source': str(self.hpc / 'ws/signet'),
                        'image': str(self.hpc / 'signet.sif'), 'executor': 'apptainer',
                        'workRoot': str(self.hpc / 'ws/work'), 'partition': 'standard'}
@@ -152,7 +152,7 @@ class StepsTest(unittest.TestCase):
         self.assertFalse((self.fake / 'sbatch_args').exists())
         self.assertEqual(steps.run_steps('step_test'), {})
         self.gtf.unlink()
-        self.gtf.write_text('genes')
+        self.gtf.write_text('chr1\tHAVANA\tgene\t1\t2\t.\t+\t.\tgene_id "A"; transcript_type "protein_coding";\n')
         self.assertEqual(steps.submit('step_test', 'expression', self.inputs)['state'], 'submitted')
 
     def test_one_attempt_per_step_and_wrong_cohort_or_unknown_step(self):
@@ -821,8 +821,13 @@ class StepsTest(unittest.TestCase):
             path = self.remote_dir / 'work' / relative
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text('data\n')
+        # Three matched patients covering the three races signet -a requires (the input check counts them).
+        patients = (('0001', 'white', 'female'), ('0002', 'asian', 'male'), ('0003', 'black or african american', 'female'))
+        if needs is None:
+            for relative in ('res/resg/signet_Genotype.sampleID', 'res/rest/signet_gexpID'):
+                (self.remote_dir / 'work' / relative).write_text(''.join(f'TCGA-AA-{p}-01A\n' for p, _, _ in patients))
         clinical = self.hpc / 'ws/refdata/clinical.tsv'
-        clinical.write_text('submitter_id\trace\tgender\n')
+        clinical.write_text('submitter_id\trace\tgender\n' + ''.join(f'TCGA-AA-{p}\t{r}\t{g}\n' for p, r, g in patients))
         return {'cli.file': str(clinical)}
 
     def test_catalog_describes_adjust_prerequisites_and_options(self):
@@ -1230,6 +1235,45 @@ class StepsTest(unittest.TestCase):
         for stream, lines in (('both', 5), ('out', 0), ('out', 201), ('out', True)):
             self.assertEqual(self.code_of(steps.read_log, 'step_test', 'expression', stream, lines), 'invalid_request')
 
+
+    def test_step_report_for_the_assistant_masks_ids_and_paths(self):
+        from agent.runtime import step_report
+        from agent.tools.signet import dispatch_tool
+        self.assertEqual(step_report.report('step_test', '-t')['state'], 'not_started')
+        steps.submit('step_test', 'expression', self.inputs)
+        running = step_report.report('step_test', 'expression')
+        self.assertEqual((running['flag'], running['state'], running['job_id']), ('-t', 'submitted', '12345'))
+        self.assertEqual(running['inputs'], {'gexp.file': 'example_gexp', 'pmap.file': 'gencode.v22.annotation.gtf'})
+        self.assertNotIn('log_tail', running, 'logs are read only for a failed step')
+        self.finish_job(exit_code='1', outputs=(), err=f'Error in fread({self.gexp}): sample TCGA-95-7947-01C-01D missing\n')
+        (self.remote_dir / 'steps/expression.out').write_text('Removed 1 samples: TCGA-44-2668-01C\n')
+        self.assertEqual(steps.status('step_test', 'expression', refresh=True)['state'], 'failed')  # as the card sees it
+        failed = dispatch_tool('get_step_report', {'run_id': 'step_test', 'step': '-t'})
+        self.assertEqual(failed['state'], 'failed')
+        text = json.dumps(failed, ensure_ascii=False)
+        self.assertIn('Error in fread(…/example_gexp)', text)
+        self.assertIn('TCGA-[masked]', text)
+        self.assertNotIn('TCGA-95', text)
+        self.assertNotIn('TCGA-44', text)
+        self.assertNotIn(str(self.hpc), text, 'no HPC3 folder reaches the model')
+        self.assertEqual(self.code_of(step_report.report, 'step_test', '-x'), 'not_found')
+        # A completed step reports counts of its downloaded outputs, never their contents.
+        self.slurm(sbatch_reply='222')
+        steps.submit('step_test', 'expression', self.inputs)
+        self.finish_job()
+        self.assertEqual(steps.status('step_test', 'expression', refresh=True)['state'], 'completed')
+        (self.root / 'work/res/rest/signet_gexpID').write_text('TCGA-95-7947-01C\nTCGA-44-2668-01C\n')
+        (self.root / 'work/res/rest/signet_gexp').write_text('1.5 2.5 3.5\n4.5 5.5 6.5\n')
+        done = step_report.report('step_test', '-t')
+        outputs = {item['file']: item for item in done['summary']['outputs']}
+        self.assertEqual((outputs['signet_gexpID']['rows'], outputs['signet_gexpID']['rows_are']), (2, 'samples'))
+        self.assertEqual((outputs['signet_gexp']['rows'], outputs['signet_gexp']['columns']), (2, 3))
+        self.assertEqual(outputs['signet_gexp']['columns_are'], 'genes')
+        self.assertNotIn('TCGA-', json.dumps(done))
+        self.assertNotIn('1.5', json.dumps(done['summary']), 'no values, only counts')
+        steps.link_conversation('step_test', 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee')
+        self.assertEqual(self.code_of(step_report.report, 'step_test', '-t', '12345678-1234-1234-1234-123456789abc'),
+                         'not_found', 'another conversation cannot read this analysis')
 
 if __name__ == '__main__':
     unittest.main()

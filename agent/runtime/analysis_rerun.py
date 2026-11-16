@@ -56,6 +56,8 @@ def prepare(run_id, session, name):
     else:
         parameters = step_proposal._parameters(name, step, settings, attempt, 'custom')
         parameters['settings'].update(attempt.get('settings', {}))
+        if name == 'adjust' and attempt.get('clinical', {}).get('choices'):
+            parameters['choices'] = attempt['clinical']['choices']   # the same treatment of race values as before
         proposal = {'id': secrets.token_hex(16), 'state': 'pending', 'baseline': baseline,
                     'parameters': parameters, 'impact': impact}
         step_proposal._write(root, key, proposal)
@@ -154,7 +156,7 @@ def _seed(root, child, name, config, records, reused, settings, proposal_id, pai
 
 
 @jobs._one_at_a_time
-def confirm(run_id, session, name, proposal_id, inputs, settings, resources, options=None):
+def confirm(run_id, session, name, proposal_id, inputs, settings, resources, options=None, choices=None):
     root = jobs._root(run_id)
     key = name + '-rerun'
     proposal = step_proposal._pending(root, session, key, proposal_id)
@@ -178,6 +180,12 @@ def confirm(run_id, session, name, proposal_id, inputs, settings, resources, opt
     config = jobs._environment()
     source = jobs._remote_dir(config, root, run_id)
     jobs._inputs(step, inputs, jobs._input_roots(config, root, source))
+    if name == 'adjust':
+        # Check the choices against this run's patients before creating anything.
+        review = jobs.clinical_review(run_id, inputs['cli.file'], choices or {})
+        blocked = step_proposal.clinical_note(review)
+        if blocked:
+            raise jobs.StepError(blocked[0], blocked[1], details=review)
     child = root.parent / f'{run_id[:42]}-rerun-{proposal_id[:12]}'
     try:
         _seed(root, child, name, config, records, impact['reused_steps'], source_settings, proposal_id, paired_setting)
@@ -186,4 +194,8 @@ def confirm(run_id, session, name, proposal_id, inputs, settings, resources, opt
     proposal['state'] = 'confirmed'
     step_proposal._write(root, key, proposal)
     jobs.link_conversation(child.name, session)
-    return jobs.submit(child.name, name, inputs, resources, parameters.get('options'), settings_override=settings)
+    clinical = None
+    if name == 'adjust':
+        inputs, clinical = step_proposal.apply_clinical_choices(child.name, inputs, choices)
+    return jobs.submit(child.name, name, inputs, resources, parameters.get('options'), settings_override=settings,
+                       clinical=clinical)

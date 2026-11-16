@@ -101,6 +101,7 @@ SIGNET_INPUTS
 }
 '''.replace('@PREPARED@', PREPARED)
 _PREPARE_SOURCE = (Path(__file__).with_name('jobs') / 'prepare_reference.py').read_text()
+_TABLE_SUMMARY_SOURCE = (Path(__file__).with_name('jobs') / 'table_summary.py').read_text()
 # Every Slurm step records its job ID as <step>.job in the state directory.
 JOB_STEPS = ('container', *REFERENCES, 'prepare')
 STEPS = ('workspace', 'signet', *JOB_STEPS)
@@ -774,6 +775,36 @@ def start_step(step, repository=None, revision=None):
     if values.get(f'{step}_job'):
         result['job_id'] = values[f'{step}_job']
     return result
+
+
+def _table_summary_script(root, key):
+    """Summarize the table in use for one reference (a chosen file, else the download) on the login node."""
+    return _prelude(root) + f'''
+chosen="$(selected_of {key})"; P="${{chosen:-$W/{REFERENCE_FILES[key]}}}"
+if [ ! -s "$P" ]; then say table missing
+else
+  say table "$(python3 - "$P" <<'SIGNET_PY'
+{_TABLE_SUMMARY_SOURCE}SIGNET_PY
+)"
+fi
+'''
+
+
+def summarize_reference(key):
+    """Counts-only summary of a reference table on HPC3; its path and rows stay on HPC3."""
+    if key != 'clinical':
+        return {'status': 'invalid', 'executed': False, 'error': 'Only the clinical table can be summarized.'}
+    values, error = _run(lambda root: _table_summary_script(root, key), timeout=60, required='table')
+    if error:
+        return error
+    if values['table'] == 'missing':
+        return {'status': 'missing', 'executed': False, 'file': key,
+                'detail': 'No clinical table yet: download it or choose one in the Workflow panel.'}
+    try:
+        result = json.loads(values['table'])
+    except ValueError:
+        return {'status': 'failed', 'executed': False, 'reason': 'The summary could not be read.'}
+    return {**result, 'executed': False, 'file': key}
 
 
 def read_log(step):

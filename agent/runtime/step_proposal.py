@@ -64,11 +64,56 @@ def _baseline(settings, attempt):
     return hashlib.sha256(json.dumps([settings, previous], sort_keys=True).encode()).hexdigest()
 
 
+def _reference_path(key, config):
+    """The file in use for one reference on HPC3: the researcher's chosen file, else the download."""
+    from agent.runtime import hpc_files
+    try:
+        chosen = hpc_files.selected().get('selected', {}).get(key)
+    except (OSError, ValueError, AttributeError):
+        chosen = None
+    return chosen or config['root'] + '/' + REFERENCE_FILES[key]
+
+
+def clinical_note(review):
+    """Why a reviewed clinical table cannot be submitted yet, or None."""
+    if review.get('needs_choice'):
+        return 'needs_choice', ('Choose how to treat these race values: ' + ', '.join(review['needs_choice']) + '.')
+    if review.get('problems'):
+        return 'invalid_request', ' '.join(review['problems'])
+    return None
+
+
+def _review_clinical(run_id, path):
+    """Attach counts-only facts about the clinical table to the card; never blocks preparing it."""
+    if not path:
+        return None
+    try:
+        return jobs.clinical_review(run_id, path, {})
+    except jobs.StepError as error:
+        return {'status': 'unavailable', 'problems': [str(error)], 'needs_choice': []}
+
+
+def apply_clinical_choices(run_id, inputs, choices):
+    """Write the run's clinical copy with the researcher's choices; returns the inputs to submit and the record entry."""
+    review = jobs.clinical_review(run_id, inputs['cli.file'], choices or {}, write=True)
+    blocked = clinical_note(review)
+    if blocked:
+        raise jobs.StepError(blocked[0], blocked[1], details=review)
+    config = jobs._environment()
+    directory = jobs._remote_dir(config, jobs._root(run_id), run_id)
+    entry = {'source': inputs['cli.file'], 'choices': {key: value for key, value in (choices or {}).items()
+                                                       if key in review['unrecognized_race']},
+             'matched_patients': review['matched_patients'], 'races_after': review['races_after']}
+    return {**inputs, 'cli.file': f'{directory}/{jobs.CLINICAL_COPY}'}, entry
+
+
 def _parameters(name, step, settings, attempt, mode):
     inputs = {key: attempt.get('inputs', {}).get(key, '') for key in step.inputs}
     values = {key: settings[key] for key in step.settings}
     resources = {key: attempt.get('resources', {}).get(key, value) for key, value in step.resources.items()}
     options = {key: attempt.get('options', {}).get(key, default) for key, (_, default) in step.prompts.items()}
+    if name == 'adjust' and attempt.get('clinical', {}).get('source'):
+        inputs['cli.file'] = attempt['clinical']['source']   # the researcher's file, not the run's copy
     if not attempt:
         if name == 'expression':
             values['restrict.tcga'] = settings['restrict.tcga.geno']
@@ -83,9 +128,14 @@ def _parameters(name, step, settings, attempt, mode):
             elif name == 'expression':
                 config = jobs._environment()
                 inputs = {'gexp.file': config['source'] + '/example/gexp/example_gexp',
-                          'pmap.file': config['root'] + '/' + REFERENCE_FILES['gtf']}
+                          'pmap.file': _reference_path('gtf', config)}
             elif name == 'visualize':
                 values.update(freq='0.5', ntop='1')
+        # The GTF and clinical table in use (chosen on HPC3 or downloaded), in either mode.
+        if name == 'expression' and not inputs.get('pmap.file'):
+            inputs['pmap.file'] = _reference_path('gtf', jobs._environment())
+        if name == 'adjust':
+            inputs['cli.file'] = _reference_path('clinical', jobs._environment())
     parameters = {'inputs': inputs, 'settings': values, 'resources': resources}
     if options:
         parameters['options'] = options
@@ -118,6 +168,10 @@ def prepare(run_id, session, mode=None, *, step_name='genotype', allow_unlinked=
         if original.get('state') == 'completed':
             previous = original
     parameters = _parameters(step_name, step, settings, previous, mode)
+    if step_name == 'adjust':
+        parameters['clinical_review'] = _review_clinical(run_id, parameters['inputs'].get('cli.file'))
+        if previous.get('clinical', {}).get('choices'):
+            parameters['choices'] = previous['clinical']['choices']
     if jobs.analysis_session(root) is None:
         jobs.link_conversation(run_id, session)
     _write(root, step_name, {'id': secrets.token_hex(16), 'state': 'pending', 'mode': mode,
@@ -159,7 +213,8 @@ def reviewed_parameters(step, inputs, settings, resources, options):
 
 
 @jobs._one_at_a_time
-def confirm(run_id, session, proposal_id, inputs, settings, resources, options=None, *, step_name='genotype'):
+def confirm(run_id, session, proposal_id, inputs, settings, resources, options=None, choices=None, *,
+            step_name='genotype'):
     root = jobs._root(run_id)
     record = _pending(root, session, step_name, proposal_id)
     attempt = _available(root, step_name)
@@ -172,12 +227,18 @@ def confirm(run_id, session, proposal_id, inputs, settings, resources, options=N
     config = jobs._environment()
     directory = jobs._remote_dir(config, root, run_id)
     jobs._inputs(step, inputs, jobs._input_roots(config, root, directory))
+    clinical = None
+    if step_name == 'adjust':
+        # Nothing is consumed while a choice is missing: the card stays open with the counts.
+        inputs, clinical = apply_clinical_choices(run_id, inputs, choices)
+        parameters['clinical'] = clinical
 
     # Consume the card under the submission lock before contacting the scheduler.
     record.update(state='confirmed', parameters=parameters)
     _write(root, step_name, record)
     try:
-        result = jobs.submit(run_id, step_name, inputs, resources, parameters.get('options'), settings_override=settings)
+        result = jobs.submit(run_id, step_name, inputs, resources, parameters.get('options'), settings_override=settings,
+                             clinical=clinical)
     except jobs.StepError:
         record['state'] = 'submission_error'
         _write(root, step_name, record)

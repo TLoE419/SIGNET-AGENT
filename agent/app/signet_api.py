@@ -43,7 +43,8 @@ from agent.runtime.visualization import read_graph
 import agent.tools.signet as signet
 
 MAX_BODY = 32768
-STATUS = {'invalid_request': 400, 'not_found': 404, 'conflict': 409, 'not_ready': 412, 'remote_failed': 502}
+STATUS = {'invalid_request': 400, 'needs_choice': 400, 'not_found': 404, 'conflict': 409, 'not_ready': 412,
+          'remote_failed': 502}
 _RUN_NAME = r'[A-Za-z0-9][A-Za-z0-9_-]{0,63}'  # same rule as agent.tools.signet._name
 _RUN = rf'(?P<run_id>{_RUN_NAME})'
 _STEP = r'(?P<step>[a-z_]{1,32})'
@@ -220,6 +221,51 @@ def create_run(handler, url):
     return 201, {'run_id': run_id, 'cohort': cohort, 'settings': result['settings']}
 
 
+def start_analysis(handler, url):
+    """POST /signet/analyses   body {"session": "<conversation>", "mode": "example" | "custom"}
+
+    Start a TCGA analysis from the Workflow panel, as the assistant does with
+    configure_signet and propose_hpc3_genotype: create a fresh run, link it to the
+    conversation and prepare its first confirmation card. Nothing is submitted; the
+    researcher still reviews and confirms the card in chat. A short note is added to
+    the conversation (saving a new one), so the card and the assistant share context.
+    Response 201: {"run_id", "proposal"}
+    Errors: 400 bad session or mode; 409 a chat turn is running; 412 HPC3 not ready.
+    """
+    _query(url, ())
+    body = _body(handler, ('session', 'mode'), required=('session', 'mode'))
+    session, mode = body['session'], body['mode']
+    if not isinstance(session, str) or not _SESSION.fullmatch(session):
+        raise ApiError(400, 'invalid_request', 'Invalid conversation session.')
+    if mode not in ('example', 'custom'):
+        raise ApiError(400, 'invalid_request', 'mode must be example or custom.')
+    jobs._environment()  # 412 before anything is created when HPC3 is not ready
+    server = handler.server
+    if not server.turn_lock.acquire(blocking=False):
+        raise ApiError(409, 'conflict', 'A chat turn is still running; start the analysis when it finishes.')
+    try:
+        base = time.strftime('tcga-%Y%m%d-%H%M%S')
+        run_id, number = base, 1
+        while (signet.PROJECT / 'runs' / run_id).exists():
+            number += 1
+            run_id = f'{base}-{number}'
+        created = signet.configure_signet(run_id, 'TCGA')
+        if created['status'] != 'created':
+            raise ApiError(400, 'invalid_request', created.get('error', 'Could not create the run.'))
+        proposal = step_proposal.prepare(run_id, session, mode, allow_unlinked=True)
+        from google.genai import types
+        data = '官方示範資料' if mode == 'example' else '自己的資料'
+        server.histories.setdefault(session, []).extend([
+            types.Content(role='user', parts=[types.Part(text=f'（從 Workflow 面板）開始 TCGA 分析：{data}。')]),
+            types.Content(role='model', parts=[types.Part(text=f'已建立分析 {run_id}，第一階段（-g）的確認卡已準備好。'
+                                                               '請檢查輸入與設定後按確認；尚未送出任何工作。')])])
+        server.active_session = session
+        server.save_state()
+    finally:
+        server.turn_lock.release()
+    return 201, {'run_id': run_id, 'proposal': proposal}
+
+
 def get_run(handler, url, run_id):
     """GET /signet/runs/{run_id}
 
@@ -257,7 +303,7 @@ def step_action(handler, url, run_id, action, step='genotype', rerun=None):
         'decline': ('session', 'proposal_id'),
         'confirm': ('session', 'proposal_id', 'inputs', 'settings', 'resources'),
     }[action]
-    optional = {'prepare': () if rerun else ('mode',), 'decline': (), 'confirm': ('options',)}[action]
+    optional = {'prepare': () if rerun else ('mode',), 'decline': (), 'confirm': ('options', 'choices')}[action]
     body = _body(handler, required + optional, required=required)
     session = body.pop('session')
     if not isinstance(session, str) or not _SESSION.fullmatch(session):
@@ -421,7 +467,7 @@ def download_results(handler, url):
             except (BrokenPipeError, ConnectionResetError):
                 return
     except jobs.StepError as error:
-        return _reply(handler, STATUS[error.code], error.code, str(error))
+        return _reply(handler, STATUS[error.code], error.code, str(error), error.details)
     except ApiError as error:
         return _reply(handler, error.status, error.code, str(error))
     except (OSError, ValueError):
@@ -533,6 +579,7 @@ ROUTES = [
     (re.compile(r'/signet/progress'), {'GET': get_progress}),
     (re.compile(r'/signet/catalog'), {'GET': get_catalog}),
     (re.compile(r'/signet/runs'), {'GET': list_runs, 'POST': create_run}),
+    (re.compile(r'/signet/analyses'), {'POST': start_analysis}),
     (re.compile(rf'/signet/runs/{_RUN}'), {'GET': get_run}),
     (re.compile(rf'/signet/runs/{_RUN}/conversation'), {'PATCH': link_conversation}),
     (re.compile(rf'/signet/runs/{_RUN}/genotype-proposal/(?P<action>prepare|decline|confirm)'), {'POST': step_action}),
@@ -559,7 +606,7 @@ def handle(handler, method, url):
                 return handler.json_response(value, status)
         raise ApiError(404, 'not_found', 'No such SIGNET API.')
     except jobs.StepError as error:
-        return _reply(handler, STATUS[error.code], error.code, str(error))
+        return _reply(handler, STATUS[error.code], error.code, str(error), error.details)
     except ApiError as error:
         return _reply(handler, error.status, error.code, str(error))
     except Exception:
@@ -569,7 +616,10 @@ def handle(handler, method, url):
                       'Unexpected error in the app; the request may not have finished. Check the run state before retrying.')
 
 
-def _reply(handler, status, code, message):
-    data = json.dumps({'error': message, 'code': code}, ensure_ascii=False).encode()
+def _reply(handler, status, code, message, details=None):
+    reply = {'error': message, 'code': code}
+    if details is not None:
+        reply['details'] = details
+    data = json.dumps(reply, ensure_ascii=False).encode()
     handler._headers(status, 'application/json; charset=utf-8', len(data))
     handler.wfile.write(data)

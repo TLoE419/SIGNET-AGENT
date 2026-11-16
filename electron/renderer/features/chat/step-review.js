@@ -121,13 +121,71 @@ function createStageCard(name, request, poll, phases) {
     return input;
   }
 
+  // signet -a: what the clinical table holds for the matched patients (counts only, from HPC3),
+  // and the researcher's choice for each race value SIGNET does not handle.
+  function clinicalSection(parameters) {
+    const review = parameters.clinical_review;
+    const saved = parameters.choices || {};
+    const box = node('div', 'step-clinical');
+    box.append(node('p', 'step-review-notice', '請選用含樣本編號、種族與性別欄位的相容臨床表。'));
+    const radios = {};
+    const counts = review?.unrecognized_race || {};
+    if (review?.status === 'ok') {
+      const total = node('p', 'step-clinical-count');
+      total.append(node('span', '', '基因型與表現量都有的病人'));
+      total.append(Object.assign(node('strong', ''), {textContent: ` ${review.matched_patients}`}));
+      box.append(total);
+      const handled = [['not reported', '當成 white'], ['american indian or alaska native', '排除']]
+        .filter(([value]) => review.race?.[value]);
+      if (handled.length) {
+        const list = node('ul', 'step-clinical-handled');
+        for (const [value, rule] of handled) {
+          const item = node('li', '');
+          item.append(Object.assign(node('span', ''), {textContent: `${value}：${review.race[value]} · `}), node('span', '', rule));
+          list.append(item);
+        }
+        box.append(node('p', 'step-review-notice', 'SIGNET 自己會處理'), list);
+      }
+    } else if (review) {
+      box.append(node('p', 'step-review-notice step-clinical-problem', '無法在 HPC3 上檢查臨床表；送出時會再檢查一次。'));
+    }
+    const values = [...new Set([...Object.keys(counts), ...Object.keys(saved)])];
+    if (values.length) box.append(node('p', 'step-review-notice step-clinical-problem', 'SIGNET 不認得的 race 值：請選擇處理方式。'));
+    for (const value of values) {
+      const group = node('fieldset', 'step-clinical-choice');
+      const legend = node('legend', '');
+      legend.textContent = counts[value] === undefined ? value : `${value}（${counts[value]}）`;
+      group.append(legend);
+      radios[value] = [['not_reported', '當成 not reported（SIGNET 會再當成 white）'], ['exclude', '排除這些病人']].map(([choice, label]) => {
+        const option = node('label', 'step-clinical-option');
+        const input = node('input', '');
+        input.type = 'radio';
+        input.name = `clinical-${name}-${value}`;
+        input.value = choice;
+        input.required = true;
+        input.checked = saved[value] === choice;
+        option.append(input, node('span', '', label));
+        group.append(option);
+        return input;
+      });
+      box.append(group);
+    }
+    if (review?.status === 'ok' && review.problems?.length) {
+      for (const problem of review.problems) {
+        box.append(Object.assign(node('p', 'step-review-notice step-clinical-problem'), {textContent: problem}));
+      }
+    }
+    const choices = () => Object.fromEntries(Object.entries(radios)
+      .map(([value, inputs]) => [value, inputs.find(input => input.checked)?.value]).filter(([, choice]) => choice));
+    return {box, choices};
+  }
+
   function reviewForm(parameters, resourceLimits, legend, rerunning = false) {
     const form = node('form', 'step-review-form');
     const fields = node('fieldset', 'step-review-fields');
     fields.append(node('legend', '', legend));
-    if (name === 'adjust') {
-      fields.append(node('p', 'step-review-notice', '請選用含樣本編號、種族與性別欄位的相容臨床表。'));
-    }
+    const clinical = name === 'adjust' ? clinicalSection(parameters) : null;
+    if (clinical) fields.append(clinical.box);
     const values = {};
     for (const [group, schema] of Object.entries(schemas)) {
       const entries = Object.entries(parameters[group] || {});
@@ -154,11 +212,11 @@ function createStageCard(name, request, poll, phases) {
       const group = event.target.closest('.step-rerun-group');
       if (group) group.open = true;
     }, true);
-    const payload = () => Object.fromEntries(Object.entries(values).map(([group, fields]) => [
+    const payload = () => ({...Object.fromEntries(Object.entries(values).map(([group, fields]) => [
       group, Object.fromEntries(Object.entries(fields).map(([name, input]) => [
         name, input.type === 'text' ? input.value.trim() : input.value === 'no' ? 'no' : Number(input.value)
       ]))
-    ]));
+    ])), ...(clinical ? {choices: clinical.choices()} : {})});
     return {form, fields, payload};
   }
 
@@ -195,6 +253,21 @@ function createStageCard(name, request, poll, phases) {
         details.append(node('summary', '', '查看完整路徑'), fullPaths);
         section.append(details);
       }
+      savedValues.append(section);
+    }
+    const treated = Object.entries(parameters?.clinical?.choices || {});
+    if (treated.length) {
+      const section = node('section', 'step-review-setting-group');
+      const list = node('dl', 'step-review-grid');
+      for (const [value, choice] of treated) {
+        const item = node('div', 'step-review-field');
+        const text = node('dd', '', choice === 'exclude' ? '排除這些病人' : '當成 not reported（SIGNET 會再當成 white）');
+        const term = node('dt', '');
+        term.textContent = value;
+        item.append(term, text);
+        list.append(item);
+      }
+      section.append(node('h4', '', '臨床資料處理'), list);
       savedValues.append(section);
     }
   }
@@ -394,13 +467,21 @@ function createStageCard(name, request, poll, phases) {
         latest = {...latest, proposal, canPrepare:action !== 'confirm'};
       }
     } catch (error) {
+      if (!state.controller.signal.aborted && action === 'confirm' && error.details?.status === 'ok' && latest.proposal) {
+        // The server checked the clinical table: show its counts and the choices still needed.
+        const parameters = {...latest.proposal.parameters, inputs: body.inputs, clinical_review: error.details,
+          choices: body.choices || {}};
+        latest = {...latest, proposal: {...latest.proposal, parameters}};
+        key = undefined;
+      }
       if (!state.controller.signal.aborted) {
-        const message = error.code === 'conflict' ? '確認卡已過期或已使用，請重新準備設定。'
+        const message = error.code === 'needs_choice' ? '請為每個值選擇處理方式。'
+          : error.code === 'conflict' ? '確認卡已過期或已使用，請重新準備設定。'
           : error.code === 'not_ready' ? '請先連線到 HPC3，再重試。'
           : error.code === 'invalid_request' ? '請檢查輸入資料與設定。'
           : '無法確認操作結果，請先查看進度。';
         say(message);
-        if (error.code === 'invalid_request' && error.message) {
+        if (['invalid_request', 'needs_choice'].includes(error.code) && error.message) {
           const detail = node('small', 'step-review-error-detail');
           detail.textContent = error.message;
           notice.append(detail);

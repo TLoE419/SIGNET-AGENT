@@ -192,9 +192,13 @@ function setup(initial={}, analysisApi) {
   const cards=()=>live.ids.get('messages').children.filter(el=>el.className==='analysis-progress-card');
   assert.equal(cards().length,1,'a run linked to another conversation must not appear');
   const original=cards()[0], bar=original.children[0].children[2], rows=original.children[1];
-  assert.equal(rows.children.length,6);
+  const steps=rows.children.filter(el=>el.className==='analysis-progress-step');
+  assert.equal(steps.length,6);
+  // Two group headings match stages 2 and 3 of the Workflow panel.
+  assert.deepEqual(rows.children.filter(el=>el.className==='analysis-progress-group').map(el=>el.textContent),['資料前處理','分析與結果']);
+  assert.equal(rows.children.indexOf(rows.children.find(el=>el.textContent==='分析與結果')),4,'the second group starts before -c');
   assert.match(original.textContent,/排隊中/);
-  assert.match(rows.children[5].textContent,/尚未追蹤/);
+  assert.match(steps[5].textContent,/尚未追蹤/);
   original.open=true;
   phase='running';progress={stage1:'31 36',stage2:'20 10'};
   await live.tick();
@@ -206,7 +210,7 @@ function setup(initial={}, analysisApi) {
   assert.equal(bar.value,0,'completed-stage progress does not count a running step');
   progress=undefined;
   await live.tick();
-  assert.match(rows.children[4].textContent,/執行中/);
+  assert.match(steps[4].textContent,/執行中/);
   assert.equal(networkCard.querySelectorAll('progress').length,0,'unknown work units do not show a bar');
   phase='downloading';
   await live.tick();
@@ -226,7 +230,7 @@ function setup(initial={}, analysisApi) {
   await live.tick();
   assert.equal(cards()[0],original);
   assert.equal(bar.value,1);
-  assert.match(rows.children[4].textContent,/已完成/);
+  assert.match(steps[4].textContent,/已完成/);
   assert.equal(original.children[0].children.at(-1).hidden,true,'successful status clears the stale notice');
   assert.ok(requests.every(r=>r.method==='GET'),'watching a run cannot submit a job');
   live.events.pagehide();
@@ -316,7 +320,9 @@ function setup(initial={}, analysisApi) {
   const submitted={genotype:{settings:{mind:'0.07'}}};
   const parameters={
     expression:{inputs:{'gexp.file':'/demo/expression','pmap.file':'/demo/annotation'},settings:{'restrict.tcga':'1'}},
-    adjust:{inputs:{'cli.file':'/demo/clinical.tsv'},settings:{},options:{npc:3}},
+    adjust:{inputs:{'cli.file':'/demo/clinical.tsv'},settings:{},options:{npc:3},
+      clinical_review:{status:'ok',matched_patients:514,race:{white:385,'not reported':62,Unknown:5},
+        unrecognized_race:{Unknown:5},needs_choice:['Unknown'],problems:[]}},
     cis:{inputs:{},settings:{'alpha.cis':'0.05'}},
     network:{inputs:{},settings:{nboots:'2',walltime:'1:00:00'}},
     visualize:{inputs:{},settings:{freq:'0.5',ntop:'1'}}
@@ -402,6 +408,11 @@ function setup(initial={}, analysisApi) {
       reviewButton('準備本階段設定').click();
       await new Promise(setImmediate);
       sequenceReview.querySelectorAll('input').find(el=>el.value===3).value='2';
+      // The card shows the matched patients and asks how SIGNET should treat "Unknown".
+      assert.match(sequenceReview.textContent,/514/);
+      assert.match(sequenceReview.textContent,/Unknown（5）/);
+      assert.match(sequenceReview.textContent,/not reported：62/);
+      sequenceReview.querySelectorAll('input').find(el=>el.value==='not_reported').checked=true;
     }
     const approve=reviewButton('同意，開始這一步');
     approve.click();approve.click();
@@ -412,6 +423,8 @@ function setup(initial={}, analysisApi) {
     await sequence.tick();
   }
   assert.equal(confirmations.find(item=>item.step==='adjust').body.options.npc,2);
+  assert.deepEqual(confirmations.find(item=>item.step==='adjust').body.choices,{Unknown:'not_reported'});
+  assert.equal('choices' in confirmations.find(item=>item.step==='cis').body,false,'only -a sends clinical choices');
   assert.equal(confirmations.find(item=>item.step==='network').body.settings.walltime,'1:00:00');
   assert.equal(confirmations.find(item=>item.step==='visualize').body.settings.freq,.5);
   assert.deepEqual(stageCards(sequenceLog),retained);

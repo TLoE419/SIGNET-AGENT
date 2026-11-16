@@ -71,7 +71,7 @@ For TCGA, the current wrappers expect:
 - Stage 5: Stage 4 significant-pair results and matching expression, genotype, gene-name, and gene-position files.
 - Stage 6: aligned frequency and coefficient matrices plus ordered gene positions from the network analysis.
 
-GTEx uses a different set of VCF, read-count, tissue, annotation, TPM, and phenotype inputs. Use the explicit `genotype_gtex`, `expression_gtex`, and `adjust_gtex` tool descriptions rather than renaming TCGA files to fit those inputs.
+GTEx uses a different set of VCF, read-count, tissue, annotation, TPM, and phenotype inputs. The HPC3 workflow supports TCGA only; do not rename TCGA files to fit GTEx inputs.
 
 Before running a stage, inspect the source data headers, sample IDs, genome build, chromosome naming, allele orientation, and row ordering. A file existing at the expected path is not evidence that it is scientifically compatible. The wrappers enforce path and prerequisite checks, but they do not establish that datasets are biologically compatible.
 
@@ -79,12 +79,14 @@ Before running a stage, inspect the source data headers, sample IDs, genome buil
 
 Use the local chat assistant to inspect the catalog and ask what inputs a stage requires. The assistant exposes fixed tools; it does not accept arbitrary shell commands. Start each independent analysis with a new run ID and cohort configuration. Each run is isolated under `runs/<run-id>/`; attempted stages cannot be replayed in place.
 
-1. **Stage 1 — genotype preparation.** For TCGA, provide the study `.ped`/`.map`, reference-panel chromosome files, and genetic maps. For GTEx, provide its VCF, reads, annotation, and tissue inputs. Check logs, QC outputs, sample counts, marker counts, and allele/assembly assumptions before proceeding.
-2. **Stage 2 — expression preparation.** Provide the cohort expression input and compatible annotation. GTEx also needs its reads, TPM, tissue, and Stage 1 intermediates. Verify sample IDs and gene mapping.
-3. **Stage 3 — PCA and covariates.** Provide the TCGA clinical file or GTEx phenotype/annotation files. Inspect PCA plots and choose the number of components based on the study design; do not copy a default without review. Confirm the resulting samples and covariates match the expression and genotype data.
+Stages 1–3 run on HPC3 from the chat confirmation cards (see [HPC3 guide](HPC3_GUIDE.md)); there are no local tools for them.
+
+1. **Stage 1 — genotype preparation.** Provide the study `.ped`/`.map`, reference-panel chromosome files, and genetic maps. Check logs, QC outputs, sample counts, marker counts, and allele/assembly assumptions before proceeding.
+2. **Stage 2 — expression preparation.** Provide the cohort expression input and compatible annotation. Verify sample IDs and gene mapping.
+3. **Stage 3 — PCA and covariates.** Provide the TCGA clinical file. Choose the number of components based on the study design; do not copy a default without review. Confirm the resulting samples and covariates match the expression and genotype data.
 4. **Stage 4 — cis-eQTL.** Provide aligned genotype/expression inputs and SNP/gene metadata. On macOS this calls the existing VM. Confirm the VM preflight succeeds before starting; an unavailable connection means the analysis did not start. Review outputs and logs before using significant pairs.
-5. **Stage 5 — network inference.** First use `prepare_network` to inspect the plan; it does not submit jobs. When prerequisites and parameters are independently reviewed, `submit_network` sends work to the existing local SLURM runtime. Query status after submission; if status is unknown, do not resubmit the same run.
-6. **Stage 6 — visualization.** First use `prepare_visualization` to inspect the plan; it does not execute or create a persistent Shiny service. `run_visualization` runs exports in the existing VM and may need online STRING annotation. Verify the exported matrices/plots and their alignment before using the chat visualization.
+5. **Stage 5 — network inference.** When prerequisites and parameters are independently reviewed, `submit_network` sends work to the existing local SLURM runtime. Query status after submission; if status is unknown, do not resubmit the same run.
+6. **Stage 6 — visualization.** `run_visualization` runs exports in the existing VM and may need online STRING annotation; it does not create a persistent Shiny service. Verify the exported matrices/plots and their alignment before using the chat visualization.
 
 The exact file names and parameters depend on the pinned upstream config and your cohort. Inspect the generated `runs/<run-id>/work/config.ini`, stage records, and logs. Do not edit the audited source copy under `.dependencies/official-signet`; the application copies it into each isolated run.
 

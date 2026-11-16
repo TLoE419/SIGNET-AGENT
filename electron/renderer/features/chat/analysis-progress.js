@@ -29,7 +29,7 @@
     const response = await fetch(path, options);
     if (!response.ok) {
       const error = await response.json().catch(() => ({}));
-      throw Object.assign(new Error(error.error || 'Analysis request failed'), {code:error.code});
+      throw Object.assign(new Error(error.error || 'Analysis request failed'), {code:error.code, details:error.details});
     }
     return response.json();
   }
@@ -61,7 +61,14 @@
     notice.hidden = true;
     const rows = node('ol', 'analysis-progress-steps');
     const stages = new Map();
+    // The same two groups as stages 2 and 3 of the Workflow panel.
+    const groups = {genotype: '資料前處理', cis: '分析與結果'};
     for (const [index, step] of analysis.steps.entries()) {
+      if (groups[step.step]) {
+        const group = node('li', 'analysis-progress-group', groups[step.step]);
+        group.setAttribute('role', 'presentation');
+        rows.append(group);
+      }
       const row = node('li', 'analysis-progress-step');
       row.dataset.step = step.step;
       const name = node('span', 'analysis-progress-name', labels[step.step]);
@@ -236,6 +243,11 @@
 
   if (initialChat.session) start();
   window.addEventListener('chat-idle', () => {
+    if (polling) void poll(polling);
+    else start();
+  });
+  // The Workflow panel started an analysis in this conversation: show its card now.
+  window.addEventListener('analysis-started', () => {
     if (polling) void poll(polling);
     else start();
   });

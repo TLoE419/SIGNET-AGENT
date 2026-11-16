@@ -72,6 +72,7 @@ class SignetApiTest(unittest.TestCase):
 
     def test_every_route_needs_the_page_token_and_writes_need_the_origin(self):
         routes = [('GET', '/signet/progress'), ('GET', '/signet/catalog'), ('GET', '/signet/runs'), ('POST', '/signet/runs'),
+                  ('POST', '/signet/analyses'),
                   ('POST', '/signet/runs/step_test/genotype-proposal/prepare'),
                   ('POST', '/signet/runs/step_test/genotype-proposal/confirm'),
                   ('POST', '/signet/runs/step_test/genotype-proposal/decline'),
@@ -135,6 +136,30 @@ class SignetApiTest(unittest.TestCase):
         self.assertEqual(self.call('GET', '/signet/runs?session=' + other)[1]['runs'], [])
         self.assertEqual(self.calls, [])
 
+    def test_workflow_panel_starts_an_analysis_with_a_card_and_submits_nothing(self):
+        session = '12345678-1234-1234-1234-123456789abc'
+        self.genotype_inputs()
+        for bad in ({'session': 'invalid', 'mode': 'example'}, {'session': session, 'mode': 'gtex'}, {'session': session}):
+            self.assertEqual(self.call('POST', '/signet/analyses', bad)[0], 400, bad)
+        status, value = self.call('POST', '/signet/analyses', {'session': session, 'mode': 'example'})
+        self.assertEqual(status, 201, value)
+        self.assertRegex(value['run_id'], r'^tcga-\d{8}-\d{6}(-\d+)?$')
+        self.assertEqual((value['proposal']['state'], value['proposal']['mode']), ('pending', 'example'))
+        # A new conversation is saved with a short note, so the card and the assistant share it.
+        self.assertEqual([item.role for item in self.server.histories[session]], ['user', 'model'])
+        self.assertIn(value['run_id'], self.server.histories[session][1].parts[0].text)
+        analysis = self.call('GET', '/signet/progress?session=' + session)[1]['analyses'][0]
+        self.assertEqual((analysis['run_id'], analysis['genotype_proposal']['state']), (value['run_id'], 'pending'))
+        second = self.call('POST', '/signet/analyses', {'session': session, 'mode': 'custom'})[1]
+        self.assertNotEqual(second['run_id'], value['run_id'], 'each start creates a fresh run')
+        self.assertEqual(second['proposal']['mode'], 'custom')
+        self.assertFalse(any('sbatch' in command for command in self.calls), 'nothing is submitted before the card')
+        self.server.turn_lock.acquire()
+        try:
+            self.assertEqual(self.call('POST', '/signet/analyses', {'session': session, 'mode': 'example'})[0], 409)
+        finally:
+            self.server.turn_lock.release()
+
     def genotype_review(self):
         session = '12345678-1234-1234-1234-123456789abc'
         self.server.histories[session] = []
@@ -158,7 +183,8 @@ class SignetApiTest(unittest.TestCase):
             proposed = dispatch_tool('propose_hpc3_genotype', {'run_id': 'step_test', 'use_example': True})
             bypass = dispatch_tool('genotype_tcga', {})
             self.assertEqual((proposed['status'], proposed['executed']), ('awaiting_confirmation', False))
-            self.assertEqual((bypass['status'], bypass['executed']), ('awaiting_confirmation', False))
+            # The local genotype tool is gone, so nothing can bypass the card.
+            self.assertEqual((bypass['status'], bypass['executed']), ('invalid', False))
             return 'Review the genotype settings.'
 
         with patch.object(chat_ui, 'run_conversation', side_effect=conversation):
@@ -229,11 +255,15 @@ class SignetApiTest(unittest.TestCase):
         self.assertEqual(self.call('GET', results)[0], 409)
         self.assertEqual(self.call('POST', download, {'session': session})[0], 409)
         clinical = self.hpc / 'ws/refdata/clinical-compatible.tsv'
-        clinical.write_text('submitter_id\trace\tgender\nTCGA-AB-0001\tasian\tfemale\n')
+        # Four matched patients: the three races signet -a requires, plus one value SIGNET does not handle.
+        clinical.write_text('submitter_id\trace\tgender\nTCGA-AB-0001\tasian\tfemale\nTCGA-AB-0002\twhite\tmale\n'
+                            'TCGA-AB-0003\tblack or african american\tfemale\nTCGA-AB-0004\tUnknown\tmale\n')
+        sample_ids = ''.join(f'TCGA-AB-000{n}-01A\n' for n in range(1, 5))
         expression = self.hpc / 'ws/signet/example/gexp/example_gexp'
         expression.parent.mkdir(exist_ok=True)
         expression.write_text('example expression')
-        (self.hpc / 'ws/refdata/gencode.v22.genes.gtf').write_text('annotation')
+        (self.hpc / 'ws/refdata/gencode.v22.genes.gtf').write_text(
+            'chr1\tHAVANA\tgene\t1\t2\t.\t+\t.\tgene_id "A"; transcript_type "protein_coding";\n')
         edges = 'source_gene_symbol,target_gene_symbol,frequency,coefficient\nA,B,0.75,0.2\n'
         original_plot = '<html><head></head><body>Original SIGNET widget</body></html>'
 
@@ -255,9 +285,19 @@ class SignetApiTest(unittest.TestCase):
                 }
                 body = {'session': session, 'proposal_id': draft['id'], **parameters}
                 if step == 'adjust':
-                    self.assertEqual(body['inputs']['cli.file'], '')
+                    # The card starts from the clinical table in use (here: the default download path).
+                    self.assertTrue(body['inputs']['cli.file'].endswith('/refdata/clinical.tsv'))
+                    self.assertIn('clinical_review', draft['parameters'])
+                    body.pop('clinical_review', None)
                     body['inputs']['cli.file'] = str(clinical)
                     body['options']['npc'] = 2
+                    # Without a choice for "Unknown" nothing is submitted and the card stays open.
+                    status, missing = self.call('POST', base + '/proposal/confirm', body)
+                    self.assertEqual((status, missing['code']), (400, 'needs_choice'), missing)
+                    self.assertEqual(missing['details']['needs_choice'], ['Unknown'])
+                    self.assertEqual(missing['details']['matched_patients'], 4)
+                    self.assertNotIn('TCGA-AB', json.dumps(missing))
+                    body['choices'] = {'Unknown': 'not_reported'}
                 if step == 'visualize':
                     body['settings']['freq'] = .75
 
@@ -266,11 +306,18 @@ class SignetApiTest(unittest.TestCase):
             status, record = self.call('POST', base + '/proposal/confirm', body)
             self.assertEqual(status, 202, record)
             self.assertEqual(record['run_id'], 'step_test')
-            submitted[step] = {key: record[key] for key in ('inputs', 'settings', 'resources', 'options')
+            submitted[step] = {key: record[key] for key in ('inputs', 'settings', 'resources', 'options', 'clinical')
                                if record.get(key)}
             self.assertEqual(self.call('POST', base + '/proposal/confirm', body)[0], 409)
             if step == 'adjust':
                 self.assertEqual(record['options'], {'npc': 2})
+                # The job reads the run's copy with the choice applied; the researcher's file is unchanged.
+                self.assertTrue(record['inputs']['cli.file'].endswith(jobs.CLINICAL_COPY))
+                self.assertEqual(record['clinical']['choices'], {'Unknown': 'not_reported'})
+                self.assertEqual(record['clinical']['races_after'], {'asian': 1, 'white': 2, 'black or african american': 1})
+                copy = (self.remote_dir / jobs.CLINICAL_COPY).read_text()
+                self.assertIn('TCGA-AB-0004\tnot reported\tmale', copy)
+                self.assertIn('Unknown', clinical.read_text())
             if step == 'visualize':
                 script = (self.remote_dir / 'steps/visualize.sbatch').read_text()
                 self.assertIn('bash ./signet -v', script)
@@ -288,7 +335,8 @@ class SignetApiTest(unittest.TestCase):
             for name in [*outputs, *extra]:
                 file = self.remote_dir / 'work' / name
                 file.parent.mkdir(parents=True, exist_ok=True)
-                content = {'signet-edges.csv': edges, 'signet_top1_freq0.75.html': original_plot}
+                content = {'signet-edges.csv': edges, 'signet_top1_freq0.75.html': original_plot,
+                           'signet_Genotype.sampleID': sample_ids, 'signet_gexpID': sample_ids}
                 file.write_text(content.get(file.name, step))
             (self.remote_dir / f'steps/{step}.done').write_text('0 2026-11-01T10:00:00\n')
             self.slurm(sacct='COMPLETED')

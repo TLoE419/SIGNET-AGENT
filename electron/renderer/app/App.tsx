@@ -30,19 +30,20 @@ export function App({model}:{model:string}){
                   <div className="workflow-stage-actions"><button type="button" onClick={()=>window.dispatchEvent(new Event('open-environment'))} data-i18n="HPC3 設定">HPC3 settings</button><button id="workflow-check" type="button" data-i18n="重新檢查">Check again</button></div>
                   <ul id="workflow-items" className="workflow-items"></ul>
                   <p id="workflow-message" className="workflow-message" role="status" hidden={true}></p>
+                  <div className="workflow-next" id="workflow-next" hidden={true}><button type="button" id="workflow-next-button" data-i18n="下一步：資料前處理 →">Next: Data preprocessing →</button></div>
                 </div>
               </details>
             </li>
-            <li className="workflow-stage locked" data-stage="preprocess">
-              <details>
-                <summary className="workflow-stage-head"><span className="workflow-step">2</span><strong data-i18n="資料前處理">Data preprocessing</strong></summary>
-                <p className="workflow-stage-body workflow-note" >Not implemented in this version</p>
+            <li className="workflow-stage locked" data-stage="preprocess" id="workflow-preprocess-stage">
+              <details id="workflow-preprocess">
+                <summary className="workflow-stage-head"><span className="workflow-step">2</span><strong data-i18n="資料前處理">Data preprocessing</strong><span id="workflow-preprocess-status" className="workflow-note"></span></summary>
+                <div className="workflow-stage-body" id="workflow-preprocess-body"><p className="workflow-note" data-i18n="請先完成準備環境。">Finish preparing the environment first.</p></div>
               </details>
             </li>
-            <li className="workflow-stage locked" data-stage="results">
-              <details>
-                <summary className="workflow-stage-head"><span className="workflow-step">3</span><strong data-i18n="分析與結果">Analysis and results</strong></summary>
-                <p className="workflow-stage-body workflow-note" >Not implemented in this version</p>
+            <li className="workflow-stage locked" data-stage="results" id="workflow-results-stage">
+              <details id="workflow-results">
+                <summary className="workflow-stage-head"><span className="workflow-step">3</span><strong data-i18n="分析與結果">Analysis and results</strong><span id="workflow-results-status" className="workflow-note"></span></summary>
+                <div className="workflow-stage-body" id="workflow-results-body"><p className="workflow-note" data-i18n="請先完成準備環境。">Finish preparing the environment first.</p></div>
               </details>
             </li>
           </ol>

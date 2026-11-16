@@ -1,7 +1,5 @@
 """Fixed SIGNET entry points; source is read-only and each run owns its files."""
 import hashlib
-import csv
-import gzip
 import importlib.util
 import inspect
 import json
@@ -144,6 +142,49 @@ HPC3_SETUP = [
 ]
 _HOW_TO_RUN = ('From the confirmation card in chat. The researcher reviews the inputs, settings and resources, '
                'then confirms; the job runs on HPC3 through Slurm. The assistant cannot confirm a card.')
+# What each card setting controls, quoted from SIGNET's own README.md (pinned commit). The card
+# may show the app's starting value instead of SIGNET's default; choosing values is the researcher's.
+_README = 'SIGNET README.md'
+_RESTRICT = ('specifing chromosome(s) of interest, which may be dash separated, e.g. 1-22; comma separated, '
+             'e.g. 1,2,3; or simply a number, e.g. 1.')
+STAGE_PARAMETERS = {
+    'genotype': {
+        'restrict.tcga.geno': _RESTRICT,
+        'mind': 'missing rate cutoff for individuals, a value in [0, 1]. By default 0.1',
+        'geno': 'missing rate cutoff for SNPs, a value in [0, 1]. By default 0.1',
+        'hwe': 'Hardy-Weinberg equilibrium cutoff, a value in (0, 1]. By default 10^-4',
+        'int': 'a positive number specifying the interval length for imputation. By default 5 * 10^6',
+    },
+    'expression': {'restrict.tcga': _RESTRICT},
+    'adjust': {
+        'npc': 'Number of genotype PCs for population structure (script/adj/adj.sh asks "Enter the number of PCs '
+               'for population structures"); expression is adjusted for these top PCs, race and gender.',
+    },
+    'cis': {
+        'alpha.cis': 'specifying a value in (0, 1) as the significance level for identifying instrumental '
+                     'variables. By default 0.05',
+        'nperms': 'specifying the number of permutations. By default 100',
+        'upstream': 'specifying the number of base pairs upstream each genetic region. By default 1000',
+        'downstream': 'specifying the number of base pairs downstream each genetic region. By default 1000',
+    },
+    'network': {
+        'nboots': 'an integer as the number of bootstrapping data sets taken in calculation. By deault 100',
+        'ncis': 'an integer as the maximum number of biomarkers associated with each gene. By default 3',
+        'cor': 'a value in [-1, 1] specifying the maximum correlation between biomarkers. By default 0.6',
+        'ncores': 'number of cores for each node. By default 128',
+        'memory': 'memory of each node, in GB. By default 256',
+        'walltime': 'maximum wall time for cluster. By default 4:00:00',
+    },
+    'visualize': {
+        'freq': 'specifying the bootstrap frequency cutoff as a value in [0, 1]. By default 1',
+        'ntop': 'specifying the number of top subnetworks to visualize. By default 1',
+    },
+}
+RESOURCE_NOTE = ('cpus, mem_gb and hours on each card are the Slurm resources requested for that step\'s job on '
+                 'HPC3, not SIGNET parameters. For -n, ncores, memory and walltime size the jobs SIGNET submits itself.')
+_STAGE_KEYS = ('genotype', 'expression', 'adjust', 'cis', 'network', 'visualize')
+
+
 ANALYSIS_STAGES = [
     {'stage': 1, 'flag': '-g', 'name': 'Genotype preprocessing',
      'purpose': 'Quality control with PLINK (removes samples and SNPs with too many missing calls, and SNPs that '
@@ -185,6 +226,11 @@ ANALYSIS_STAGES = [
      'inputs': 'Results of stage 5.',
      'how_to_run': _HOW_TO_RUN},
 ]
+for _stage, _key in zip(ANALYSIS_STAGES, _STAGE_KEYS):
+    _stage['step'] = _key
+    _stage['parameters'] = {name: {'meaning': text, 'source': _README} for name, text in STAGE_PARAMETERS[_key].items()}
+
+
 SCOPE = {
     'cohort': 'The HPC3 chat workflow supports TCGA. GTEx tools exist only for the separate local workflow.',
     'reference_data': 'Prepared for chromosome 1 only, matching the SIGNET example study (simulated TCGA-LUAD data).',
@@ -200,13 +246,12 @@ def signet_catalog() -> dict:
     from agent.tools.registry import ALL_TOOLS
     return {'status': 'ok', 'revision': INVENTORY['revision'], 'analysis_script_files': 138,
             'source_entries': 16, 'internal_scripts': 121, 'development_files': 3,
-            'analysis_tools': 15, 'signet_tools': len(SIGNET_TOOLS), 'all_tools_including_list_files': len(ALL_TOOLS),
+            'signet_tools': len(SIGNET_TOOLS), 'all_tools_including_list_files': len(ALL_TOOLS),
             'general_tools': [fn.__name__ for fn in GENERAL_TOOLS], 'hpc_tools': [fn.__name__ for fn in HPC_TOOLS],
             'scripts': INVENTORY['scripts'],
-            'prepare_only': ['prepare_network', 'prepare_visualization'],
             'network_execution': ['submit_network', 'get_network_status', 'cancel_network'],
             'visualization_execution': ['run_visualization'],
-            'hpc3_setup': HPC3_SETUP, 'analysis_stages': ANALYSIS_STAGES, 'scope': SCOPE,
+            'hpc3_setup': HPC3_SETUP, 'analysis_stages': ANALYSIS_STAGES, 'resources': RESOURCE_NOTE, 'scope': SCOPE,
             'note': 'Preparation is not execution. No scientific success is inferred from exit code alone.'}
 
 
@@ -371,72 +416,6 @@ def _execute(run_id, operation, command, values=None, dependencies=(), modules=(
             (root / '.active').unlink(missing_ok=True)
 
 
-def genotype_tcga(run_id: str, ped: str, map_file: str, reference_prefix: str, genetic_map_prefix: str,
-                  mind: float = 0.1, geno: float = 0.1, hwe: float = 0.0001,
-                  interval: int = 5000000, chromosome: int = 0) -> dict:
-    """Stage 1 TCGA genotype QC and imputation. Prefixes must identify chr1.gen/chr1.map inputs; chromosome=0 means all."""
-    ref = _prefix_inputs(reference_prefix, '.gen', run_id, chromosome)
-    gmap = _prefix_inputs(genetic_map_prefix, '.map', run_id, chromosome)
-    values = {'ped.file':_input(ped),'map.file':_input(map_file),'ref':ref,'gmap':gmap,
-              'mind':_number(mind,0,1),'geno':_number(geno,0,1),'hwe':_number(hwe,0,1),
-              'int':_number(interval,1,100000000,True),
-              'restrict.tcga.geno':_number(chromosome,1,22,True) if chromosome else 'no'}
-    return _execute(run_id,'genotype_tcga',['bash','{work}/signet','-g'],values,
-                    ('bash','Rscript','perl','plink','impute2','ParaFly'),cohort='TCGA')
-
-
-def _prefix_inputs(prefix, suffix, run_id, chromosome):
-    nchr = int(_settings(_run(run_id))['nchr'])
-    if chromosome:
-        _number(chromosome,1,nchr,True)
-    chromosomes = [chromosome] if chromosome else range(1,nchr+1)
-    for number in chromosomes:
-        path = _input(prefix + str(number) + suffix)
-    return path[:-len(str(number)+suffix)]
-
-
-def genotype_gtex(run_id: str, vcf_before_phasing: str, vcf: str, reads: str, annotation: str, tissue: str) -> dict:
-    """Stage 1 GTEx genotype extraction and PLINK processing, using explicit input files."""
-    return _execute(run_id,'genotype_gtex',['bash','{work}/signet','-g'],
-                    {'vcf0':_input(vcf_before_phasing),'vcf.file':_input(vcf),'read.file':_input(reads),
-                     'anno':_input(annotation),'tissue':_name(tissue)},
-                    ('bash','Rscript','bcftools','tabix','plink'),cohort='GTEx')
-
-
-def expression_tcga(run_id: str, expression: str, annotation_gtf: str, chromosome: int = 0) -> dict:
-    """Stage 2 TCGA expression normalization and gene positions; chromosome=0 means all."""
-    return _execute(run_id,'expression_tcga',['bash','{work}/signet','-t'],
-                    {'gexp.file':_input(expression),'pmap.file':_input(annotation_gtf),
-                     'restrict.tcga':_number(chromosome,1,22,True) if chromosome else 'no'},
-                    ('bash','Rscript'),cohort='TCGA')
-
-
-def expression_gtex(run_id: str, reads: str, tpm: str, annotation_gtf: str, tissue: str) -> dict:
-    """Stage 2 GTEx expression preparation; requires genotype extraction intermediates."""
-    return _execute(run_id,'expression_gtex',['bash','{work}/signet','-t'],
-                    {'reads.file':_input(reads),'tpm.file':_input(tpm),'gtf.file':_input(annotation_gtf),'tissue':_name(tissue)},
-                    ('bash','Rscript','python3','bgzip','tabix'),('numpy','pandas','scipy','feather'),cohort='GTEx',
-                    prerequisites=('tmp/tmpg/subjid_wb_common.txt','tmp/tmpg/GTEx_snp.vcf.gz'))
-
-
-def adjust_tcga(run_id: str, clinical: str, principal_components: int = 3) -> dict:
-    """Stage 3 TCGA matching, PCA and covariate adjustment; choose PCs after inspecting plots in a prior exploratory run."""
-    npc = _number(principal_components,0,10,True)
-    return _execute(run_id,'adjust_tcga',['bash','{work}/signet','-a'],{'cli.file':_input(clinical)},
-                    ('bash','Rscript','perl','ParaFly','smartpca.perl'),cohort='TCGA',stdin=npc+'\n',
-                    prerequisites=('res/resg/signet_Geno','res/resg/signet_Genotype.sampleID','res/rest/signet_gexp','res/rest/signet_gexpID'))
-
-
-def adjust_gtex(run_id: str, phenotype: str, annotation: str, annotation_gtf: str,
-                tissue: str, principal_components: int = 3) -> dict:
-    """Stage 3 GTEx PCA and covariate adjustment; requires genotype and expression preprocessing."""
-    npc = _number(principal_components,0,10,True)
-    return _execute(run_id,'adjust_gtex',['bash','{work}/signet','-a'],
-                    {'pheno':_input(phenotype),'anno':_input(annotation),'gtf.file':_input(annotation_gtf),'tissue':_name(tissue)},
-                    ('bash','Rscript','plink','smartpca.perl','python3'),('numpy','pandas','statsmodels'),
-                    cohort='GTEx',stdin=npc+'\n',prerequisites=('tmp/tmpg/GTEx_snp.vcf',))
-
-
 def cis_eqtl(run_id: str, expression: str, expression_with_pc: str, genotype: str,
              snp_map: str, snp_maf: str, gene_positions: str, alpha: float = 0.05,
              permutations: int = 100, upstream: int = 1000, downstream: int = 1000) -> dict:
@@ -451,27 +430,6 @@ def cis_eqtl(run_id: str, expression: str, expression_with_pc: str, genotype: st
                      'gene.pos':_input(gene_positions),'alpha.cis':_number(alpha,1e-12,1),
                      'nperms':_number(permutations,1,10000,True),'upstream':_number(upstream,0,10000000,True),
                      'downstream':_number(downstream,0,10000000,True)},('bash','Rscript','ParaFly'))
-
-
-def prepare_network(run_id: str, expression: str, genotype: str, significant_pairs: str,
-                    gene_names: str, gene_positions: str, container: str = '', bootstraps: int = 100,
-                    markers_per_gene: int = 3, correlation: float = 0.3, memory_gb: int = 16,
-                    queue: str = 'standby', walltime_hours: int = 4, cores: int = 128,
-                    computing: str = 'slurm', stage: int = 1) -> dict:
-    """Stage 5 PREPARE ONLY: validate SLURM or cloud (stage 1/2) network configuration; never submit or execute jobs."""
-    if computing not in ('slurm','cloud'):
-        raise ValueError('computing must be slurm or cloud.')
-    _number(stage,1,2,True)
-    return _execute(run_id,'network',['bash','{work}/signet','-n'],
-                    {'net.gexp.data':_input(expression),'net.geno.data':_input(genotype),
-                     'sig.pair':_input(significant_pairs),'net.genename':_input(gene_names),
-                     'net.genepos':_input(gene_positions),
-                     'sif':_input(container) if computing=='slurm' or container else str(_run(run_id)/'work/missing/sif'),
-                     'nboots':_number(bootstraps,1,10000,True),'ncis':_number(markers_per_gene,1,100,True),
-                     'cor':_number(correlation,0,1),'memory':_number(memory_gb,1,1024,True),
-                     'queue':_name(queue),'walltime':_number(walltime_hours,1,168,True)+':00:00',
-                     'ncores':_number(cores,1,1024,True),'computing':computing,'stage':str(stage)},
-                    ('bash','Rscript','singularity','sbatch','srun') if computing=='slurm' else ('bash','Rscript'),prepare=True)
 
 
 def submit_network(run_id: str, expression: str, genotype: str, significant_pairs: str,
@@ -540,19 +498,6 @@ def _network_status(run_id, cancel=False):
         (root / '.active').unlink()
 
 
-def prepare_visualization(run_id: str, frequencies: str, coefficients: str, gene_positions: str,
-                          frequency: float = 1, top_networks: int = 3, taxonomy_id: int = 9606,
-                          assembly: str = 'hg38', transcription_factors: str = '') -> dict:
-    """Stage 6 PREPARE ONLY: online STRINGdb lookup and interactive Shiny require manual execution."""
-    values = {'Afreq':_input(frequencies),'coef':_input(coefficients),'vis.genepos':_input(gene_positions),
-              'freq':_number(frequency,0,1),'ntop':_number(top_networks,1,100,True),
-              'id':_number(taxonomy_id,1,10000000,True),'assembly':_name(assembly)}
-    if taxonomy_id != 9606 or transcription_factors:
-        values['tf'] = _input(transcription_factors)
-    return _execute(run_id,'visualization',['bash','{work}/signet','-v'],values,('bash','Rscript'),prepare=True)
-
-
-
 def run_visualization(run_id: str, frequencies: str, coefficients: str, gene_positions: str,
                       frequency: float, top_networks: int, taxonomy_id: int = 9606,
                       assembly: str = 'hg38', transcription_factors: str = '') -> dict:
@@ -570,84 +515,6 @@ def run_visualization(run_id: str, frequencies: str, coefficients: str, gene_pos
     if taxonomy_id != 9606 or transcription_factors:
         values['tf'] = _input(transcription_factors)
     return _execute(run_id, 'visualization', ['bash', '{work}/signet', '-v'], values)
-
-
-def run_pca(run_id: str) -> dict:
-    """Stage 3 PCA only on existing matched/pruned intermediate genotype files in the isolated run."""
-    root = _run(run_id)
-    gtex = _settings(root)['cohort'] == 'GTEx'
-    files = ('tmp/tmpa/Geno_all_prune.ped','tmp/tmpa/Geno_all_prune.pedsnp','tmp/tmpa/Geno_all_prune.pedind') if gtex else ('res/resa/signet_new.Geno','res/resa/signet_new.Geno.map','tmp/tmpg/clean_Genotype.fam','tmp/tmpg/geno_id')
-    return _execute(run_id,'pca',['bash','{work}/script/adj/adj_pca_gtex.sh' if gtex else '{work}/script/adj/adj_pca.sh'],
-                    dependencies=('bash','Rscript','smartpca.perl'),prerequisites=files,cwd='tmp/tmpa',
-                    environment={'resa':_settings(root)['resa.gtex' if gtex else 'resa.tcga']})
-
-
-def plot_pca(run_id: str) -> dict:
-    """Stage 3 plot existing PCA eigenvectors/eigenvalues without recomputing the PCA."""
-    return _execute(run_id,'plot_pca',['Rscript','{work}/script/adj/pca_vis.R'],dependencies=('Rscript',),
-                    cwd='tmp/tmpa',prerequisites=('tmp/tmpa/Geno.pca.evec','tmp/tmpa/Geno.eval'))
-
-
-def combine_covariates(run_id: str, expression_covariates: str, genotype_pcs: str = '',
-                       additional_covariates: list[str] = None) -> dict:
-    """Stage 3 combine covariate matrices and drop collinear rows; output inside run/res/covariates/."""
-    argv = [sys.executable,'{work}/script/adj/combine_covariates.py',_input(expression_covariates),'signet','-o','{work}/res/covariates']
-    if genotype_pcs:
-        argv += ['--genotype_pcs',_input(genotype_pcs)]
-    if additional_covariates:
-        if not isinstance(additional_covariates, list) or len(additional_covariates)>20:
-            raise ValueError('Expected at most 20 additional covariate files.')
-        argv += ['--add_covariates',*[_input(path) for path in additional_covariates]]
-    return _standalone(run_id,'combine_covariates',argv,('numpy','pandas'),'covariates')
-
-
-def adjust_expression(run_id: str, expression_bed: str, covariates: str) -> dict:
-    """Stage 3 standalone expression OLS residual adjustment; sample-column order must match covariates."""
-    _validate_adjustment(expression_bed, covariates)
-    return _standalone(run_id,'adjust_expression',[sys.executable,'{work}/script/adj/gexp_cov_adjust.py',
-                        '--expr',_input(expression_bed),'--covf',_input(covariates),
-                        '--prefix','{work}/res/adjusted/signet'],('numpy','pandas','statsmodels'),'adjusted')
-
-
-def _validate_adjustment(expression, covariates):
-    expression, covariates = _input(expression), _input(covariates)
-    opener = gzip.open if expression.endswith('.gz') else open
-    with opener(expression, 'rt') as handle:
-        header = next(csv.reader(handle, delimiter='\t'), [])
-    with open(covariates) as handle:
-        cov_header = next(csv.reader(handle, delimiter='\t'), [])
-    if len(header)<5 or header[3]!='gene_id' or not cov_header or cov_header[0]!='ID':
-        raise ValueError('Expected expression BED header with gene_id in column 4, and covariate header starting ID.')
-    if header[4:] != cov_header[1:] or len(set(header[4:])) != len(header[4:]):
-        raise ValueError('Expression and covariate sample columns must match exactly in order, without duplicates.')
-
-
-def normalize_expression(run_id: str, tpm: str, counts: str, annotation_gtf: str,
-                         sample_lookup: str, vcf_chromosomes: str, sample_ids: str = '',
-                         convert_tpm: bool = False, legacy_mode: bool = False,
-                         tpm_threshold: float = 0.1, count_threshold: int = 6,
-                         sample_fraction: float = 0.2, normalization: str = 'tmm') -> dict:
-    """Stage 2 standalone GTEx expression BED normalization; upstream requires its older pandas/feather API."""
-    if normalization not in ('tmm','qn') or type(convert_tpm) is not bool or type(legacy_mode) is not bool:
-        raise ValueError('Use normalization=tmm/qn and boolean conversion/legacy flags.')
-    argv = [sys.executable,'{work}/script/gexp_prep/eqtl_prepare_expression_igt2log.py',
-            _input(tpm),_input(counts),_input(annotation_gtf),_input(sample_lookup),_input(vcf_chromosomes),
-            'signet','-o','{work}/res/normalized','--tpm_threshold',_number(tpm_threshold,0,1e9),
-            '--count_threshold',_number(count_threshold,0,100000000,True),
-            '--sample_frac_threshold',_number(sample_fraction,0,1),'--normalization_method',normalization]
-    if sample_ids:
-        argv += ['--sample_id_list',_input(sample_ids)]
-    if convert_tpm:
-        argv.append('--convert_tpm')
-    if legacy_mode:
-        argv.append('--legacy_mode')
-    return _standalone(run_id,'normalize_expression',argv,('numpy','pandas','scipy','feather'),'normalized',('bgzip','tabix'))
-
-
-def _standalone(run_id, operation, argv, modules, output, dependencies=()):
-    root = _run(run_id)
-    (root / 'work/res' / output).mkdir(exist_ok=True)
-    return _execute(run_id,operation,argv,modules=modules,dependencies=dependencies)
 
 
 def get_visualization_workspace() -> dict:
@@ -685,10 +552,21 @@ def propose_hpc3_genotype(run_id: str, use_example: bool = False) -> dict:
     return {'status': 'awaiting_confirmation', 'executed': False, 'run_id': run_id}
 
 
-SIGNET_TOOLS = [signet_catalog,configure_signet,propose_hpc3_genotype,get_signet_settings,genotype_tcga,genotype_gtex,
-                expression_tcga,expression_gtex,adjust_tcga,adjust_gtex,cis_eqtl,prepare_network,
-                submit_network,get_network_status,cancel_network,
-                prepare_visualization,run_visualization,get_visualization_workspace,propose_visualization_change,run_pca,plot_pca,combine_covariates,adjust_expression,normalize_expression]
+def get_step_report(run_id: str, step: str) -> dict:
+    """State of one HPC3 analysis step ("-g", "-t", ...); for a failure, its masked log tail. Read-only."""
+    from agent.runtime import step_proposal, step_report
+    from agent.runtime.signet_jobs import StepError
+    try:
+        return step_report.report(run_id, step, step_proposal.CHAT_SESSION.get())
+    except StepError as error:
+        return {'status': error.code, 'executed': False, 'error': str(error)}
+
+
+# The HPC3 workflow (confirmation cards and agent.runtime.signet_jobs) replaced the local -g, -t and -a
+# tools. cis_eqtl, the network tools and run_visualization remain for the Stage 6 comparison workspace.
+SIGNET_TOOLS = [signet_catalog,configure_signet,propose_hpc3_genotype,get_step_report,get_signet_settings,
+                cis_eqtl,submit_network,get_network_status,cancel_network,
+                run_visualization,get_visualization_workspace,propose_visualization_change]
 
 
 def dispatch_tool(name, arguments):
@@ -698,15 +576,12 @@ def dispatch_tool(name, arguments):
     try:
         if name not in functions or not isinstance(arguments, dict):
             raise ValueError('Unsupported tool or argument object.')
-        genotype_tools = ('genotype_tcga', 'genotype_gtex')
-        downstream_tools = ('expression_tcga', 'expression_gtex', 'adjust_tcga', 'adjust_gtex',
-                            'cis_eqtl', 'submit_network')
-        if name in genotype_tools + downstream_tools:
+        if name in ('cis_eqtl', 'submit_network'):
             from agent.runtime.step_proposal import CHAT_SESSION
             from agent.runtime.signet_jobs import analysis_session
             run_id = arguments.get('run_id')
-            if CHAT_SESSION.get() is not None and (name in genotype_tools or (
-                    isinstance(run_id, str) and analysis_session(_run(run_id)) is not None)):
+            if CHAT_SESSION.get() is not None and (
+                    isinstance(run_id, str) and analysis_session(_run(run_id)) is not None):
                 return {'status': 'awaiting_confirmation', 'executed': False,
                         'reason': 'Linked HPC3 analyses require the chat confirmation card. '
                                   'The next card follows each completed step.'}

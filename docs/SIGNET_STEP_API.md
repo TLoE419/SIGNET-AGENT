@@ -344,6 +344,19 @@ aliases for the `genotype` proposal actions.
   shown in the card. The server checks ordering and rejects stale settings. It consumes the
   approval under the run's submission lock before contacting the scheduler. A repeat returns
   409 even if the first reply was lost.
+- Prepared cards start from the reference file in use: the file chosen on HPC3 (`refdata/selected.tsv`),
+  else the download (`pmap.file` for `-t`, `cli.file` for `-a`).
+- `-a` only: the card's `parameters.clinical_review` counts, for patients with both genotype and
+  expression results, each race and gender value (no IDs or rows). SIGNET requires exactly asian,
+  black or african american and white after its own rules (`not reported` counts as white;
+  `american indian or alaska native` is removed). Any other race value needs a `choices` entry
+  (`{"Unknown": "not_reported" | "exclude"}`); without it `confirm` returns 400 `needs_choice` with
+  the counts in `details` and the card stays open. On success the job reads a copy in the run's
+  HPC3 folder (`clinical/clinical.signet.tsv`) with the choices applied and Unix line endings;
+  `exclude` uses SIGNET's own removal rule. The step record keeps `clinical.source` and
+  `clinical.choices`; the researcher's file is never changed.
+- Before `sbatch`, the login node checks formats: `-t` needs an uncompressed, collapsed GTF; `-a`
+  needs the clinical columns and race values above. A failed check returns 400 and submits nothing.
 
 `POST /signet/runs/{run_id}/steps/{step}/rerun/prepare` accepts the owning `session` and returns
 the completed step's parameters, its resource limits, and the steps to rerun or reuse. It queues no
