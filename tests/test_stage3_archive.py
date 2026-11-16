@@ -66,11 +66,11 @@ class Stage3ArchiveTest(unittest.TestCase):
         path.write_text(json.dumps(snapshot))
         return path, snapshot
 
-    def request(self, query='', authenticated=True):
+    def request(self, query='', authenticated=True, *, route='/stage3/results'):
         connection = http.client.HTTPConnection('127.0.0.1', self.server.server_port, timeout=3)
         try:
             headers = {'X-Chat-Token': self.server.token} if authenticated else {}
-            connection.request('GET', '/stage3/results' + query, headers=headers)
+            connection.request('GET', route + query, headers=headers)
             response = connection.getresponse()
             return response.status, json.loads(response.read())
         finally:
@@ -120,3 +120,88 @@ class Stage3ArchiveTest(unittest.TestCase):
         path.write_text(json.dumps(snapshot))
         (path.parent / 'history.json').unlink()
         self.assertEqual(self.request('?run=first'), unavailable)
+
+
+    def saved_steps_fixture(self, run_id, chromosome='1'):
+        path, _ = self.archive(run_id)
+        report_path = path.parent / 'verification.json'
+        report = json.loads(report_path.read_text())
+        jobs = {
+            'genotype': {'job_id': '123', 'state': 'completed', 'settings': {'restrict.tcga.geno': chromosome}},
+            'expression': {'job_id': '124', 'state': 'completed', 'settings': {'restrict.tcga': chromosome}},
+            'cis': {'job_id': '125', 'state': 'completed', 'settings': {'alpha.cis': '0.05'}},
+            'network': {'job_id': '126', 'state': 'completed', 'settings': {'ncis': '3', 'nboots': '2'}},
+        }
+        report['jobs'].update(jobs)
+        report_path.write_text(json.dumps(report))
+        stages = {
+            '1': {'samples': 2, 'variants': 3, 'nonzero_bins': [1, 1, 0, 1, 0, 0],
+                  'genotype_codes': [3, 2, 1]},
+            '2': {'samples': 2, 'genes': 2, 'histogram': [{'lower': 11, 'upper': 12, 'count': 4}],
+                  'gene_summary': [{'gene': 'MEGF6', 'min': 11.1, 'median': 11.2, 'max': 11.3}]},
+            '4': {'genes': 2, 'counts': {'common': 1, 'low': 0, 'rare': 1},
+                  'pairs': [{'gene': 'MEGF6', 'variant': '17', 'category': 'rare', 'p_value': 0.001}]},
+            '5': {'genes': 2, 'frequencies': [{'frequency': 0.5, 'count': 1}, {'frequency': 1, 'count': 1}],
+                  'edges': [{'source': 'MEGF6', 'target': 'CHD5', 'frequency': 0.5}]},
+        }
+        stages_path = path.parent / 'stages.json'
+        stages_path.write_text(json.dumps({'run_id': run_id, 'stages': stages}))
+        return stages_path, report_path, stages, jobs
+
+    def request_saved_step(self, query='', authenticated=True):
+        return self.request(query, authenticated, route='/stage/results')
+
+    def test_saved_steps_return_the_requested_stage_and_verified_job(self):
+        first, report, stages, jobs = self.saved_steps_fixture('first')
+        second, _, _, _ = self.saved_steps_fixture('second', chromosome='2')
+        second_record = json.loads(second.read_text())
+        second_record['stages']['1']['nonzero_bins'] = [3, 0, 0, 0, 0, 0]
+        second.write_text(json.dumps(second_record))
+        original_files = [path.read_bytes() for path in (first, second, report)]
+        for stage, job_type in zip(('1', '2', '4', '5'), ('genotype', 'expression', 'cis', 'network')):
+            with self.subTest(stage=stage):
+                self.assertEqual(self.request_saved_step(f'?run=first&stage={stage}'), (200, {
+                    'run_id': 'first', 'stage': int(stage), 'job': jobs[job_type], 'summary': stages[stage],
+                }))
+        status, other = self.request_saved_step('?run=second&stage=1')
+        self.assertEqual(status, 200)
+        self.assertEqual(other['job']['settings'], {'restrict.tcga.geno': '2'})
+        self.assertEqual(other['summary']['nonzero_bins'], [3, 0, 0, 0, 0, 0])
+        self.assertEqual([path.read_bytes() for path in (first, second, report)], original_files)
+        self.assertEqual(self.server.stage6.sessions, {})
+        self.assertFalse(self.state_file.exists())
+        self.provider.assert_not_called()
+
+    def test_invalid_missing_or_unlinked_saved_steps_never_fall_back(self):
+        path, report_path, stages, _ = self.saved_steps_fixture('first')
+        query = '?run=first&stage=1'
+        unavailable = (404, {'error': 'No readable archived result for this stage.'})
+        self.assertEqual(self.request_saved_step(query, authenticated=False)[0], 403)
+        for invalid in ('', '?run=first&stage=3', '?run=first&stage=6', query + '&stage=2',
+                        query + '&run=second', query + '&source=archive'):
+            with self.subTest(query=invalid):
+                self.assertEqual(self.request_saved_step(invalid)[0], 400)
+        self.assertEqual(self.request_saved_step('?run=missing&stage=1'), unavailable)
+        self.assertEqual(self.request_saved_step('?run=..%2Ffirst&stage=1'), unavailable)
+
+        path.write_text(json.dumps({'run_id': 'another-run', 'stages': stages}))
+        self.assertEqual(self.request_saved_step(query), unavailable)
+        path.write_text(json.dumps({'run_id': 'first', 'stages': {'1': {**stages['1'], 'variants': 1}}}))
+        self.assertEqual(self.request_saved_step(query), unavailable)
+        path.write_text(json.dumps({'run_id': 'first', 'stages': stages}))
+        outside = self.project / 'unrelated-stages.json'
+        path.rename(outside)
+        self.assertEqual(self.request_saved_step(query), unavailable)
+        path.symlink_to(outside)
+        self.assertEqual(self.request_saved_step(query), unavailable)
+        path.unlink()
+        outside.rename(path)
+
+        verification = json.loads(report_path.read_text())
+        verification['jobs']['genotype']['state'] = 'failed'
+        report_path.write_text(json.dumps(verification))
+        self.assertEqual(self.request_saved_step(query), unavailable)
+        verification['jobs']['genotype']['state'] = 'completed'
+        report_path.write_text(json.dumps(verification))
+        (path.parent / 'history.json').unlink()
+        self.assertEqual(self.request_saved_step(query), unavailable)

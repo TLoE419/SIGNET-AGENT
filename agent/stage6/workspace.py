@@ -14,6 +14,7 @@ import agent.tools.signet as st
 from agent.runtime.visualization import validate_inputs
 
 CHAT_CONTEXT = ContextVar('stage6_chat_context', default=None)
+ARCHIVED_STEP_JOBS = {'1': 'genotype', '2': 'expression', '4': 'cis', '5': 'network'}
 
 
 def graph(root, settings):
@@ -164,6 +165,65 @@ def _stage3_snapshot(record, run_id, saved_npc):
     return {'run_id': run_id, 'npc': saved_npc, 'matching': matching, 'pca': pca, 'comparison': comparison}
 
 
+def _count(value):
+    return type(value) is int and value >= 0
+
+
+def _archived_step_summary(stage, summary):
+    if not isinstance(summary, dict):
+        raise ValueError('Invalid archived summary.')
+    if stage == '1':
+        samples, variants = summary['samples'], summary['variants']
+        bins, codes = summary['nonzero_bins'], summary['genotype_codes']
+        valid = (set(summary) == {'samples', 'variants', 'nonzero_bins', 'genotype_codes'}
+                 and _count(samples) and _count(variants)
+                 and isinstance(bins, list) and len(bins) == 6 and all(map(_count, bins))
+                 and isinstance(codes, list) and len(codes) == 3 and all(map(_count, codes))
+                 and sum(bins) == variants and sum(codes) == samples * variants)
+    elif stage == '2':
+        samples, genes = summary['samples'], summary['genes']
+        bars, excerpt = summary['histogram'], summary['gene_summary']
+        valid = (set(summary) == {'samples', 'genes', 'histogram', 'gene_summary'}
+                 and _count(samples) and _count(genes)
+                 and isinstance(bars, list) and all(
+                     isinstance(bar, dict) and set(bar) == {'lower', 'upper', 'count'}
+                     and _finite_number(bar['lower']) and _finite_number(bar['upper'])
+                     and bar['lower'] < bar['upper'] and _count(bar['count']) for bar in bars)
+                 and sum(bar['count'] for bar in bars) == samples * genes
+                 and isinstance(excerpt, list) and len(excerpt) <= min(5, genes)
+                 and all(
+                     isinstance(row, dict) and set(row) == {'gene', 'min', 'median', 'max'}
+                     and _history_text(row['gene'], 240)
+                     and all(_finite_number(row[key]) for key in ('min', 'median', 'max'))
+                     and row['min'] <= row['median'] <= row['max'] for row in excerpt))
+    elif stage == '4':
+        genes, counts, pairs = summary['genes'], summary['counts'], summary['pairs']
+        valid = (set(summary) == {'genes', 'counts', 'pairs'} and _count(genes)
+                 and isinstance(counts, dict) and set(counts) == {'common', 'low', 'rare'}
+                 and all(map(_count, counts.values())) and genes <= sum(counts.values())
+                 and isinstance(pairs, list) and len(pairs) <= min(5, sum(counts.values()))
+                 and all(
+                     isinstance(row, dict) and set(row) == {'gene', 'variant', 'category', 'p_value'}
+                     and _history_text(row['gene'], 240) and _history_text(row['variant'], 240)
+                     and isinstance(row['category'], str) and counts.get(row['category'], 0) > 0
+                     and _finite_number(row['p_value']) and 0 <= row['p_value'] <= 1 for row in pairs))
+    else:
+        genes, frequencies, edges = summary['genes'], summary['frequencies'], summary['edges']
+        valid = (set(summary) == {'genes', 'frequencies', 'edges'} and _count(genes)
+                 and isinstance(frequencies, list) and all(
+                     isinstance(row, dict) and set(row) == {'frequency', 'count'}
+                     and _finite_number(row['frequency']) and 0 < row['frequency'] <= 1
+                     and _count(row['count']) for row in frequencies)
+                 and isinstance(edges, list) and len(edges) <= min(5, sum(row['count'] for row in frequencies))
+                 and all(
+                     isinstance(row, dict) and set(row) == {'source', 'target', 'frequency'}
+                     and _history_text(row['source'], 240) and _history_text(row['target'], 240)
+                     and _finite_number(row['frequency']) and 0 < row['frequency'] <= 1 for row in edges))
+    if not valid:
+        raise ValueError('Invalid archived stage summary.')
+    return summary
+
+
 def fingerprint(settings):
     value = {key: settings[key] for key in ('freq', 'ntop', 'id', 'assembly', 'cohort', 'nchr')}
     for key in ('Afreq', 'coef', 'vis.genepos'):
@@ -263,10 +323,29 @@ class Workspace:
                 continue
         return {'datasets': list(datasets.values()), 'runs': runs}
 
-    def archived_stage3(self, run_id):
+    def _archived_history_run(self, run_id):
         run_id = st._name(run_id)
-        run = next((entry for entry in self.archived_history()['runs'] if entry['run_id'] == run_id), None)
-        if run is None or run['jobs']['adjust']['state'] != 'completed':
+        for entry in self.archived_history()['runs']:
+            if entry['run_id'] == run_id:
+                return entry
+        raise ValueError('Run has no archived history.')
+
+    def archived_stage_result(self, run_id, stage):
+        run = self._archived_history_run(run_id)
+        job = run['jobs'][ARCHIVED_STEP_JOBS[stage]]
+        if job['state'] != 'completed':
+            raise ValueError('Run has no completed archived result for this stage.')
+        path = st._no_links(_archive_directory() / run_id / 'stages.json')
+        record = json.loads(path.read_text(encoding='utf-8'))
+        if record['run_id'] != run_id:
+            raise ValueError('The stage summary belongs to a different run.')
+        summary = _archived_step_summary(stage, record['stages'][stage])
+        json.dumps(job, allow_nan=False)
+        return {'run_id': run_id, 'stage': int(stage), 'job': job, 'summary': summary}
+
+    def archived_stage3(self, run_id):
+        run = self._archived_history_run(run_id)
+        if run['jobs']['adjust']['state'] != 'completed':
             raise ValueError('Run has no completed archived adjustment.')
         saved_npc = run['jobs']['adjust']['options']['npc']
         if type(saved_npc) is not int or not 0 <= saved_npc <= 10:

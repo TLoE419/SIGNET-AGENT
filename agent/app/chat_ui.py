@@ -19,7 +19,7 @@ from agent.core.conversation import MODEL, run_conversation
 from agent.core.model_timing import ModelRequestTiming
 from agent.paths import PROJECT_ROOT
 from agent.providers import PROVIDERS, create_provider_adapter
-from agent.stage6.workspace import Workspace, CHAT_CONTEXT
+from agent.stage6.workspace import ARCHIVED_STEP_JOBS, CHAT_CONTEXT, Workspace
 from agent.tools.ui import UI_CHANNEL
 
 ROOT = PROJECT_ROOT
@@ -115,6 +115,8 @@ class ChatHandler(BaseHTTPRequestHandler):
             if not secrets.compare_digest(self.headers.get('X-Chat-Token', ''), self.server.token):
                 return self._error(403, 'Page token required.')
             return signet_api.handle(self, 'GET', url)
+        if url.path == '/stage/results':
+            return self.archived_stage_results_get(url)
         if url.path == '/stage3/results':
             return self.stage3_results_get(url)
         if url.path == '/stage6/results':
@@ -303,6 +305,19 @@ class ChatHandler(BaseHTTPRequestHandler):
         if action is None:
             return self._error(404, '找不到此操作。')
         return self.json_response(action())
+
+    def archived_stage_results_get(self, url):
+        if not secrets.compare_digest(self.headers.get('X-Chat-Token', ''), self.server.token):
+            return self._error(403, 'Workspace token required.')
+        query = parse_qs(url.query, keep_blank_values=True)
+        if (set(query) != {'run', 'stage'} or len(query['run']) != 1 or not query['run'][0]
+                or len(query['stage']) != 1 or query['stage'][0] not in ARCHIVED_STEP_JOBS):
+            return self._error(400, 'Provide a run ID and an archived stage number (1, 2, 4, or 5).')
+        try:
+            result = self.server.stage6.archived_stage_result(query['run'][0], query['stage'][0])
+        except (OSError, ValueError, KeyError, TypeError, OverflowError):
+            return self._error(404, 'No readable archived result for this stage.')
+        return self.json_response(result)
 
     def stage3_results_get(self, url):
         if not secrets.compare_digest(self.headers.get('X-Chat-Token', ''), self.server.token):

@@ -36,11 +36,13 @@ are bundled.
 The desktop opens directly to the bilingual workspace. The left chat uses the
 existing SIGNET Agent, model configuration, and saved conversations. Choose a
 dataset in **Data**, then open **Run history** to see that dataset's completed
-runs. A run shows its saved input filenames and job records. Open its Stage 3
-result to review sample matching, the principal component count used in that run,
-and the archived expression before and after adjustment. Open Stage 6 to view
-that run's network and edge table. Selecting a gene filters the table to its
-incoming and outgoing edges. The Stage 6 selector in
+runs. A run shows its saved input filenames, and its six timeline stages open
+the results for that run. Stages 1 and 2 show genotype and expression outputs.
+Stage 3 shows sample matching, the recorded principal component count, and the
+archived expression comparison. Stage 4 shows significant association pairs,
+and Stage 5 shows candidate edges grouped by their recorded bootstrap frequency.
+Stage 6 opens the network and edge table, with a filter for the selected gene.
+Each stage uses the settings preserved with its job. The Stage 6 selector in
 **Analysis** also follows the selected dataset. The first five stage previews
 in **Analysis** still use simulated data.
 
@@ -59,6 +61,12 @@ the ignored `data/` directory:
 - If available, `stage3.json` beside the verification report contains that run's
   matching counts, principal component scatter, and expression comparison. The
   recorded component count must match the completed adjustment job.
+- `stages.json` contains the same `run_id` and a `stages` object for stages
+  `1`, `2`, `4`, and `5`. These summaries come from the archived genotype
+  codes, transformed expression matrix, per-category significant pairs, and
+  network frequency matrix. The Stage 5 chart counts positive frequencies in
+  that matrix before the separate Stage 6 display threshold. Settings and
+  resources come from `verification.json`.
 
 The November 11 archives preserve genotype and expression matrices but omit the
 original PCA score files. The Stage 3 scatter uses the archived retained

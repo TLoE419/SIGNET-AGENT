@@ -105,9 +105,34 @@ function createHistoryFixture() {
       source: 'retained_genotype',
     }};
     writeFileSync(path.join(folder, 'stage3.json'), JSON.stringify(stage3));
+
+    const samples = 9 + index;
+    const stages = {
+      1: {samples, variants: 8, nonzero_bins: [index + 1, 0, 1, 1, 1, 4 - index],
+        genotype_codes: [samples * 8 - 5, 4, 1]},
+      2: {samples, genes, histogram: [{lower: 10, upper: 11, count: samples}, {lower: 11, upper: 12, count: samples * (genes - 1)}],
+        gene_summary: [{gene: 'MEGF6', min: 10.5, median: 11, max: 11.4}]},
+      4: {genes: 1, counts: {common: 2 + index, low: 1, rare: 0},
+        pairs: [{gene: 'MEGF6', variant: '10', category: 'common', p_value: 0.01}]},
+      5: {genes, frequencies: [{frequency: 0.5, count: connections}],
+        edges: pairs.map(([source, target]) => ({source, target, frequency: 0.5}))},
+    };
+    writeFileSync(path.join(folder, 'stages.json'), JSON.stringify({run_id, stages}));
+    const stepSettings = {
+      1: {mind: String((index + 1) / 10)},
+      2: {'restrict.tcga': '1'},
+      4: {'alpha.cis': '0.05'},
+      5: {nboots: '2'},
+    };
+    const controllerCpus = index + 2;
+    const finished_at = '2026-11-11T01:03:00-0800';
+    const beforeAdjustmentAndNetwork = Object.fromEntries(Object.entries({1: 'genotype', 2: 'expression', 4: 'cis', 5: 'network'})
+      .map(([stage, key]) => [key, {state: 'completed', finished_at, settings: stepSettings[stage],
+        resources: {cpus: stage === '1' ? controllerCpus : 2, mem_gb: 16, hours: 3}}]));
     writeFileSync(path.join(folder, 'verification.json'), JSON.stringify({
       run: run_id,
       jobs: {
+        ...beforeAdjustmentAndNetwork,
         adjust: {state: 'completed', options: {npc}, finished_at: '2026-11-11T01:03:00-0800'},
         visualize: {state: 'completed', settings: {freq: '0.45', ntop: '1'},
           submitted_at: '2026-11-11T01:04:38-0800', finished_at: '2026-11-11T01:07:11-0800'},
@@ -120,7 +145,14 @@ function createHistoryFixture() {
       '',
     ].join('\n'));
     const incidentPairs = pairs.filter(pair => pair.includes('MEGF6'));
-    return {...snapshot, genes, connections, incident: incidentPairs.length, incidentPairs, stage3};
+    const stageBars = {
+      1: stages[1].nonzero_bins,
+      2: stages[2].histogram.map(bin => bin.count),
+      4: Object.values(stages[4].counts),
+      5: stages[5].frequencies.map(bin => bin.count),
+    };
+    return {...snapshot, genes, connections, incident: incidentPairs.length, incidentPairs, stage3,
+      stageBars, controllerCpus, stepSettings};
   });
   return {groups, runs};
 }
@@ -129,11 +161,13 @@ function readArchivedHistory() {
   const read = filename => JSON.parse(readFileSync(filename, 'utf8'));
   const groups = ['example-chr1', 'simulated-cohort-b'].map(id => read(path.join(datasetDir, id + '.json')));
   const runs = [
-    ['official-example-chr1-20261111', 731, 13, 1110, 0.93366491],
-    ['official-example-chr1-stage-cards-20261111', 726, 10, 1112, 0.93373123],
-    ['official-example-chr1-english-20261111', 706, 9, 1110, 0.93348844],
-  ].map(([run_id, connections, incident, variants, after_sd]) => ({
-    ...read(path.join(archiveDir, run_id, 'history.json')), genes: 95, connections, incident,
+    ['official-example-chr1-20261111', 731, 13, 1110, 0.93366491, 8, [1884, 495, 138, 131, 174, 161], [156, 35, 15], [394, 337]],
+    ['official-example-chr1-stage-cards-20261111', 726, 10, 1112, 0.93373123, 16, [1883, 497, 137, 132, 172, 162], [159, 36, 15], [391, 335]],
+    ['official-example-chr1-english-20261111', 706, 9, 1110, 0.93348844, 16, [1884, 496, 137, 132, 173, 161], [155, 35, 14], [372, 334]],
+  ].map(([run_id, connections, incident, variants, after_sd, controllerCpus, genotype, cis, network]) => ({
+    ...read(path.join(archiveDir, run_id, 'history.json')), genes: 95, connections, incident, controllerCpus,
+    stageBars: {1: genotype, 2: [617, 5634, 16258, 18300, 9462, 2116, 230, 13], 4: cis, 5: network},
+    stepSettings: {1: {mind: '0.1'}, 2: {'restrict.tcga': '1'}, 4: {'alpha.cis': '0.05'}, 5: {nboots: '2'}},
     stage3: {
       npc: 3,
       matching: {genotype: 560, expression: 554, matched: 473, retained: 471, excluded: 2, variants, genes: 95},
@@ -171,6 +205,7 @@ async function verifyWorkspace({groups, runs}) {
   };
   const datasetPicker = find('#ml-dataset-select');
   const stage3 = find('#lens-history-stage3');
+  const savedStage = find('#lens-history-stage');
   const stage6 = find('#lens-stage6');
   const resultPicker = find('#ml-stage6-run');
   const selectDataset = id => {
@@ -223,6 +258,29 @@ async function verifyWorkspace({groups, runs}) {
       const original = ['genotype', 'expression', 'clinical'].flatMap(kind => run.inputs[kind]);
       check(visible(detail) && JSON.stringify(names) === JSON.stringify(original),
         'Run did not show its own saved input files: ' + run.run_id);
+
+
+      for (const stage of [1, 2, 4, 5]) {
+        click(`[data-run-stage="${stage}"][data-run-id="${run.run_id}"]`);
+        await waitFor(() => savedStage.dataset.runState === 'ready' && savedStage.dataset.runId === run.run_id &&
+          savedStage.dataset.stage === String(stage), 'Could not load archived Stage ' + stage + ' for ' + run.run_id);
+        check(visible('#lens-history-stage .ml-count-chart') && visible('#lens-history-stage [data-stage-table]') &&
+          !visible(detail) && !visible('#lens-stage6'), 'The archived Stage ' + stage + ' view or table is hidden');
+        const bars = [...savedStage.querySelectorAll('.ml-count-label')].map(label =>
+          Number(label.textContent.trim().replaceAll(',', '')));
+        check(JSON.stringify(bars) === JSON.stringify(run.stageBars[stage]),
+          'Archived Stage ' + stage + ' used output counts from another run');
+        for (const [key, value] of Object.entries(run.stepSettings[stage])) {
+          const field = savedStage.querySelector(`[data-stage-setting="${key}"]`);
+          check(field?.textContent.includes(value) || field?.dataset.value === value, 'Wrong historical setting: ' + key);
+        }
+        if (stage === 1) {
+          const cpus = savedStage.querySelector('[data-stage-resource="cpus"]');
+          check(cpus?.textContent.includes(String(run.controllerCpus)), 'Wrong resources from the original genotype job');
+        }
+        click('#lens-history-stage [data-run-back]');
+        check(visible(detail) && !visible('#lens-history-stage'), 'Back from Stage ' + stage + ' lost the timeline');
+      }
 
       const adjustment = `[data-run-adjustment="${run.run_id}"]`;
       click(adjustment);
@@ -390,7 +448,7 @@ app.once('browser-window-created', (_event, window) => {
         [firstMessage, 'Provider replied to: ' + firstMessage, nextMessage, 'Provider replied to: ' + nextMessage]);
       assert.deepEqual(stored.events[existingSession], [[existingActivity]]);
       await window.webContents.executeJavaScript(`(${verifyWorkspace.toString()})(${JSON.stringify(history)})`);
-      console.log(`PASS: workspace geometry, Agent chat, scoped dataset history, frozen inputs, archived Stage 3 and Stage 6 (${history.runs.map(run => `${run.connections}/${run.incident}`).join(', ')} total/MEGF6 edges)`);
+      console.log(`PASS: workspace geometry, Agent chat, scoped dataset history, frozen inputs, all six archived stages (${history.runs.map(run => `${run.connections}/${run.incident}`).join(', ')} total/MEGF6 edges)`);
       window.close();
     } catch (error) { fail(error); }
   }));

@@ -565,12 +565,14 @@
   const toEnglish = new Map(labelPairs);
   const toChinese = new Map(labelPairs.map(([chinese, english]) => [english, chinese]));
   const englishLabel = (text) => toEnglish.get(text) ?? text;
+  const escapeHistory = (value) => String(value ?? "").replace(/[&<>"']/g, (char) =>
+    ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"})[char]);
   const countLabel = new Intl.NumberFormat("en-US");
   function countChart(bars, step, axis, title) {
     const maximum = step * (Math.floor(Math.max(...bars.map(([, value]) => value)) / step) + 1);
     const left = 74, right = 636, top = 50, bottom = 354;
     const columnWidth = (right - left) / bars.length;
-    const barWidth = Math.min(128, columnWidth - 12);
+    const barWidth = Math.min(128, columnWidth - Math.min(12, columnWidth / 2));
     const yFor = (value) => bottom - value / maximum * (bottom - top);
     const grid = Array.from({ length: maximum / step + 1 }, (_, index) => {
       const value = index * step;
@@ -584,13 +586,13 @@
       const formatted = countLabel.format(value);
       return `<rect class="ml-count-bar" x="${x - barWidth / 2}" y="${y}" width="${barWidth}" height="${bottom - y}" rx="2"/>
         <text class="ml-count-label" x="${x}" y="${y - 9}" text-anchor="middle">${formatted}</text>
-        <text x="${x}" y="${bottom + 28}" text-anchor="middle">${label}</text>`;
+        <text x="${x}" y="${bottom + 28}" text-anchor="middle">${escapeHistory(label)}</text>`;
     }).join("");
     const description = bars.map(([label, value]) => `${label} ${countLabel.format(value)}`).join("，");
     const englishDescription = bars.map(([label, value]) => `${englishLabel(label)} ${countLabel.format(value)}`).join(", ");
-    return `<svg class="ml-count-chart" viewBox="0 0 660 410" role="img" aria-label="${title}。${axis}：${description}"
-        data-en-aria-label="${englishLabel(title)}. ${englishLabel(axis)}: ${englishDescription}">
-      <text x="${left}" y="23">${axis}</text>
+    return `<svg class="ml-count-chart" viewBox="0 0 660 410" role="img" aria-label="${escapeHistory(`${title}。${axis}：${description}`)}"
+        data-en-aria-label="${escapeHistory(`${englishLabel(title)}. ${englishLabel(axis)}: ${englishDescription}`)}">
+      <text x="${left}" y="23">${escapeHistory(axis)}</text>
       ${grid}${columns}
     </svg>`;
   }
@@ -868,31 +870,12 @@
     `${genes} genes · ${edges} edges`,
   ];
   const historySteps = ["genotype", "expression", "adjust", "cis", "network", "visualize"];
-  const escapeHistory = (value) => String(value ?? "").replace(/[&<>"']/g, (char) =>
-    ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"})[char]);
   const historyText = (chinese, english) =>
     `<span data-history-zh="${escapeHistory(chinese)}" data-history-en="${escapeHistory(english)}"></span>`;
   const historyLabel = (chinese) => historyText(chinese, englishLabel(chinese));
   const clockTime = (value) => value?.match(/T(\d{2}:\d{2}:\d{2})/)?.[1] ?? "";
   const fullTime = (value) => value?.replace("T", " ").replace(/([+-]\d{2})(\d{2})$/, " $1:$2") ?? "";
   const notRecorded = () => historyText("未記錄", "Not recorded");
-
-  function historyJobDetails(job) {
-    const settings = Object.entries({...job.settings, ...job.options});
-    const fields = [
-      ["工作編號", job.job_id],
-      ["送出時間", fullTime(job.submitted_at)],
-      ["完成時間", fullTime(job.finished_at)],
-    ];
-    const {cpus, mem_gb: memory} = job.resources ?? {};
-    const resources = cpus && memory ? historyText(`${cpus} 核心 · ${memory} GB`, `${cpus} cores · ${memory} GB`) : notRecorded();
-    return `<dl class="ml-key-values">
-      ${fields.map(([label, value]) => `<dt>${historyLabel(label)}</dt><dd>${value ? escapeHistory(value) : notRecorded()}</dd>`).join("")}
-      <dt>${historyLabel("分配資源")}</dt><dd>${resources}</dd>
-      <dt>${historyLabel("設定")}</dt><dd>${settings.length ? settings.map(([key, value]) =>
-        `<code>${escapeHistory(key)} = ${escapeHistory(typeof value === "object" ? JSON.stringify(value) : value)}</code>`).join("<br>") : notRecorded()}</dd>
-    </dl>`;
-  }
 
   function renderHistoryRecords() {
     runList.innerHTML = historyRuns.map((run) => {
@@ -914,16 +897,12 @@
         const title = `<i data-lucide="circle-check" aria-hidden="true"></i>
           ${historyText(`第 ${number} 階段`, `Stage ${number}`)}<strong>${historyLabel(stageData[offset].name)}</strong>
           <time datetime="${escapeHistory(job.finished_at)}">${escapeHistory(clockTime(job.finished_at))}</time>`;
-        if (key === "adjust" || key === "visualize") {
-          const adjustment = key === "adjust";
-          return `<li><button type="button" class="ml-run-step-link" ${adjustment ? "data-run-adjustment" : "data-run-network"}="${id}"
-            aria-controls="${adjustment ? "lens-history-stage3" : "lens-stage6"}">
-            ${title}<i data-lucide="arrow-right" aria-hidden="true"></i>
-          </button></li>`;
-        }
-        return `<li><details class="ml-run-step"><summary>
-          ${title}<i data-lucide="chevron-down" class="ml-run-chevron" aria-hidden="true"></i>
-        </summary>${historyJobDetails(job)}</details></li>`;
+        const panel = number === 3 ? "lens-history-stage3" : number === 6 ? "lens-stage6" : "lens-history-stage";
+        const legacy = number === 3 ? `data-run-adjustment="${id}"` : number === 6 ? `data-run-network="${id}"` : "";
+        return `<li><button type="button" class="ml-run-step-link" data-run-stage="${number}"
+          data-run-id="${id}" ${legacy} aria-controls="${panel}">
+          ${title}<i data-lucide="arrow-right" aria-hidden="true"></i>
+        </button></li>`;
       }).join("");
       const snapshot = inputTypes.map(([type, zh, en]) => {
         const files = run.inputs[type] ?? [];
@@ -1216,9 +1195,188 @@
     }
   }
 
+  const archiveSteps = new Set([1, 2, 4, 5]);
+  const archivedStepPanel = root.querySelector("#lens-history-stage");
+  const archivedStepBack = byId("archive-stage-back");
+  const archivedStepRetry = byId("archive-stage-retry");
+  const archivedStepChart = archivedStepPanel.querySelector("[data-stage-chart]");
+  const archivedStepPlot = archivedStepPanel.querySelector("[data-stage-plot]");
+  const archivedStepDock = archivedStepPanel.querySelector("[data-stage-results]");
+  const archivedStepTable = archivedStepPanel.querySelector("[data-stage-table]");
+  const archivedStepMetrics = archivedStepPanel.querySelector("[data-stage-metrics]");
+  const archivedStepSettings = archivedStepPanel.querySelector("[data-stage-settings]");
+  const archivedStepStatus = archivedStepPanel.querySelector("[data-stage-status]");
+  const savedSettingLabels = {
+    "restrict.tcga.geno": ["染色體", "Chromosome"],
+    "restrict.tcga": ["染色體", "Chromosome"],
+    mind: ["樣本缺失率上限", "Max. sample missingness"],
+    geno: ["位點缺失率上限", "Max. variant missingness"],
+    hwe: ["哈溫平衡檢定門檻", "HWE p-value cutoff"],
+    int: ["插補分塊長度（鹼基對）", "Imputation block size (bp)"],
+    "alpha.cis": ["顯著性門檻", "Significance cutoff"],
+    nperms: ["低頻及罕見區域置換", "Permutations (low/rare)"],
+    upstream: ["上游範圍（鹼基對）", "Upstream window (bp)"],
+    downstream: ["下游範圍（鹼基對）", "Downstream window (bp)"],
+    nboots: ["重抽樣次數", "Bootstrap runs"],
+    ncis: ["每個基因的標記數上限", "Max. markers per gene"],
+    cor: ["標記間絕對相關性上限", "Max. absolute marker correlation"],
+    ncores: ["重抽樣工作核心數", "Bootstrap worker cores"],
+    memory: ["重抽樣工作記憶體（GB）", "Bootstrap worker memory (GB)"],
+    walltime: ["重抽樣工作時間上限", "Bootstrap worker time limit"],
+  };
+  const savedStepStates = {
+    loading: ["讀取階段封存結果…", "Loading the archived stage result…"],
+    empty: ["這次執行沒有可讀取的階段封存結果。", "This run has no readable result for this stage."],
+    error: ["無法載入階段封存結果。", "Could not load the archived stage result."],
+  };
+  const cisCategories = {
+    common: ["常見變異", "Common variants"],
+    low: ["低頻區域", "Low-frequency regions"],
+    rare: ["罕見區域", "Rare-variant regions"],
+  };
+  let archivedStepResult = null;
+  let archivedStepRequest;
+
+  function viewArchivedStep(stage, summary, language) {
+    const snapshot = snapshots.find(({number}) => number === stage);
+    const local = (zh, en) => [zh, en][language];
+    const label = (zh) => language ? englishLabel(zh) : zh;
+    const count = (value) => countLabel.format(value);
+    const percent = (value) => `${Number((value * 100).toFixed(6))}%`;
+    const view = {
+      title: label(snapshot.chartTitle), axis: label(snapshot.axis),
+      tableTitle: label(snapshot.tableTitle), headers: snapshot.headers.map(label),
+      step: snapshot.step,
+    };
+    if (stage === 1) {
+      const total = summary.genotype_codes.reduce((sum, value) => sum + value, 0);
+      view.metrics = [[local("樣本數", "Samples"), summary.samples], [local("變異數", "Variants"), summary.variants]];
+      view.bars = snapshot.bars.map(([range], index) => [range, summary.nonzero_bins[index]]);
+      view.rows = summary.genotype_codes.map((entries, index) =>
+        [index, count(entries), total ? `${(entries / total * 100).toFixed(2)}%` : "—"]);
+      view.caption = local("各區間含下限，最後一組也含 100%。",
+        "Each bin includes its lower bound. The last also includes 100%.");
+    } else if (stage === 2) {
+      view.metrics = [[local("樣本數", "Samples"), summary.samples], [local("基因數", "Genes"), summary.genes]];
+      view.bars = summary.histogram.map(({lower, upper, count: entries}) => [`${lower}–${upper}`, entries]);
+      view.rows = summary.gene_summary.map(({gene, min, median, max}) =>
+        [gene, min.toFixed(2), median.toFixed(2), max.toFixed(2)]);
+      view.caption = local("各區間含下限，最後一組也含上限。", "Each bin includes its lower bound. The last also includes its upper bound.");
+    } else if (stage === 4) {
+      const total = summary.counts.common + summary.counts.low + summary.counts.rare;
+      view.metrics = [[local("顯著配對數", "Significant pairs"), total], [local("涉及基因數", "Genes represented"), summary.genes]];
+      view.bars = Object.entries(cisCategories).map(([key, names]) => [names[language], summary.counts[key]]);
+      view.headers[1] = local("類別內的變異／區域編號", "Variant / region index in category");
+      view.rows = summary.pairs.map(({gene, variant, category, p_value}) =>
+        [gene, variant, cisCategories[category][language], p_value]);
+      view.caption = local("低頻與罕見變異依區域合併分析。", "Low-frequency and rare variants are grouped by region.");
+    } else {
+      const total = summary.frequencies.reduce((sum, {count: edges}) => sum + edges, 0);
+      view.title = local("候選連線的重抽樣出現頻率", "Bootstrap frequency of candidate edges");
+      view.metrics = [[local("候選連線數", "Candidate edges"), total], [local("分析基因數", "Genes analyzed"), summary.genes]];
+      view.bars = summary.frequencies.map(({frequency, count: edges}) => [percent(frequency), edges]);
+      view.rows = summary.edges.map(({source, target, frequency}) => [source, target, percent(frequency)]);
+      view.caption = local("顯示至少出現一次的候選連線。第 6 階段會依出現頻率篩選。",
+        "Candidate edges appeared in at least one bootstrap run. Stage 6 filters them by frequency.");
+    }
+
+    // Fit small and large archived results within the existing chart frame.
+    const maximum = view.bars.reduce((largest, [, value]) => Math.max(largest, value), 0);
+    if (maximum && (maximum < view.step || maximum > 10 * view.step)) {
+      view.step = Math.ceil(maximum / 5);
+    }
+    return view;
+  }
+
+  function renderArchivedStep() {
+    const language = root.lang === "en" ? 1 : 0;
+    const local = (zh, en) => [zh, en][language];
+    const recorded = (value) => value ?? local("未記錄", "Not recorded");
+    const stage = historyResult?.stage;
+    const run = archiveSteps.has(stage)
+      ? runsForDataset().find(({run_id}) => run_id === historyResult.runId) : null;
+    const view = run && archivedStepResult ? viewArchivedStep(stage, archivedStepResult.summary, language) : null;
+    const state = archivedStepPanel.dataset.runState;
+    const name = run ? stageData[stage - 1].name : "";
+    const job = run ? archivedStepResult?.job ?? run.jobs[historySteps[stage - 1]] : null;
+    const definition = (label, value, identity = "") =>
+      `<dt>${escapeHistory(label)}</dt><dd${identity}>${escapeHistory(recorded(value))}</dd>`;
+
+    archivedStepPanel.querySelector("h2").textContent = language ? englishLabel(name) : name;
+    archivedStepStatus.textContent = savedStepStates[state]?.[language] ?? "";
+    archivedStepStatus.hidden = !savedStepStates[state];
+    archivedStepRetry.hidden = state !== "error";
+    archivedStepChart.hidden = !view || !view.bars.length;
+    archivedStepDock.hidden = !view;
+    archivedStepMetrics.innerHTML = run ? [
+      [local("階段", "Stage"), local(`第 ${stage} 階段`, `Stage ${stage}`)],
+      [local("封存執行", "Archived run"), run.name[language]],
+      ...(view?.metrics.map(([label, value]) => [label, countLabel.format(value)]) ?? []),
+    ].map(([label, value]) => definition(label, value)).join("") : "";
+
+    const resources = [
+      ["cpus", local("排程工作核心數", "Scheduled job cores")],
+      ["mem_gb", local("排程工作記憶體（GB）", "Scheduled job memory (GB)")],
+      ["time", local("排程工作時間上限", "Scheduled job time limit")],
+    ];
+    const settings = Object.entries({...job?.settings, ...job?.options});
+    archivedStepSettings.innerHTML = job ? [
+      definition(local("工作編號", "Job ID"), job.job_id),
+      ...settings.map(([key, value]) => definition(savedSettingLabels[key]?.[language] ?? key,
+        typeof value === "object" && value !== null ? JSON.stringify(value) : value,
+        ` data-stage-setting="${escapeHistory(key)}" title="${escapeHistory(key)}"`)),
+      ...resources.filter(([field]) => job.resources?.[field] != null).map(([field, label]) =>
+        definition(label, job.resources[field], ` data-stage-resource="${field}"`)),
+    ].join("") : "";
+
+    if (!view) {
+      archivedStepPlot.replaceChildren();
+      archivedStepTable.tBodies[0].replaceChildren();
+      return;
+    }
+    archivedStepChart.querySelector("h3").textContent = view.title;
+    archivedStepChart.querySelector("figcaption").textContent = view.caption;
+    archivedStepPlot.innerHTML = view.bars.length ? countChart(view.bars, view.step, view.axis, view.title) : "";
+    archivedStepPanel.querySelector("[data-stage-table-title]").textContent = view.tableTitle;
+    archivedStepTable.setAttribute("aria-label", view.tableTitle);
+    archivedStepTable.tHead.rows[0].innerHTML = view.headers.map((title) =>
+      `<th scope="col">${escapeHistory(title)}</th>`).join("");
+    const rows = view.rows.map((row) => `<tr>${row.map((value) =>
+      `<td>${escapeHistory(value)}</td>`).join("")}</tr>`).join("");
+    archivedStepTable.tBodies[0].innerHTML = rows || `<tr><td colspan="${view.headers.length}">${recorded(null)}</td></tr>`;
+  }
+
+  async function loadArchivedStep() {
+    archivedStepRequest?.abort();
+    const {runId, stage} = historyResult ?? {};
+    if (!archiveSteps.has(stage) || !runsForDataset().some(({run_id}) => run_id === runId)) return;
+    const request = new AbortController();
+    archivedStepRequest = request;
+    archivedStepResult = null;
+    delete archivedStepPanel.dataset.runId;
+    archivedStepPanel.dataset.stage = stage;
+    archivedStepPanel.dataset.runState = "loading";
+    renderArchivedStep();
+    try {
+      const params = new URLSearchParams({run: runId, stage});
+      const result = await getArchivedResult("/stage/results?" + params, {signal: request.signal});
+      if (request.signal.aborted) return;
+      if (result.run_id !== runId || result.stage !== stage) throw new Error("Result does not match the selected run and stage");
+      archivedStepResult = result;
+      archivedStepPanel.dataset.runId = runId;
+      archivedStepPanel.dataset.runState = "ready";
+    } catch (error) {
+      if (request.signal.aborted) return;
+      archivedStepPanel.dataset.runState = error.status === 404 ? "empty" : "error";
+    }
+    renderArchivedStep();
+  }
+  archivedStepRetry.addEventListener("click", () => void loadArchivedStep());
+
   function clearHistoryResult() {
     historyResult = null;
     stage3Request?.abort();
+    archivedStepRequest?.abort();
   }
 
   async function loadStage3Run() {
@@ -1508,6 +1666,7 @@
     renderHistoryStatus();
     renderStage6Status();
     renderStage3History();
+    renderArchivedStep();
     renderRemoteSettings();
     renderDatasetLabels();
     syncInputFiles();
@@ -1544,6 +1703,7 @@
     const showResult = inHistory && Boolean(selected) && historyResult?.runId === selected;
     const showNetwork = showResult && historyResult.stage === 6;
     stage3HistoryPanel.hidden = !showResult || historyResult.stage !== 3;
+    archivedStepPanel.hidden = !showResult || !archiveSteps.has(historyResult.stage);
     runDetails.hidden = !inHistory || !selected || showResult;
     byId("empty-history").hidden = !inHistory || Boolean(selected);
     byId("empty-run-list").hidden = Boolean(selected);
@@ -1714,17 +1874,19 @@
     syncStage6Picker();
   });
   runDetails.addEventListener("click", (event) => {
-    const button = event.target.closest("[data-run-adjustment], [data-run-network]");
+    const button = event.target.closest("[data-run-stage]");
     if (!button) return;
-    const adjustment = button.hasAttribute("data-run-adjustment");
-    const runId = button.dataset.runAdjustment ?? button.dataset.runNetwork;
+    const stage = Number(button.dataset.runStage);
+    const runId = button.dataset.runId;
     if (!runsForDataset().some(({run_id}) => run_id === runId)) return;
     clearHistoryResult();
-    historyResult = {runId, stage: adjustment ? 3 : 6};
-    if (adjustment) void loadStage3Run();
+    historyResult = {runId, stage};
+    if (stage === 3) void loadStage3Run();
+    else if (archiveSteps.has(stage)) void loadArchivedStep();
     updateHistoryView();
     syncStage6Picker();
-    (adjustment ? stage3Back : stage6Back).focus({ preventScroll: true });
+    const back = stage === 3 ? stage3Back : stage === 6 ? stage6Back : archivedStepBack;
+    back.focus({ preventScroll: true });
   });
   function backToRunTimeline() {
     if (!historyResult) return;
@@ -1732,9 +1894,9 @@
     clearHistoryResult();
     updateHistoryView();
     syncStage6Picker();
-    const attribute = stage === 3 ? "data-run-adjustment" : "data-run-network";
-    runDetails.querySelector(`[${attribute}="${CSS.escape(runId)}"]`)?.focus({ preventScroll: true });
+    runDetails.querySelector(`[data-run-stage="${stage}"][data-run-id="${CSS.escape(runId)}"]`)?.focus({ preventScroll: true });
   }
+  archivedStepBack.addEventListener("click", backToRunTimeline);
   stage3Back.addEventListener("click", backToRunTimeline);
   stage6Back.addEventListener("click", backToRunTimeline);
   byId("close").addEventListener("click", () => {
