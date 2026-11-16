@@ -1,42 +1,53 @@
 (() => {
-  const panel = document.getElementById("lens-stage3");
-  const points = JSON.parse(panel.querySelector("[data-stage3-points]").textContent);
-  const svg = (tag, attrs) => {
-    const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
-    for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, value);
-    return node;
-  };
-  const bounds = { left: 68, right: 636, top: 18, bottom: 350 };
-  const xFor = (value) => bounds.left + (value + 3) / 15 * (bounds.right - bounds.left);
-  const yFor = (value) => bounds.bottom - (value + 6) / 12 * (bounds.bottom - bounds.top);
-  const axes = panel.querySelector(".s3-axes");
-  const gridLine = (value, attrs) => svg("line", {
-    ...attrs,
-    class: value === 0 ? "s3-grid-line s3-zero" : "s3-grid-line",
-  });
+  function drawStage3Scatter(panel, points, xTicks, yTicks, inEnglish = false) {
+    const svg = (tag, attrs) => {
+      const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
+      for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, value);
+      return node;
+    };
+    const bounds = { left: 68, right: 636, top: 18, bottom: 350 };
+    const proportion = (value, ticks) => (value - ticks[0]) / (ticks.at(-1) - ticks[0]);
+    const xFor = (value) => bounds.left + proportion(value, xTicks) * (bounds.right - bounds.left);
+    const yFor = (value) => bounds.bottom - proportion(value, yTicks) * (bounds.bottom - bounds.top);
+    const axes = panel.querySelector(".s3-axes");
+    const marks = document.createDocumentFragment();
+    const gridLine = (value, attrs) => svg("line", {
+      ...attrs,
+      class: value === 0 ? "s3-grid-line s3-zero" : "s3-grid-line",
+    });
+    const format = (value) => Number(value.toPrecision(4));
 
-  for (const value of [-3, 0, 3, 6, 9, 12]) {
-    const x = xFor(value);
-    const tick = svg("text", { x, y: bounds.bottom + 19, "text-anchor": "middle" });
-    tick.textContent = value;
-    axes.append(gridLine(value, { x1: x, x2: x, y1: bounds.top, y2: bounds.bottom }), tick);
+    axes.replaceChildren();
+    for (const value of xTicks) {
+      const x = xFor(value);
+      const tick = svg("text", { x, y: bounds.bottom + 19, "text-anchor": "middle" });
+      tick.textContent = format(value);
+      axes.append(gridLine(value, { x1: x, x2: x, y1: bounds.top, y2: bounds.bottom }), tick);
+    }
+    for (const value of yTicks) {
+      const y = yFor(value);
+      const tick = svg("text", { x: bounds.left - 9, y: y + 4, "text-anchor": "end" });
+      tick.textContent = format(value);
+      axes.append(gridLine(value, { x1: bounds.left, x2: bounds.right, y1: y, y2: y }), tick);
+    }
+    for (const [x, y] of points) {
+      const zh = `第 1 主成分 ${format(x)} · 第 2 主成分 ${format(y)}`;
+      const en = `PC1: ${format(x)} · PC2: ${format(y)}`;
+      marks.append(svg("circle", {
+        cx: xFor(x).toFixed(2),
+        cy: yFor(y).toFixed(2),
+        r: 2.6,
+        "data-tooltip": inEnglish ? en : zh,
+        "data-en-data-tooltip": en,
+      }));
+    }
+    panel.querySelector(".s3-points").replaceChildren(marks);
   }
-  for (const value of [-6, -3, 0, 3, 6]) {
-    const y = yFor(value);
-    const tick = svg("text", { x: bounds.left - 9, y: y + 4, "text-anchor": "end" });
-    tick.textContent = value;
-    axes.append(gridLine(value, { x1: bounds.left, x2: bounds.right, y1: y, y2: y }), tick);
-  }
-  panel.querySelector(".s3-points").append(...points.map(([x, y]) => svg("circle", {
-    cx: xFor(x).toFixed(2),
-    cy: yFor(y).toFixed(2),
-    r: 2.6,
-    "data-tooltip": `第 1 主成分 ${x} · 第 2 主成分 ${y}`,
-    "data-en-data-tooltip": `PC1: ${x} · PC2: ${y}`,
-  })));
-})();
 
-(() => {
+  const exampleStage3 = document.getElementById("lens-stage3");
+  const examplePoints = JSON.parse(exampleStage3.querySelector("[data-stage3-points]").textContent);
+  drawStage3Scatter(exampleStage3, examplePoints, [-3, 0, 3, 6, 9, 12], [-6, -3, 0, 3, 6]);
+
   const root = document.getElementById("signet-lens-left-preview");
   const app = root.querySelector(".ml-app");
 
@@ -74,7 +85,7 @@
   let activeDataset = makeDataset({id: "", name: ["", ""]});
   let historyRuns = [];
   let historyState = "loading";
-  let historyNetworkRun = "";
+  let historyResult = null;
   const localDatasetName = (dataset) => dataset.name[root.lang === "en" ? 1 : 0];
   const runsForDataset = () => historyRuns.filter((run) => run.dataset_id === activeDataset.id);
   const tabs = [byId("agent-tab"), byId("stage-tab")];
@@ -903,9 +914,14 @@
         const title = `<i data-lucide="circle-check" aria-hidden="true"></i>
           ${historyText(`第 ${number} 階段`, `Stage ${number}`)}<strong>${historyLabel(stageData[offset].name)}</strong>
           <time datetime="${escapeHistory(job.finished_at)}">${escapeHistory(clockTime(job.finished_at))}</time>`;
-        return key === "visualize" ? `<li><button type="button" class="ml-run-step-link" data-run-network="${id}" aria-controls="lens-stage6">
-          ${title}<i data-lucide="arrow-right" aria-hidden="true"></i>
-        </button></li>` : `<li><details class="ml-run-step"><summary>
+        if (key === "adjust" || key === "visualize") {
+          const adjustment = key === "adjust";
+          return `<li><button type="button" class="ml-run-step-link" ${adjustment ? "data-run-adjustment" : "data-run-network"}="${id}"
+            aria-controls="${adjustment ? "lens-history-stage3" : "lens-stage6"}">
+            ${title}<i data-lucide="arrow-right" aria-hidden="true"></i>
+          </button></li>`;
+        }
+        return `<li><details class="ml-run-step"><summary>
           ${title}<i data-lucide="chevron-down" class="ml-run-chevron" aria-hidden="true"></i>
         </summary>${historyJobDetails(job)}</details></li>`;
       }).join("");
@@ -998,9 +1014,11 @@
     renderStage6Status();
   }
 
-  async function getStage6Results(path, options = {}) {
+  async function getArchivedResult(path, options = {}) {
     const response = await fetch(path, {...options, headers: {"X-Chat-Token": chatToken}});
-    if (!response.ok) throw new Error("Stage 6 result request failed");
+    if (!response.ok) {
+      throw Object.assign(new Error("Could not load archived result"), {status: response.status});
+    }
     return response.json();
   }
 
@@ -1045,7 +1063,7 @@
     setStage6RunState("loading");
     try {
       const query = new URLSearchParams({run: runId, source: run.source});
-      const result = await getStage6Results("/stage6/results?" + query, {signal: request.signal});
+      const result = await getArchivedResult("/stage6/results?" + query, {signal: request.signal});
       if (request.signal.aborted) return;
       if (result.run_id !== runId || result.source !== run.source) {
         throw new Error("Stage 6 result belongs to a different run");
@@ -1075,11 +1093,11 @@
       stage6RunSelect.replaceChildren(new Option("", ""), ...runs.map(({run_id}) => new Option(run_id, run_id)));
       stage6RunSelect.disabled = !runs.length;
     }
-    const inHistory = app.dataset.nav === "history" && Boolean(historyNetworkRun);
+    const inHistory = app.dataset.nav === "history" && historyResult?.stage === 6;
     stage6RunSelect.hidden = inHistory;
     stage6HistoryLabel.hidden = !inHistory;
     stage6Back.hidden = !inHistory;
-    stage6RunSelect.value = inHistory ? historyNetworkRun : analysisRunByDataset.get(activeDataset.id) ?? "";
+    stage6RunSelect.value = inHistory ? historyResult.runId : analysisRunByDataset.get(activeDataset.id) ?? "";
     if (!stage6RunSelect.value) stage6RunSelect.value = "";
     syncStage6Choice();
   }
@@ -1095,6 +1113,138 @@
   analysisNetwork.addEventListener("lens:gene-selected", ({detail}) => {
     if (stage6Result) selectedStage6Genes.set(stage6Result.run_id, detail.gene);
   });
+
+  const stage3HistoryPanel = root.querySelector("#lens-history-stage3");
+  const stage3Back = byId("stage3-back");
+  const stage3Retry = byId("stage3-retry");
+  const stage3Plot = stage3HistoryPanel.querySelector(".s3-chart");
+  const stage3Legend = stage3HistoryPanel.querySelector("figcaption");
+  const stage3Status = stage3HistoryPanel.querySelector("[data-s3-status]");
+  const stage3RunLabel = stage3HistoryPanel.querySelector("[data-s3-run]");
+  const stage3Components = stage3HistoryPanel.querySelector("[data-s3-components]");
+  const stage3Counts = stage3HistoryPanel.querySelectorAll("[data-s3-count]");
+  const stage3ComparisonRows = stage3HistoryPanel.querySelector("[data-s3-difference] tbody");
+  const stage3MetricNote = stage3HistoryPanel.querySelector(".s3-metric-note");
+  const stage3Comparison = [
+    ["before", "校正前", "Before adjustment", "before_sd"],
+    ["covariates", "僅校正性別與種族", "Adjusted for sex and race", "covariates_sd"],
+    ["after", "校正後", "After adjustment", "after_sd"],
+  ];
+  const stage3States = {
+    loading: ["讀取第 3 階段封存結果…", "Loading the archived Stage 3 result…"],
+    empty: ["這次執行沒有可讀取的第 3 階段封存結果。", "This run has no readable Stage 3 archive."],
+    error: ["無法載入第 3 階段結果。", "Could not load the Stage 3 result."],
+  };
+  let stage3Result = null;
+  let stage3Request;
+
+  function stage3Ticks(points, component) {
+    let lowest = 0, highest = 0;
+    for (const point of points) {
+      lowest = Math.min(lowest, point[component]);
+      highest = Math.max(highest, point[component]);
+    }
+    const targetStep = (highest - lowest) / 5 || 1;
+    const magnitude = 10 ** Math.floor(Math.log10(targetStep));
+    const step = Math.ceil(targetStep / magnitude) * magnitude;
+    const start = Math.floor(lowest / step);
+    const end = Math.max(start + 1, Math.ceil(highest / step));
+    return Array.from({length: end - start + 1}, (_, offset) => (start + offset) * step);
+  }
+
+  function renderStage3History() {
+    const inEnglish = root.lang === "en";
+    const locale = inEnglish ? "en" : "zh-Hant";
+    const run = historyResult?.stage === 3
+      ? runsForDataset().find(({run_id}) => run_id === historyResult.runId) : null;
+    const state = stage3HistoryPanel.dataset.runState;
+    const number = new Intl.NumberFormat(locale);
+    const formatSD = new Intl.NumberFormat(locale, {maximumFractionDigits: 5, minimumFractionDigits: 5});
+    const formatChange = new Intl.NumberFormat(locale, {maximumFractionDigits: 5, minimumFractionDigits: 5, signDisplay: "exceptZero"});
+    const missing = inEnglish ? "Not recorded" : "未記錄";
+    const comparison = stage3Result?.comparison;
+    const pca = stage3Result?.pca;
+
+    stage3RunLabel.textContent = run?.name[inEnglish ? 1 : 0] ?? "";
+    stage3RunLabel.title = run?.run_id ?? "";
+    stage3Components.textContent = stage3Result ? number.format(stage3Result.npc) : "—";
+    for (const count of stage3Counts) {
+      const value = stage3Result?.matching[count.dataset.s3Count];
+      count.textContent = Number.isInteger(value) ? number.format(value) : "—";
+    }
+    stage3Status.hidden = !stage3States[state];
+    stage3Status.textContent = stage3States[state]?.[inEnglish ? 1 : 0] ?? "";
+    stage3Retry.hidden = state !== "error";
+    stage3HistoryPanel.querySelector(".s3-figure").hidden = state !== "ready";
+    stage3HistoryPanel.querySelector(".ml-result-dock").hidden = state !== "ready";
+
+    stage3Plot.toggleAttribute("hidden", !pca?.points.length);
+    if (pca?.points.length) {
+      const points = pca.points;
+      drawStage3Scatter(stage3HistoryPanel, points, stage3Ticks(points, 0), stage3Ticks(points, 1), inEnglish);
+      const variance = new Intl.NumberFormat(locale, {maximumFractionDigits: 2});
+      const axisNames = inEnglish ? ["PC1", "PC2"] : ["第 1 主成分", "第 2 主成分"];
+      stage3Plot.querySelectorAll(".s3-axis-title").forEach((axis, index) => {
+        axis.textContent = `${axisNames[index]} · ${variance.format(pca.variance_explained[index])}%`;
+      });
+      stage3Plot.setAttribute("aria-label", inEnglish
+        ? `Scatter plot of ${number.format(points.length)} retained individuals on PC1 and PC2`
+        : `${number.format(points.length)} 位保留個體在第 1 與第 2 主成分上的散點圖`);
+      stage3Legend.textContent = inEnglish
+        ? "Each point is one retained individual. The plot is reconstructed from the archived genotype data."
+        : "每個點代表一位保留個體。散點圖由封存的基因型資料重建。";
+    } else {
+      stage3Plot.querySelector(".s3-points").replaceChildren();
+      stage3Legend.textContent = inEnglish ? "This archive has no data for the PCA plot." : "這份封存結果沒有可繪製主成分圖的資料。";
+    }
+
+    stage3ComparisonRows.replaceChildren();
+    stage3MetricNote.hidden = !comparison;
+    if (!comparison) {
+      const cell = stage3ComparisonRows.insertRow().insertCell();
+      cell.colSpan = 3;
+      cell.textContent = inEnglish ? "Expression comparison is unavailable in this archive." : "這份封存結果沒有校正前後的比較資料。";
+      return;
+    }
+    for (const [key, zh, en, field] of stage3Comparison) {
+      const row = stage3ComparisonRows.insertRow();
+      row.dataset.s3Comparison = key;
+      const value = comparison[field];
+      row.insertCell().textContent = inEnglish ? en : zh;
+      row.insertCell().textContent = value === null ? missing : formatSD.format(value);
+      row.insertCell().textContent = key === "before" || value === null ? "—" : formatChange.format(value - comparison.before_sd);
+    }
+  }
+
+  function clearHistoryResult() {
+    historyResult = null;
+    stage3Request?.abort();
+  }
+
+  async function loadStage3Run() {
+    stage3Request?.abort();
+    const runId = historyResult?.runId;
+    if (historyResult?.stage !== 3 || !runsForDataset().some(({run_id}) => run_id === runId)) return;
+    const request = new AbortController();
+    stage3Request = request;
+    stage3Result = null;
+    delete stage3HistoryPanel.dataset.runId;
+    stage3HistoryPanel.dataset.runState = "loading";
+    renderStage3History();
+    try {
+      const result = await getArchivedResult("/stage3/results?" + new URLSearchParams({run: runId}), {signal: request.signal});
+      if (request.signal.aborted) return;
+      if (result.run_id !== runId) throw new Error("Stage 3 result belongs to a different run");
+      stage3Result = result;
+      stage3HistoryPanel.dataset.runId = runId;
+      stage3HistoryPanel.dataset.runState = "ready";
+    } catch (error) {
+      if (request.signal.aborted) return;
+      stage3HistoryPanel.dataset.runState = error.status === 404 ? "empty" : "error";
+    }
+    renderStage3History();
+  }
+  stage3Retry.addEventListener("click", () => void loadStage3Run());
 
   const newChatTitle = ["新對話", "New chat"];
   const idleChatStatus = ["SIGNET Agent · 本機服務已啟動", "SIGNET Agent · Local service ready"];
@@ -1357,6 +1507,7 @@
     renderHistoryLanguage();
     renderHistoryStatus();
     renderStage6Status();
+    renderStage3History();
     renderRemoteSettings();
     renderDatasetLabels();
     syncInputFiles();
@@ -1390,8 +1541,10 @@
     const matchingRuns = runsForDataset();
     const previousSelection = selectedRuns.get(activeDataset.id);
     const selected = matchingRuns.find(({run_id}) => run_id === previousSelection)?.run_id ?? matchingRuns[0]?.run_id;
-    const showNetwork = inHistory && Boolean(selected) && historyNetworkRun === selected;
-    runDetails.hidden = !inHistory || !selected || showNetwork;
+    const showResult = inHistory && Boolean(selected) && historyResult?.runId === selected;
+    const showNetwork = showResult && historyResult.stage === 6;
+    stage3HistoryPanel.hidden = !showResult || historyResult.stage !== 3;
+    runDetails.hidden = !inHistory || !selected || showResult;
     byId("empty-history").hidden = !inHistory || Boolean(selected);
     byId("empty-run-list").hidden = Boolean(selected);
     for (const button of runList.querySelectorAll("[data-run-target]")) {
@@ -1431,7 +1584,7 @@
     updateHistoryView();
     if (!stage6RunSelect.value) void loadStage6Run("");
     try {
-      const {datasets: savedDatasets, runs} = await getStage6Results("/stage6/history");
+      const {datasets: savedDatasets, runs} = await getArchivedResult("/stage6/history");
       const existing = new Map(datasets.map((dataset) => [dataset.id, dataset]));
       const drafts = datasets.filter(({draft}) => draft);
       datasets.splice(0, datasets.length, ...savedDatasets.map((record) => {
@@ -1471,7 +1624,7 @@
     closeDatasetForm();
     if (dataset !== activeDataset) {
       activeDataset = dataset;
-      historyNetworkRun = "";
+      clearHistoryResult();
     }
     renderDatasetLabels();
     syncInputFiles(true);
@@ -1556,25 +1709,34 @@
     const id = event.target.closest("[data-run-target]")?.dataset.runTarget;
     if (!runsForDataset().some(({run_id}) => run_id === id)) return;
     selectedRuns.set(activeDataset.id, id);
-    historyNetworkRun = "";
+    clearHistoryResult();
     updateHistoryView();
     syncStage6Picker();
   });
   runDetails.addEventListener("click", (event) => {
-    const id = event.target.closest("[data-run-network]")?.dataset.runNetwork;
-    if (!runsForDataset().some(({run_id}) => run_id === id)) return;
-    historyNetworkRun = id;
+    const button = event.target.closest("[data-run-adjustment], [data-run-network]");
+    if (!button) return;
+    const adjustment = button.hasAttribute("data-run-adjustment");
+    const runId = button.dataset.runAdjustment ?? button.dataset.runNetwork;
+    if (!runsForDataset().some(({run_id}) => run_id === runId)) return;
+    clearHistoryResult();
+    historyResult = {runId, stage: adjustment ? 3 : 6};
+    if (adjustment) void loadStage3Run();
     updateHistoryView();
     syncStage6Picker();
-    stage6Back.focus({ preventScroll: true });
+    (adjustment ? stage3Back : stage6Back).focus({ preventScroll: true });
   });
-  stage6Back.addEventListener("click", () => {
-    const id = historyNetworkRun;
-    historyNetworkRun = "";
+  function backToRunTimeline() {
+    if (!historyResult) return;
+    const {runId, stage} = historyResult;
+    clearHistoryResult();
     updateHistoryView();
     syncStage6Picker();
-    runDetails.querySelector(`[data-run-network="${CSS.escape(id)}"]`)?.focus({ preventScroll: true });
-  });
+    const attribute = stage === 3 ? "data-run-adjustment" : "data-run-network";
+    runDetails.querySelector(`[${attribute}="${CSS.escape(runId)}"]`)?.focus({ preventScroll: true });
+  }
+  stage3Back.addEventListener("click", backToRunTimeline);
+  stage6Back.addEventListener("click", backToRunTimeline);
   byId("close").addEventListener("click", () => {
     setSidebarOpen(false);
     root.querySelector('[data-nav-target][aria-current="page"]').focus();

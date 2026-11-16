@@ -115,6 +115,8 @@ class ChatHandler(BaseHTTPRequestHandler):
             if not secrets.compare_digest(self.headers.get('X-Chat-Token', ''), self.server.token):
                 return self._error(403, 'Page token required.')
             return signet_api.handle(self, 'GET', url)
+        if url.path == '/stage3/results':
+            return self.stage3_results_get(url)
         if url.path == '/stage6/results':
             return self.stage6_results_get(url)
         if url.path == '/stage6/history':
@@ -301,6 +303,18 @@ class ChatHandler(BaseHTTPRequestHandler):
         if action is None:
             return self._error(404, '找不到此操作。')
         return self.json_response(action())
+
+    def stage3_results_get(self, url):
+        if not secrets.compare_digest(self.headers.get('X-Chat-Token', ''), self.server.token):
+            return self._error(403, 'Workspace token required.')
+        query = parse_qs(url.query, keep_blank_values=True)
+        if set(query) != {'run'} or len(query['run']) != 1 or not query['run'][0]:
+            return self._error(400, 'Provide a single run ID.')
+        try:
+            result = self.server.stage6.archived_stage3(query['run'][0])
+        except (OSError, ValueError, KeyError, TypeError, OverflowError):
+            return self._error(404, 'No readable archived Stage 3 result for this run.')
+        return self.json_response(result)
 
     def stage6_results_get(self, url):
         if not secrets.compare_digest(self.headers.get('X-Chat-Token', ''), self.server.token):

@@ -2,7 +2,7 @@
 
 Use a local chat interface to explore SIGNET's analysis capabilities, inspect files you provide, and run operations through controlled tools. The interface supports English and Traditional Chinese, tool progress, and parameter proposals and comparisons for Stage 6 network results.
 
-The desktop opens to the bilingual workspace. The chat uses the existing SIGNET Agent with your configured model and saved conversations. Data and Run history show saved dataset records and their archived runs. Each run has an input snapshot, and Stage 6 opens its saved network result. Stages 1–5 in Analysis use simulated data. Use **View → Classic Interface** for model setup and remote connection controls.
+The desktop opens to the bilingual workspace. The chat uses the existing SIGNET Agent with your configured model and saved conversations. Data and Run history show saved dataset records and their archived runs. Each run has an input snapshot. Stage 3 opens its saved adjustment summary, and Stage 6 opens its saved network result. Stages 1–5 in Analysis use simulated data. Use **View → Classic Interface** for model setup and remote connection controls.
 
 ## Replacing the Former Desktop Workbench
 

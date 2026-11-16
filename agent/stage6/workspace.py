@@ -124,6 +124,46 @@ def _history_inputs(value):
     return snapshot
 
 
+def _finite_number(value):
+    return type(value) in (int, float) and math.isfinite(value)
+
+
+def _stage3_snapshot(record, run_id, saved_npc):
+    if (not isinstance(record, dict) or record.get('run_id') != run_id
+            or type(record.get('npc')) is not int or record['npc'] != saved_npc):
+        raise ValueError('Stage 3 snapshot does not match the archived adjustment.')
+
+    matching = record['matching']
+    expected_counts = {'genotype', 'expression', 'matched', 'retained', 'excluded', 'variants', 'genes'}
+    if (not isinstance(matching, dict) or matching.keys() != expected_counts
+            or any(type(value) is not int or value < 0 for value in matching.values())
+            or matching['matched'] > min(matching['genotype'], matching['expression'])
+            or matching['matched'] != matching['retained'] + matching['excluded']):
+        raise ValueError('Invalid archived Stage 3 matching counts.')
+
+    pca = record.get('pca')
+    if pca is not None:
+        points, variance = pca['points'], pca['variance_explained']
+        if (pca['source'] != 'retained_genotype'
+                or not isinstance(points, list) or len(points) != matching['retained']
+                or any(not isinstance(point, list) or len(point) != 2
+                       or not all(map(_finite_number, point)) for point in points)
+                or not isinstance(variance, list) or len(variance) != 2
+                or any(not _finite_number(value) or not 0 <= value <= 100 for value in variance)):
+            raise ValueError('Invalid archived Stage 3 PCA display data.')
+        pca = {'points': points, 'variance_explained': variance, 'source': 'retained_genotype'}
+
+    comparison = record.get('comparison')
+    if comparison is not None:
+        before, after, covariates = comparison['before_sd'], comparison['after_sd'], comparison.get('covariates_sd')
+        if (any(not _finite_number(value) or value < 0 for value in (before, after))
+                or (covariates is not None and (not _finite_number(covariates) or covariates < 0))):
+            raise ValueError('Invalid archived Stage 3 expression comparison.')
+        comparison = {'before_sd': before, 'after_sd': after, 'covariates_sd': covariates}
+
+    return {'run_id': run_id, 'npc': saved_npc, 'matching': matching, 'pca': pca, 'comparison': comparison}
+
+
 def fingerprint(settings):
     value = {key: settings[key] for key in ('freq', 'ntop', 'id', 'assembly', 'cohort', 'nchr')}
     for key in ('Afreq', 'coef', 'vis.genepos'):
@@ -222,6 +262,18 @@ class Workspace:
             except (OSError, ValueError, KeyError, TypeError):
                 continue
         return {'datasets': list(datasets.values()), 'runs': runs}
+
+    def archived_stage3(self, run_id):
+        run_id = st._name(run_id)
+        run = next((entry for entry in self.archived_history()['runs'] if entry['run_id'] == run_id), None)
+        if run is None or run['jobs']['adjust']['state'] != 'completed':
+            raise ValueError('Run has no completed archived adjustment.')
+        saved_npc = run['jobs']['adjust']['options']['npc']
+        if type(saved_npc) is not int or not 0 <= saved_npc <= 10:
+            raise ValueError('Invalid archived number of principal components.')
+        path = st._no_links(_archive_directory() / run_id / 'stage3.json')
+        record = json.loads(path.read_text(encoding='utf-8'))
+        return _stage3_snapshot(record, run_id, saved_npc)
 
     def state(self, session):
         return self.sessions.setdefault(session, {'baseline': None, 'comparison': None, 'proposals': []})

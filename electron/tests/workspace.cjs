@@ -96,10 +96,22 @@ function createHistoryFixture() {
     mkdirSync(folder);
     fixturePaths.push(folder);
     writeFileSync(path.join(folder, 'history.json'), JSON.stringify(snapshot));
+    const npc = 2 + index;
+    const matching = {genotype: 9, expression: 8, matched: 5, retained: 4, excluded: 1, variants: 20 + index, genes};
+    const comparison = {before_sd: 0.5, covariates_sd: 0.4, after_sd: (index + 2) / 10};
+    const stage3 = {run_id, npc, matching, comparison, pca: {
+      points: [[-2, -1], [-1, 2], [1, -2], [2, 1]],
+      variance_explained: [40, 20],
+      source: 'retained_genotype',
+    }};
+    writeFileSync(path.join(folder, 'stage3.json'), JSON.stringify(stage3));
     writeFileSync(path.join(folder, 'verification.json'), JSON.stringify({
       run: run_id,
-      jobs: {visualize: {state: 'completed', settings: {freq: '0.45', ntop: '1'},
-        submitted_at: '2026-11-11T01:04:38-0800', finished_at: '2026-11-11T01:07:11-0800'}},
+      jobs: {
+        adjust: {state: 'completed', options: {npc}, finished_at: '2026-11-11T01:03:00-0800'},
+        visualize: {state: 'completed', settings: {freq: '0.45', ntop: '1'},
+          submitted_at: '2026-11-11T01:04:38-0800', finished_at: '2026-11-11T01:07:11-0800'},
+      },
       graph: {connections, genes, subnetworks: 1, displayed: 1},
     }));
     writeFileSync(path.join(folder, 'signet_edgelist_0.45.txt'), [
@@ -108,7 +120,7 @@ function createHistoryFixture() {
       '',
     ].join('\n'));
     const incidentPairs = pairs.filter(pair => pair.includes('MEGF6'));
-    return {...snapshot, genes, connections, incident: incidentPairs.length, incidentPairs};
+    return {...snapshot, genes, connections, incident: incidentPairs.length, incidentPairs, stage3};
   });
   return {groups, runs};
 }
@@ -117,11 +129,16 @@ function readArchivedHistory() {
   const read = filename => JSON.parse(readFileSync(filename, 'utf8'));
   const groups = ['example-chr1', 'simulated-cohort-b'].map(id => read(path.join(datasetDir, id + '.json')));
   const runs = [
-    ['official-example-chr1-20261111', 731, 13],
-    ['official-example-chr1-stage-cards-20261111', 726, 10],
-    ['official-example-chr1-english-20261111', 706, 9],
-  ].map(([run_id, connections, incident]) => ({
+    ['official-example-chr1-20261111', 731, 13, 1110, 0.93366491],
+    ['official-example-chr1-stage-cards-20261111', 726, 10, 1112, 0.93373123],
+    ['official-example-chr1-english-20261111', 706, 9, 1110, 0.93348844],
+  ].map(([run_id, connections, incident, variants, after_sd]) => ({
     ...read(path.join(archiveDir, run_id, 'history.json')), genes: 95, connections, incident,
+    stage3: {
+      npc: 3,
+      matching: {genotype: 560, expression: 554, matched: 473, retained: 471, excluded: 2, variants, genes: 95},
+      comparison: {before_sd: 0.93990024, covariates_sd: 0.93650323, after_sd},
+    },
   }));
   return {groups, runs};
 }
@@ -153,6 +170,7 @@ async function verifyWorkspace({groups, runs}) {
     }
   };
   const datasetPicker = find('#ml-dataset-select');
+  const stage3 = find('#lens-history-stage3');
   const stage6 = find('#lens-stage6');
   const resultPicker = find('#ml-stage6-run');
   const selectDataset = id => {
@@ -205,6 +223,29 @@ async function verifyWorkspace({groups, runs}) {
       const original = ['genotype', 'expression', 'clinical'].flatMap(kind => run.inputs[kind]);
       check(visible(detail) && JSON.stringify(names) === JSON.stringify(original),
         'Run did not show its own saved input files: ' + run.run_id);
+
+      const adjustment = `[data-run-adjustment="${run.run_id}"]`;
+      click(adjustment);
+      await waitFor(() => stage3.dataset.runState === 'ready' && stage3.dataset.runId === run.run_id,
+        'Could not load Stage 3 from history: ' + run.run_id);
+      check(visible('#lens-history-stage3 .s3-chart'), 'Selected Stage 3 chart is hidden');
+      check(!visible(detail), 'Run detail remained visible in Stage 3');
+      check(!visible('#lens-stage6'), 'Stage 6 remained visible in Stage 3');
+      const {npc, matching, comparison} = run.stage3;
+      const numberFrom = selector => Number(stage3.querySelector(selector).textContent.trim().replaceAll(',', ''));
+      check(numberFrom('[data-s3-components]') === npc, 'Wrong archived principal component setting');
+      for (const [key, value] of Object.entries(matching)) {
+        check(numberFrom(`[data-s3-count="${key}"]`) === value, 'Wrong Stage 3 matching count: ' + key);
+      }
+      check(stage3.querySelectorAll('.s3-points circle').length === matching.retained,
+        'Stage 3 chart does not contain the retained samples');
+      check(visible('#lens-history-stage3 [data-s3-difference]'), 'Stage 3 expression comparison is hidden');
+      for (const kind of ['before', 'covariates', 'after']) {
+        const displayed = numberFrom(`[data-s3-comparison="${kind}"] td:nth-child(2)`);
+        check(displayed === Number(comparison[kind + '_sd'].toFixed(5)), 'Wrong Stage 3 expression comparison: ' + kind);
+      }
+      click('#lens-history-stage3 [data-run-back]');
+      check(visible(detail) && !visible('#lens-history-stage3'), 'Back from Stage 3 did not restore the run detail');
 
       click(`[data-run-network="${run.run_id}"]`);
       await waitFor(() => stage6.dataset.runState === 'ready' && stage6.dataset.runId === run.run_id,
@@ -301,6 +342,9 @@ async function verifyChat({existingMessage, existingActivity, firstMessage, next
 }
 
 app.once('browser-window-created', (_event, window) => {
+  window.webContents.on('console-message', ({level, message, sourceId, lineNumber}) => {
+    if (level === 'error') console.error(`${sourceId}:${lineNumber}: ${message}`);
+  });
   window.webContents.once('did-finish-load', () => setImmediate(async () => {
     try {
       assert.equal(BrowserWindow.getAllWindows().length, 1);
@@ -346,7 +390,7 @@ app.once('browser-window-created', (_event, window) => {
         [firstMessage, 'Provider replied to: ' + firstMessage, nextMessage, 'Provider replied to: ' + nextMessage]);
       assert.deepEqual(stored.events[existingSession], [[existingActivity]]);
       await window.webContents.executeJavaScript(`(${verifyWorkspace.toString()})(${JSON.stringify(history)})`);
-      console.log(`PASS: workspace geometry, Agent chat, scoped dataset history, frozen inputs, and Stage 6 (${history.runs.map(run => `${run.connections}/${run.incident}`).join(', ')} total/MEGF6 edges)`);
+      console.log(`PASS: workspace geometry, Agent chat, scoped dataset history, frozen inputs, archived Stage 3 and Stage 6 (${history.runs.map(run => `${run.connections}/${run.incident}`).join(', ')} total/MEGF6 edges)`);
       window.close();
     } catch (error) { fail(error); }
   }));

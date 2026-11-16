@@ -36,9 +36,11 @@ are bundled.
 The desktop opens directly to the bilingual workspace. The left chat uses the
 existing SIGNET Agent, model configuration, and saved conversations. Choose a
 dataset in **Data**, then open **Run history** to see that dataset's completed
-runs. A run shows its saved input filenames and job records. Open its Stage 6
-result to view the corresponding network and edge table. Selecting a gene
-filters the table to incoming and outgoing edges. The Stage 6 selector in
+runs. A run shows its saved input filenames and job records. Open its Stage 3
+result to review sample matching, the principal component count used in that run,
+and the archived expression before and after adjustment. Open Stage 6 to view
+that run's network and edge table. Selecting a gene filters the table to its
+incoming and outgoing edges. The Stage 6 selector in
 **Analysis** also follows the selected dataset. The first five stage previews
 in **Analysis** still use simulated data.
 
@@ -54,6 +56,21 @@ the ignored `data/` directory:
 - Beside `history.json`, keep the original `verification.json` and
   `signet_edgelist_<frequency>.txt` from the completed visualization. The
   verification report supplies the run's timestamps, settings, and counts.
+- If available, `stage3.json` beside the verification report contains that run's
+  matching counts, principal component scatter, and expression comparison. The
+  recorded component count must match the completed adjustment job.
+
+The November 11 archives preserve genotype and expression matrices but omit the
+original PCA score files. The Stage 3 scatter uses the archived retained
+genotypes, centered by mean dosage and scaled by genotype variance under the
+observed allele frequencies. The two plotted coordinates are the leading
+principal component scores of that standardized matrix. The inspector records
+the component count from the original job. The comparison uses the median
+per-gene sample standard deviation across the same retained individuals.
+Pre-adjustment expression is aligned by matching each retained genotype row
+uniquely and in order to the matched genotype matrix. The other columns use
+the two archived expression outputs, adjusted for sex and race and then for
+those covariates plus the original genotype components.
 
 Creating a dataset in the workspace adds a draft for the current session. An
 archive is a read-only result and remains tied to its saved input snapshot.
