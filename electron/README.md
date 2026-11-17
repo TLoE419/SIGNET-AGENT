@@ -43,7 +43,7 @@ archived expression comparison. Stage 4 shows significant association pairs,
 and Stage 5 shows candidate edges grouped by their recorded bootstrap frequency.
 Stage 6 opens the network and edge table, with a filter for the selected gene.
 Each stage uses the settings preserved with its job. The Stage 6 selector in
-**Analysis** also follows the selected dataset. Stages 1–5 can be submitted
+**Analysis** also follows the selected dataset. Stages 1–6 can be submitted
 manually for the chromosome 1 example.
 
 ### Submit the chromosome 1 example
@@ -101,6 +101,19 @@ resumes status tracking. Saved results read the actual normalized bootstrap
 frequency matrix and preserve the official direction from source columns to
 target rows, including every positive candidate. Stage 5 uses the significance
 file from the completed Stage 4 job even if the run's current threshold changes.
+
+When Stage 5 completes, **Stage 6** reviews the frequency threshold and number
+of subnetworks against that run's collected matrices. **Check network and
+thresholds** checks the selected values without submitting. **Submit Stage 6**
+runs the original SIGNET exports on HPC3 in the same run, with queue and
+execution progress. The confirmed settings and original edge list, subnetwork
+names, interactive graph and plot files are saved with the job.
+
+The completed Stage 6 history view opens the existing graph and edge table.
+Both follow the actual exported subnetworks. Selecting **MEGF6**, or another
+gene in the graph, filters the table to that gene's incident edges. Returning
+from another stage restores the selection for the same run. Archived graphs
+remain available in the completed-result selector.
 
 The local installation needs the audited SIGNET source, as described under
 [installation](../docs/INSTALL.md). The existing desktop SSH environment

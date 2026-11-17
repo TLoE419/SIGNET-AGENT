@@ -157,6 +157,17 @@ def submit_network_example(handler, url, run_id):
     return 202, workspace_genotype.submit_network(run_id, **_body(handler, fields, required=fields))
 
 
+def review_visualize_example(handler, url, run_id):
+    query = _query(url, ('freq', 'ntop'))
+    return 200, workspace_genotype.review_visualize(run_id, query.get('freq'), query.get('ntop'))
+
+
+def submit_visualize_example(handler, url, run_id):
+    _query(url, ())
+    fields = ('inputs', 'settings', 'resources')
+    return 202, workspace_genotype.submit_visualize(run_id, **_body(handler, fields, required=fields))
+
+
 # ---------- runs (local; includes signet -s) ----------
 
 def list_runs(handler, url):
@@ -328,6 +339,8 @@ ROUTES = [
      {'GET': review_cis_example, 'POST': submit_cis_example}),
     (re.compile(rf'/signet/runs/{_RUN}/network/example'),
      {'GET': review_network_example, 'POST': submit_network_example}),
+    (re.compile(rf'/signet/runs/{_RUN}/visualize/example'),
+     {'GET': review_visualize_example, 'POST': submit_visualize_example}),
     (re.compile(r'/signet/runs'), {'GET': list_runs, 'POST': create_run}),
     (re.compile(rf'/signet/runs/{_RUN}'), {'GET': get_run}),
     (re.compile(rf'/signet/runs/{_RUN}/settings'), {'PATCH': update_settings}),

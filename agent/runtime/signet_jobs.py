@@ -241,6 +241,21 @@ STEPS = {
         failures=('Some jobs are incomplete', 'Cannot find the container', "doesn't exist", 'Please reset'),
         description='TCGA network construction (signet -n): two-stage penalized least squares on bootstrap '
                     'data; SIGNET submits its own Slurm jobs, this step drives and follows them.'),
+    'visualize': Step(
+        flag='-v', cohort='TCGA', inputs=(), requires=('network',),
+        links={'Afreq': 'res/resn/signet_Afreq', 'coef': 'res/resn/signet_CoeffMat0',
+               'vis.genepos': 'res/resn/signet_net.genepos'},
+        needs=('res/resn/signet_Afreq', 'res/resn/signet_CoeffMat0', 'res/resn/signet_net.genepos'),
+        settings={'freq': 'frequency', 'ntop': 'subnetworks'},
+        required=('res/resv/signet_edgelist_{freq}.txt', 'res/resv/signet_count_vs_freq.pdf',
+                  'res/resv/signet_count_vs_freq.eps'),
+        download='work/res/resv',
+        resources={'cpus': 2, 'mem_gb': 16, 'hours': 1},
+        limits={'cpus': (1, 8), 'mem_gb': (1, 64), 'hours': (0.25, 12)},
+        env={'cloud': 'T', 'OPENBLAS_NUM_THREADS': '1', 'OMP_NUM_THREADS': '1', 'MKL_NUM_THREADS': '1'},
+        failures=("doesn't exist",),
+        description='TCGA network visualization (signet -v): export the selected subnetworks, '
+                    'directed edge list and original interactive graphs without starting a Shiny server.'),
 }
 
 
@@ -388,6 +403,14 @@ def _setting(key, rule, value):
         if number and 0 <= value <= 1:
             return str(value)
         raise StepError('invalid_request', f'{key} must be a number from 0 to 1.')
+    if rule == 'frequency':
+        if number and 0 <= value <= 1:
+            return format(value, '.15g')
+        raise StepError('invalid_request', f'{key} must be a number from 0 to 1.')
+    if rule == 'subnetworks':
+        if isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 100:
+            return str(value)
+        raise StepError('invalid_request', f'{key} must be a whole number from 1 to 100.')
     if rule == 'interval':   # IMPUTE2 chunk length in base pairs
         if isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 100_000_000:
             return str(value)
@@ -649,6 +672,17 @@ cp -- tmp/tmpg/geno_id res/resa/workspace-genotype-ids.txt &&
 cp -- tmp/tmpa/Geno.pca.evec res/resa/workspace-pca.evec &&
 cp -- tmp/tmpa/Geno.eval res/resa/workspace-pca.eval
 )'''
+    if name == 'visualize':
+        # cloud=T leaves the official exports intact and skips only the blocking Shiny app.
+        run = f'''(
+if ! grep -q SIGNET_STAGE6_EXPORTS_COMPLETED script/netvis/netshiny.R; then
+  {{ printf '%s\\n' 'Sys.setenv(freq=trimws(Sys.getenv("freq")))' &&
+     cat script/netvis/netshiny.R &&
+     printf '\\ncat("SIGNET_STAGE6_EXPORTS_COMPLETED\\\\n")\\n'; }} > script/netvis/netshiny.R.workspace-tmp &&
+  mv -- script/netvis/netshiny.R.workspace-tmp script/netvis/netshiny.R
+fi &&
+{run}
+)'''
     return f'''#!/bin/bash
 #SBATCH --job-name=signet-{name}-{run_id}
 #SBATCH --output={directory}/steps/{name}.out
@@ -829,6 +863,11 @@ def submit(run_id, name, inputs, resources=None, options=None):
         record['settings'] = {key: settings[key] for key in step.settings}
         if any('{' in path for path in step.required):
             record['required_outputs'] = [_resolve(path, settings) for path in step.required]
+        if name == 'visualize':
+            for number in range(1, int(settings['ntop']) + 1):
+                prefix = f'res/resv/signet_top{number}_freq{settings["freq"]}'
+                record['required_outputs'].extend((prefix + '.html', prefix + '_name.txt',
+                    f'res/resv/signet_circular_top{number}_freq{settings["freq"]}.pdf'))
         if previous:
             record['attempt'] = attempt
             # A refused submission has no job of its own; retain the last real ID across it.
@@ -922,6 +961,8 @@ def _status_script(record, step):
     orphans = (f'if [ -n "$j" ] && [ -z "$(squeue -h -j "$j" -o %T 2>/dev/null)" ]; then\n{_children_script(step)}fi\n'
                if step.children else '')
     queue_check = _queue_check(record) if record.get('cancel_requested_at') or step.children else ''
+    export_check = ('grep -Fxq SIGNET_STAGE6_EXPORTS_COMPLETED "$D/steps/visualize.out" 2>/dev/null '
+                    '&& say exports_completed yes\n') if name == 'visualize' else ''
     return _say() + f'''D={q(directory)}
 j={q(job) if job else '"$(head -n 1 "$D/steps/' + name + '.job" 2>/dev/null)"'}
 # No ID recorded (connection lost around sbatch): look for this step's own job name, ours only.
@@ -934,7 +975,7 @@ if [ -n "$j" ]; then
 fi
 [ -f "$D/steps/{name}.done" ] && say done "$(head -n 1 "$D/steps/{name}.done")"
 {outputs}cat "$D/steps/{name}.out" "$D/steps/{name}.err" 2>/dev/null | grep -E -m 20 {q(pattern)} | while IFS= read -r l; do say line "$l"; done
-{progress}{orphans}{queue_check}true
+{progress}{orphans}{queue_check}{export_check}true
 '''
 
 
@@ -997,6 +1038,8 @@ def status(run_id, name, refresh=False):
         _change(record, 'failed', finished_at=_now(), missing_outputs=missing, failure_hints=hints,
                 reason=f'Slurm ended the job with {slurm}.')
     elif slurm == 'COMPLETED' or 'done' in values:
+        if record['step'] == 'visualize' and values.get('exports_completed') != 'yes':
+            hints = [*hints, 'The official Stage 6 export completion marker is missing.']
         _finish(root, record, step, values.get('done', ''), missing, hints)
     elif not record.get('job_id'):
         # Empty lookups can mean scheduler failure or accounting delay, not an unsubmitted job.

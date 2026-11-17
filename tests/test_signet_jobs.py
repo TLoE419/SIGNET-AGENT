@@ -163,7 +163,7 @@ class StepsTest(unittest.TestCase):
         self.assertEqual(self.code_of(steps.submit, 'step_test', 'expression', self.inputs), 'conflict')
         st.configure_signet('gtex_run', cohort='GTEx')
         self.assertEqual(self.code_of(steps.submit, 'gtex_run', 'expression', self.inputs), 'invalid_request')
-        self.assertEqual(self.code_of(steps.submit, 'step_test', 'visualize', self.inputs), 'not_found')
+        self.assertEqual(self.code_of(steps.submit, 'step_test', 'unknown_step', self.inputs), 'not_found')
         self.assertEqual(self.code_of(steps.status, 'missing_run', 'expression'), 'not_found')
 
     # ---------- retrying a failed step in the same run ----------
@@ -1708,6 +1708,167 @@ class StepsTest(unittest.TestCase):
                 self.assertEqual(steps.status('step_test', 'network', refresh=True)['state'], waiting)
                 queue.write_text('#!/bin/bash\n' + FAKE_SLURM['squeue'] + '\n')
                 self.assertEqual(steps.status('step_test', 'network', refresh=True)['state'], final)
+
+    # ---------- visualization (signet -v) ----------
+
+    def visualize_ready(self):
+        """One workspace run with its first five stages and saved network matrices complete."""
+        from agent.runtime import workspace_genotype as workspace
+
+        self.network_ready()
+        inputs = {'genotype': self.genotype_inputs(), 'expression': self.inputs,
+                  'adjust': {'cli.file': str(self.hpc / 'ws/refdata/clinical.tsv')}, 'cis': {}, 'network': {}}
+        settings = {'genotype': {key: str(value) for key, value in workspace.DEFAULT_SETTINGS.items()},
+                    'expression': {'restrict.tcga': '1'}, 'adjust': {}, 'cis': {'alpha.cis': '0.05'},
+                    'network': {key: str(value) for key, value in self.NETWORK_SETTINGS.items()}}
+        snapshots = {'genotype': workspace.SNAPSHOT, 'expression': workspace.EXPRESSION_SNAPSHOT,
+                     'adjust': workspace.ADJUST_SNAPSHOT, 'cis': workspace.CIS_SNAPSHOT,
+                     'network': workspace.NETWORK_SNAPSHOT}
+        for name, filename in snapshots.items():
+            record = {'run_id': 'step_test', 'step': name, 'state': 'completed',
+                      'submitted_at': '2026-11-17T10:00:00-0800', 'remote_dir': str(self.remote_dir),
+                      'inputs': inputs[name], 'settings': settings[name], 'resources': steps.STEPS[name].resources,
+                      'options': {'npc': 3} if name == 'adjust' else {}, 'input_sources': {},
+                      'source_cis_alpha': '0.05'}
+            (self.root / 'steps' / f'{name}.json').write_text(json.dumps(record))
+            (self.root / filename).write_text(json.dumps({**record, 'dataset_id': workspace.DATASET_ID,
+                                                        'review_attempt': 1}))
+        files = {'signet_Afreq': '0,0.5\n1,0\n', 'signet_CoeffMat0': '0,0.2\n-0.4,0\n',
+                 'signet_net.genepos': 'GENE1 1 100 200\nMEGF6 1 300 400\n'}
+        for base in (self.root, self.remote_dir):
+            folder = base / 'work/res/resn'
+            folder.mkdir(parents=True, exist_ok=True)
+            for name, contents in files.items():
+                (folder / name).write_text(contents)
+        return {path: path.read_bytes() for path in [
+            *(self.root / filename for filename in snapshots.values()),
+            *(self.root / 'steps' / f'{name}.json' for name in snapshots),
+            *(self.remote_dir / 'work/res/resn' / name for name in files),
+        ]}
+
+    def finish_visualize(self, record, marker=True):
+        for relative in record['required_outputs']:
+            path = self.remote_dir / 'work' / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if '_edgelist_' in relative:
+                path.write_text('source_gene_symbol,target_gene_symbol,frequency,coefficient\n'
+                                'MEGF6,GENE1,0.5,0.2\nGENE1,MEGF6,1,-0.4\n')
+            elif relative.endswith('_name.txt'):
+                path.write_text('GENE1\nMEGF6\n')
+            elif relative.endswith('.html'):
+                path.write_text('<html>visNetwork</html>\n')
+            else:
+                path.write_text('Saved original graph artifact\n')
+        (self.remote_dir / 'steps/visualize.done').write_text('0 2026-11-17T16:00:00-08:00\n')
+        (self.remote_dir / 'steps/visualize.out').write_text('SIGNET_STAGE6_EXPORTS_COMPLETED\n' if marker else '')
+        self.slurm(squeue='', sacct='COMPLETED')
+
+    def test_workspace_visualize_reviews_draft_and_keeps_the_same_run(self):
+        from agent.app.chat_ui import ChatServer
+        from agent.runtime import workspace_genotype as workspace
+
+        preserved = self.visualize_ready()
+        config_before = (self.root / 'work/config.ini').read_bytes()
+        server = ChatServer(('127.0.0.1', 0), lambda: None)
+        self.addCleanup(server.server_close)
+        worker = threading.Thread(target=server.serve_forever, kwargs={'poll_interval': 0.01}, daemon=True)
+        worker.start()
+        self.addCleanup(worker.join, 3)
+        self.addCleanup(server.shutdown)
+
+        def request(method, path, body=None):
+            connection = http.client.HTTPConnection('127.0.0.1', server.server_port, timeout=5)
+            headers = {'X-Chat-Token': server.token, 'Origin': f'http://127.0.0.1:{server.server_port}',
+                       'Content-Type': 'application/json'}
+            try:
+                connection.request(method, path, None if body is None else json.dumps(body), headers)
+                response = connection.getresponse()
+                return response.status, json.loads(response.read())
+            finally:
+                connection.close()
+
+        route = '/signet/runs/step_test/visualize/example'
+        review = request('GET', route)[1]
+        self.assertEqual(review['settings'], {'freq': 1, 'ntop': 3})
+        self.assertFalse(review['ready'])
+        self.assertIn('Only 1 connected subnetworks', review['reason'])
+        status, review = request('GET', route + '?freq=0.45&ntop=1')
+        self.assertEqual(status, 200)
+        self.assertTrue(review['ready'], review['reason'])
+        self.assertEqual(review['validation']['edges_at_threshold'], 2)
+        self.assertEqual(review['validation']['connected_subnetworks'], 1)
+        self.assertEqual(review['input_sources']['Afreq'], str(self.remote_dir / 'work/res/resn/signet_Afreq'))
+        self.assertEqual((self.root / 'work/config.ini').read_bytes(), config_before)
+        self.assertFalse((self.root / workspace.VISUALIZE_SNAPSHOT).exists())
+        self.assertFalse((self.fake / 'sbatch_args').exists())
+        for suffix in ('?freq=nan&ntop=1', '?freq=0.45&ntop=1.5', '?freq=0.45&ntop=0'):
+            self.assertEqual(request('GET', route + suffix)[0], 400)
+        self.assertFalse(request('GET', route + '?freq=0.45&ntop=2')[1]['ready'])
+        body = {key: review[key] for key in ('inputs', 'settings', 'resources')}
+        network = self.root / 'steps/network.json'
+        network.write_text(json.dumps({**json.loads(network.read_text()), 'state': 'running'}))
+        self.assertFalse(request('GET', route + '?freq=0.45&ntop=1')[1]['ready'])
+        self.assertEqual(request('POST', route, body)[0], 409)
+        network.write_bytes(preserved[network])
+        for bad in ({'freq': '0.45'}, {'freq': True}, {'freq': 1.1}, {'ntop': 1.5}, {'ntop': 101}):
+            self.assertEqual(request('POST', route, {**body, 'settings': {**body['settings'], **bad}})[0], 400)
+        self.assertEqual(request('POST', route, {**body, 'inputs': {'Afreq': review['input_sources']['Afreq']}})[0], 400)
+        status, record = request('POST', route, body)
+        self.assertEqual((status, record['state'], record['run_id']), (202, 'submitted', 'step_test'))
+        self.assertEqual(record['settings'], {'freq': '0.45', 'ntop': '1'})
+        self.assertEqual(record['remote_dir'], str(self.remote_dir))
+        self.assertEqual(len(record['required_outputs']), 6)
+        job = self.remote_dir / 'steps/visualize.sbatch'
+        self.assertEqual(subprocess.run(['bash', '-n', str(job)]).returncode, 0)
+        self.assertIn('--env cloud=T,', job.read_text())
+        self.assertIn('bash ./signet -v < /dev/null', job.read_text())
+        self.assertIn('Sys.setenv(freq=trimws(Sys.getenv("freq")))', job.read_text())
+        # A stand-in container exercises the per-run R patch, without executing SIGNET.
+        executor = self.fake / 'bin/apptainer'
+        executor.write_text('#!/bin/bash\ntrue\n')
+        executor.chmod(0o700)
+        self.assertEqual(self.remote('bash ' + str(job)).returncode, 0)
+        patched = (self.remote_dir / 'work/script/netvis/netshiny.R').read_text()
+        self.assertTrue(patched.startswith('Sys.setenv(freq=trimws(Sys.getenv("freq")))\n'))
+        self.assertTrue(patched.endswith('cat("SIGNET_STAGE6_EXPORTS_COMPLETED\\n")\n'))
+        (self.remote_dir / 'steps/visualize.done').unlink()
+        snapshot = (self.root / workspace.VISUALIZE_SNAPSHOT).read_bytes()
+        calls = len(self.calls)
+        self.assertEqual(request('POST', route, body)[0], 409)
+        self.assertEqual(len(self.calls), calls)
+        self.assertEqual((self.root / workspace.VISUALIZE_SNAPSHOT).read_bytes(), snapshot)
+        step_route = '/signet/runs/step_test/steps/visualize?refresh=1'
+        self.slurm(squeue='PENDING')
+        self.assertEqual(request('GET', step_route)[1]['state'], 'pending')
+        self.slurm(squeue='RUNNING')
+        self.assertEqual(request('GET', step_route)[1]['state'], 'running')
+        self.finish_visualize(record)
+        self.assertEqual(request('GET', step_route)[1]['state'], 'completed')
+        steps.update_settings('step_test', {'freq': 0.9, 'ntop': 3})
+        history = request('GET', '/stage6/history')[1]['runs'][0]
+        self.assertEqual(history['jobs']['visualize']['settings'], {'freq': '0.45', 'ntop': '1'})
+        self.assertEqual(history['graph'], {'genes': 2, 'connections': 2, 'subnetworks': 1, 'displayed': 1})
+        self.assertEqual((self.root / workspace.VISUALIZE_SNAPSHOT).read_bytes(), snapshot)
+        for path, contents in preserved.items():
+            self.assertEqual(path.read_bytes(), contents, path)
+
+    def test_visualize_requires_original_completion_marker_and_keeps_failed_review_on_retry(self):
+        from agent.runtime import workspace_genotype as workspace
+
+        self.visualize_ready()
+        settings = {'freq': 0.45, 'ntop': 1}
+        resources = steps.STEPS['visualize'].resources
+        first = workspace.submit_visualize('step_test', {}, settings, resources)
+        self.finish_visualize(first, marker=False)
+        failed = steps.status('step_test', 'visualize', refresh=True)
+        self.assertEqual(failed['state'], 'failed')
+        self.assertIn('completion marker is missing', failed['failure_hints'][0])
+        prior = (self.root / workspace.VISUALIZE_SNAPSHOT).read_bytes()
+        self.slurm(sbatch_reply='222')
+        retried = workspace.submit_visualize('step_test', {}, settings, resources)
+        self.assertEqual((retried['attempt'], retried['job_id']), (2, '222'))
+        self.assertEqual((self.root / 'workspace-visualize.review1.json').read_bytes(), prior)
+        self.assertTrue((self.root / 'steps/visualize.attempt1.json').is_file())
 
     def test_read_log_returns_last_lines_with_limits(self):
         steps.submit('step_test', 'expression', self.inputs)

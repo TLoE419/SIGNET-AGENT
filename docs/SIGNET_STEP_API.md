@@ -11,6 +11,7 @@ Steps available now (TCGA cohort only):
 | `adjust` | `signet -a` | Match expression and genotype samples, filter rare SNPs, compute genotype PCs, regress out race, gender and PCs |
 | `cis` | `signet -c` | cis-eQTL mapping: each gene's significant nearby SNPs (common, low-frequency, rare), used later as instrumental variables |
 | `network` | `signet -n` | Gene regulatory network by two-stage penalized least squares on bootstrap data; SIGNET submits its own Slurm jobs (section 6.4) |
+| `visualize` | `signet -v` | Export the completed network's directed edges, selected subnetworks and original interactive graphs (section 6.5) |
 
 The chat tool `cis_eqtl` still runs `signet -c` through the older `remote.execute_cis()` path on the login node; the `cis` step here is the Slurm replacement.
 
@@ -71,6 +72,10 @@ Workflow panel / AI tool
 1. the job's exit marker (`steps/<step>.done`) is complete and says exit code 0,
 2. every required output exists and is non-empty,
 3. the job's stdout and stderr contain no known failure line (`Execution halted`, `Error in `, `cannot open`, `No such file or directory`, `command not found`, plus step-specific lines).
+
+Stage 6 also requires the exact `SIGNET_STAGE6_EXPORTS_COMPLETED` line from the
+end of the official export script. An early exit cannot pass solely because
+some output files exist.
 
 `completed` is not scientific validation. It means the outputs exist and the logs are clean.
 
@@ -218,6 +223,33 @@ links, while Stage 4's record and outputs remain intact. Poll
 `GET /signet/runs/{run_id}/steps/network` for queue, execution and child-stage
 progress. The completed candidate edges and bootstrap frequencies are available
 from `GET /stage/results?run={run_id}&stage=5&source=live`.
+
+`GET /signet/runs/{run_id}/visualize/example` reviews Stage 6 in the same
+workspace run. It returns numeric `settings` (`freq`, `ntop`), `resources`,
+`limits`, the three linked network `input_sources`, `validation`, and
+`ready/issues/reason`. Initial fields retain the current configuration; they
+are not silently replaced by archive examples. Optional single-valued
+`?freq=0.45&ntop=1` checks an edited draft without saving it or submitting work.
+The form remains available while Stage 5 runs. Once its saved matrices are
+complete, the checker validates dimensions, frequencies, passing edges and
+connected subnetworks locally, then verifies the same remote inputs. A
+threshold with no edges or a subnetwork count larger than the available
+components returns `ready: false` with an explanation.
+
+`POST /signet/runs/{run_id}/visualize/example` accepts `inputs: {}`, both
+reviewed `settings` and `resources`, checks them again, saves
+`workspace-visualize.json`, and submits only `visualize` in the original
+remote run. Poll `GET /signet/runs/{run_id}/steps/visualize` for queue,
+execution and validated completion. Earlier stages are not rerun. Failed
+attempt reviews are preserved as `workspace-visualize.review<N>.json`.
+An active or completed Stage 6 rejects duplicate submission before settings
+or the review change.
+
+The history entry contains `jobs.visualize`, its submitted settings and source
+paths, and graph counts from the saved exports. The full completed result is
+`GET /stage6/results?run={run_id}&source=live`. It reads that run's saved
+frequency and actual selected-subnetwork name exports, so later configuration
+edits cannot change the historical graph or connection table.
 
 ### 5.1 `GET /signet/catalog`
 
@@ -434,6 +466,8 @@ Before a step is submitted, the run's **current** values of that step's settings
 | `ncores` | network | a whole number 1–64: CPUs of **each of SIGNET's own jobs** | `16` |
 | `memory` | network | a whole number of GB 1–128: memory of each of SIGNET's own jobs | `32` |
 | `walltime` | network | `H:MM:SS` from `0:05:00` to `48:00:00`: wall time of each of SIGNET's own jobs | `4:00:00` |
+| `freq` | visualize | number from 0 to 1; frequency threshold, canonicalized to 15 significant digits for output names | current configuration |
+| `ntop` | visualize | whole number from 1 to 100; workspace review also requires no more than the passing connected subnetworks | current configuration |
 | `upstream`, `downstream` | cis | a whole number of base pairs 0–10,000,000 around each gene | `1000` |
 | `npc` (option) | adjust | a whole number 0–10: genotype PCs used as covariates (0 = none) | `3` |
 
@@ -469,6 +503,36 @@ Following and stopping it:
 Required outputs: `res/resn/signet_Afreq` (edge frequencies over the bootstraps), `signet_CoeffMat0` (coefficients on the original data) and `signet_net.genepos`; `work/res/resn` is downloaded.
 
 Measured on HPC3 (chromosome-1 example: 2,090 genes, 85 with cis-eQTL, `nboots` 10, `ncores` 4): stage 1 had 11 commands and stage 2 had 165; the whole step took 19 minutes, mostly waiting in the queue. `signet_Afreq` is comma-separated, 2,090 rows × 85 columns (one column per gene with cis-eQTL), with values in steps of 1/`nboots`.
+
+### 6.5 The `visualize` step (`signet -v`)
+
+Requires `network` completed in the same run, with its nonempty
+`res/resn/signet_Afreq`, `signet_CoeffMat0` and `signet_net.genepos`. The
+workspace review additionally checks the recorded first five stages belong to
+the current remote run. There are no external Stage 6 input files to select.
+
+Defaults are 2 CPUs, 16 GB and one hour; supported ranges are 1–8 CPUs,
+1–64 GB and 0.25–12 hours. The Slurm job runs the existing container with
+`cloud=T` and one BLAS/OpenMP thread. This preserves the original exports
+while skipping its blocking Shiny server. Only the run's copied
+`script/netvis/netshiny.R` receives a whitespace normalization for the upstream
+frequency environment variable and the final export marker. The pinned
+source, other runs and preceding results are unchanged.
+
+Required output paths are frozen in the submitted record:
+
+- `res/resv/signet_edgelist_<freq>.txt`
+- `res/resv/signet_count_vs_freq.pdf` and `.eps`
+- For every selected `i` from 1 to `ntop`:
+  `res/resv/signet_top<i>_freq<freq>.html`,
+  `res/resv/signet_top<i>_freq<freq>_name.txt` and
+  `res/resv/signet_circular_top<i>_freq<freq>.pdf`.
+
+The whole `work/res/resv` folder is downloaded, including interactive graph
+assets and optional original enrichment exports. The live graph reader checks
+the saved directed edges and the official selected-component name files;
+the UI's network and connection table use these exports together. This path
+uses the existing HPC3 run, without creating another VM or analysis.
 
 ## 7. Step states
 
@@ -586,4 +650,5 @@ If `adjust` fails (for example because of the clinical file), fix the cause and 
 - **No job confirmed.** A step that ends `unknown` without a job ID has no way out yet other than inspecting the HPC3 folder: it cannot be retried, and it blocks the run's other steps and settings.
 - **One run per analysis.** Results are never taken from another run. Copying `-t` or `-g` results between runs would also need `-g`'s `tmp/tmpg/impute/` and a check that both runs used the same samples.
 - **`network` holds a control job for hours.** It needs 1–2 CPUs while SIGNET's jobs run; a control job that hits its wall time stops SIGNET, and its remaining jobs are cancelled by the next status call.
-- **Not yet steps:** `-v` (visualization) and all GTEx steps. The chat tool `cis_eqtl` still uses the older login-node path.
+- **Stage 6 online dependencies.** The original visualization reads online enrichment/annotation services. A network or service failure is reported as a failed export, with its logs retained; the app does not substitute a generated graph.
+- **Not yet steps:** all GTEx steps. The chat tool `cis_eqtl` still uses the older login-node path.

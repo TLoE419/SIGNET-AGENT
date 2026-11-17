@@ -347,11 +347,12 @@ class ChatHandler(BaseHTTPRequestHandler):
         if not query:
             return self.json_response({'runs': self.server.stage6.completed_runs()})
         if (set(query) - {'run', 'source'} or len(query.get('run', [])) != 1
-                or ('source' in query and query['source'] != ['archive'])):
-            return self._error(400, 'Provide a single run ID and, optionally, the archived source.')
+                or ('source' in query and query['source'] not in (['archive'], ['live']))):
+            return self._error(400, 'Provide a single run ID and, optionally, the archive or live source.')
         try:
             return self.json_response(self.server.stage6.completed_result(
-                query['run'][0], archive_only='source' in query))
+                query['run'][0], archive_only=query.get('source') == ['archive'],
+                live_only=query.get('source') == ['live']))
         except (OSError, ValueError, KeyError, TypeError, csv.Error):
             return self._error(400, 'No readable completed Stage 6 result for this run.')
 

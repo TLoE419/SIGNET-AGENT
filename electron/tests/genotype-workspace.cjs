@@ -27,7 +27,7 @@ const deadline = setTimeout(async () => {
   await running?.backend.forceStop();
   rmSync(temp, {recursive: true, force: true});
   app.exit(1);
-}, 240000);
+}, 300000);
 app.on('will-quit', () => {
   clearTimeout(deadline);
   rmSync(temp, {recursive: true, force: true});
@@ -50,7 +50,12 @@ async function verify() {
   const fixture = JSON.parse(readFileSync(metadataPath, 'utf8'));
   const sbatchCalls = path.join(fixture.slurm, 'sbatch_calls');
   const js = source => window.webContents.executeJavaScript(source);
-  const click = selector => js(`document.querySelector(${JSON.stringify(selector)}).click(); true`);
+  const click = selector => js(`(() => {
+    const target = document.querySelector(${JSON.stringify(selector)});
+    if (!target) throw Error('The requested control is missing');
+    if (target instanceof HTMLElement) target.click();
+    else target.dispatchEvent(new MouseEvent('click', {bubbles:true}));
+  })(); true`);
   const review = '#lens-stage1 [data-genotype-review]';
   const submit = '#lens-stage1 [data-genotype-submit]';
   const state = () => js(`document.querySelector('#lens-stage1')?.dataset.genotypeState`);
@@ -244,11 +249,11 @@ async function verify() {
 
   const expressionResultPath = path.join(remoteRun, 'work/res/rest');
   mkdirSync(expressionResultPath, {recursive: true});
-  const expressionMatrix = '1 2\n3 4\n5 6\n7 8\n';
+  const expressionMatrix = '1 2 2\n3 4 4\n5 6 6\n7 8 8\n';
   writeFileSync(path.join(expressionResultPath, 'signet_gexp'), expressionMatrix);
   writeFileSync(path.join(expressionResultPath, 'signet_gexpID'), sampleIds.join('\n') + '\n');
-  writeFileSync(path.join(expressionResultPath, 'signet_gene_name'), 'GENE1\nMEGF6\n');
-  writeFileSync(path.join(expressionResultPath, 'signet_gene_pos'), '1 100 200\n1 300 400\n');
+  writeFileSync(path.join(expressionResultPath, 'signet_gene_name'), 'GENE1\nMEGF6\nOTHER\n');
+  writeFileSync(path.join(expressionResultPath, 'signet_gene_pos'), 'GENE1 chr1 100 200\nMEGF6 chr1 300 400\nOTHER chr1 500 600\n');
   writeFileSync(path.join(remoteRun, 'steps/expression.done'), '0 2026-11-17T10:00:00\n');
   writeFileSync(path.join(fixture.slurm, 'sacct'), 'COMPLETED\n');
   writeFileSync(path.join(fixture.slurm, 'squeue'), '');
@@ -335,8 +340,8 @@ async function verify() {
     'signet_new.Geno': genotypeResult,
     'signet_new.Geno.map': '1 SNP1 0 100 A G\n1 SNP2 0 200 A G\n1 SNP3 0 300 A G\n',
     'signet_new.Geno.maf': '0.1\n0.2\n0.3\n',
-    'signet_gexp.data': '-1 -2\n0 0\n1 2\n',
-    'signet_gexp_rmpc.data': '-0.5 -1\n0 0\n0.5 1\n',
+    'signet_gexp.data': '-1 -2 -2\n0 0 0\n1 2 2\n',
+    'signet_gexp_rmpc.data': '-0.5 -1 -0.75\n0 0 0\n0.5 1 0.75\n',
     'signet_geno.data': '0 1 2\n2 1 0\n1 0 1\n',
     'workspace-clinical.tsv': readFileSync(fixture.adjust_inputs['cli.file'], 'utf8'),
     'workspace-genotype-ids.txt': sampleIds.join('\n') + '\n',
@@ -352,7 +357,7 @@ async function verify() {
   await until(() => js(`document.querySelector('#lens-history-stage3')?.dataset.runState === 'ready'`),
     'Completed Stage 3 did not show its actual saved results');
   assert.equal(await js(`document.querySelector('#lens-history-stage3 [data-s3-components]').textContent`), '2');
-  for (const [key, expected] of Object.entries({genotype:4, expression:4, matched:4, retained:3, excluded:1, variants:3, genes:2})) {
+  for (const [key, expected] of Object.entries({genotype:4, expression:4, matched:4, retained:3, excluded:1, variants:3, genes:3})) {
     assert.equal(Number(await js(`document.querySelector('#lens-history-stage3 [data-s3-count="${key}"]').textContent`)), expected);
   }
   assert.equal(await js(`document.querySelectorAll('#lens-history-stage3 .s3-points circle').length`), 3);
@@ -424,8 +429,8 @@ async function verify() {
     'signet_rare.eQTL.data': '1\n0\n0\n',
     'signet_all.eQTL.data': '0 1 0 1\n1 0 1 0\n2 1 0 0\n',
     'signet_net.gexp.data': files['signet_gexp.data'],
-    'signet_net.genepos': 'GENE1 chr1 100 200\nMEGF6 chr1 300 400\n',
-    'signet_net.genename': 'GENE1\nMEGF6\n',
+    'signet_net.genepos': 'GENE1 chr1 100 200\nMEGF6 chr1 300 400\nOTHER chr1 500 600\n',
+    'signet_net.genename': 'GENE1\nMEGF6\nOTHER\n',
   };
   for (const [name, content] of Object.entries(cisFiles)) writeFileSync(path.join(cisOutput, name), content);
   writeFileSync(path.join(remoteRun, 'steps/cis.done'), '0 2026-11-17T14:00:00\n');
@@ -510,8 +515,8 @@ async function verify() {
   await until(async () => await networkState() === 'running', 'Stage 5 did not resume after reload');
   const networkOutput = path.join(remoteRun, 'work/res/resn');
   mkdirSync(networkOutput, {recursive:true});
-  writeFileSync(path.join(networkOutput, 'signet_Afreq'), '0,0.5\n1,0\n');
-  writeFileSync(path.join(networkOutput, 'signet_CoeffMat0'), '0,0.2\n-0.4,0\n');
+  writeFileSync(path.join(networkOutput, 'signet_Afreq'), '0,0.5\n1,0\n0.5,0\n');
+  writeFileSync(path.join(networkOutput, 'signet_CoeffMat0'), '0,0.2\n-0.4,0\n0.1,0\n');
   writeFileSync(path.join(networkOutput, 'signet_net.genepos'), cisFiles['signet_net.genepos']);
   writeFileSync(path.join(remoteRun, 'steps/network.done'), '0 2026-11-17T15:00:00\n');
   writeFileSync(path.join(fixture.slurm, 'sacct'), 'COMPLETED\n');
@@ -523,8 +528,8 @@ async function verify() {
   })()`), 'Stage 5 did not display candidate edges from its saved matrices');
   const candidates = await js(`[...document.querySelectorAll('#lens-history-stage [data-stage-table] tbody tr')]
     .map(row => [...row.cells].map(cell => cell.textContent))`);
-  assert.deepEqual(candidates, [['MEGF6','GENE1','50%'], ['GENE1','MEGF6','100%']]);
-  assert.deepEqual(await js(`[...document.querySelectorAll('#lens-history-stage .ml-count-label')].map(n => Number(n.textContent))`), [1,1]);
+  assert.deepEqual(candidates, [['MEGF6','GENE1','50%'], ['GENE1','MEGF6','100%'], ['GENE1','OTHER','50%']]);
+  assert.deepEqual(await js(`[...document.querySelectorAll('#lens-history-stage .ml-count-label')].map(n => Number(n.textContent))`), [2,1]);
   assert.equal(await js(`document.querySelector('#lens-history-stage [data-stage-setting="nboots"]').textContent`), '2');
   assert.equal(await js(`document.querySelector('#lens-history-stage [data-stage-setting="walltime"]').textContent`), '1:30:00');
   const networkFinishedReload = once(window.webContents, 'did-finish-load');
@@ -540,7 +545,106 @@ async function verify() {
   assert.equal(readFileSync(path.join(localRun, 'work/res/resa/signet_gexp_rmpc.data'), 'utf8'), originalAdjustedExpression);
   assert.deepEqual(readFileSync(sbatchCalls, 'utf8').trim().split('\n'), Array(5).fill('submitted'));
   assert.deepEqual(readdirSync(path.join(fixture.project, 'runs')).sort(), ['step_test',runId].sort());
-  console.log('PASS: manual same-run Stages 1–5, child progress, active/completed reload, preserved prior stages and directed candidate frequencies');
+  const originalNetworkRecord = readFileSync(networkJson, 'utf8');
+  const visualizationPanel = '#lens-stage6-run';
+  const visualizationStage = `[data-run-stage="6"][data-run-id="${runId}"]`;
+  const visualizationState = () => js(`document.querySelector('${visualizationPanel}')?.dataset.visualizeState`);
+  async function openVisualization() {
+    await click(history);
+    await until(() => js(`Boolean(document.querySelector(${JSON.stringify(row)})?.getClientRects().length)`),
+      'The original run was missing while opening Stage 6');
+    await click(row);
+    await click(visualizationStage);
+  }
+  await openVisualization();
+  await until(() => js(`!!document.querySelector('${visualizationPanel} [data-visualize-review]:not(:disabled)')`),
+    'Stage 6 review did not settle');
+  assert.ok(await js(`document.querySelector('${visualizationPanel} [data-visualize-form]')?.getClientRects().length > 0`));
+  await setReviewValue('[data-visualize-setting="freq"]', '0.45');
+  await setReviewValue('[data-visualize-setting="ntop"]', '1');
+  await click(`${visualizationPanel} [data-visualize-review]`);
+  await until(() => js(`document.querySelector('${visualizationPanel} [data-visualize-submit]')?.disabled === false`),
+    'Stage 6 did not validate the requested frequency and subnetwork count');
+  assert.deepEqual(readFileSync(sbatchCalls, 'utf8').trim().split('\n'), Array(5).fill('submitted'));
+  writeFileSync(path.join(fixture.slurm, 'sbatch_reply'), '666\n');
+  writeFileSync(path.join(fixture.slurm, 'sacct'), '');
+  writeFileSync(path.join(fixture.slurm, 'squeue'), 'PENDING\n');
+  await js(`(() => {
+    const button = document.querySelector('${visualizationPanel} [data-visualize-submit]');
+    button.click(); button.click();
+  })()`);
+  await until(async () => await visualizationState() === 'pending', 'Stage 6 did not show its queued state');
+  const visualizationJson = path.join(localRun, 'steps/visualize.json');
+  const readVisualization = () => JSON.parse(readFileSync(visualizationJson, 'utf8'));
+  assert.equal(readVisualization().run_id, runId);
+  assert.equal(readVisualization().job_id, '666');
+  assert.deepEqual(readVisualization().settings, {freq:'0.45', ntop:'1'});
+  assert.deepEqual(readFileSync(sbatchCalls, 'utf8').trim().split('\n'), Array(6).fill('submitted'));
+  const visualizationScript = readFileSync(path.join(remoteRun, 'steps/visualize.sbatch'), 'utf8');
+  assert.match(visualizationScript, /bash \.\/signet -v/);
+  assert.match(visualizationScript, /cloud=T/);
+  writeFileSync(path.join(fixture.slurm, 'squeue'), 'RUNNING\n');
+  await until(async () => await visualizationState() === 'running', 'Stage 6 did not report automatic execution');
+  const visualizationReload = once(window.webContents, 'did-finish-load');
+  window.webContents.reload();
+  await visualizationReload;
+  await openVisualization();
+  await until(async () => await visualizationState() === 'running', 'Stage 6 did not resume after reload');
+
+  const edgeCsv = 'source_gene_symbol,target_gene_symbol,frequency,coefficient\n'
+    + 'MEGF6,GENE1,0.5,0.2\nGENE1,MEGF6,1,-0.4\nGENE1,OTHER,0.5,0.1\n';
+  for (const relative of readVisualization().required_outputs) {
+    const target = path.join(remoteRun, 'work', relative);
+    mkdirSync(path.dirname(target), {recursive:true});
+    const content = relative.includes('_edgelist_') ? edgeCsv
+      : relative.endsWith('_name.txt') ? 'GENE1\nMEGF6\nOTHER\n'
+      : relative.endsWith('.pdf') ? '%PDF-1.4\nlocal scientific export fixture\n'
+      : relative.endsWith('.eps') ? '%!PS-Adobe-3.0 EPSF-3.0\nlocal scientific export fixture\n'
+      : relative.endsWith('.html') ? '<html><body>visNetwork fixture</body></html>\n' : 'saved export\n';
+    writeFileSync(target, content);
+  }
+  writeFileSync(path.join(remoteRun, 'steps/visualize.out'), 'SIGNET_STAGE6_EXPORTS_COMPLETED\n');
+  writeFileSync(path.join(remoteRun, 'steps/visualize.done'), '0 2026-11-17T16:00:00\n');
+  writeFileSync(path.join(fixture.slurm, 'sacct'), 'COMPLETED\n');
+  writeFileSync(path.join(fixture.slurm, 'squeue'), '');
+  await until(async () => await visualizationState() === 'completed', 'Stage 6 did not verify and collect its exports');
+  await openVisualization();
+  const graphReady = () => js(`(() => {
+    const panel = document.querySelector('#lens-stage6');
+    return panel.dataset.runState === 'ready' && panel.dataset.runId === ${JSON.stringify(runId)} && panel.getClientRects().length > 0;
+  })()`);
+  await until(graphReady, 'The completed Stage 6 graph did not open from the same run history');
+  assert.equal(await js(`document.querySelectorAll('#lens-stage6 [data-gene]').length`), 3);
+  assert.equal(await js(`document.querySelectorAll('#lens-stage6 tbody tr').length`), 3);
+  await click('#lens-stage6 [data-gene="MEGF6"]');
+  assert.equal(await js(`document.querySelectorAll('#lens-stage6 tbody tr').length`), 2);
+  const megf6Rows = await js(`[...document.querySelectorAll('#lens-stage6 tbody tr')].map(row => [...row.cells].slice(0,2).map(cell => cell.textContent))`);
+  assert.ok(megf6Rows.every(cells => cells.includes('MEGF6')));
+
+  await click('#ml-stage6-back');
+  await click(adjustmentStage);
+  await until(() => js(`document.querySelector('#lens-history-stage3')?.dataset.runState === 'ready'`),
+    'Earlier Stage 3 did not reopen after viewing the live Stage 6 graph');
+  await click('#ml-stage3-back');
+  await click(visualizationStage);
+  await until(graphReady, 'Stage 6 graph did not reopen after an earlier stage');
+  assert.equal(await js(`document.querySelector('#lens-stage6').dataset.selectedGene`), 'MEGF6');
+  assert.equal(await js(`document.querySelectorAll('#lens-stage6 tbody tr').length`), 2);
+  const visualizationFinishedReload = once(window.webContents, 'did-finish-load');
+  window.webContents.reload();
+  await visualizationFinishedReload;
+  await openVisualization();
+  await until(graphReady, 'Saved Stage 6 graph did not reopen after reload');
+  await click('#lens-stage6 [data-gene="MEGF6"]');
+  assert.equal(await js(`document.querySelectorAll('#lens-stage6 tbody tr').length`), 2);
+  assert.equal(readFileSync(stepJson, 'utf8'), genotypeRecord);
+  assert.equal(readFileSync(expressionJson, 'utf8'), originalExpressionRecord);
+  assert.equal(readFileSync(adjustmentJson, 'utf8'), originalAdjustmentRecord);
+  assert.equal(readFileSync(cisJson, 'utf8'), originalCisRecord);
+  assert.equal(readFileSync(networkJson, 'utf8'), originalNetworkRecord);
+  assert.deepEqual(readFileSync(sbatchCalls, 'utf8').trim().split('\n'), Array(6).fill('submitted'));
+  assert.deepEqual(readdirSync(path.join(fixture.project, 'runs')).sort(), ['step_test',runId].sort());
+  console.log('PASS: manual same-run Stages 1–6, progress/reload, preserved prior stages, actual export graph, and MEGF6-only linked table');
   await running.quit();
 }
 

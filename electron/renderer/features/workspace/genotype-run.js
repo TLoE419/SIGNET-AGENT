@@ -462,18 +462,40 @@
     phase2: ["第二批模型工作", "Second batch of model work items"],
   };
 
-  function mountContinuationRun({panel, token, onHistoryChanged, onOpenHistory, onBack}, step = "expression") {
+  const visualizationCopy = {
+    title: ["網路圖與連線匯出", "Network visualization and export"],
+    stage: ["第 6 階段", "Stage 6"],
+    run: expressionCopy.run,
+    empty: ["先選擇前 5 階段已完成的執行。", "Choose a run with completed Stages 1–5."],
+    prerequisite: ["這筆執行的前 5 階段完成後，即可送出第 6 階段。", "Submit Stage 6 after Stages 1–5 complete in this run."],
+    readyPrompt: ["核對出現頻率門檻與子網路數後，按「送出第 6 階段」。", "Review the frequency threshold and subnetwork count, then select Submit Stage 6."],
+    submit: ["送出第 6 階段", "Submit Stage 6"],
+    review: ["檢查網路與門檻", "Check network and thresholds"],
+    checking: ["正在核對網路與門檻…", "Checking network and thresholds…"],
+    inputs: cisCopy.inputs,
+    retry: expressionCopy.retry,
+    back: expressionCopy.back,
+    freq: ["連線出現頻率門檻", "Edge frequency threshold"],
+    ntop: ["顯示的子網路數", "Subnetworks to display"],
+    savedResults: ["已儲存網路圖", "Saved networks"],
+  };
+
+  function mountContinuationRun({panel, token, onHistoryChanged, onOpenHistory, onBack, onShowResults}, step = "expression") {
     const adjustment = step === "adjust";
     const cis = step === "cis";
     const network = step === "network";
-    const linkedInputs = cis || network;
+    const visualization = step === "visualize";
+    const linkedInputs = cis || network || visualization;
     const alwaysVisible = adjustment || linkedInputs;
     const prefix = step;
-    const stage = network ? 5 : cis ? 4 : adjustment ? 3 : 2;
-    const copy = network ? networkCopy : cis ? cisCopy : adjustment ? adjustmentCopy : expressionCopy;
+    const stage = visualization ? 6 : network ? 5 : cis ? 4 : adjustment ? 3 : 2;
+    const copy = visualization ? visualizationCopy : network ? networkCopy : cis ? cisCopy : adjustment ? adjustmentCopy : expressionCopy;
     const parameterGroup = adjustment ? "options" : "settings";
     const parameterAttribute = adjustment ? "option" : "setting";
-    const parameterDefinitions = network ? [
+    const parameterDefinitions = visualization ? [
+      {key: "freq", label: "freq", min: 0, max: 1, value: 0.45, step: "any"},
+      {key: "ntop", label: "ntop", min: 1, max: 100, value: 1, step: 1},
+    ] : network ? [
       {key: "nboots", label: "nboots", min: 1, max: 1000, value: 100, step: 1},
       {key: "cor", label: "cor", min: 0, max: 1, value: 0.3, step: "any"},
       {key: "ncis", label: "ncis", min: 1, max: 10, value: 3, step: 1},
@@ -487,7 +509,8 @@
       {key: "nperms", label: "nperms", min: 1, max: 100_000, value: 100, step: 1},
     ] : [{key: adjustment ? "npc" : "restrict.tcga", label: adjustment ? "npc" : "chromosome",
       min: adjustment ? 0 : 1, max: adjustment ? 10 : 1, value: adjustment ? 3 : 1, step: 1}];
-    const initialResources = network ? {cpus: 2, mem_gb: 16, hours: 24}
+    const initialResources = visualization ? {cpus: 2, mem_gb: 16, hours: 1}
+      : network ? {cpus: 2, mem_gb: 16, hours: 24}
       : cis ? {cpus: 8, mem_gb: 32, hours: 4} : {cpus: 4, mem_gb: 16, hours: 2};
     const fileKeys = linkedInputs ? [] : adjustment ? ["cli.file"] : ["gexp.file", "pmap.file"];
     const parameterMarkup = definitions => definitions.map(({key, label, min, max, value, step: increment, type = "number"}) => `<label>
@@ -499,7 +522,7 @@
     panel.innerHTML = `
       <div class="ml-result-main ml-genotype-main" data-live-language>
         <header><p class="ml-genotype-eyebrow" data-${prefix}-copy="stage"></p>
-          <h2 id="lens-stage${stage}-title" data-${prefix}-copy="title"></h2></header>
+          <h2 id="${visualization ? 'lens-stage6-run-title' : `lens-stage${stage}-title`}" data-${prefix}-copy="title"></h2></header>
         <label class="ml-expression-run-label"><span data-${prefix}-copy="run"></span>
           <select data-${prefix}-run></select>
         </label>
@@ -544,6 +567,7 @@
           <button type="button" class="ml-nav-action" data-${prefix}-refresh data-${prefix}-copy="refresh" hidden></button>
           <button type="button" class="ml-nav-action" data-${prefix}-history data-${prefix}-copy="history" hidden></button>
           <button type="button" class="ml-nav-action" data-${prefix}-retry data-${prefix}-copy="retry" hidden></button>
+          ${visualization ? '<button type="button" class="ml-nav-action" data-visualize-results data-visualize-copy="savedResults"></button>' : ''}
           <button type="button" class="ml-nav-action" data-${prefix}-back data-${prefix}-copy="back" hidden></button>
         </div>
       </aside>`;
@@ -613,7 +637,8 @@
       const allowed = source()?.jobs.genotype?.state === "completed" &&
         (step === "expression" || source()?.jobs.expression?.state === "completed") &&
         (!linkedInputs || source()?.jobs.adjust?.state === "completed") &&
-        (!network || source()?.jobs.cis?.state === "completed");
+        (!(network || visualization) || source()?.jobs.cis?.state === "completed") &&
+        (!visualization || source()?.jobs.network?.state === "completed");
       const terminal = terminalStates.has(state);
       panel.dataset[`${prefix}State`] = state;
       panel.dataset[`${prefix}RunId`] = selectedRun;
@@ -632,7 +657,7 @@
       part("review").hidden = !(alwaysVisible ? selectedRun : allowed) || hasAttempt;
       part("review").disabled = Boolean(item?.checking);
       form.hidden = !alwaysVisible && (!allowed || !(hasAttempt ? saved?.inputs : item?.review));
-      for (const field of fields) field.disabled = hasAttempt || !selectedRun;
+      for (const field of fields) field.disabled = hasAttempt || !selectedRun || visualization && Boolean(item?.checking);
       if (adjustment) {
         panel.querySelector('[data-adjust-input="cli.file"]').disabled = hasAttempt || Boolean(item?.checking) || !selectedRun;
         const clinical = item?.review?.clinical;
@@ -686,6 +711,7 @@
       part("history").hidden = !saved;
       part("retry").hidden = !saved || !["failed", "cancelled"].includes(state) || Boolean(item?.retry || item?.uncertain);
       part("back").hidden = !context.runId;
+      if (visualization) part("results").disabled = !context.resultsAvailable;
       const message = [item?.uncertain ? local("uncertain") : "", item?.error].filter(Boolean).join(" ");
       part("notice").textContent = message;
       part("notice").hidden = !message;
@@ -750,7 +776,13 @@
       render();
       try {
         const clinicalPath = adjustment ? panel.querySelector('[data-adjust-input="cli.file"]').value.trim() : "";
-        const query = clinicalPath ? `?clinical=${encodeURIComponent(clinicalPath)}` : "";
+        const params = new URLSearchParams();
+        if (clinicalPath) params.set("clinical", clinicalPath);
+        if (visualization && item.draft) {
+          for (const [key, input] of parameterInputs) params.set(key,
+            Number.isFinite(input.valueAsNumber) ? String(input.valueAsNumber) : input.value);
+        }
+        const query = params.size ? `?${params}` : "";
         const next = await request(`/signet/runs/${encodeURIComponent(id)}/${step}/example${query}`);
         const preserve = adjustment || (linkedInputs ? Boolean(item.draft) : item.review && fileKeys.every(key => item.review.inputs[key] === next.inputs[key]));
         item.review = next;
@@ -845,7 +877,19 @@
       });
     }
     if (alwaysVisible) for (const input of [...parameterInputs.values(), ...resourceInputs.values()]) {
-      input.addEventListener("input", () => { input.setCustomValidity(""); saveDraft(); });
+      input.addEventListener("input", () => {
+        input.setCustomValidity("");
+        if (visualization && [...parameterInputs.values()].includes(input)) {
+          const item = current();
+          if (item && (!item.record || item.retry)) {
+            item.review = null;
+            item.attempted = true;
+            item.error = "";
+          }
+        }
+        saveDraft();
+        if (visualization) render();
+      });
     }
     picker.addEventListener("change", () => selectRun(picker.value));
     part("review").addEventListener("click", () => void review());
@@ -853,6 +897,7 @@
     part("refresh").addEventListener("click", () => void refresh(true));
     part("history").addEventListener("click", () => onOpenHistory?.(selectedRun));
     part("back").addEventListener("click", () => onBack?.());
+    if (visualization) part("results").addEventListener("click", () => onShowResults?.());
     part("retry").addEventListener("click", () => {
       const item = current();
       if (!item || item.uncertain || item.submitting || !["failed", "cancelled"].includes(item.record?.state)) return;
@@ -873,5 +918,6 @@
   window.mountAdjustmentRun = options => mountContinuationRun(options, "adjust");
   window.mountCisRun = options => mountContinuationRun(options, "cis");
   window.mountNetworkRun = options => mountContinuationRun(options, "network");
+  window.mountVisualizationRun = options => mountContinuationRun(options, "visualize");
 
 })();
