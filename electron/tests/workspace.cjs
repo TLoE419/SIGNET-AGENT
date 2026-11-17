@@ -225,6 +225,9 @@ async function verifyWorkspace({groups, runs}) {
 
   await waitFor(() => [...datasetPicker.options].some(option => option.value === groups[0].id),
     'Dataset catalog failed to load');
+  const token = document.querySelector('meta[name="chat-token"]').content;
+  const savedHistory = await fetch('/stage6/history', {headers: {'X-Chat-Token': token}}).then(reply => reply.json());
+  const liveRuns = savedHistory.runs.filter(run => run.source === 'live');
   for (const group of groups) {
     const groupRuns = expectedList(group);
     const runIds = groupRuns.map(run => run.run_id).sort();
@@ -243,7 +246,8 @@ async function verifyWorkspace({groups, runs}) {
     check(JSON.stringify(resultIds()) === JSON.stringify(runIds), 'Stage 6 picker showed another dataset’s runs');
 
     go('history');
-    check(JSON.stringify(historyIds()) === JSON.stringify(runIds), 'History showed another dataset’s runs');
+    const expectedHistoryIds = [...runIds, ...liveRuns.filter(run => run.dataset_id === group.id).map(run => run.run_id)].sort();
+    check(JSON.stringify(historyIds()) === JSON.stringify(expectedHistoryIds), 'History showed another dataset’s runs');
     if (!groupRuns.length) {
       check(visible('#ml-empty-history') && !visible('#lens-stage6'), 'The unused dataset inherited a result');
       continue;

@@ -771,7 +771,7 @@ class StepsTest(unittest.TestCase):
         self.assertEqual(result['summary'], {
             'samples': 2, 'variants': 3, 'nonzero_bins': [1, 0, 0, 0, 0, 2], 'genotype_codes': [3, 2, 1],
         })
-        self.assertEqual(request('GET', detail.replace('stage=1', 'stage=2'))[0], 400)
+        self.assertEqual(request('GET', detail.replace('stage=1', 'stage=2'))[0], 404)
         self.assertEqual(request('GET', detail.replace('&source=live', ''))[0], 404)
         calls = len(self.calls)
         status, saved = request('GET', '/stage6/history')
@@ -820,6 +820,116 @@ class StepsTest(unittest.TestCase):
         (self.fake / 'squeue').write_text('PENDING')
         status, recovered = request('GET', f'/signet/runs/{run_id_255}/steps/genotype?refresh=1')
         self.assertEqual((status, recovered['state'], recovered['job_id']), (200, 'pending', '44001'))
+
+    def test_workspace_expression_uses_same_run_and_preserves_stage1(self):
+        from agent.app.chat_ui import ChatServer
+        from agent.runtime import workspace_genotype as workspace
+
+        inputs = self.genotype_inputs()
+        run_id = 'workspace-expression-test'
+        genotype = workspace.submit_example(run_id, inputs, workspace.DEFAULT_SETTINGS,
+                                            steps.STEPS['genotype'].resources)
+        route = f'/signet/runs/{run_id}/expression/example'
+        self.server = ChatServer(('127.0.0.1', 0), lambda: None)
+        self.addCleanup(self.server.server_close)
+        worker = threading.Thread(target=self.server.serve_forever, kwargs={'poll_interval': 0.01}, daemon=True)
+        worker.start()
+        self.addCleanup(worker.join, 3)
+        self.addCleanup(self.server.shutdown)
+        origin = f'http://127.0.0.1:{self.server.server_port}'
+
+        def request(method, url, body=None):
+            connection = http.client.HTTPConnection('127.0.0.1', self.server.server_port, timeout=5)
+            headers = {'X-Chat-Token': self.server.token, 'Origin': origin, 'Content-Type': 'application/json'}
+            try:
+                connection.request(method, url, None if body is None else json.dumps(body), headers)
+                response = connection.getresponse()
+                return response.status, json.loads(response.read())
+            finally:
+                connection.close()
+
+        self.assertEqual(request('GET', route)[0], 412)
+        self.remote_dir = Path(genotype['remote_dir'])
+        (self.remote_dir / 'steps/genotype.done').write_text('0 2026-11-16T10:00:00\n')
+        output = self.remote_dir / 'work/res/resg'
+        output.mkdir(parents=True, exist_ok=True)
+        (output / 'signet_Geno').write_text('0 1 2\n2 1 0\n1 0 1\n0 0 2\n')
+        (output / 'signet_Genotype.sampleID').write_text('S1\nS2\nS3\nS4\n')
+        self.slurm(squeue='', sacct='COMPLETED')
+        self.assertEqual(steps.status(run_id, 'genotype', refresh=True)['state'], 'completed')
+        root = self.project / 'runs' / run_id
+        preserved = {path: path.read_bytes() for path in
+                     (root / workspace.SNAPSHOT, root / 'steps/genotype.json', root / 'work/res/resg/signet_Geno',
+                      root / 'work/res/resg/signet_Genotype.sampleID')}
+        self.gexp = self.hpc / 'ws/signet/example/gexp-prep/example_gexp'
+        self.gexp.parent.mkdir()
+        self.gexp.write_text('counts')
+        annotation = self.hpc / 'ws/refdata/gencode.v22.genes.gtf'
+        annotation.write_text('genes')
+        self.assertEqual(request('GET', route.replace(run_id, 'step_test'))[0], 404)
+        status, review = request('GET', route)
+        self.assertEqual(status, 200)
+        self.assertEqual(review['run_id'], run_id)
+        self.assertEqual(review['inputs'], {'gexp.file': str(self.gexp), 'pmap.file': str(annotation)})
+        self.assertEqual(review['settings'], {'restrict.tcga': 1})
+        self.assertFalse((root / 'steps/expression.json').exists())
+        body = {key: review[key] for key in ('inputs', 'settings', 'resources')}
+        body['resources']['cpus'] = 2
+        body['resources']['hours'] = 1.5
+        self.assertEqual(request('POST', route, {**body, 'settings': {'restrict.tcga': 2}})[0], 400)
+        self.assertEqual(request('POST', route, {**body, 'inputs': {**body['inputs'], 'pmap.file': '/other.gtf'}})[0], 400)
+        self.assertFalse((root / workspace.EXPRESSION_SNAPSHOT).exists())
+        self.lose_connection_on = 'tar xzf'
+        self.assertEqual(request('POST', route, body)[0], 502)
+        row = next(row for row in request('GET', '/stage6/history')[1]['runs'] if row['run_id'] == run_id)
+        self.assertEqual((row['status'], row['jobs']['expression']['state']), ('not_submitted', 'not_submitted'))
+        self.lose_connection_on = None
+        status, submitted = request('POST', route, body)
+        self.assertEqual((status, submitted['state'], submitted['run_id']), (202, 'submitted', run_id))
+        self.assertEqual(submitted['settings'], {'restrict.tcga': '1'})
+        self.assertEqual(submitted['resources'], {'cpus': 2, 'mem_gb': 16, 'hours': 1.5, 'time': '01:30:00'})
+        self.assertTrue((root / 'workspace-expression.review1.json').is_file())
+        snapshot = (root / workspace.EXPRESSION_SNAPSHOT).read_bytes()
+        calls = len(self.calls)
+        self.assertEqual(request('POST', route, body)[0], 409)
+        self.assertEqual(len(self.calls), calls, 'Duplicate submission must not contact HPC3')
+        self.assertEqual((root / workspace.EXPRESSION_SNAPSHOT).read_bytes(), snapshot)
+        self.assertEqual(set(path.name for path in (self.project / 'runs').iterdir()), {'step_test', run_id})
+        status_route = f'/signet/runs/{run_id}/steps/expression?refresh=1'
+        for scheduler, state in (('PENDING', 'pending'), ('RUNNING', 'running')):
+            self.slurm(squeue=scheduler)
+            self.assertEqual(request('GET', status_route)[1]['state'], state)
+        self.finish_job()
+        result = self.remote_dir / 'work/res/rest'
+        (result / 'signet_gexp').write_text('1 2\n3 4\n5 6\n7 8\n')
+        (result / 'signet_gexpID').write_text('S1\nS2\nS3\nS4\n')
+        (result / 'signet_gene_pos').write_text('GENE1 chr1 100 200\nMEGF6 chr1 300 400\n')
+        (result / 'signet_gene_name').write_text('GENE1\nMEGF6\n')
+        self.assertEqual(request('GET', status_route)[1]['state'], 'completed')
+        steps.update_settings(run_id, {'restrict.tcga': 2})
+        detail = f'/stage/results?run={run_id}&stage=2&source=live'
+        status, saved = request('GET', detail)
+        self.assertEqual(status, 200)
+        self.assertEqual(saved['job']['settings']['restrict.tcga'], '1')
+        self.assertEqual((saved['summary']['samples'], saved['summary']['genes']), (4, 2))
+        self.assertEqual(sum(bar['count'] for bar in saved['summary']['histogram']), 8)
+        self.assertEqual(saved['summary']['gene_summary'], [
+            {'gene': 'GENE1', 'min': 1.0, 'median': 4.0, 'max': 7.0},
+            {'gene': 'MEGF6', 'min': 2.0, 'median': 5.0, 'max': 8.0}])
+        calls = len(self.calls)
+        row = next(row for row in request('GET', '/stage6/history')[1]['runs'] if row['run_id'] == run_id)
+        self.assertEqual(set(row['jobs']), {'genotype', 'expression'})
+        self.assertEqual(row['inputs']['expression'], [str(self.gexp), str(annotation)])
+        self.assertEqual(row['status'], 'completed')
+        self.assertEqual(len(self.calls), calls, 'Reopening saved results reads local files only')
+        self.assertEqual(request('POST', route, body)[0], 409)
+        self.assertEqual((root / workspace.EXPRESSION_SNAPSHOT).read_bytes(), snapshot)
+        for path, data in preserved.items():
+            self.assertEqual(path.read_bytes(), data, f'Stage 2 changed the Stage 1 artifact {path.name}')
+
+        # Invalid collected values must never become a chart with fabricated counts.
+        (root / 'work/res/rest/signet_gexp').write_text('nan 2\n3 4\n5 6\n7 8\n')
+        self.assertEqual(request('GET', detail)[0], 404)
 
     def test_genotype_on_one_chromosome_checks_its_files_and_queues_signet_g(self):
         inputs = self.genotype_inputs()

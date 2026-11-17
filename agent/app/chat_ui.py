@@ -313,11 +313,11 @@ class ChatHandler(BaseHTTPRequestHandler):
         query = parse_qs(url.query, keep_blank_values=True)
         if (set(query) - {'run', 'stage', 'source'} or len(query.get('run', [])) != 1 or not query['run'][0]
                 or len(query.get('stage', [])) != 1 or query['stage'][0] not in ARCHIVED_STEP_JOBS
-                or ('source' in query and (query['source'] != ['live'] or query['stage'] != ['1']))):
-            return self._error(400, 'Provide a run ID and stage number (1, 2, 4, or 5). A live result requires stage 1.')
+                or ('source' in query and (query['source'] != ['live'] or query['stage'][0] not in ('1', '2')))):
+            return self._error(400, 'Provide a run ID and stage number (1, 2, 4, or 5). A live result requires stage 1 or 2.')
         run_id, stage = query['run'][0], query['stage'][0]
         try:
-            result = (workspace_genotype.completed_result(run_id) if 'source' in query
+            result = (workspace_genotype.completed_result(run_id, stage) if 'source' in query
                       else self.server.stage6.archived_stage_result(run_id, stage))
         except (OSError, ValueError, KeyError, TypeError, OverflowError):
             return self._error(404, 'No readable archived result for this stage.')

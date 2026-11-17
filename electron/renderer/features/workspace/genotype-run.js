@@ -380,4 +380,291 @@
       restore,
     };
   };
+
+  const expressionCopy = {
+    title: ["基因表現量準備", "Expression preparation"],
+    stage: ["第 2 階段", "Stage 2"],
+    run: ["接續執行", "Continue run"],
+    empty: ["先選擇已完成第 1 階段的執行。", "Choose a run with completed Stage 1."],
+    prerequisite: ["這筆執行的第 1 階段完成後，即可核對第 2 階段。", "Review Stage 2 after Stage 1 completes in this run."],
+    readyPrompt: ["核對檔案與設定後，按「送出第 2 階段」。", "Review the files and settings, then select Submit Stage 2."],
+    submit: ["送出第 2 階段", "Submit Stage 2"],
+    retry: ["重新核對並準備送出", "Review a new attempt"],
+    back: ["回到執行時間線", "Back to run timeline"],
+    chromosome: ["染色體", "Chromosome"],
+    "gexp.file": ["基因表現量檔案", "Expression file"],
+    "pmap.file": ["基因註解檔案", "Gene annotation file"],
+  };
+
+  window.mountExpressionRun = function mountExpressionRun({panel, token, onHistoryChanged, onOpenHistory, onBack}) {
+    const expressionInputs = ["gexp.file", "pmap.file"];
+    panel.classList.add("ml-expression-panel");
+    panel.innerHTML = `
+      <div class="ml-result-main ml-genotype-main" data-live-language>
+        <header><p class="ml-genotype-eyebrow" data-expression-copy="stage"></p>
+          <h2 id="lens-stage2-title" data-expression-copy="title"></h2></header>
+        <label class="ml-expression-run-label"><span data-expression-copy="run"></span>
+          <select data-expression-run></select>
+        </label>
+        <p data-expression-readiness role="status"></p>
+        <p data-expression-guidance></p>
+        <button type="button" class="ml-nav-action" data-expression-review data-expression-copy="review"></button>
+        <form data-expression-form hidden>
+          <h3 data-expression-copy="inputs"></h3>
+          <dl class="ml-key-values">${expressionInputs.map(key => `<dt data-expression-copy="${key}"></dt>
+            <dd><code data-expression-input="${key}"></code></dd>`).join("")}</dl>
+          <fieldset data-expression-fields><legend data-expression-copy="settings"></legend>
+            <div class="ml-genotype-controls"><label><span data-expression-copy="chromosome"></span>
+              <input type="number" data-expression-setting="restrict.tcga" min="1" max="1" value="1" readonly>
+            </label></div>
+          </fieldset>
+          <fieldset data-expression-fields><legend data-expression-copy="resources"></legend>
+            <div class="ml-genotype-controls">${resources.map(key => `<label><span data-expression-copy="${key}"></span>
+              <input type="number" data-expression-resource="${key}" step="${key === "hours" ? "any" : "1"}" required>
+            </label>`).join("")}</div>
+          </fieldset>
+          <button type="button" class="ml-nav-action ml-genotype-submit" data-expression-submit data-expression-copy="submit"></button>
+        </form>
+      </div>
+      <aside class="ml-result-inspector ml-genotype-progress" data-live-language>
+        <header class="ml-result-inspector-heading"><h3 data-expression-copy="progress"></h3></header>
+        <p class="ml-genotype-status" data-expression-status role="status"></p>
+        <dl class="ml-key-values" data-expression-identifiers hidden>
+          <dt data-expression-copy="runID"></dt><dd data-expression-run-id></dd>
+          <dt data-expression-copy="jobID"></dt><dd data-expression-job-id></dd>
+        </dl>
+        <ol class="ml-genotype-events" data-expression-events hidden></ol>
+        <p class="ml-genotype-notice" data-expression-notice role="status" hidden></p>
+        <div class="ml-genotype-actions">
+          <button type="button" class="ml-nav-action" data-expression-refresh data-expression-copy="refresh" hidden></button>
+          <button type="button" class="ml-nav-action" data-expression-history data-expression-copy="history" hidden></button>
+          <button type="button" class="ml-nav-action" data-expression-retry data-expression-copy="retry" hidden></button>
+          <button type="button" class="ml-nav-action" data-expression-back data-expression-copy="back" hidden></button>
+        </div>
+      </aside>`;
+
+    const part = name => panel.querySelector(`[data-expression-${name}]`);
+    const form = part("form");
+    const picker = part("run");
+    const resourceInputs = new Map(resources.map(key => [key, panel.querySelector(`[data-expression-resource="${key}"]`)]));
+    const settingsInputs = new Map([["restrict.tcga", panel.querySelector('[data-expression-setting="restrict.tcga"]')]]);
+    const fields = [...panel.querySelectorAll("[data-expression-fields]")];
+    const runStates = new Map();
+    let context = {datasetId: "", language: "zh-Hant", visible: false, runs: [], runId: null};
+    let selectedRun = "";
+    let pollTimer;
+    const local = key => (expressionCopy[key] ?? labels[key])?.[context.language === "en" ? 1 : 0] ?? key;
+    const current = () => runStates.get(selectedRun);
+    const source = () => context.runs.find(run => run.run_id === selectedRun);
+
+    function stateFor(id) {
+      if (!runStates.has(id)) runStates.set(id, {record: null, review: null, attempted: false, checking: false,
+        submitting: false, polling: false, uncertain: false, retry: false, error: ""});
+      return runStates.get(id);
+    }
+
+    async function request(path, body) {
+      const headers = {"X-Chat-Token": typeof token === "function" ? token() : token};
+      const options = {headers};
+      if (body) {
+        Object.assign(options, {method: "POST", body: JSON.stringify(body)});
+        headers["Content-Type"] = "application/json";
+      }
+      const reply = await fetch(path, options);
+      const result = await reply.json().catch(() => null);
+      if (!reply.ok || !result) throw Object.assign(new Error(result?.error || local("serviceError")), {status: reply.status, code: result?.code});
+      return result;
+    }
+
+    function fillReview(value, keepDraft = false) {
+      for (const key of expressionInputs) panel.querySelector(`[data-expression-input="${key}"]`).textContent = value.inputs?.[key] ?? "—";
+      for (const [key, element] of settingsInputs) if (!keepDraft) element.value = value.settings?.[key] ?? "";
+      for (const [key, element] of resourceInputs) {
+        if (value.limits?.[key]) [element.min, element.max] = value.limits[key];
+        if (!keepDraft) element.value = value.resources?.[key] ?? "";
+      }
+    }
+
+    function render() {
+      for (const element of panel.querySelectorAll("[data-expression-copy]")) element.textContent = local(element.dataset.expressionCopy);
+      const item = current();
+      const saved = item?.record;
+      const state = item?.submitting ? "submitting" : item?.uncertain ? "unknown" : saved?.state ?? "idle";
+      const hasAttempt = Boolean(saved) && !item?.retry || Boolean(item?.submitting || item?.uncertain);
+      const allowed = source()?.jobs.genotype?.state === "completed";
+      const terminal = terminalStates.has(state);
+      panel.dataset.expressionState = state;
+      panel.dataset.expressionRunId = selectedRun;
+      const selection = selectedRun;
+      picker.replaceChildren(...context.runs.map(run => {
+        const option = document.createElement("option");
+        option.value = run.run_id;
+        option.textContent = run.run_id;
+        return option;
+      }));
+      picker.value = selection;
+      picker.disabled = Boolean(context.runId) || !context.runs.length || Boolean(item?.submitting);
+      part("readiness").textContent = !selectedRun ? local("empty") : !allowed ? local("prerequisite")
+        : item.checking ? local("checking") : item.review && !hasAttempt ? local("ready") : "";
+      part("guidance").textContent = allowed && item?.review && !hasAttempt ? local("readyPrompt") : "";
+      part("review").hidden = !allowed || hasAttempt;
+      part("review").disabled = Boolean(item?.checking);
+      form.hidden = !allowed || !(hasAttempt ? saved?.inputs : item?.review);
+      for (const field of fields) field.disabled = hasAttempt;
+      part("submit").hidden = hasAttempt;
+      part("submit").disabled = !allowed || !item?.review || item.checking || item.submitting || hasAttempt;
+      part("status").textContent = local(state);
+      part("identifiers").hidden = !selectedRun;
+      part("run-id").textContent = selectedRun;
+      part("job-id").textContent = saved?.job_id ?? "—";
+      part("refresh").hidden = !hasAttempt || terminal;
+      part("refresh").disabled = Boolean(item?.polling || item?.submitting);
+      part("history").hidden = !saved;
+      part("retry").hidden = !saved || !["failed", "cancelled"].includes(state) || Boolean(item?.retry || item?.uncertain);
+      part("back").hidden = !context.runId;
+      const message = [item?.uncertain ? local("uncertain") : "", item?.error].filter(Boolean).join(" ");
+      part("notice").textContent = message;
+      part("notice").hidden = !message;
+      part("events").replaceChildren(...(saved?.history ?? []).map(event => {
+        const row = document.createElement("li");
+        row.dataset.state = event.state;
+        row.textContent = local(event.state);
+        if (event.at) {
+          const time = document.createElement("time");
+          time.dateTime = event.at;
+          const date = new Date(event.at);
+          time.textContent = Number.isNaN(date.valueOf()) ? event.at : date.toLocaleString(context.language);
+          row.append(time);
+        }
+        return row;
+      }));
+      part("events").hidden = !saved?.history?.length;
+    }
+
+    function accept(item, value, id) {
+      if (value.run_id !== id || value.step !== "expression" || !Object.hasOwn(labels, value.state)) throw Error(local("serviceError"));
+      const changed = !item.record || value.state !== item.record.state || value.job_id !== item.record.job_id;
+      item.record = value;
+      item.uncertain = false;
+      item.retry = false;
+      item.error = value.connection === "interrupted" ? local("interrupted") : value.reason ?? "";
+      if (id === selectedRun && value.inputs) fillReview(value);
+      if (changed) onHistoryChanged?.(id);
+    }
+
+    function schedule() {
+      clearTimeout(pollTimer);
+      const item = current();
+      if (item && !item.submitting && (item.uncertain || item.record && !terminalStates.has(item.record.state))) {
+        pollTimer = setTimeout(() => void refresh(), pollInterval);
+      }
+    }
+
+    async function refresh(force = false) {
+      const id = selectedRun;
+      const item = current();
+      if (!id || !item || item.polling || item.submitting) return;
+      item.polling = true;
+      render();
+      try {
+        accept(item, await request(`/signet/runs/${encodeURIComponent(id)}/steps/expression${force ? "?refresh=1" : ""}`), id);
+      } catch (error) {
+        item.error = error.message;
+      } finally {
+        item.polling = false;
+        render();
+        schedule();
+      }
+    }
+
+    async function review() {
+      const id = selectedRun;
+      const item = current();
+      if (!id || !item || item.checking || item.submitting || item.uncertain || item.record && !item.retry || source()?.jobs.genotype?.state !== "completed") return;
+      item.checking = item.attempted = true;
+      item.error = "";
+      render();
+      try {
+        const next = await request(`/signet/runs/${encodeURIComponent(id)}/expression/example`);
+        const preserve = item.review && expressionInputs.every(key => item.review.inputs[key] === next.inputs[key]);
+        item.review = next;
+        if (id === selectedRun) fillReview(next, Boolean(preserve));
+      } catch (error) {
+        item.review = null;
+        item.error = error.message;
+      } finally {
+        item.checking = false;
+        render();
+      }
+    }
+
+    function selectRun(id) {
+      const changed = selectedRun !== id;
+      selectedRun = id;
+      clearTimeout(pollTimer);
+      const item = id ? stateFor(id) : null;
+      const saved = source()?.jobs.expression;
+      const received = saved && saved.state !== "not_submitted" && !item.submitting && !item.uncertain &&
+        (!item.record || Date.parse(saved.updated_at ?? saved.submitted_at) > Date.parse(item.record.updated_at ?? item.record.submitted_at));
+      if (received) item.record = saved;
+      if ((changed || received) && item?.record?.inputs && !item.retry) fillReview(item.record);
+      else if (changed && item?.review) fillReview(item.review);
+      render();
+      if (context.visible && item && !item.attempted && !item.record) void review();
+      if (item?.record && !terminalStates.has(item.record.state)) void refresh();
+      schedule();
+    }
+
+    async function submit() {
+      const id = selectedRun;
+      const item = current();
+      if (!item || part("submit").disabled || !form.reportValidity()) return;
+      const values = inputs => Object.fromEntries([...inputs].map(([key, element]) => [key, element.valueAsNumber]));
+      const body = {inputs: item.review.inputs, settings: values(settingsInputs), resources: values(resourceInputs)};
+      item.submitting = true;
+      item.retry = false;
+      item.error = "";
+      render();
+      try {
+        accept(item, await request(`/signet/runs/${encodeURIComponent(id)}/expression/example`, body), id);
+      } catch (error) {
+        item.error = error.message;
+        if (error.status === 400 || error.status === 412 || error.status === 502 && error.code === "remote_failed") {
+          item.review = null;
+          item.attempted = false;
+          item.retry = Boolean(item.record);
+          onHistoryChanged?.(id);
+        } else {
+          item.uncertain = true;
+          void onHistoryChanged?.(id);
+        }
+      } finally {
+        item.submitting = false;
+        render();
+        schedule();
+      }
+    }
+
+    form.addEventListener("submit", event => event.preventDefault());
+    picker.addEventListener("change", () => selectRun(picker.value));
+    part("review").addEventListener("click", () => void review());
+    part("submit").addEventListener("click", () => void submit());
+    part("refresh").addEventListener("click", () => void refresh(true));
+    part("history").addEventListener("click", () => onOpenHistory?.(selectedRun));
+    part("back").addEventListener("click", () => onBack?.());
+    part("retry").addEventListener("click", () => {
+      const item = current();
+      if (!item || item.uncertain || item.submitting || !["failed", "cancelled"].includes(item.record?.state)) return;
+      item.retry = true;
+      item.review = null;
+      void review();
+    });
+    return {
+      setContext(next) {
+        context = next;
+        const id = context.runId ?? (context.runs.some(run => run.run_id === selectedRun) ? selectedRun : context.runs[0]?.run_id ?? "");
+        selectRun(id);
+      },
+    };
+  };
 })();

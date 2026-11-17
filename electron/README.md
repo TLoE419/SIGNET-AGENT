@@ -43,7 +43,7 @@ archived expression comparison. Stage 4 shows significant association pairs,
 and Stage 5 shows candidate edges grouped by their recorded bootstrap frequency.
 Stage 6 opens the network and edge table, with a filter for the selected gene.
 Each stage uses the settings preserved with its job. The Stage 6 selector in
-**Analysis** also follows the selected dataset. The previews for Stages 2–5
+**Analysis** also follows the selected dataset. The previews for Stages 3–5
 in **Analysis** still use simulated data.
 
 ### Submit the chromosome 1 example
@@ -57,6 +57,13 @@ fixed chromosome, thresholds, and resource settings, then select **Submit Stage 
 The application tracks the saved job through the queue, execution, and output
 validation. From **Run history**, open the new run and select its Stage 1 result
 to read the collected data and the settings actually submitted.
+
+After Stage 1 completes, open the same run from **Run history** and select
+**Stage 2**. Confirm the example expression file, gene annotation, chromosome
+and resources, then select **Submit Stage 2**. Its queue and execution status
+update automatically. The completed run retains both stages, their input
+files and the settings submitted for each step. Reopening Stage 2 after completion
+shows its collected expression distribution and gene summary.
 
 The local installation needs the audited SIGNET source, as described under
 [installation](../docs/INSTALL.md). The existing desktop SSH environment

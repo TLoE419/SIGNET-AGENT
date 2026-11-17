@@ -23,11 +23,11 @@ process.env.SIGNET_PYTHON = pythonWrapper;
 
 let running;
 const deadline = setTimeout(async () => {
-  console.error('Workspace genotype test timed out');
+  console.error('Workspace genotype/expression test timed out');
   await running?.backend.forceStop();
   rmSync(temp, {recursive: true, force: true});
   app.exit(1);
-}, 75000);
+}, 150000);
 app.on('will-quit', () => {
   clearTimeout(deadline);
   rmSync(temp, {recursive: true, force: true});
@@ -158,7 +158,130 @@ async function verify() {
   assert.deepEqual(counts, [0, 0, 0, 0, 0, 3]);
   submitted = readFileSync(sbatchCalls, 'utf8').trim().split('\n');
   assert.deepEqual(submitted, ['submitted'], 'Checking history or reloading replayed a submission');
-  console.log('PASS: manual Stage 1 submission, real local status polling, downloaded results, and history after reload');
+
+  const genotypeRecord = readFileSync(stepJson, 'utf8');
+  const genotypeResult = readFileSync(path.join(localRun, 'work/res/resg/signet_Geno'), 'utf8');
+  const genotypeDone = readFileSync(path.join(remoteRun, 'steps/genotype.done'), 'utf8');
+  const genotypeIntermediate = path.join(remoteRun, 'work/tmp/tmpg/impute/impute_Genotype.sizes');
+  mkdirSync(path.dirname(genotypeIntermediate), {recursive: true});
+  writeFileSync(genotypeIntermediate, '4 samples, 3 retained variants\n');
+  const expressionPanel = '#lens-stage2';
+  const expressionSubmit = `${expressionPanel} [data-expression-submit]`;
+  const expressionStage = `[data-run-stage="2"][data-run-id="${runId}"]`;
+  const expressionState = () => js(`document.querySelector(${JSON.stringify(expressionPanel)})?.dataset.expressionState`);
+  const openExpression = async () => {
+    await click(history);
+    await until(() => js(`Boolean(document.querySelector(${JSON.stringify(row)})?.getClientRects().length)`),
+      'The original run did not reappear in history');
+    await click(row);
+    await until(() => js(`Boolean(document.querySelector(${JSON.stringify(expressionStage)})?.getClientRects().length)`),
+      'The same run did not offer its next expression stage');
+    await click(expressionStage);
+    await until(() => js(`Boolean(document.querySelector(${JSON.stringify(expressionPanel)})?.getClientRects().length)`),
+      'History did not open Stage 2 in the existing run');
+  };
+
+  await openExpression();
+  await until(() => js(`document.querySelector(${JSON.stringify(expressionSubmit)})?.disabled === false`),
+    'Reviewing the same run did not enable Stage 2 submission');
+  assert.equal(await js(`document.querySelector(${JSON.stringify(expressionPanel)}).dataset.expressionRunId`), runId);
+  for (const [key, file] of Object.entries(fixture.expression_inputs)) {
+    const selector = `${expressionPanel} [data-expression-input="${key}"]`;
+    const rendered = await js(`(() => {
+      const input = document.querySelector(${JSON.stringify(selector)});
+      return input?.value || input?.textContent;
+    })()`);
+    assert.equal(rendered, file, `Stage 2 did not review the prepared ${key}`);
+  }
+  assert.equal(await js(`document.querySelector('[data-expression-setting="restrict.tcga"]').value`), '1');
+  await setReviewValue('[data-expression-resource="cpus"]', '2');
+  await setReviewValue('[data-expression-resource="hours"]', '1.5');
+  assert.deepEqual(readFileSync(sbatchCalls, 'utf8').trim().split('\n'), ['submitted'],
+    'Opening Stage 2 or editing its review submitted a job');
+  assert.equal(readFileSync(stepJson, 'utf8'), genotypeRecord, 'Review changed the completed Stage 1 record');
+
+  writeFileSync(path.join(fixture.slurm, 'sbatch_reply'), '222\n');
+  writeFileSync(path.join(fixture.slurm, 'sacct'), '');
+  writeFileSync(path.join(fixture.slurm, 'squeue'), 'PENDING\n');
+  await js(`(() => {
+    const button = document.querySelector(${JSON.stringify(expressionSubmit)});
+    button.click();
+    button.click();
+  })()`);
+  await until(async () => await expressionState() === 'pending', 'Stage 2 did not show its queued state');
+  assert.deepEqual(readFileSync(sbatchCalls, 'utf8').trim().split('\n'), ['submitted', 'submitted'],
+    'Stage 2 submitted more than one job');
+  assert.deepEqual(readdirSync(path.join(fixture.project, 'runs')).sort(), ['step_test', runId].sort(),
+    'Stage 2 created another run instead of extending the original');
+  const expressionJson = path.join(localRun, 'steps/expression.json');
+  const readExpression = () => JSON.parse(readFileSync(expressionJson, 'utf8'));
+  assert.equal(readExpression().run_id, runId);
+  assert.equal(readExpression().job_id, '222');
+  assert.equal(readExpression().settings['restrict.tcga'], '1');
+  assert.deepEqual(readExpression().inputs, fixture.expression_inputs);
+  assert.equal(readExpression().resources.cpus, 2);
+  assert.equal(readExpression().resources.hours, 1.5);
+  assert.match(readFileSync(path.join(remoteRun, 'steps/expression.sbatch'), 'utf8'), /bash \.\/signet -t < \/dev\/null/);
+  assert.equal(readFileSync(stepJson, 'utf8'), genotypeRecord, 'Submitting Stage 2 rewrote Stage 1 history');
+  assert.equal(readFileSync(path.join(localRun, 'work/res/resg/signet_Geno'), 'utf8'), genotypeResult);
+  assert.equal(readFileSync(path.join(remoteRun, 'work/res/resg/signet_Geno'), 'utf8'), genotypeResult);
+  assert.equal(readFileSync(path.join(remoteRun, 'steps/genotype.done'), 'utf8'), genotypeDone);
+  assert.equal(readFileSync(genotypeIntermediate, 'utf8'), '4 samples, 3 retained variants\n',
+    'Stage 2 upload changed the original genotype intermediate needed by Stage 3');
+
+  writeFileSync(path.join(fixture.slurm, 'squeue'), 'RUNNING\n');
+  await until(async () => await expressionState() === 'running', 'Stage 2 polling did not show its running state');
+  const expressionReload = once(window.webContents, 'did-finish-load');
+  window.webContents.reload();
+  await expressionReload;
+  await until(() => js(`!!document.querySelector(${JSON.stringify(history)})`), 'Could not reload during Stage 2');
+  await openExpression();
+  await until(async () => await expressionState() === 'running', 'Stage 2 did not resume progress after reloading');
+  assert.equal(await js(`document.querySelector(${JSON.stringify(expressionPanel)}).dataset.expressionRunId`), runId);
+  assert.deepEqual(readFileSync(sbatchCalls, 'utf8').trim().split('\n'), ['submitted', 'submitted'],
+    'Reloading the active Stage 2 replayed submission');
+
+  const expressionResultPath = path.join(remoteRun, 'work/res/rest');
+  mkdirSync(expressionResultPath, {recursive: true});
+  const expressionMatrix = '1 2\n3 4\n5 6\n7 8\n';
+  writeFileSync(path.join(expressionResultPath, 'signet_gexp'), expressionMatrix);
+  writeFileSync(path.join(expressionResultPath, 'signet_gexpID'), 'S1\nS2\nS3\nS4\n');
+  writeFileSync(path.join(expressionResultPath, 'signet_gene_name'), 'GENE1\nMEGF6\n');
+  writeFileSync(path.join(expressionResultPath, 'signet_gene_pos'), '1 100 200\n1 300 400\n');
+  writeFileSync(path.join(remoteRun, 'steps/expression.done'), '0 2026-11-17T10:00:00\n');
+  writeFileSync(path.join(fixture.slurm, 'sacct'), 'COMPLETED\n');
+  writeFileSync(path.join(fixture.slurm, 'squeue'), '');
+  await until(async () => await expressionState() === 'completed', 'Stage 2 polling did not collect completed results');
+  assert.equal(readExpression().state, 'completed');
+  assert.equal(readFileSync(path.join(localRun, 'work/res/rest/signet_gexp'), 'utf8'), expressionMatrix);
+  assert.equal(readFileSync(stepJson, 'utf8'), genotypeRecord, 'Completing Stage 2 changed the Stage 1 record');
+  await click(`${expressionPanel} [data-expression-history]`);
+  await until(() => js(`Boolean(document.querySelector(${JSON.stringify(expressionStage)})?.getClientRects().length)`),
+    'The completed expression run did not open its saved timeline');
+  const expressionSavedInputs = await js(`[...document.querySelectorAll(${JSON.stringify(runDetail + ' .ml-run-inputs code')})]
+    .map(node => node.textContent)`);
+  for (const file of Object.values(fixture.expression_inputs)) assert.ok(expressionSavedInputs.includes(file));
+  const completedReload = once(window.webContents, 'did-finish-load');
+  window.webContents.reload();
+  await completedReload;
+  await until(() => js(`!!document.querySelector(${JSON.stringify(history)})`), 'Could not reopen completed Stage 2');
+  await click(history);
+  await until(() => js(`Boolean(document.querySelector(${JSON.stringify(row)})?.getClientRects().length)`),
+    'The completed Stage 2 run was missing after reload');
+  await click(row);
+  await click(expressionStage);
+  await until(() => js(`(() => {
+    const panel = document.querySelector('#lens-history-stage');
+    return panel?.dataset.runId === ${JSON.stringify(runId)} && panel.dataset.stage === '2' && panel.dataset.runState === 'ready';
+  })()`), 'The completed Stage 2 result did not reopen from history');
+  assert.equal(await js(`document.querySelector('#lens-history-stage [data-stage-setting="restrict.tcga"]')?.textContent`), '1');
+  assert.equal(await js(`document.querySelector('#lens-history-stage [data-stage-resource="cpus"]')?.textContent`), '2');
+  assert.equal(await js(`document.querySelector('#lens-history-stage [data-stage-resource="time"]')?.textContent`), '01:30:00');
+  assert.ok(await js(`document.querySelector('#lens-history-stage [data-stage-table]').textContent.includes('MEGF6')`));
+  assert.deepEqual(readFileSync(sbatchCalls, 'utf8').trim().split('\n'), ['submitted', 'submitted']);
+  assert.equal(readFileSync(stepJson, 'utf8'), genotypeRecord);
+  assert.equal(readFileSync(path.join(localRun, 'work/res/resg/signet_Geno'), 'utf8'), genotypeResult);
+  console.log('PASS: manual Stage 1 and same-run Stage 2, live polling, active reload, immutable Stage 1, and saved Stage 2 results');
   await running.quit();
 }
 

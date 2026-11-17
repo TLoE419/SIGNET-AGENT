@@ -22,6 +22,12 @@ def main():
     try:
         fixture.setUp()
         inputs = fixture.genotype_inputs()
+        expression = fixture.hpc / 'ws/signet/example/gexp-prep/example_gexp'
+        expression.parent.mkdir(parents=True, exist_ok=True)
+        expression.write_text('gene_id\tS1\tS2\tS3\tS4\nENSG1\t1\t3\t5\t7\nENSG2\t2\t4\t6\t8\n')
+        annotation = fixture.hpc / 'ws/refdata/gencode.v22.genes.gtf'
+        annotation.write_text('chr1\tGENCODE\tgene\t100\t200\t.\t+\t.\tgene_id "ENSG1";\n')
+        expression_inputs = {'gexp.file': str(expression), 'pmap.file': str(annotation)}
         fixture.slurm(squeue='PENDING')
         sbatch = fixture.fake / 'bin/sbatch'
         first, body = sbatch.read_text().split('\n', 1)
@@ -36,7 +42,7 @@ def main():
         }), encoding='utf-8')
         metadata.write_text(json.dumps({
             'project': str(fixture.project), 'remote': fixture.config['workRoot'],
-            'slurm': str(fixture.fake), 'inputs': inputs,
+            'slurm': str(fixture.fake), 'inputs': inputs, 'expression_inputs': expression_inputs,
         }), encoding='utf-8')
 
         sys.argv = [str(server), *sys.argv[3:]]

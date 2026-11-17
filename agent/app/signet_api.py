@@ -113,6 +113,17 @@ def submit_genotype_example(handler, url):
     return 202, workspace_genotype.submit_example(**_body(handler, fields, required=fields))
 
 
+def review_expression_example(handler, url, run_id):
+    _query(url, ())
+    return 200, workspace_genotype.review_expression(run_id)
+
+
+def submit_expression_example(handler, url, run_id):
+    _query(url, ())
+    fields = ('inputs', 'settings', 'resources')
+    return 202, workspace_genotype.submit_expression(run_id, **_body(handler, fields, required=fields))
+
+
 # ---------- runs (local; includes signet -s) ----------
 
 def list_runs(handler, url):
@@ -276,6 +287,8 @@ def get_log(handler, url, run_id, step):
 ROUTES = [
     (re.compile(r'/signet/catalog'), {'GET': get_catalog}),
     (re.compile(r'/signet/genotype/example'), {'GET': review_genotype_example, 'POST': submit_genotype_example}),
+    (re.compile(rf'/signet/runs/{_RUN}/expression/example'),
+     {'GET': review_expression_example, 'POST': submit_expression_example}),
     (re.compile(r'/signet/runs'), {'GET': list_runs, 'POST': create_run}),
     (re.compile(rf'/signet/runs/{_RUN}'), {'GET': get_run}),
     (re.compile(rf'/signet/runs/{_RUN}/settings'), {'PATCH': update_settings}),
