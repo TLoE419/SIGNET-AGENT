@@ -28,6 +28,12 @@ def main():
         annotation = fixture.hpc / 'ws/refdata/gencode.v22.genes.gtf'
         annotation.write_text('chr1\tGENCODE\tgene\t100\t200\t.\t+\t.\tgene_id "ENSG1";\n')
         expression_inputs = {'gexp.file': str(expression), 'pmap.file': str(annotation)}
+        clinical = fixture.hpc / 'ws/refdata/official-demo-chr1-restart-clinical.tsv'
+        clinical.write_text('submitter_id\trace\tgender\n'
+                            'TCGA-XX-A001\tasian\tfemale\n'
+                            'TCGA-XX-A002\tblack or african american\tmale\n'
+                            'TCGA-XX-A003\twhite\tfemale\n'
+                            'TCGA-XX-A004\twhite\tmale\n')
         fixture.slurm(squeue='PENDING')
         sbatch = fixture.fake / 'bin/sbatch'
         first, body = sbatch.read_text().split('\n', 1)
@@ -43,6 +49,7 @@ def main():
         metadata.write_text(json.dumps({
             'project': str(fixture.project), 'remote': fixture.config['workRoot'],
             'slurm': str(fixture.fake), 'inputs': inputs, 'expression_inputs': expression_inputs,
+            'adjust_inputs': {'cli.file': str(clinical)},
         }), encoding='utf-8')
 
         sys.argv = [str(server), *sys.argv[3:]]

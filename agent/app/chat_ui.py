@@ -327,10 +327,15 @@ class ChatHandler(BaseHTTPRequestHandler):
         if not secrets.compare_digest(self.headers.get('X-Chat-Token', ''), self.server.token):
             return self._error(403, 'Workspace token required.')
         query = parse_qs(url.query, keep_blank_values=True)
-        if set(query) != {'run'} or len(query['run']) != 1 or not query['run'][0]:
-            return self._error(400, 'Provide a single run ID.')
+        if (set(query) - {'run', 'source'} or len(query.get('run', [])) != 1 or not query['run'][0]
+                or ('source' in query and query['source'] != ['live'])):
+            return self._error(400, 'Provide a single run ID and an optional live source.')
         try:
-            result = self.server.stage6.archived_stage3(query['run'][0])
+            if 'source' in query:
+                from agent.runtime import workspace_adjustment
+                result = workspace_adjustment.completed_result(query['run'][0])
+            else:
+                result = self.server.stage6.archived_stage3(query['run'][0])
         except (OSError, ValueError, KeyError, TypeError, OverflowError):
             return self._error(404, 'No readable archived Stage 3 result for this run.')
         return self.json_response(result)

@@ -635,6 +635,20 @@ export SINGULARITY_BIND={q(bind)} APPTAINER_BIND={q(bind)}
         env = f"--env {q(','.join(f'{k}={v}' for k, v in step.env.items()))} " if step.env else ''
         run = (f"{q(config['executor'])} exec --cleanenv --no-home {env}--bind {q(bind)} {q(config['image'])} "
                f"bash ./signet {step.flag} {stdin}")
+    if name == 'adjust':
+        # Keep the actual clinical input and smartpca outputs with the downloaded results.
+        clinical = q((settings or {})['cli.file'])
+        frozen = directory + '/work/res/resa/workspace-clinical.tsv'
+        replacement = q('s|^cli.file *=.*|cli.file = ' + frozen + '|')
+        run = f'''(
+mkdir -p res/resa &&
+cp -- {clinical} res/resa/workspace-clinical.tsv &&
+sed -i {replacement} config.ini &&
+{run} || exit $?
+cp -- tmp/tmpg/geno_id res/resa/workspace-genotype-ids.txt &&
+cp -- tmp/tmpa/Geno.pca.evec res/resa/workspace-pca.evec &&
+cp -- tmp/tmpa/Geno.eval res/resa/workspace-pca.eval
+)'''
     return f'''#!/bin/bash
 #SBATCH --job-name=signet-{name}-{run_id}
 #SBATCH --output={directory}/steps/{name}.out

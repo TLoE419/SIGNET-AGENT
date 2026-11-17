@@ -23,11 +23,11 @@ process.env.SIGNET_PYTHON = pythonWrapper;
 
 let running;
 const deadline = setTimeout(async () => {
-  console.error('Workspace genotype/expression test timed out');
+  console.error('Workspace genotype/expression/adjustment test timed out');
   await running?.backend.forceStop();
   rmSync(temp, {recursive: true, force: true});
   app.exit(1);
-}, 150000);
+}, 180000);
 app.on('will-quit', () => {
   clearTimeout(deadline);
   rmSync(temp, {recursive: true, force: true});
@@ -55,6 +55,7 @@ async function verify() {
   const submit = '#lens-stage1 [data-genotype-submit]';
   const state = () => js(`document.querySelector('#lens-stage1')?.dataset.genotypeState`);
   const history = '[data-nav-target="history"]';
+  const sampleIds = ['TCGA-XX-A001-01', 'TCGA-XX-A002-01', 'TCGA-XX-A003-01', 'TCGA-XX-A004-01'];
 
   const frame = await js(`(() => {
     const root = document.querySelector('.ml-app');
@@ -119,7 +120,7 @@ async function verify() {
   const resultPath = path.join(remoteRun, 'work/res/resg');
   mkdirSync(resultPath, {recursive: true});
   writeFileSync(path.join(resultPath, 'signet_Geno'), '0 1 2\n2 1 0\n1 0 1\n0 0 2\n');
-  writeFileSync(path.join(resultPath, 'signet_Genotype.sampleID'), 'S1\nS2\nS3\nS4\n');
+  writeFileSync(path.join(resultPath, 'signet_Genotype.sampleID'), sampleIds.join('\n') + '\n');
   writeFileSync(path.join(remoteRun, 'steps/genotype.done'), '0 2026-11-16T10:00:00\n');
   writeFileSync(path.join(fixture.slurm, 'sacct'), 'COMPLETED\n');
   writeFileSync(path.join(fixture.slurm, 'squeue'), '');
@@ -245,7 +246,7 @@ async function verify() {
   mkdirSync(expressionResultPath, {recursive: true});
   const expressionMatrix = '1 2\n3 4\n5 6\n7 8\n';
   writeFileSync(path.join(expressionResultPath, 'signet_gexp'), expressionMatrix);
-  writeFileSync(path.join(expressionResultPath, 'signet_gexpID'), 'S1\nS2\nS3\nS4\n');
+  writeFileSync(path.join(expressionResultPath, 'signet_gexpID'), sampleIds.join('\n') + '\n');
   writeFileSync(path.join(expressionResultPath, 'signet_gene_name'), 'GENE1\nMEGF6\n');
   writeFileSync(path.join(expressionResultPath, 'signet_gene_pos'), '1 100 200\n1 300 400\n');
   writeFileSync(path.join(remoteRun, 'steps/expression.done'), '0 2026-11-17T10:00:00\n');
@@ -281,7 +282,95 @@ async function verify() {
   assert.deepEqual(readFileSync(sbatchCalls, 'utf8').trim().split('\n'), ['submitted', 'submitted']);
   assert.equal(readFileSync(stepJson, 'utf8'), genotypeRecord);
   assert.equal(readFileSync(path.join(localRun, 'work/res/resg/signet_Geno'), 'utf8'), genotypeResult);
-  console.log('PASS: manual Stage 1 and same-run Stage 2, live polling, active reload, immutable Stage 1, and saved Stage 2 results');
+  const originalExpressionRecord = readFileSync(expressionJson, 'utf8');
+  const adjustmentPanel = '#lens-stage3';
+  const adjustmentStage = `[data-run-stage="3"][data-run-id="${runId}"]`;
+  const adjustmentState = () => js(`document.querySelector(${JSON.stringify(adjustmentPanel)})?.dataset.adjustState`);
+  async function openAdjustment() {
+    await click(history);
+    await until(() => js(`Boolean(document.querySelector(${JSON.stringify(row)})?.getClientRects().length)`),
+      'The original run was missing while opening Stage 3');
+    await click(row);
+    await click(adjustmentStage);
+  }
+  await openAdjustment();
+  await until(() => js(`document.querySelector('${adjustmentPanel} [data-adjust-submit]')?.disabled === false`),
+    'Stage 3 clinical review did not enable its manual submit button');
+  assert.ok(await js(`document.querySelector('${adjustmentPanel} [data-adjust-form]')?.getClientRects().length > 0`),
+    'Stage 3 clinical file and principal component controls are hidden');
+  assert.equal(await js(`document.querySelector('[data-adjust-input="cli.file"]').value`), fixture.adjust_inputs['cli.file']);
+  assert.equal(await js(`document.querySelector('[data-adjust-option="npc"]').value`), '3');
+  await setReviewValue('[data-adjust-option="npc"]', '2');
+  await setReviewValue('[data-adjust-resource="cpus"]', '2');
+  assert.deepEqual(readFileSync(sbatchCalls, 'utf8').trim().split('\n'), ['submitted', 'submitted'],
+    'Reviewing Stage 3 submitted a job before the user clicked submit');
+
+  writeFileSync(path.join(fixture.slurm, 'sbatch_reply'), '333\n');
+  writeFileSync(path.join(fixture.slurm, 'sacct'), '');
+  writeFileSync(path.join(fixture.slurm, 'squeue'), 'PENDING\n');
+  await js(`(() => {
+    const button = document.querySelector('${adjustmentPanel} [data-adjust-submit]');
+    button.click(); button.click();
+  })()`);
+  await until(async () => await adjustmentState() === 'pending', 'Stage 3 did not show its queued state');
+  const adjustmentJson = path.join(localRun, 'steps/adjust.json');
+  const readAdjustment = () => JSON.parse(readFileSync(adjustmentJson, 'utf8'));
+  assert.equal(readAdjustment().run_id, runId);
+  assert.equal(readAdjustment().job_id, '333');
+  assert.equal(readAdjustment().options.npc, 2);
+  assert.deepEqual(readAdjustment().inputs, fixture.adjust_inputs);
+  assert.deepEqual(readFileSync(sbatchCalls, 'utf8').trim().split('\n'), ['submitted', 'submitted', 'submitted']);
+  writeFileSync(path.join(fixture.slurm, 'squeue'), 'RUNNING\n');
+  await until(async () => await adjustmentState() === 'running', 'Stage 3 did not automatically report execution');
+  const adjustmentReload = once(window.webContents, 'did-finish-load');
+  window.webContents.reload();
+  await adjustmentReload;
+  await openAdjustment();
+  await until(async () => await adjustmentState() === 'running', 'Stage 3 did not resume after reload');
+
+  const adjustmentOutputs = path.join(remoteRun, 'work/res/resa');
+  mkdirSync(adjustmentOutputs, {recursive: true});
+  const files = {
+    'signet_matched.gexp': expressionMatrix,
+    'signet_new.Geno': genotypeResult,
+    'signet_new.Geno.map': '1 SNP1 0 100 A G\n1 SNP2 0 200 A G\n1 SNP3 0 300 A G\n',
+    'signet_new.Geno.maf': '0.1\n0.2\n0.3\n',
+    'signet_gexp.data': '-1 -2\n0 0\n1 2\n',
+    'signet_gexp_rmpc.data': '-0.5 -1\n0 0\n0.5 1\n',
+    'signet_geno.data': '0 1 2\n2 1 0\n1 0 1\n',
+    'workspace-clinical.tsv': readFileSync(fixture.adjust_inputs['cli.file'], 'utf8'),
+    'workspace-genotype-ids.txt': sampleIds.join('\n') + '\n',
+    'workspace-pca.evec': '#eigvals: 6 3 1\nTCGA-XX-A001 -1 0 0\nTCGA-XX-A002 0 1 0\nTCGA-XX-A003 1 -1 0\n',
+    'workspace-pca.eval': '6\n3\n1\n',
+  };
+  for (const [file, content] of Object.entries(files)) writeFileSync(path.join(adjustmentOutputs, file), content);
+  writeFileSync(path.join(remoteRun, 'steps/adjust.done'), '0 2026-11-17T12:00:00\n');
+  writeFileSync(path.join(fixture.slurm, 'sacct'), 'COMPLETED\n');
+  writeFileSync(path.join(fixture.slurm, 'squeue'), '');
+  await until(async () => await adjustmentState() === 'completed', 'Stage 3 did not collect its completed outputs');
+  assert.equal(readAdjustment().state, 'completed');
+  await until(() => js(`document.querySelector('#lens-history-stage3')?.dataset.runState === 'ready'`),
+    'Completed Stage 3 did not show its actual saved results');
+  assert.equal(await js(`document.querySelector('#lens-history-stage3 [data-s3-components]').textContent`), '2');
+  for (const [key, expected] of Object.entries({genotype:4, expression:4, matched:4, retained:3, excluded:1, variants:3, genes:2})) {
+    assert.equal(Number(await js(`document.querySelector('#lens-history-stage3 [data-s3-count="${key}"]').textContent`)), expected);
+  }
+  assert.equal(await js(`document.querySelectorAll('#lens-history-stage3 .s3-points circle').length`), 3);
+  assert.ok(await js(`document.querySelector('#lens-history-stage3 [data-s3-difference]').textContent.includes('0.75000')`));
+
+  const finishedAdjustmentReload = once(window.webContents, 'did-finish-load');
+  window.webContents.reload();
+  await finishedAdjustmentReload;
+  await openAdjustment();
+  await until(() => js(`document.querySelector('#lens-history-stage3')?.dataset.runState === 'ready'`),
+    'Completed Stage 3 did not reopen after reload');
+  assert.equal(readFileSync(stepJson, 'utf8'), genotypeRecord);
+  assert.equal(readFileSync(expressionJson, 'utf8'), originalExpressionRecord);
+  assert.equal(readFileSync(path.join(localRun, 'work/res/resg/signet_Geno'), 'utf8'), genotypeResult);
+  assert.equal(readFileSync(path.join(localRun, 'work/res/rest/signet_gexp'), 'utf8'), expressionMatrix);
+  assert.deepEqual(readFileSync(sbatchCalls, 'utf8').trim().split('\n'), ['submitted', 'submitted', 'submitted']);
+  assert.deepEqual(readdirSync(path.join(fixture.project, 'runs')).sort(), ['step_test', runId].sort());
+  console.log('PASS: manual same-run Stages 1–3, live polling, active/completed reload, immutable prior stages, and actual-shaped PCA/matching/comparison');
   await running.quit();
 }
 

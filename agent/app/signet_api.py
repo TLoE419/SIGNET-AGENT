@@ -124,6 +124,17 @@ def submit_expression_example(handler, url, run_id):
     return 202, workspace_genotype.submit_expression(run_id, **_body(handler, fields, required=fields))
 
 
+def review_adjust_example(handler, url, run_id):
+    query = _query(url, ('clinical',))
+    return 200, workspace_genotype.review_adjust(run_id, query.get('clinical'))
+
+
+def submit_adjust_example(handler, url, run_id):
+    _query(url, ())
+    fields = ('inputs', 'options', 'resources')
+    return 202, workspace_genotype.submit_adjust(run_id, **_body(handler, fields, required=fields))
+
+
 # ---------- runs (local; includes signet -s) ----------
 
 def list_runs(handler, url):
@@ -289,6 +300,8 @@ ROUTES = [
     (re.compile(r'/signet/genotype/example'), {'GET': review_genotype_example, 'POST': submit_genotype_example}),
     (re.compile(rf'/signet/runs/{_RUN}/expression/example'),
      {'GET': review_expression_example, 'POST': submit_expression_example}),
+    (re.compile(rf'/signet/runs/{_RUN}/adjust/example'),
+     {'GET': review_adjust_example, 'POST': submit_adjust_example}),
     (re.compile(r'/signet/runs'), {'GET': list_runs, 'POST': create_run}),
     (re.compile(rf'/signet/runs/{_RUN}'), {'GET': get_run}),
     (re.compile(rf'/signet/runs/{_RUN}/settings'), {'PATCH': update_settings}),

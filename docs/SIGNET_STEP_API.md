@@ -159,6 +159,29 @@ and settings. The completed expression result is available through
 `GET /stage/results?run={run_id}&stage=2&source=live`, which summarizes the
 downloaded matrix, sample identifiers and gene outputs using local files.
 
+`GET /signet/runs/{run_id}/adjust/example` reviews Stage 3 of the same run.
+It returns `inputs`, `options` (`npc`, default 3), `resources`, `limits`,
+`ready`, `issues`, and a clinical compatibility summary. The form remains
+available when inputs need attention. Optional `?clinical=<absolute_path>`
+checks a different file under the input roots allowed by the step service.
+The saved remote clinical selection takes priority. Otherwise an existing
+`refdata/official-demo-chr1-restart-clinical.tsv` from the archived chromosome 1
+example is selected when available, followed by `refdata/clinical.tsv`.
+
+The review checks completed genotype and expression in the same remote run,
+the earlier intermediate files, and `submitter_id`, `race`, and `gender`
+columns. It reports missing matched patients and covariate values. The pinned
+official adjustment requires three race groups and variation in gender. The
+checker follows its patient-identifier matching and existing race handling
+without modifying the clinical input.
+
+`POST /signet/runs/{run_id}/adjust/example` accepts the reviewed `inputs`,
+`options` (`npc` is an integer from 0 to 10), and `resources`. It checks the
+clinical file again, records the confirmed request and submits only `adjust`.
+Poll `GET /signet/runs/{run_id}/steps/adjust` for progress. The original
+genotype and expression records remain associated with this run. Clinical
+input and principal component choices appear with the Stage 3 history entry.
+
 ### 5.1 `GET /signet/catalog`
 
 What the app may offer. The panel builds its forms from this instead of hard-coding them.

@@ -4,6 +4,7 @@ from bisect import bisect_right
 from collections import Counter
 import json
 import math
+from pathlib import Path
 import shlex
 from statistics import median
 
@@ -14,6 +15,8 @@ import agent.tools.signet as signet
 DATASET_ID = 'example-chr1'
 SNAPSHOT = 'workspace-genotype.json'
 EXPRESSION_SNAPSHOT = 'workspace-expression.json'
+ADJUST_SNAPSHOT = 'workspace-adjust.json'
+_CLINICAL_REVIEW = (Path(__file__).with_name('jobs') / 'review_clinical.py').read_text()
 DEFAULT_SETTINGS = {'restrict.tcga.geno': 1, 'mind': 0.1, 'geno': 0.1, 'hwe': 0.0001, 'int': 5000000}
 
 
@@ -95,12 +98,17 @@ def _submit_example(run_id, inputs, settings, resources):
     return jobs.submit(run_id, 'genotype', accepted_inputs, resources)
 
 
-def _expression_run(run_id):
+def _workspace_run(run_id):
     try:
         root = signet._run(run_id)
         history = run_history(root)
     except (ValueError, OSError, KeyError, TypeError) as error:
         raise jobs.StepError('not_found', 'Select the chromosome 1 workspace run created in Stage 1.') from error
+    return root, history
+
+
+def _expression_run(run_id):
+    root, history = _workspace_run(run_id)
     genotype = history['jobs']['genotype']
     if genotype['state'] != 'completed':
         raise jobs.StepError('not_ready', 'Wait for Stage 1 of this run to complete before submitting Stage 2.')
@@ -196,6 +204,121 @@ def submit_expression(run_id, inputs, settings, resources):
     return jobs.submit(run_id, 'expression', inputs, resources)
 
 
+def _adjust_inputs(config, clinical):
+    if clinical is not None:
+        return {'cli.file': clinical}
+    q = shlex.quote
+    default = config['root'] + '/' + REFERENCE_FILES['clinical']
+    archived_example = config['root'] + '/refdata/official-demo-chr1-restart-clinical.tsv'
+    table = config['root'] + '/refdata/selected.tsv'
+    script = (jobs._say() + f'clinical={q(default)}\n'
+              + f'if [ -s {q(archived_example)} ]; then clinical={q(archived_example)}; fi\n'
+              + f'if [ -f {q(table)} ]; then\n'
+              + f'  while IFS=$\'\\t\' read -r key path; do [ "$key" != clinical ] || clinical="$path"; done < {q(table)}\n'
+              + 'fi\nsay clinical "$clinical"\n')
+    try:
+        code, values, _ = jobs._shell(script)
+    except OSError as error:
+        raise jobs.StepError('remote_failed', 'Could not read the configured clinical file on HPC3.') from error
+    if code or not values.get('clinical'):
+        raise jobs.StepError('remote_failed', 'Could not read the configured clinical file on HPC3.')
+    return {'cli.file': values['clinical']}
+
+
+def _review_adjust(run_id, clinical=None):
+    root, history = _workspace_run(run_id)
+    config = jobs._environment()
+    step = jobs.STEPS['adjust']
+    inputs = _adjust_inputs(config, clinical)
+    directory = jobs._remote_dir(config, root, run_id)
+    checked = jobs._inputs(step, inputs, (config['root'] + '/refdata', config['source'] + '/example', directory))
+    result = {'run_id': run_id, 'inputs': inputs, 'options': {'npc': 3},
+              'resources': step.resources.copy(), 'limits': step.limits.copy(),
+              'ready': False, 'issues': [], 'clinical': None}
+    issues = result['issues']
+    for name in ('genotype', 'expression'):
+        record = history['jobs'].get(name)
+        if not record or record['state'] != 'completed':
+            issues.append(f'Wait for {name} to complete in this same run.')
+        elif record['remote_dir'] != directory:
+            issues.append(f'Select the remote environment used by {name} of this run.')
+    if issues:
+        result['reason'] = ' '.join(issues)
+        return result
+    q = shlex.quote
+    script = jobs._say() + jobs._input_checks(jobs._files(step, checked, {}))
+    for relative in step.needs:
+        path = directory + '/work/' + relative
+        script += f'if [ ! -s {q(path)} ]; then say missing_prior {q(relative)}; exit 5; fi\n'
+    script += (f'if [ ! -s {q(config["image"])} ]; then say not_ready container; exit 5; fi\n'
+               + 'if ! command -v sbatch >/dev/null 2>&1; then say not_ready sbatch; exit 5; fi\n')
+    script += ('python3 - ' + ' '.join(q(path) for path in (
+        inputs['cli.file'], directory + '/work/res/resg/signet_Genotype.sampleID',
+        directory + '/work/res/rest/signet_gexpID')) + " <<'SIGNET_CLINICAL_REVIEW'\n"
+        + _CLINICAL_REVIEW + '\nSIGNET_CLINICAL_REVIEW\n')
+    try:
+        code, values, _ = jobs._shell(script)
+    except OSError as error:
+        raise jobs.StepError('remote_failed', 'Could not check the clinical file on HPC3.') from error
+    if 'missing_input' in values:
+        issues.append('The clinical file is unavailable: ' + values['missing_file'])
+    elif 'missing_prior' in values:
+        issues.append('This run is missing an earlier-stage intermediate: ' + values['missing_prior'])
+    elif 'not_ready' in values:
+        issues.append('The remote environment is missing ' + values['not_ready'] + '.')
+    elif code or not values.get('clinical'):
+        issues.append('The clinical compatibility check could not finish on HPC3.')
+    else:
+        result['clinical'] = json.loads(values['clinical'])
+        issues.extend(result['clinical']['issues'])
+    result['ready'] = not issues
+    result['reason'] = ' '.join(issues)
+    return result
+
+
+@jobs._one_at_a_time
+def review_adjust(run_id, clinical=None):
+    """Return the review form and readiness without changing this run or its files."""
+    return _review_adjust(run_id, clinical)
+
+
+@jobs._one_at_a_time
+def submit_adjust(run_id, inputs, options, resources):
+    root, _ = _workspace_run(run_id)
+    path = jobs._record_path(root, 'adjust')
+    previous = jobs._load(root, 'adjust') if path.exists() else None
+    if previous and previous.get('state') not in jobs.RETRYABLE:
+        raise jobs.StepError('conflict', 'Stage 3 already has a recorded job. Check its status before submitting.')
+    if jobs._active_step(root) or (root / '.active').exists():
+        raise jobs.StepError('conflict', 'A step of this run is still active. Check its status first.')
+    if not isinstance(inputs, dict) or set(inputs) != {'cli.file'}:
+        raise jobs.StepError('invalid_request', 'Confirm the clinical file for this run.')
+    answers = jobs._options(jobs.STEPS['adjust'], options)
+    accepted_resources = jobs._resources(jobs.STEPS['adjust'], resources)
+    review = _review_adjust(run_id, inputs['cli.file'])
+    if not review['ready']:
+        raise jobs.StepError('not_ready', review['reason'])
+    if previous:
+        jobs._ensure_stopped(previous)
+    path = signet._no_links(root / ADJUST_SNAPSHOT)
+    attempt = 1
+    if path.exists():
+        saved = json.loads(path.read_text())
+        attempt = saved['review_attempt'] + 1
+        archive = root / f'workspace-adjust.review{saved["review_attempt"]}.json'
+        if archive.exists() or archive.is_symlink():
+            raise jobs.StepError('conflict', 'The previous Stage 3 review archive already exists.')
+        with archive.open('x') as stream:
+            stream.write(json.dumps(saved, indent=2) + '\n')
+    snapshot = {'run_id': run_id, 'dataset_id': DATASET_ID, 'review_attempt': attempt,
+                'submitted_at': jobs._now(), 'inputs': review['inputs'],
+                'options': answers, 'resources': accepted_resources}
+    temporary = root / (ADJUST_SNAPSHOT + '.tmp')
+    temporary.write_text(json.dumps(snapshot, indent=2) + '\n')
+    temporary.replace(path)
+    return jobs.submit(run_id, 'adjust', review['inputs'], resources, answers)
+
+
 def run_history(root):
     """Return the most recent recorded step alongside the immutable review snapshot."""
     run_id = root.name
@@ -235,6 +358,22 @@ def run_history(root):
         result['jobs']['expression'] = expression_job
         result['inputs']['expression'] = [expression_job['inputs'][key] for key in ('gexp.file', 'pmap.file')]
         result['status'] = expression_job['state']
+        result['name'] = ['第 1 號染色體 · 分析', 'Chromosome 1 · Analysis']
+    adjust_path = signet._no_links(root / ADJUST_SNAPSHOT)
+    if adjust_path.is_file():
+        adjustment = json.loads(adjust_path.read_text(encoding='utf-8'))
+        if adjustment['run_id'] != run_id or adjustment['dataset_id'] != DATASET_ID:
+            raise ValueError('The adjustment history does not identify this run.')
+        adjustment_job = {key: adjustment[key] for key in ('submitted_at', 'inputs', 'options', 'resources')}
+        adjustment_job['state'] = 'submitting' if (root / '.active').exists() else 'not_submitted'
+        if signet._no_links(root / 'steps/adjust.json').is_file():
+            record = jobs._load(root, 'adjust')
+            if record['run_id'] != run_id or record['step'] != 'adjust':
+                raise ValueError('The adjustment step record does not belong to this run.')
+            adjustment_job.update(record)
+        result['jobs']['adjust'] = adjustment_job
+        result['inputs']['clinical'] = [adjustment_job['inputs']['cli.file']]
+        result['status'] = adjustment_job['state']
         result['name'] = ['第 1 號染色體 · 分析', 'Chromosome 1 · Analysis']
     return result
 

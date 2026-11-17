@@ -89,6 +89,7 @@
   let activeDataset = datasets[0];
   let genotypeRun;
   let expressionRun;
+  let adjustmentRun;
   let restoredGenotypeRun = false;
   let historyRequest = 0;
   let historyRuns = [];
@@ -686,6 +687,15 @@
       runs: activeDataset.id === exampleDataset.id ? runsForDataset().filter(run => run.source === "live") : [],
       runId: app.dataset.nav === "history" && historyResult?.stage === 2 ? historyResult.runId : null,
     });
+    adjustmentRun?.setContext({
+      datasetId: activeDataset.id,
+      language: root.lang,
+      visible: app.dataset.nav === "analysis" &&
+        timeline.querySelector('[aria-current="step"]')?.dataset.stage === "3" ||
+        app.dataset.nav === "history" && historyResult?.stage === 3,
+      runs: activeDataset.id === exampleDataset.id ? runsForDataset().filter(run => run.source === "live") : [],
+      runId: app.dataset.nav === "history" && historyResult?.stage === 3 ? historyResult.runId : null,
+    });
   }
 
   function showStage(button, open) {
@@ -940,13 +950,14 @@
         : historyText(...genotypeHistoryState(historyJob(run)?.state));
       const stages = historySteps.map((key, offset) => {
         const job = run.jobs[key];
-        if (!job && !(offset === 1 && run.source === "live" && run.jobs.genotype?.state === "completed")) return "";
+        if (!job && !(run.source === "live" && (offset === 1 && run.jobs.genotype?.state === "completed" ||
+          offset === 2 && run.jobs.genotype?.state === "completed" && run.jobs.expression?.state === "completed"))) return "";
         const number = offset + 1;
         const icon = job?.state === "completed" ? "circle-check" : "history";
         const title = `<i data-lucide="${icon}" aria-hidden="true"></i>
           ${historyText(`第 ${number} 階段`, `Stage ${number}`)}<strong>${historyLabel(stageData[offset].name)}</strong>
           <time datetime="${escapeHistory(job?.finished_at)}">${escapeHistory(clockTime(job?.finished_at))}</time>`;
-        const panel = number === 2 && run.source === "live" && job?.state !== "completed" ? "lens-stage2"
+        const panel = [2, 3].includes(number) && run.source === "live" && job?.state !== "completed" ? `lens-stage${number}`
           : number === 3 ? "lens-history-stage3" : number === 6 ? "lens-stage6" : "lens-history-stage";
         const legacy = number === 3 ? `data-run-adjustment="${id}"` : number === 6 ? `data-run-network="${id}"` : "";
         return `<li><button type="button" class="ml-run-step-link" data-run-stage="${number}"
@@ -1196,13 +1207,17 @@
 
     stage3RunLabel.textContent = run?.name[inEnglish ? 1 : 0] ?? "";
     stage3RunLabel.title = run?.run_id ?? "";
+    stage3RunLabel.previousElementSibling.textContent = run?.source === "live"
+      ? (inEnglish ? "Run" : "執行") : (inEnglish ? "Archived run" : "封存執行");
     stage3Components.textContent = stage3Result ? number.format(stage3Result.npc) : "—";
     for (const count of stage3Counts) {
       const value = stage3Result?.matching[count.dataset.s3Count];
       count.textContent = Number.isInteger(value) ? number.format(value) : "—";
     }
     stage3Status.hidden = !stage3States[state];
-    stage3Status.textContent = stage3States[state]?.[inEnglish ? 1 : 0] ?? "";
+    stage3Status.textContent = run?.source === "live" && state === "loading"
+      ? (inEnglish ? "Loading the saved Stage 3 result…" : "讀取第 3 階段結果…")
+      : stage3States[state]?.[inEnglish ? 1 : 0] ?? "";
     stage3Retry.hidden = state !== "error";
     stage3HistoryPanel.querySelector(".s3-figure").hidden = state !== "ready";
     stage3HistoryPanel.querySelector(".ml-result-dock").hidden = state !== "ready";
@@ -1219,9 +1234,11 @@
       stage3Plot.setAttribute("aria-label", inEnglish
         ? `Scatter plot of ${number.format(points.length)} retained individuals on PC1 and PC2`
         : `${number.format(points.length)} 位保留個體在第 1 與第 2 主成分上的散點圖`);
-      stage3Legend.textContent = inEnglish
-        ? "Each point is one retained individual. The plot is reconstructed from the archived genotype data."
-        : "每個點代表一位保留個體。散點圖由封存的基因型資料重建。";
+      stage3Legend.textContent = pca.source === "signet_smartpca"
+        ? (inEnglish ? "Each point is one retained individual. Coordinates and explained variance come from this run’s SIGNET PCA outputs."
+          : "每個點代表一位保留個體。座標與解釋變異比例來自這筆執行的主成分分析輸出。")
+        : (inEnglish ? "Each point is one retained individual. The plot is reconstructed from the archived genotype data."
+          : "每個點代表一位保留個體。散點圖由封存的基因型資料重建。" );
     } else {
       stage3Plot.querySelector(".s3-points").replaceChildren();
       stage3Legend.textContent = inEnglish ? "This archive has no data for the PCA plot." : "這份封存結果沒有可繪製主成分圖的資料。";
@@ -1445,7 +1462,9 @@
     stage3HistoryPanel.dataset.runState = "loading";
     renderStage3History();
     try {
-      const result = await getArchivedResult("/stage3/results?" + new URLSearchParams({run: runId}), {signal: request.signal});
+      const params = new URLSearchParams({run: runId});
+      if (runsForDataset().find(run => run.run_id === runId)?.source === "live") params.set("source", "live");
+      const result = await getArchivedResult("/stage3/results?" + params, {signal: request.signal});
       if (request.signal.aborted) return;
       if (result.run_id !== runId) throw new Error("Stage 3 result belongs to a different run");
       stage3Result = result;
@@ -1722,12 +1741,18 @@
     const selectedRun = matchingRuns.find(run => run.run_id === selected);
     const showExpression = showResult && historyResult.stage === 2 && selectedRun?.source === "live" &&
       selectedRun.jobs.expression?.state !== "completed";
-    stage3HistoryPanel.hidden = !showResult || historyResult.stage !== 3;
+    const showAdjustment = showResult && historyResult.stage === 3 && selectedRun?.source === "live" &&
+      selectedRun.jobs.adjust?.state !== "completed";
+    stage3HistoryPanel.hidden = !showResult || historyResult.stage !== 3 || showAdjustment;
     archivedStepPanel.hidden = !showResult || showExpression || !archiveSteps.has(historyResult.stage);
     const expressionPanel = root.querySelector("#lens-stage2");
     expressionPanel.classList.toggle("ml-workspace", !showExpression);
     expressionPanel.classList.toggle("ml-nav-workspace", showExpression);
     expressionPanel.hidden = inHistory ? !showExpression : timeline.querySelector('[aria-current="step"]').dataset.stage !== "2";
+    const adjustmentPanel = root.querySelector("#lens-stage3");
+    adjustmentPanel.classList.toggle("ml-workspace", !showAdjustment);
+    adjustmentPanel.classList.toggle("ml-nav-workspace", showAdjustment);
+    adjustmentPanel.hidden = inHistory ? !showAdjustment : timeline.querySelector('[aria-current="step"]').dataset.stage !== "3";
     runDetails.hidden = !inHistory || !selected || showResult;
     byId("empty-history").hidden = !inHistory || Boolean(selected);
     byId("empty-run-list").hidden = Boolean(selected);
@@ -1754,16 +1779,16 @@
     timeline.hidden = !hasSavedResults;
     byId("stage-header").querySelector("span").hidden = !hasSavedResults;
     byId("empty-stage").hidden = hasSavedResults || historyState !== "ready";
-    // Stages 1 and 2 use manual jobs; the later stages retain the saved walkthrough.
+    // Stages 1–3 use manual jobs; the later stages retain the saved walkthrough.
     const showWalkthrough = isExample && stage6RunsForDataset().length > 0;
     const activeStage = timeline.querySelector('[aria-current="step"]').dataset.stage;
-    if (!isExample || (!showWalkthrough && !["1", "2", "6"].includes(activeStage))) {
+    if (!isExample || (!showWalkthrough && !["1", "2", "3", "6"].includes(activeStage))) {
       const lastStage = stageButtons[stageButtons.length - 1];
       showStage(lastStage, true);
     }
     for (const button of stageButtons) {
       button.closest(".ml-stage-entry").hidden = !showWalkthrough && button.dataset.stage !== "6" &&
-        !(isExample && ["1", "2"].includes(button.dataset.stage));
+        !(isExample && ["1", "2", "3"].includes(button.dataset.stage));
     }
     syncGenotypeContext();
   }
@@ -1796,6 +1821,10 @@
       if (historyResult?.stage === 2 && historyRuns.find(run => run.run_id === historyResult.runId)?.jobs.expression?.state === "completed" &&
         (archivedStepPanel.dataset.runId !== historyResult.runId || archivedStepPanel.dataset.stage !== "2")) {
         void loadArchivedStep();
+      }
+      if (historyResult?.stage === 3 && historyRuns.find(run => run.run_id === historyResult.runId)?.jobs.adjust?.state === "completed" &&
+        stage3HistoryPanel.dataset.runId !== historyResult.runId) {
+        void loadStage3Run();
       }
       if (genotypeRun && !restoredGenotypeRun) {
         restoredGenotypeRun = true;
@@ -1835,6 +1864,16 @@
     clearHistoryResult();
     updateHistoryView();
     runDetails.querySelector(`[data-run-stage="2"][data-run-id="${CSS.escape(runId)}"]`)?.focus({preventScroll: true});
+  }
+
+  async function openAdjustmentHistory(runId) {
+    openNavigation("history");
+    await loadWorkspaceHistory();
+    if (app.dataset.nav !== "history" || !runsForDataset().some(run => run.run_id === runId)) return;
+    selectedRuns.set(activeDataset.id, runId);
+    clearHistoryResult();
+    updateHistoryView();
+    runDetails.querySelector(`[data-run-stage="3"][data-run-id="${CSS.escape(runId)}"]`)?.focus({preventScroll: true});
   }
 
   function closeDatasetForm() {
@@ -1946,14 +1985,17 @@
     if (!runsForDataset().some(({run_id}) => run_id === runId)) return;
     clearHistoryResult();
     historyResult = {runId, stage};
-    if (stage === 3) void loadStage3Run();
+    if (stage === 3 && !(runsForDataset().find(run => run.run_id === runId)?.source === "live" &&
+      runsForDataset().find(run => run.run_id === runId)?.jobs.adjust?.state !== "completed")) void loadStage3Run();
     else if (archiveSteps.has(stage) && !(stage === 2 &&
       runsForDataset().find(run => run.run_id === runId)?.source === "live" &&
       runsForDataset().find(run => run.run_id === runId)?.jobs.expression?.state !== "completed")) void loadArchivedStep();
     updateHistoryView();
     syncStage6Picker();
     const expressionBack = root.querySelector("#lens-stage2 [data-expression-back]");
+    const adjustmentBack = root.querySelector("#lens-stage3 [data-adjust-back]");
     const back = stage === 2 && !root.querySelector("#lens-stage2").hidden ? expressionBack
+      : stage === 3 && !root.querySelector("#lens-stage3").hidden ? adjustmentBack
       : stage === 3 ? stage3Back : stage === 6 ? stage6Back : archivedStepBack;
     back.focus({ preventScroll: true });
   });
@@ -2086,6 +2128,13 @@
     token: chatToken,
     onHistoryChanged: () => void loadWorkspaceHistory(),
     onOpenHistory: (runId) => void openExpressionHistory(runId),
+    onBack: backToRunTimeline,
+  });
+  adjustmentRun = globalThis.mountAdjustmentRun({
+    panel: root.querySelector("#lens-stage3"),
+    token: chatToken,
+    onHistoryChanged: () => void loadWorkspaceHistory(),
+    onOpenHistory: (runId) => void openAdjustmentHistory(runId),
     onBack: backToRunTimeline,
   });
   updateAnalysisView();

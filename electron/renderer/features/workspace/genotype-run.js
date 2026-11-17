@@ -396,64 +396,92 @@
     "pmap.file": ["基因註解檔案", "Gene annotation file"],
   };
 
-  window.mountExpressionRun = function mountExpressionRun({panel, token, onHistoryChanged, onOpenHistory, onBack}) {
-    const expressionInputs = ["gexp.file", "pmap.file"];
+  const adjustmentCopy = {
+    title: ["樣本配對與校正", "Sample matching and adjustment"],
+    stage: ["第 3 階段", "Stage 3"],
+    run: ["接續執行", "Continue run"],
+    empty: ["先選擇第 1、2 階段已完成的執行。", "Choose a run with completed Stages 1 and 2."],
+    prerequisite: ["這筆執行的第 1、2 階段完成後，即可送出第 3 階段。", "Submit Stage 3 after Stages 1 and 2 complete in this run."],
+    readyPrompt: ["核對臨床資料、主成分數與運算資源後，按「送出第 3 階段」。", "Review the clinical file, principal components and resources, then select Submit Stage 3."],
+    submit: ["送出第 3 階段", "Submit Stage 3"],
+    review: ["檢查臨床資料", "Check clinical file"],
+    checking: ["正在核對臨床資料…", "Checking clinical data…"],
+    inputs: ["臨床資料", "Clinical data"],
+    retry: expressionCopy.retry,
+    back: expressionCopy.back,
+    npc: ["校正使用的主成分數（0–10）", "Principal components for adjustment (0–10)"],
+    "cli.file": ["臨床資料檔案", "Clinical data file"],
+  };
+
+  function mountContinuationRun({panel, token, onHistoryChanged, onOpenHistory, onBack}, adjustment = false) {
+    const step = adjustment ? "adjust" : "expression";
+    const prefix = step;
+    const stage = adjustment ? 3 : 2;
+    const copy = adjustment ? adjustmentCopy : expressionCopy;
+    const parameterKey = adjustment ? "npc" : "restrict.tcga";
+    const parameterGroup = adjustment ? "options" : "settings";
+    const parameterAttribute = adjustment ? "option" : "setting";
+    const fileKeys = adjustment ? ["cli.file"] : ["gexp.file", "pmap.file"];
     panel.classList.add("ml-expression-panel");
+    if (adjustment) panel.classList.add("ml-adjust-panel");
     panel.innerHTML = `
       <div class="ml-result-main ml-genotype-main" data-live-language>
-        <header><p class="ml-genotype-eyebrow" data-expression-copy="stage"></p>
-          <h2 id="lens-stage2-title" data-expression-copy="title"></h2></header>
-        <label class="ml-expression-run-label"><span data-expression-copy="run"></span>
-          <select data-expression-run></select>
+        <header><p class="ml-genotype-eyebrow" data-${prefix}-copy="stage"></p>
+          <h2 id="lens-stage${stage}-title" data-${prefix}-copy="title"></h2></header>
+        <label class="ml-expression-run-label"><span data-${prefix}-copy="run"></span>
+          <select data-${prefix}-run></select>
         </label>
-        <p data-expression-readiness role="status"></p>
-        <p data-expression-guidance></p>
-        <button type="button" class="ml-nav-action" data-expression-review data-expression-copy="review"></button>
-        <form data-expression-form hidden>
-          <h3 data-expression-copy="inputs"></h3>
-          <dl class="ml-key-values">${expressionInputs.map(key => `<dt data-expression-copy="${key}"></dt>
-            <dd><code data-expression-input="${key}"></code></dd>`).join("")}</dl>
-          <fieldset data-expression-fields><legend data-expression-copy="settings"></legend>
-            <div class="ml-genotype-controls"><label><span data-expression-copy="chromosome"></span>
-              <input type="number" data-expression-setting="restrict.tcga" min="1" max="1" value="1" readonly>
+        <p data-${prefix}-readiness role="status"></p>
+        <p data-${prefix}-guidance></p>
+        <button type="button" class="ml-nav-action" data-${prefix}-review data-${prefix}-copy="review"></button>
+        <form data-${prefix}-form hidden>
+          <h3 data-${prefix}-copy="inputs"></h3>
+          <dl class="ml-key-values">${fileKeys.map(key => `<dt data-${prefix}-copy="${key}"></dt>
+            <dd>${adjustment
+              ? `<input class="ml-clinical-input" type="text" data-${prefix}-input="${key}" maxlength="2048" required>`
+              : `<code data-${prefix}-input="${key}"></code>`}</dd>`).join("")}</dl>
+          ${adjustment ? '<p class="ml-settings-note" data-adjust-clinical-summary role="status"></p>' : ''}
+          <fieldset data-${prefix}-fields><legend data-${prefix}-copy="settings"></legend>
+            <div class="ml-genotype-controls"><label><span data-${prefix}-copy="${adjustment ? 'npc' : 'chromosome'}"></span>
+              <input type="number" data-${prefix}-${parameterAttribute}="${parameterKey}" min="${adjustment ? 0 : 1}" max="${adjustment ? 10 : 1}" value="${adjustment ? 3 : 1}" ${adjustment ? 'required' : 'readonly'}>
             </label></div>
           </fieldset>
-          <fieldset data-expression-fields><legend data-expression-copy="resources"></legend>
-            <div class="ml-genotype-controls">${resources.map(key => `<label><span data-expression-copy="${key}"></span>
-              <input type="number" data-expression-resource="${key}" step="${key === "hours" ? "any" : "1"}" required>
+          <fieldset data-${prefix}-fields><legend data-${prefix}-copy="resources"></legend>
+            <div class="ml-genotype-controls">${resources.map(key => `<label><span data-${prefix}-copy="${key}"></span>
+              <input type="number" data-${prefix}-resource="${key}" step="${key === "hours" ? "any" : "1"}" value="${adjustment ? ({cpus:4, mem_gb:16, hours:2})[key] : ''}" required>
             </label>`).join("")}</div>
           </fieldset>
-          <button type="button" class="ml-nav-action ml-genotype-submit" data-expression-submit data-expression-copy="submit"></button>
+          <button type="button" class="ml-nav-action ml-genotype-submit" data-${prefix}-submit data-${prefix}-copy="submit"></button>
         </form>
       </div>
       <aside class="ml-result-inspector ml-genotype-progress" data-live-language>
-        <header class="ml-result-inspector-heading"><h3 data-expression-copy="progress"></h3></header>
-        <p class="ml-genotype-status" data-expression-status role="status"></p>
-        <dl class="ml-key-values" data-expression-identifiers hidden>
-          <dt data-expression-copy="runID"></dt><dd data-expression-run-id></dd>
-          <dt data-expression-copy="jobID"></dt><dd data-expression-job-id></dd>
+        <header class="ml-result-inspector-heading"><h3 data-${prefix}-copy="progress"></h3></header>
+        <p class="ml-genotype-status" data-${prefix}-status role="status"></p>
+        <dl class="ml-key-values" data-${prefix}-identifiers hidden>
+          <dt data-${prefix}-copy="runID"></dt><dd data-${prefix}-run-id></dd>
+          <dt data-${prefix}-copy="jobID"></dt><dd data-${prefix}-job-id></dd>
         </dl>
-        <ol class="ml-genotype-events" data-expression-events hidden></ol>
-        <p class="ml-genotype-notice" data-expression-notice role="status" hidden></p>
+        <ol class="ml-genotype-events" data-${prefix}-events hidden></ol>
+        <p class="ml-genotype-notice" data-${prefix}-notice role="status" hidden></p>
         <div class="ml-genotype-actions">
-          <button type="button" class="ml-nav-action" data-expression-refresh data-expression-copy="refresh" hidden></button>
-          <button type="button" class="ml-nav-action" data-expression-history data-expression-copy="history" hidden></button>
-          <button type="button" class="ml-nav-action" data-expression-retry data-expression-copy="retry" hidden></button>
-          <button type="button" class="ml-nav-action" data-expression-back data-expression-copy="back" hidden></button>
+          <button type="button" class="ml-nav-action" data-${prefix}-refresh data-${prefix}-copy="refresh" hidden></button>
+          <button type="button" class="ml-nav-action" data-${prefix}-history data-${prefix}-copy="history" hidden></button>
+          <button type="button" class="ml-nav-action" data-${prefix}-retry data-${prefix}-copy="retry" hidden></button>
+          <button type="button" class="ml-nav-action" data-${prefix}-back data-${prefix}-copy="back" hidden></button>
         </div>
       </aside>`;
 
-    const part = name => panel.querySelector(`[data-expression-${name}]`);
+    const part = name => panel.querySelector(`[data-${prefix}-${name}]`);
     const form = part("form");
     const picker = part("run");
-    const resourceInputs = new Map(resources.map(key => [key, panel.querySelector(`[data-expression-resource="${key}"]`)]));
-    const settingsInputs = new Map([["restrict.tcga", panel.querySelector('[data-expression-setting="restrict.tcga"]')]]);
-    const fields = [...panel.querySelectorAll("[data-expression-fields]")];
+    const resourceInputs = new Map(resources.map(key => [key, panel.querySelector(`[data-${prefix}-resource="${key}"]`)]));
+    const parameterInputs = new Map([[parameterKey, panel.querySelector(`[data-${prefix}-${parameterAttribute}="${parameterKey}"]`)]]);
+    const fields = [...panel.querySelectorAll(`[data-${prefix}-fields]`)];
     const runStates = new Map();
     let context = {datasetId: "", language: "zh-Hant", visible: false, runs: [], runId: null};
     let selectedRun = "";
     let pollTimer;
-    const local = key => (expressionCopy[key] ?? labels[key])?.[context.language === "en" ? 1 : 0] ?? key;
+    const local = key => (copy[key] ?? labels[key])?.[context.language === "en" ? 1 : 0] ?? key;
     const current = () => runStates.get(selectedRun);
     const source = () => context.runs.find(run => run.run_id === selectedRun);
 
@@ -477,24 +505,38 @@
     }
 
     function fillReview(value, keepDraft = false) {
-      for (const key of expressionInputs) panel.querySelector(`[data-expression-input="${key}"]`).textContent = value.inputs?.[key] ?? "—";
-      for (const [key, element] of settingsInputs) if (!keepDraft) element.value = value.settings?.[key] ?? "";
+      for (const key of fileKeys) {
+        const element = panel.querySelector(`[data-${prefix}-input="${key}"]`);
+        if (adjustment) element.value = value.inputs?.[key] ?? "";
+        else element.textContent = value.inputs?.[key] ?? "—";
+      }
+      for (const [key, element] of parameterInputs) if (!keepDraft) element.value = value[parameterGroup]?.[key] ?? "";
       for (const [key, element] of resourceInputs) {
         if (value.limits?.[key]) [element.min, element.max] = value.limits[key];
         if (!keepDraft) element.value = value.resources?.[key] ?? "";
       }
     }
 
+    function saveAdjustmentDraft() {
+      const item = current();
+      if (!adjustment || !item || item.record && !item.retry) return;
+      item.draft = {
+        clinical: panel.querySelector('[data-adjust-input="cli.file"]').value,
+        options: Object.fromEntries([...parameterInputs].map(([key, input]) => [key, input.value])),
+        resources: Object.fromEntries([...resourceInputs].map(([key, input]) => [key, input.value])),
+      };
+    }
+
     function render() {
-      for (const element of panel.querySelectorAll("[data-expression-copy]")) element.textContent = local(element.dataset.expressionCopy);
+      for (const element of panel.querySelectorAll(`[data-${prefix}-copy]`)) element.textContent = local(element.getAttribute(`data-${prefix}-copy`));
       const item = current();
       const saved = item?.record;
       const state = item?.submitting ? "submitting" : item?.uncertain ? "unknown" : saved?.state ?? "idle";
       const hasAttempt = Boolean(saved) && !item?.retry || Boolean(item?.submitting || item?.uncertain);
-      const allowed = source()?.jobs.genotype?.state === "completed";
+      const allowed = source()?.jobs.genotype?.state === "completed" && (!adjustment || source()?.jobs.expression?.state === "completed");
       const terminal = terminalStates.has(state);
-      panel.dataset.expressionState = state;
-      panel.dataset.expressionRunId = selectedRun;
+      panel.dataset[`${prefix}State`] = state;
+      panel.dataset[`${prefix}RunId`] = selectedRun;
       const selection = selectedRun;
       picker.replaceChildren(...context.runs.map(run => {
         const option = document.createElement("option");
@@ -505,14 +547,21 @@
       picker.value = selection;
       picker.disabled = Boolean(context.runId) || !context.runs.length || Boolean(item?.submitting);
       part("readiness").textContent = !selectedRun ? local("empty") : !allowed ? local("prerequisite")
-        : item.checking ? local("checking") : item.review && !hasAttempt ? local("ready") : "";
-      part("guidance").textContent = allowed && item?.review && !hasAttempt ? local("readyPrompt") : "";
-      part("review").hidden = !allowed || hasAttempt;
+        : item.checking ? local("checking") : item.review && !hasAttempt ? local(item.review.ready === false ? "unavailable" : "ready") : "";
+      part("guidance").textContent = allowed && item?.review && !hasAttempt && item.review.ready !== false ? local("readyPrompt") : "";
+      part("review").hidden = !(adjustment ? selectedRun : allowed) || hasAttempt;
       part("review").disabled = Boolean(item?.checking);
-      form.hidden = !allowed || !(hasAttempt ? saved?.inputs : item?.review);
-      for (const field of fields) field.disabled = hasAttempt;
+      form.hidden = !adjustment && (!allowed || !(hasAttempt ? saved?.inputs : item?.review));
+      for (const field of fields) field.disabled = hasAttempt || !selectedRun;
+      if (adjustment) {
+        panel.querySelector('[data-adjust-input="cli.file"]').disabled = hasAttempt || Boolean(item?.checking) || !selectedRun;
+        const clinical = item?.review?.clinical;
+        part("clinical-summary").textContent = clinical
+          ? (context.language === "en" ? `${clinical.rows ?? 0} clinical rows · ${(clinical.columns ?? []).join(", ")}`
+            : `${clinical.rows ?? 0} 筆臨床資料 · ${(clinical.columns ?? []).join("、")}`) : "";
+      }
       part("submit").hidden = hasAttempt;
-      part("submit").disabled = !allowed || !item?.review || item.checking || item.submitting || hasAttempt;
+      part("submit").disabled = !allowed || !item?.review || item.review.ready === false || item.checking || item.submitting || hasAttempt;
       part("status").textContent = local(state);
       part("identifiers").hidden = !selectedRun;
       part("run-id").textContent = selectedRun;
@@ -542,7 +591,7 @@
     }
 
     function accept(item, value, id) {
-      if (value.run_id !== id || value.step !== "expression" || !Object.hasOwn(labels, value.state)) throw Error(local("serviceError"));
+      if (value.run_id !== id || value.step !== step || !Object.hasOwn(labels, value.state)) throw Error(local("serviceError"));
       const changed = !item.record || value.state !== item.record.state || value.job_id !== item.record.job_id;
       item.record = value;
       item.uncertain = false;
@@ -567,7 +616,7 @@
       item.polling = true;
       render();
       try {
-        accept(item, await request(`/signet/runs/${encodeURIComponent(id)}/steps/expression${force ? "?refresh=1" : ""}`), id);
+        accept(item, await request(`/signet/runs/${encodeURIComponent(id)}/steps/${step}${force ? "?refresh=1" : ""}`), id);
       } catch (error) {
         item.error = error.message;
       } finally {
@@ -580,15 +629,21 @@
     async function review() {
       const id = selectedRun;
       const item = current();
-      if (!id || !item || item.checking || item.submitting || item.uncertain || item.record && !item.retry || source()?.jobs.genotype?.state !== "completed") return;
+      if (!id || !item || !source() || item.checking || item.submitting || item.uncertain || item.record && !item.retry || !adjustment && source()?.jobs.genotype?.state !== "completed") return;
       item.checking = item.attempted = true;
       item.error = "";
       render();
       try {
-        const next = await request(`/signet/runs/${encodeURIComponent(id)}/expression/example`);
-        const preserve = item.review && expressionInputs.every(key => item.review.inputs[key] === next.inputs[key]);
+        const clinicalPath = adjustment ? panel.querySelector('[data-adjust-input="cli.file"]').value.trim() : "";
+        const query = clinicalPath ? `?clinical=${encodeURIComponent(clinicalPath)}` : "";
+        const next = await request(`/signet/runs/${encodeURIComponent(id)}/${step}/example${query}`);
+        const preserve = adjustment || item.review && fileKeys.every(key => item.review.inputs[key] === next.inputs[key]);
         item.review = next;
-        if (id === selectedRun) fillReview(next, Boolean(preserve));
+        item.error = next.issues?.join(" ") || next.reason || "";
+        if (id === selectedRun) {
+          fillReview(next, Boolean(preserve));
+          saveAdjustmentDraft();
+        }
       } catch (error) {
         item.review = null;
         item.error = error.message;
@@ -600,15 +655,22 @@
 
     function selectRun(id) {
       const changed = selectedRun !== id;
+      if (changed) saveAdjustmentDraft();
       selectedRun = id;
       clearTimeout(pollTimer);
       const item = id ? stateFor(id) : null;
-      const saved = source()?.jobs.expression;
+      const saved = source()?.jobs[step];
       const received = saved && saved.state !== "not_submitted" && !item.submitting && !item.uncertain &&
         (!item.record || Date.parse(saved.updated_at ?? saved.submitted_at) > Date.parse(item.record.updated_at ?? item.record.submitted_at));
       if (received) item.record = saved;
       if ((changed || received) && item?.record?.inputs && !item.retry) fillReview(item.record);
       else if (changed && item?.review) fillReview(item.review);
+      else if (changed && adjustment) fillReview({options: {npc: 3}, resources: {cpus: 4, mem_gb: 16, hours: 2}});
+      if (changed && adjustment && item?.draft && (!item.record || item.retry)) {
+        panel.querySelector('[data-adjust-input="cli.file"]').value = item.draft.clinical;
+        for (const [key, input] of parameterInputs) input.value = item.draft.options[key];
+        for (const [key, input] of resourceInputs) input.value = item.draft.resources[key];
+      }
       render();
       if (context.visible && item && !item.attempted && !item.record) void review();
       if (item?.record && !terminalStates.has(item.record.state)) void refresh();
@@ -620,13 +682,13 @@
       const item = current();
       if (!item || part("submit").disabled || !form.reportValidity()) return;
       const values = inputs => Object.fromEntries([...inputs].map(([key, element]) => [key, element.valueAsNumber]));
-      const body = {inputs: item.review.inputs, settings: values(settingsInputs), resources: values(resourceInputs)};
+      const body = {inputs: item.review.inputs, [parameterGroup]: values(parameterInputs), resources: values(resourceInputs)};
       item.submitting = true;
       item.retry = false;
       item.error = "";
       render();
       try {
-        accept(item, await request(`/signet/runs/${encodeURIComponent(id)}/expression/example`, body), id);
+        accept(item, await request(`/signet/runs/${encodeURIComponent(id)}/${step}/example`, body), id);
       } catch (error) {
         item.error = error.message;
         if (error.status === 400 || error.status === 412 || error.status === 502 && error.code === "remote_failed") {
@@ -646,6 +708,18 @@
     }
 
     form.addEventListener("submit", event => event.preventDefault());
+    if (adjustment) {
+      panel.querySelector('[data-adjust-input="cli.file"]').addEventListener("input", () => {
+        const item = current();
+        if (!item) return;
+        item.review = null;
+        item.attempted = true;
+        item.error = "";
+        saveAdjustmentDraft();
+        render();
+      });
+      for (const input of [...parameterInputs.values(), ...resourceInputs.values()]) input.addEventListener("input", saveAdjustmentDraft);
+    }
     picker.addEventListener("change", () => selectRun(picker.value));
     part("review").addEventListener("click", () => void review());
     part("submit").addEventListener("click", () => void submit());
@@ -665,6 +739,10 @@
         const id = context.runId ?? (context.runs.some(run => run.run_id === selectedRun) ? selectedRun : context.runs[0]?.run_id ?? "");
         selectRun(id);
       },
-    };
-  };
+    }
+  }
+
+  window.mountExpressionRun = options => mountContinuationRun(options);
+  window.mountAdjustmentRun = options => mountContinuationRun(options, true);
+
 })();
