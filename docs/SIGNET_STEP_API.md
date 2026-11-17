@@ -140,7 +140,7 @@ Inside the API:
 `GET /signet/runs/{run_id}/expression/example` reviews Stage 2 for that existing
 workspace run after its genotype step completes. Its response contains
 `run_id`, `inputs`, `settings`, `resources` and `limits`. The inputs are the
-audited source's `example/gexp-prep/example_gexp` and the configured gene
+audited source's `example/gexp/example_gexp` and the configured gene
 annotation, defaulting to `refdata/gencode.v22.genes.gtf`. Selected annotations
 still follow the input-root and path checks described in section 3. The
 chromosome setting is fixed to `{"restrict.tcga": 1}`.

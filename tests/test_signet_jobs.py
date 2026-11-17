@@ -45,6 +45,8 @@ FAKE_SLURM = {
     'scancel': 'printf "%s\\n" "$@" >> "$FAKE/scancel"',
 }
 OUTPUTS = steps.STEPS['expression'].required
+EXAMPLE_EXPRESSION_PATH = next(item['path'] for item in st.INVENTORY['example_files']
+                               if Path(item['path']).name == 'example_gexp')
 
 
 class StepsTest(unittest.TestCase):
@@ -861,14 +863,14 @@ class StepsTest(unittest.TestCase):
         preserved = {path: path.read_bytes() for path in
                      (root / workspace.SNAPSHOT, root / 'steps/genotype.json', root / 'work/res/resg/signet_Geno',
                       root / 'work/res/resg/signet_Genotype.sampleID')}
-        self.gexp = self.hpc / 'ws/signet/example/gexp-prep/example_gexp'
+        self.gexp = self.hpc / 'ws/signet' / EXAMPLE_EXPRESSION_PATH
         self.gexp.parent.mkdir()
         self.gexp.write_text('counts')
         annotation = self.hpc / 'ws/refdata/gencode.v22.genes.gtf'
         annotation.write_text('genes')
         self.assertEqual(request('GET', route.replace(run_id, 'step_test'))[0], 404)
         status, review = request('GET', route)
-        self.assertEqual(status, 200)
+        self.assertEqual(status, 200, review)
         self.assertEqual(review['run_id'], run_id)
         self.assertEqual(review['inputs'], {'gexp.file': str(self.gexp), 'pmap.file': str(annotation)})
         self.assertEqual(review['settings'], {'restrict.tcga': 1})

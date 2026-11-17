@@ -121,7 +121,8 @@ def _expression_inputs(config):
         raise jobs.StepError('remote_failed', 'Could not read the configured gene annotation on HPC3.') from error
     if code or not values.get('annotation'):
         raise jobs.StepError('remote_failed', 'Could not read the configured gene annotation on HPC3.')
-    return {'gexp.file': config['source'] + '/example/gexp-prep/example_gexp',
+    # The pinned example inventory uses gexp; upstream config.ini.default still says gexp-prep.
+    return {'gexp.file': config['source'] + '/example/gexp/example_gexp',
             'pmap.file': values['annotation']}
 
 

@@ -9,7 +9,7 @@ import tempfile
 
 REPO = Path(__file__).resolve().parents[3]
 sys.path[:0] = [str(REPO), str(REPO / 'tests')]
-from test_signet_jobs import StepsTest
+from test_signet_jobs import EXAMPLE_EXPRESSION_PATH, StepsTest
 
 
 def main():
@@ -22,7 +22,7 @@ def main():
     try:
         fixture.setUp()
         inputs = fixture.genotype_inputs()
-        expression = fixture.hpc / 'ws/signet/example/gexp-prep/example_gexp'
+        expression = fixture.hpc / 'ws/signet' / EXAMPLE_EXPRESSION_PATH
         expression.parent.mkdir(parents=True, exist_ok=True)
         expression.write_text('gene_id\tS1\tS2\tS3\tS4\nENSG1\t1\t3\t5\t7\nENSG2\t2\t4\t6\t8\n')
         annotation = fixture.hpc / 'ws/refdata/gencode.v22.genes.gtf'
