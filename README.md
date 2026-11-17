@@ -4,6 +4,12 @@ Use a local chat interface to explore SIGNET's analysis capabilities, inspect fi
 
 The desktop opens to the bilingual workspace. The chat uses the existing SIGNET Agent with your configured model and saved conversations. Data and Run history show saved dataset records and their archived runs. Each run has an input snapshot and a timeline that opens its saved stage results. Analysis can submit Stage 1 for the chromosome 1 example through the existing HPC3 workflow. After Stage 1 completes, open Stage 2 of that run to review and manually submit expression preprocessing. Stage 3 continues that run with a reviewed clinical file and principal component count, live progress, and saved sample matching, PCA and expression adjustment results. Stage 4 reviews the association threshold, analysis range and permutations before submitting cis-eQTL mapping in the same run, with saved settings and the complete association table. Stage 5 continues with reviewed bootstrap, instrument correlation and compute settings, follows the controller and model work progress, and shows all saved candidate connections and bootstrap frequencies. Stage 6 reviews the frequency threshold and subnetwork count, runs the original exports, and opens the same run's graph and linked edge table with gene filtering. Use **Settings → Remote compute** to connect to HPC3 and check remote resources.
 
+Datasets created in **Data** and their current file selections survive an app
+restart. Each dataset shows only its own run history, whose original files and
+settings remain preserved when current selections change. File choices still
+use the existing simulated picker; running another dataset is a separate
+integration step.
+
 ## Replacing the Former Desktop Workbench
 
 This version replaces the desktop workbench with the local chat research assistant. The retired `desktop/` implementation, former `tools/` setup and execution entry points, desktop architecture documents, and historical validation records have been removed. Use the Python installation and startup steps below; the former desktop `npm start` and `tools/setup-dev.sh` are no longer entry points. The current Electron client is the supported UI described below.

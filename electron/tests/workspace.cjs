@@ -1,14 +1,30 @@
 'use strict';
 
 const assert = require('node:assert/strict');
-const {randomBytes} = require('node:crypto');
-const {mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync} = require('node:fs');
+const {once} = require('node:events');
+const {createHash, randomBytes} = require('node:crypto');
+const {cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync} = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const {app, BrowserWindow, screen} = require('electron');
+const {Backend} = require('../main/backend/backend.cjs');
+const {launch} = require('../main/app/main.cjs');
 
-const temporary = mkdtempSync(path.join(os.tmpdir(), 'signet-workspace-test-'));
+const temporary = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'signet-workspace-test-')));
 app.setPath('appData', temporary);
+const project = path.join(temporary, 'project');
+const backendMetadata = path.join(temporary, 'backend-starts.json');
+const datasetState = path.join(project, 'data/workspace-datasets.json');
+const repo = path.resolve(__dirname, '../..');
+const pythonWrapper = path.join(temporary, 'python-fixture');
+const defaultPython = path.join(repo, '.venv/bin/python');
+process.env.SIGNET_WORKSPACE_TEST_PYTHON = process.env.SIGNET_PYTHON || (existsSync(defaultPython) ? defaultPython : 'python3');
+process.env.SIGNET_WORKSPACE_TEST_ENTRY = path.join(__dirname, 'fixtures/workspace_backend.py');
+process.env.SIGNET_WORKSPACE_TEST_PROJECT = project;
+process.env.SIGNET_WORKSPACE_TEST_BACKEND = backendMetadata;
+process.env.SIGNET_DATASETS_STATE_FILE = datasetState;
+writeFileSync(pythonWrapper, '#!/bin/sh\nexec "$SIGNET_WORKSPACE_TEST_PYTHON" "$SIGNET_WORKSPACE_TEST_ENTRY" "$@"\n', {mode: 0o700});
+process.env.SIGNET_PYTHON = pythonWrapper;
 const stateFile = path.join(temporary, 'SIGNET Research Assistant', 'state', '.chat-state.json');
 const existingSession = '19579628-cff7-48b1-8a7e-e275eff4272c';
 const existingMessage = 'Retained workspace conversation';
@@ -41,10 +57,11 @@ emit({'type': 'turn.completed', 'usage': {'input_tokens': 30, 'output_tokens': 1
 process.env.PATH = [temporary, process.env.PATH].filter(Boolean).join(path.delimiter);
 process.env.SIGNET_WORKSPACE_TEST_CAPTURE = captureFile;
 
-const archiveDir = path.resolve(__dirname, '../../data/stage6-results');
+const archiveDir = path.join(project, 'data/stage6-results');
 const datasetDir = path.resolve(archiveDir, '../datasets');
 const useArchivedRuns = process.argv.includes('--archived-run');
 const fixturePaths = [];
+let running, replacementBackend, startup;
 
 function cleanup() {
   clearTimeout(deadline);
@@ -54,11 +71,13 @@ function cleanup() {
 
 function fail(error) {
   console.error(error);
+  void replacementBackend?.forceStop();
+  void running?.backend.forceStop();
   cleanup();
   app.exit(1);
 }
 
-const deadline = setTimeout(() => fail(Error('Workspace startup and chat test timed out')), 45000);
+const deadline = setTimeout(() => fail(Error('Workspace persistence and chat test timed out')), 90000);
 app.on('will-quit', cleanup);
 
 function createHistoryFixture() {
@@ -67,6 +86,13 @@ function createHistoryFixture() {
     {id: name + '-a', name: ['測試資料甲', 'Test dataset A'], inputs: {genotype: ['current-a.ped'], expression: ['current-a-expression'], clinical: []}},
     {id: name + '-b', name: ['測試資料乙', 'Test dataset B'], inputs: {genotype: ['current-b.ped'], expression: [], clinical: []}},
   ];
+  for (const [index, dataset] of groups.entries()) {
+    dataset.folder = '/fixture/cohort-' + index;
+    dataset.default_inputs = dataset.inputs;
+    dataset.alternative_inputs = {genotype: index === 0 ? ['replacement-a.ped', 'replacement-a.map'] : [],
+      expression: [], clinical: []};
+    dataset.selections = {genotype: 0, expression: 0, clinical: 0};
+  }
   mkdirSync(datasetDir, {recursive: true});
   mkdirSync(archiveDir, {recursive: true});
   for (const dataset of groups) {
@@ -158,6 +184,8 @@ function createHistoryFixture() {
 }
 
 function readArchivedHistory() {
+  cpSync(path.join(repo, 'data/datasets'), datasetDir, {recursive: true});
+  cpSync(path.join(repo, 'data/stage6-results'), archiveDir, {recursive: true});
   const read = filename => JSON.parse(readFileSync(filename, 'utf8'));
   const groups = ['example-chr1', 'simulated-cohort-b'].map(id => read(path.join(datasetDir, id + '.json')));
   const runs = [
@@ -177,9 +205,49 @@ function readArchivedHistory() {
   return {groups, runs};
 }
 
-let history;
+function createLiveHistoryFixture() {
+  const run_id = 'workspace-persistence-live';
+  const root = path.join(project, 'runs', run_id);
+  const inputs = {'ped.file': '/fixture/original.ped', 'map.file': '/fixture/original.map',
+    ref: '/fixture/original-ref/chr', gmap: '/fixture/original-map/chr'};
+  const settings = {'restrict.tcga.geno': '1', mind: '0.07', geno: '0.08', hwe: '0.0001', int: '5000000'};
+  const snapshot = {run_id, dataset_id: 'example-chr1', submitted_at: '2026-11-17T01:00:00-0800',
+    inputs, settings, resources: {cpus: 3, mem_gb: 12, hours: 2}};
+  mkdirSync(path.join(root, 'steps'), {recursive: true});
+  mkdirSync(path.join(root, 'work/res/resg'), {recursive: true});
+  writeFileSync(path.join(root, 'manifest.json'), JSON.stringify({run_id}));
+  writeFileSync(path.join(root, 'workspace-genotype.json'), JSON.stringify(snapshot));
+  writeFileSync(path.join(root, 'steps/genotype.json'), JSON.stringify({...snapshot, step: 'genotype',
+    state: 'completed', job_id: '9001', finished_at: '2026-11-17T01:05:00-0800'}));
+  writeFileSync(path.join(root, 'work/config.ini'), 'mind = 0.07\ngeno = 0.08\nrestrict.tcga.geno = 1\nfreq = 0.45\nntop = 1\n');
+  writeFileSync(path.join(root, 'work/res/resg/signet_Geno'), '0 1\n2 0\n');
+  writeFileSync(path.join(root, 'work/res/resg/signet_Genotype.sampleID'), 'P1\nP2\n');
+  const example = path.join(datasetDir, 'example-chr1.json');
+  if (!existsSync(example)) writeFileSync(example, JSON.stringify({id: 'example-chr1',
+    name: ['第 1 號染色體範例', 'Chromosome 1 example'],
+    inputs: {genotype: ['study.ped', 'study.map'], expression: ['example_gexp'], clinical: ['clinical.tsv']}}));
+  return {run_id, inputs: {genotype: [inputs['ped.file'], inputs['map.file'], inputs.ref + '1.gen', inputs.gmap + '1.map']},
+    settings, root};
+}
+
+function frozenFiles(directories) {
+  const hashes = {};
+  function visit(directory) {
+    for (const entry of readdirSync(directory, {withFileTypes: true})) {
+      const filename = path.join(directory, entry.name);
+      if (entry.isDirectory()) visit(filename);
+      else hashes[path.relative(project, filename)] = createHash('sha256').update(readFileSync(filename)).digest('hex');
+    }
+  }
+  directories.forEach(visit);
+  return hashes;
+}
+
+let history, liveHistory, originalFiles;
 try {
   history = useArchivedRuns ? readArchivedHistory() : createHistoryFixture();
+  liveHistory = createLiveHistoryFixture();
+  originalFiles = frozenFiles([archiveDir, liveHistory.root]);
 } catch (error) { fail(error); }
 
 async function verifyWorkspace({groups, runs}) {
@@ -226,6 +294,7 @@ async function verifyWorkspace({groups, runs}) {
   await waitFor(() => [...datasetPicker.options].some(option => option.value === groups[0].id),
     'Dataset catalog failed to load');
   const token = document.querySelector('meta[name="chat-token"]').content;
+  const initialCatalog = await fetch('/signet/datasets', {headers: {'X-Chat-Token': token}}).then(reply => reply.json());
   const savedHistory = await fetch('/stage6/history', {headers: {'X-Chat-Token': token}}).then(reply => reply.json());
   const liveRuns = savedHistory.runs.filter(run => run.source === 'live');
   for (const group of groups) {
@@ -236,11 +305,14 @@ async function verifyWorkspace({groups, runs}) {
     check(datasetPicker.value === group.id, 'Could not select dataset ' + group.id);
     const current = find('#ml-input-genotype [data-current-files]').textContent;
     check(group.inputs.genotype.every(file => current.includes(file)), 'Dataset showed the wrong current files');
-    if (group.id === 'example-chr1') {
+    const alternatives = initialCatalog.datasets.find(dataset => dataset.id === group.id)?.alternative_inputs.genotype;
+    if (group === groups[0] && alternatives?.length) {
       click('#ml-input-genotype [data-input-replace]');
       click('#ml-file-picker input[value="1"]');
       click('[data-input-apply]');
-      check(find('#ml-input-genotype [data-current-files]').textContent.includes('study-qc-preview.ped'),
+      await waitFor(() => find('#ml-input-genotype .ml-current-input').dataset.saveState === 'applied',
+        'Alternate input selection was not saved');
+      check(alternatives.every(file => find('#ml-input-genotype [data-current-files]').textContent.includes(file)),
         'Could not select alternate draft files to test the saved history');
     }
     check(JSON.stringify(resultIds()) === JSON.stringify(runIds), 'Stage 6 picker showed another dataset’s runs');
@@ -351,11 +423,156 @@ async function verifyWorkspace({groups, runs}) {
   click('#ml-dataset-add');
   find('#ml-dataset-name').value = 'Third workspace dataset';
   click('#ml-dataset-create');
-  check(datasetPicker.selectedOptions[0]?.textContent === 'Third workspace dataset', 'New dataset was not selected');
+  await waitFor(() => find('#ml-dataset-form').dataset.saveState === 'saved' &&
+    datasetPicker.selectedOptions[0]?.textContent === 'Third workspace dataset', 'New dataset was not saved and selected');
+  const id = datasetPicker.value;
+  check(id.startsWith('dataset-') && !id.startsWith('draft-'), 'New dataset did not receive a persisted ID');
+  const catalog = await fetch('/signet/datasets', {headers: {'X-Chat-Token': token}}).then(reply => reply.json());
+  const created = catalog.datasets.find(dataset => dataset.id === id);
+  check(Boolean(created), 'New dataset was missing from the backend catalog');
+  for (const type of ['genotype', 'expression', 'clinical']) {
+    click(`[data-input-target="${type}"]`);
+    click(`#ml-input-${type} [data-input-replace]`);
+    click('#ml-file-picker input[value="1"]');
+    click('[data-input-apply]');
+    await waitFor(() => find(`#ml-input-${type} .ml-current-input`).dataset.saveState === 'applied',
+      'File choice was not saved for ' + type);
+    const current = find(`#ml-input-${type} [data-current-files]`).textContent;
+    check(created.alternative_inputs[type].length > 0 && created.alternative_inputs[type].every(file => current.includes(file)),
+      'The new dataset did not apply its own alternate ' + type + ' files');
+  }
+  click('[data-input-target="genotype"]');
+  click('#ml-input-genotype [data-input-reset]');
+  await waitFor(() => find('#ml-input-genotype .ml-current-input').dataset.saveState === 'default',
+    'Resetting genotype files to their default was not saved');
   click('#ml-language');
   check(datasetPicker.selectedOptions[0]?.textContent === 'Third workspace dataset', 'Language change lost the new dataset');
   go('history');
   check(!historyIds().length && visible('#ml-empty-history') && !resultIds().length, 'New dataset inherited saved runs');
+  const saved = await fetch('/signet/datasets', {headers: {'X-Chat-Token': token}}).then(reply => reply.json());
+  const record = saved.datasets.find(dataset => dataset.id === id);
+  check(record.selections.genotype === 0 && record.selections.expression === 1 && record.selections.clinical === 1,
+    'The backend did not retain the per-type default and alternate choices');
+  return {created: record, changed: saved.datasets.find(dataset => dataset.id === groups[0].id)};
+}
+
+async function verifyPersistedWorkspace({saved, groups, runs, live, changeLive = false}) {
+  const find = selector => {
+    const element = document.querySelector(selector);
+    if (!element) throw Error('Missing control after reopening: ' + selector);
+    return element;
+  };
+  const click = selector => {
+    const element = find(selector);
+    if (element instanceof HTMLElement) element.click();
+    else element.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+  };
+  const check = (condition, message) => { if (!condition) throw Error(message); };
+  const waitFor = async (condition, description) => {
+    const end = Date.now() + 10000;
+    while (!condition()) {
+      check(Date.now() < end, description);
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+  };
+  const visible = selector => Boolean(find(selector).getClientRects().length);
+  const go = view => click(`[data-nav-target="${view}"]`);
+  const picker = find('#ml-dataset-select');
+  const selectDataset = id => {
+    picker.value = id;
+    picker.dispatchEvent(new Event('change', {bubbles: true}));
+    check(picker.value === id, 'A saved dataset disappeared after backend restart: ' + id);
+  };
+  const visibleHistory = () => [...document.querySelectorAll('#ml-run-list [data-run-target]')]
+    .filter(button => button.getClientRects().length).map(button => button.dataset.runTarget).sort();
+  const token = document.querySelector('meta[name="chat-token"]').content;
+  await waitFor(() => [...picker.options].some(option => option.value === saved.created.id),
+    'The persisted dataset catalog did not reload');
+  const catalog = await fetch('/signet/datasets', {headers: {'X-Chat-Token': token}}).then(reply => reply.json());
+  for (const record of [saved.created, saved.changed, saved.liveDataset].filter(Boolean)) {
+    const current = catalog.datasets.find(dataset => dataset.id === record.id);
+    check(JSON.stringify(current) === JSON.stringify(record), 'Saved dataset configuration changed across restart: ' + record.id);
+    go('data');
+    selectDataset(record.id);
+    for (const type of ['genotype', 'expression', 'clinical']) {
+      click(`[data-input-target="${type}"]`);
+      const text = find(`#ml-input-${type} [data-current-files]`).textContent;
+      check(record.inputs[type].every(file => text.includes(file)), 'Reopened ' + type + ' files differ from the saved configuration');
+    }
+  }
+  go('data');
+  selectDataset(saved.created.id);
+  for (const type of ['genotype', 'expression', 'clinical']) {
+    click(`[data-input-target="${type}"]`);
+    click(`#ml-input-${type} [data-input-replace]`);
+    check(find(`#ml-file-picker input[value="${saved.created.selections[type]}"]`).checked,
+      'The persisted default/alternate selection was lost for ' + type);
+    click('[data-input-cancel]');
+  }
+  go('history');
+  check(!visibleHistory().length && visible('#ml-empty-history'), 'The new dataset inherited another dataset’s history after restart');
+
+  for (const group of groups) {
+    go('data');
+    selectDataset(group.id);
+    go('history');
+    const expected = runs.filter(run => run.dataset_id === group.id).map(run => run.run_id);
+    if (group.id === 'example-chr1') expected.push(live.run_id);
+    check(JSON.stringify(visibleHistory()) === JSON.stringify(expected.sort()), 'Reopened history crossed dataset boundaries');
+  }
+
+  const archived = runs[0];
+  go('data');
+  selectDataset(archived.dataset_id);
+  go('history');
+  click(`[data-run-target="${archived.run_id}"]`);
+  const archivedFiles = [...find(`#ml-run-${archived.run_id}`).querySelectorAll('.ml-run-inputs code')].map(node => node.textContent);
+  check(JSON.stringify(archivedFiles) === JSON.stringify(['genotype', 'expression', 'clinical'].flatMap(type => archived.inputs[type])),
+    'Editing current files replaced an archived run’s original inputs');
+  for (const stage of [1, 2, 4, 5, 3, 6]) {
+    click(`[data-run-stage="${stage}"][data-run-id="${archived.run_id}"]`);
+    const panel = find(stage === 3 ? '#lens-history-stage3' : stage === 6 ? '#lens-stage6' : '#lens-history-stage');
+    await waitFor(() => panel.dataset.runState === 'ready' && panel.dataset.runId === archived.run_id,
+      'A saved stage did not reopen after backend restart: ' + stage);
+    if ([1, 2, 4, 5].includes(stage)) {
+      for (const [key, value] of Object.entries(archived.stepSettings[stage])) {
+        check(panel.querySelector(`[data-stage-setting="${key}"]`)?.textContent.includes(value),
+          'Reopening an archive replaced its recorded settings: ' + key);
+      }
+    } else if (stage === 3) {
+      check(Number(panel.querySelector('[data-s3-components]').textContent) === archived.stage3.npc,
+        'Reopening an archive changed its principal component count');
+    } else {
+      if (panel.dataset.selectedGene) click('#lens-stage6 [data-s6-clear]');
+      check(panel.querySelectorAll('tbody tr').length === archived.connections, 'Reopened archived graph has the wrong connections');
+    }
+    click(`${stage === 3 ? '#lens-history-stage3' : stage === 6 ? '#lens-stage6' : '#lens-history-stage'} [data-run-back]`);
+  }
+
+  go('data');
+  selectDataset('example-chr1');
+  if (changeLive) {
+    click('[data-input-target="genotype"]');
+    click('#ml-input-genotype [data-input-replace]');
+    click('#ml-file-picker input[value="1"]');
+    click('[data-input-apply]');
+    await waitFor(() => find('#ml-input-genotype .ml-current-input').dataset.saveState === 'applied',
+      'The live dataset file change was not saved');
+  }
+  go('history');
+  click(`[data-run-target="${live.run_id}"]`);
+  const liveFiles = [...find(`#ml-run-${live.run_id}`).querySelectorAll('.ml-run-inputs code')].map(node => node.textContent);
+  check(JSON.stringify(liveFiles) === JSON.stringify(live.inputs.genotype), 'Current dataset files replaced the live run’s frozen input snapshot');
+  click(`[data-run-stage="1"][data-run-id="${live.run_id}"]`);
+  const panel = find('#lens-history-stage');
+  await waitFor(() => panel.dataset.runState === 'ready' && panel.dataset.runId === live.run_id,
+    'The completed live Stage 1 result did not reopen');
+  check(panel.querySelector('[data-stage-setting="mind"]')?.textContent === live.settings.mind,
+    'Current dataset configuration replaced the live run’s saved setting');
+  check(JSON.stringify([...panel.querySelectorAll('.ml-count-label')].map(node => Number(node.textContent))) === JSON.stringify([0, 0, 0, 0, 0, 2]),
+    'The live result changed when dataset files were edited');
+  const finalCatalog = await fetch('/signet/datasets', {headers: {'X-Chat-Token': token}}).then(reply => reply.json());
+  return {...saved, liveDataset: finalCatalog.datasets.find(dataset => dataset.id === 'example-chr1')};
 }
 
 async function verifyChat({existingMessage, existingActivity, firstMessage, nextMessage}) {
@@ -451,11 +668,40 @@ app.once('browser-window-created', (_event, window) => {
       assert.deepEqual(stored.histories[stored.active_session].map(message => message.parts[0].text),
         [firstMessage, 'Provider replied to: ' + firstMessage, nextMessage, 'Provider replied to: ' + nextMessage]);
       assert.deepEqual(stored.events[existingSession], [[existingActivity]]);
-      await window.webContents.executeJavaScript(`(${verifyWorkspace.toString()})(${JSON.stringify(history)})`);
-      console.log(`PASS: workspace geometry, Agent chat, scoped dataset history, frozen inputs, all six archived stages (${history.runs.map(run => `${run.connections}/${run.incident}`).join(', ')} total/MEGF6 edges)`);
+      let saved = await window.webContents.executeJavaScript(`(${verifyWorkspace.toString()})(${JSON.stringify(history)})`);
+      const persistenceInputs = () => JSON.stringify({saved, ...history, live: liveHistory});
+      saved = await window.webContents.executeJavaScript(`(${verifyPersistedWorkspace.toString()})(${JSON.stringify({saved, ...history, live: liveHistory, changeLive: true})})`);
+      assert.deepEqual(frozenFiles([archiveDir, liveHistory.root]), originalFiles,
+        'Editing dataset files mutated archived or live analysis snapshots');
+      const persistedBytes = readFileSync(datasetState);
+      const firstStart = JSON.parse(readFileSync(backendMetadata, 'utf8'));
+      assert.equal(firstStart.starts.length, 1);
+
+      // Replace the real Python process, then reload the renderer. This proves
+      // disk persistence rather than keeping the original JavaScript objects.
+      running = await startup;
+      await running.backend.stop();
+      assert.equal(running.backend.exited, true);
+      replacementBackend = new Backend(running.backend.options);
+      const reopenedOrigin = await replacementBackend.start();
+      assert.equal(reopenedOrigin, running.origin);
+      const reopened = JSON.parse(readFileSync(backendMetadata, 'utf8'));
+      assert.equal(reopened.starts.length, 2);
+      assert.notEqual(reopened.starts[0], reopened.starts[1], 'The backend process was not restarted');
+      const loaded = once(window.webContents, 'did-finish-load');
+      window.webContents.reload();
+      await loaded;
+      await window.webContents.executeJavaScript(`(${verifyPersistedWorkspace.toString()})(${persistenceInputs()})`);
+      assert.deepEqual(readFileSync(datasetState), persistedBytes, 'Reopening rewrote the saved dataset configuration');
+      assert.deepEqual(frozenFiles([archiveDir, liveHistory.root]), originalFiles,
+        'Reopening stage results mutated archived or live analysis snapshots');
+      await replacementBackend.stop();
+      replacementBackend = undefined;
+      console.log(`PASS: workspace geometry, Agent chat, dataset/file/default persistence across a Python restart, scoped history, immutable live and archived snapshots, all six archived stages (${history.runs.map(run => `${run.connections}/${run.incident}`).join(', ')} total/MEGF6 edges); all data isolated in a temporary project`);
       window.close();
     } catch (error) { fail(error); }
   }));
 });
 
-require(path.resolve(__dirname, '..', require('../package.json').main));
+startup = launch({provider: 'codex'});
+startup.then(value => { running = value; }).catch(fail);

@@ -46,6 +46,13 @@ Each stage uses the settings preserved with its job. The Stage 6 selector in
 **Analysis** also follows the selected dataset. Stages 1–6 can be submitted
 manually for the chromosome 1 example.
 
+**Add dataset** saves the dataset immediately. Applying a file selection or
+restoring its defaults also saves that dataset's current file configuration;
+reopening the application reads it back. Save failures remain visible and do
+not replace the last saved configuration. The file choices are still the
+existing simulated choices; this does not browse HPC3 or change the inputs of
+the chromosome 1 execution controls.
+
 ### Submit the chromosome 1 example
 
 Connect to HPC3 from **Settings → Remote compute**. The same panel can check
@@ -153,8 +160,16 @@ uniquely and in order to the matched genotype matrix. The other columns use
 the two archived expression outputs, adjusted for sex and race and then for
 those covariates plus the original genotype components.
 
-Creating a dataset in the workspace adds a draft for the current session. An
-archive is a read-only result and remains tied to its saved input snapshot.
+Dataset additions and current file selections are saved atomically in
+`data/workspace-datasets.json`. The existing `data/datasets/*.json` files supply
+the initial definitions and defaults; edits are stored separately. The dataset
+catalog includes both these definitions and saved additions. Run history stays
+scoped to each dataset's stable ID and reads its files and settings from the
+run's original snapshots, so changing a dataset cannot rewrite an old run.
+
+The authenticated `/signet/datasets` routes manage this metadata only; saving a
+file path neither opens that file nor submits a scientific job. For an isolated
+test profile, `SIGNET_DATASETS_STATE_FILE` overrides the state-file location.
 
 Use **View → Classic Interface** for model setup, existing Stage 6 tools, and
 the development terminal. **View → Workspace** returns to the new interface.

@@ -108,6 +108,7 @@
             </button>
           </div>
         </div>
+        <p id="ml-dataset-catalog-error" class="ml-dataset-empty-note" role="alert" data-live-language hidden></p>
         <form class="ml-dataset-form" id="ml-dataset-form" hidden>
           <label for="ml-dataset-name" data-en-text="Dataset name">資料組名稱</label>
           <input type="text" id="ml-dataset-name" maxlength="60" required placeholder="例如：另一組研究資料" data-en-placeholder="For example, another research dataset">
@@ -171,8 +172,10 @@
             <button type="button" class="ml-input-button" data-input-reset disabled data-en-text="Use default">改用預設</button>
           </div>
           <p class="ml-input-status" role="status">
-            <span data-file-status="applied" data-en-text="Selection applied to the preview." hidden>檔案選擇已套用到預覽。</span>
-            <span data-file-status="default" data-en-text="Default files restored." hidden>已改用預設檔案。</span>
+            <span data-file-status="saving" data-en-text="Saving file selection…" hidden>正在儲存檔案選擇…</span>
+            <span data-file-status="applied" data-en-text="Simulated file selection saved to this dataset." hidden>模擬檔案選擇已儲存至這組資料。</span>
+            <span data-file-status="default" data-en-text="Default file selection saved." hidden>已儲存預設檔案選擇。</span>
+            <span data-file-status="error" data-live-language hidden></span>
           </p>
         </section>
       </template>

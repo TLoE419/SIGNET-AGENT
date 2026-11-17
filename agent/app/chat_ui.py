@@ -19,7 +19,7 @@ from agent.core.conversation import MODEL, run_conversation
 from agent.core.model_timing import ModelRequestTiming
 from agent.paths import PROJECT_ROOT
 from agent.providers import PROVIDERS, create_provider_adapter
-from agent.runtime import workspace_genotype
+from agent.runtime import signet_jobs, workspace_genotype
 from agent.stage6.workspace import ARCHIVED_STEP_JOBS, CHAT_CONTEXT, Workspace
 from agent.tools.ui import UI_CHANNEL
 
@@ -166,7 +166,7 @@ class ChatHandler(BaseHTTPRequestHandler):
                 and secrets.compare_digest(self.headers.get('X-Chat-Token', ''), self.server.token))
 
     def do_PATCH(self):
-        # Only the SIGNET API uses PATCH (changing a run's settings).
+        # Run settings and current dataset selections use the authenticated SIGNET API.
         if not self._app_request():
             return self._error(403, '請從本機聊天頁面送出。')
         url = urlsplit(self.path)
@@ -361,7 +361,11 @@ class ChatHandler(BaseHTTPRequestHandler):
             return self._error(403, 'Workspace token required.')
         if url.query:
             return self._error(400, 'The Stage 6 history does not accept query parameters.')
-        return self.json_response(self.server.stage6.history())
+        try:
+            result = self.server.stage6.history()
+        except signet_jobs.StepError as error:
+            return self._error(signet_api.STATUS.get(error.code, 500), str(error))
+        return self.json_response(result)
 
     def stage6_get(self, url):
         query = parse_qs(url.query)
