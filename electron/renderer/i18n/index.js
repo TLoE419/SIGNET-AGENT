@@ -1,5 +1,10 @@
 'use strict';
 const uiEnglish = {
+  "請先連線 SSH，再準備遠端環境。": "Connect SSH to prepare the remote environment.",
+  "請先連線 SSH，再檢查環境。": "Connect SSH before checking the environment.",
+  "無法保留草稿。仍要離開並捨棄未送出的內容嗎？": "Your draft could not be saved. Leave and discard the unsent text?",
+  "跳至輸入研究需求": "Skip to research request",
+  "此版本尚未提供": "Not available in this version",
   "已存對話": "Saved conversations",
   "聊天紀錄": "CHATS",
   "分析流程": "Workflow",
@@ -177,7 +182,7 @@ const uiEnglish = {
 let uiLanguage = 'en';
 try { if (localStorage.getItem('signet-language') === 'zh-Hant') uiLanguage = 'zh-Hant'; } catch (_) {}
 function translateUI(source, language = uiLanguage) {
-  if (language === 'zh-Hant') return source;
+  if (language === 'zh-Hant') return source.replace(/<br\s*\/?>/gi, '\n');
   if (Object.hasOwn(uiEnglish, source)) return uiEnglish[source];
   if (source.includes('\n')) return source.split('\n').map(line => translateUI(line, language)).join('\n');
   const prefix = source.match(/^(目前進度|判讀提示|服務訊息|原因|缺少依賴|工具錯誤類別|工具錯誤)：(.*)$/);

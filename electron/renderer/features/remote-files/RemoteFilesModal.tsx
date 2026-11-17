@@ -66,8 +66,8 @@ export function RemoteFilesModal({target,onClose,onSelected}:{target:Target;onCl
      <input aria-label="HPC3 path" value={typed} disabled={busy} placeholder="/dfs7/your-lab/references" onChange={event=>setTyped(event.target.value)}/>
      <button type="submit" disabled={busy||!typed.trim()}>Go</button>
     </form>
-    <ul className="remote-files-list" aria-label="Files">
-     {entries.map(entry=><li key={entry.path}><button type="button" className="remote-files-row" disabled={busy||!entry.supported} aria-selected={chosen===entry.path}
+    <ul className="remote-files-list" aria-label="Files" aria-busy={loading}>
+     {entries.map(entry=><li key={entry.path}><button type="button" className="remote-files-row" disabled={busy||!entry.supported} aria-pressed={entry.kind==='file'?chosen===entry.path:undefined}
        title={entry.supported?entry.path:'Not supported: use only letters, numbers, _, -, . and / in the path.'}
        onClick={()=>entry.kind==='folder'?void open(entry.path):setChosen(entry.path)}>
       <span className="remote-files-name">{entry.kind==='folder'?`${entry.name}/`:entry.name}</span>

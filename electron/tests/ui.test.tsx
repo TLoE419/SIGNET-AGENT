@@ -286,8 +286,10 @@ test('SSH icon collapses manually and reapplies defaults on status changes',()=>
  const props={name:'Key',host:'user@host:22',onEdit:()=>{},onToggle:()=>{}};
  const view=render(<SshStatusBlock {...props} status="disconnected"/>);
  assert.ok(screen.getByRole('switch'));
+ assert.equal(view.container.querySelector('.ssh-status-heading .ssh-protocol')?.textContent,'SSH');
  fireEvent.click(screen.getByRole('button',{name:'Collapse SSH connection'}));
  assert.ok(screen.getByRole('switch'));assert.equal(screen.queryByRole('button',{name:'Edit SSH connection: Key'}),null);
+ assert.equal(screen.getByRole('button',{name:'Expand SSH connection'}).textContent,'SSH');
  view.rerender(<SshStatusBlock {...props} status="connecting"/>);
  assert.ok(screen.getByRole('switch'));
  view.rerender(<SshStatusBlock {...props} status="disconnected"/>);

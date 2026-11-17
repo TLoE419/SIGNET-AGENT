@@ -28,6 +28,7 @@ assert.equal(tr('目前進度：本次需求已有 2 個工具結果；失敗發
 assert.equal(tr('runs/test/medical-results.tsv'),'runs/test/medical-results.tsv');
 toggle.click();
 assert.equal(document.documentElement.lang,'zh-Hant');
+assert.equal(tr('第一行<br>第二行'),'第一行\n第二行');
 assert.equal(label.textContent,'對話');
 assert.equal(toggle.textContent,'English');
 assert.equal(saved.get('signet-language'),'zh-Hant');
