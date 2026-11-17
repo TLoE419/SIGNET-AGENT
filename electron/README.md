@@ -43,8 +43,8 @@ archived expression comparison. Stage 4 shows significant association pairs,
 and Stage 5 shows candidate edges grouped by their recorded bootstrap frequency.
 Stage 6 opens the network and edge table, with a filter for the selected gene.
 Each stage uses the settings preserved with its job. The Stage 6 selector in
-**Analysis** also follows the selected dataset. The previews for Stages 4–5
-in **Analysis** still use simulated data.
+**Analysis** also follows the selected dataset. The Stage 5 preview in
+**Analysis** still uses simulated data.
 
 ### Submit the chromosome 1 example
 
@@ -78,6 +78,15 @@ with its results. The saved view shows the original component count, matching
 and excluded sample counts, retained individuals at their SIGNET PCA coordinates,
 and expression variation on the same retained individuals before adjustment,
 after clinical covariates, and after clinical covariates plus the selected PCs.
+
+After Stage 3 completes, open **Stage 4** of the same run. Its review keeps the
+significance threshold, range before the gene start and after the gene end,
+permutation count and scheduler resources visible. The values come from that
+run's current configuration. **Check prior results** checks all six preceding
+output files without creating a job. **Submit Stage 4** submits the reviewed
+values through the existing cis-eQTL workflow and tracks its queue and progress.
+The saved result lists all associations, with the submitted settings, category
+counts, gene names, category-local variant or region indices, and p-values.
 
 The local installation needs the audited SIGNET source, as described under
 [installation](../docs/INSTALL.md). The existing desktop SSH environment

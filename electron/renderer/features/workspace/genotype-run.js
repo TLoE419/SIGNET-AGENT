@@ -413,15 +413,44 @@
     "cli.file": ["臨床資料檔案", "Clinical data file"],
   };
 
-  function mountContinuationRun({panel, token, onHistoryChanged, onOpenHistory, onBack}, adjustment = false) {
-    const step = adjustment ? "adjust" : "expression";
+  const cisCopy = {
+    title: ["基因與變異關聯分析", "Gene–variant associations"],
+    stage: ["第 4 階段", "Stage 4"],
+    run: expressionCopy.run,
+    empty: ["先選擇前 3 階段已完成的執行。", "Choose a run with completed Stages 1–3."],
+    prerequisite: ["這筆執行的前 3 階段完成後，即可送出第 4 階段。", "Submit Stage 4 after Stages 1–3 complete in this run."],
+    readyPrompt: ["核對顯著門檻、分析範圍與置換次數後，按「送出第 4 階段」。", "Review the significance threshold, analysis range and permutations, then select Submit Stage 4."],
+    submit: ["送出第 4 階段", "Submit Stage 4"],
+    review: ["檢查前階段結果", "Check prior results"],
+    checking: ["正在核對前階段結果…", "Checking prior results…"],
+    inputs: ["沿用這筆執行的檔案", "Files from this run"],
+    retry: expressionCopy.retry,
+    back: expressionCopy.back,
+    "alpha.cis": ["顯著門檻", "Significance threshold"],
+    upstream: ["基因終點後的範圍（鹼基對）", "After gene end (base pairs)"],
+    downstream: ["基因起點前的範圍（鹼基對）", "Before gene start (base pairs)"],
+    nperms: ["置換次數", "Permutations"],
+    positiveAlpha: ["顯著門檻必須大於 0。", "The significance threshold must be above 0."],
+  };
+
+  function mountContinuationRun({panel, token, onHistoryChanged, onOpenHistory, onBack}, step = "expression") {
+    const adjustment = step === "adjust";
+    const cis = step === "cis";
+    const alwaysVisible = adjustment || cis;
     const prefix = step;
-    const stage = adjustment ? 3 : 2;
-    const copy = adjustment ? adjustmentCopy : expressionCopy;
-    const parameterKey = adjustment ? "npc" : "restrict.tcga";
+    const stage = cis ? 4 : adjustment ? 3 : 2;
+    const copy = cis ? cisCopy : adjustment ? adjustmentCopy : expressionCopy;
     const parameterGroup = adjustment ? "options" : "settings";
     const parameterAttribute = adjustment ? "option" : "setting";
-    const fileKeys = adjustment ? ["cli.file"] : ["gexp.file", "pmap.file"];
+    const parameterDefinitions = cis ? [
+      {key: "alpha.cis", label: "alpha.cis", min: 0, max: 1, value: 0.05, step: "any"},
+      {key: "downstream", label: "downstream", min: 0, max: 10_000_000, value: 1000, step: 1},
+      {key: "upstream", label: "upstream", min: 0, max: 10_000_000, value: 1000, step: 1},
+      {key: "nperms", label: "nperms", min: 1, max: 100_000, value: 100, step: 1},
+    ] : [{key: adjustment ? "npc" : "restrict.tcga", label: adjustment ? "npc" : "chromosome",
+      min: adjustment ? 0 : 1, max: adjustment ? 10 : 1, value: adjustment ? 3 : 1, step: 1}];
+    const initialResources = cis ? {cpus: 8, mem_gb: 32, hours: 4} : {cpus: 4, mem_gb: 16, hours: 2};
+    const fileKeys = cis ? [] : adjustment ? ["cli.file"] : ["gexp.file", "pmap.file"];
     panel.classList.add("ml-expression-panel");
     if (adjustment) panel.classList.add("ml-adjust-panel");
     panel.innerHTML = `
@@ -435,22 +464,24 @@
         <p data-${prefix}-guidance></p>
         <button type="button" class="ml-nav-action" data-${prefix}-review data-${prefix}-copy="review"></button>
         <form data-${prefix}-form hidden>
-          <h3 data-${prefix}-copy="inputs"></h3>
-          <dl class="ml-key-values">${fileKeys.map(key => `<dt data-${prefix}-copy="${key}"></dt>
+          ${cis ? '' : `<h3 data-${prefix}-copy="inputs"></h3>`}
+          <dl class="ml-key-values" ${cis ? 'hidden' : ''}>${fileKeys.map(key => `<dt data-${prefix}-copy="${key}"></dt>
             <dd>${adjustment
               ? `<input class="ml-clinical-input" type="text" data-${prefix}-input="${key}" maxlength="2048" required>`
               : `<code data-${prefix}-input="${key}"></code>`}</dd>`).join("")}</dl>
           ${adjustment ? '<p class="ml-settings-note" data-adjust-clinical-summary role="status"></p>' : ''}
           <fieldset data-${prefix}-fields><legend data-${prefix}-copy="settings"></legend>
-            <div class="ml-genotype-controls"><label><span data-${prefix}-copy="${adjustment ? 'npc' : 'chromosome'}"></span>
-              <input type="number" data-${prefix}-${parameterAttribute}="${parameterKey}" min="${adjustment ? 0 : 1}" max="${adjustment ? 10 : 1}" value="${adjustment ? 3 : 1}" ${adjustment ? 'required' : 'readonly'}>
-            </label></div>
+            <div class="ml-genotype-controls">${parameterDefinitions.map(({key, label, min, max, value, step: increment}) => `<label>
+              <span data-${prefix}-copy="${label}"></span>
+              <input type="number" data-${prefix}-${parameterAttribute}="${key}" min="${min}" max="${max}" step="${increment}" value="${value}" ${alwaysVisible ? 'required' : 'readonly'}>
+            </label>`).join("")}</div>
           </fieldset>
           <fieldset data-${prefix}-fields><legend data-${prefix}-copy="resources"></legend>
             <div class="ml-genotype-controls">${resources.map(key => `<label><span data-${prefix}-copy="${key}"></span>
-              <input type="number" data-${prefix}-resource="${key}" step="${key === "hours" ? "any" : "1"}" value="${adjustment ? ({cpus:4, mem_gb:16, hours:2})[key] : ''}" required>
+              <input type="number" data-${prefix}-resource="${key}" step="${key === "hours" ? "any" : "1"}" value="${alwaysVisible ? initialResources[key] : ''}" required>
             </label>`).join("")}</div>
           </fieldset>
+          ${cis ? '<details class="ml-cis-inputs"><summary data-cis-copy="inputs"></summary><dl class="ml-key-values" data-cis-input-sources></dl></details>' : ''}
           <button type="button" class="ml-nav-action ml-genotype-submit" data-${prefix}-submit data-${prefix}-copy="submit"></button>
         </form>
       </div>
@@ -475,7 +506,7 @@
     const form = part("form");
     const picker = part("run");
     const resourceInputs = new Map(resources.map(key => [key, panel.querySelector(`[data-${prefix}-resource="${key}"]`)]));
-    const parameterInputs = new Map([[parameterKey, panel.querySelector(`[data-${prefix}-${parameterAttribute}="${parameterKey}"]`)]]);
+    const parameterInputs = new Map(parameterDefinitions.map(({key}) => [key, panel.querySelector(`[data-${prefix}-${parameterAttribute}="${key}"]`)]));
     const fields = [...panel.querySelectorAll(`[data-${prefix}-fields]`)];
     const runStates = new Map();
     let context = {datasetId: "", language: "zh-Hant", visible: false, runs: [], runId: null};
@@ -517,12 +548,12 @@
       }
     }
 
-    function saveAdjustmentDraft() {
+    function saveDraft() {
       const item = current();
-      if (!adjustment || !item || item.record && !item.retry) return;
+      if (!alwaysVisible || !item || item.record && !item.retry) return;
       item.draft = {
-        clinical: panel.querySelector('[data-adjust-input="cli.file"]').value,
-        options: Object.fromEntries([...parameterInputs].map(([key, input]) => [key, input.value])),
+        clinical: adjustment ? panel.querySelector('[data-adjust-input="cli.file"]').value : "",
+        parameters: Object.fromEntries([...parameterInputs].map(([key, input]) => [key, input.value])),
         resources: Object.fromEntries([...resourceInputs].map(([key, input]) => [key, input.value])),
       };
     }
@@ -533,7 +564,9 @@
       const saved = item?.record;
       const state = item?.submitting ? "submitting" : item?.uncertain ? "unknown" : saved?.state ?? "idle";
       const hasAttempt = Boolean(saved) && !item?.retry || Boolean(item?.submitting || item?.uncertain);
-      const allowed = source()?.jobs.genotype?.state === "completed" && (!adjustment || source()?.jobs.expression?.state === "completed");
+      const allowed = source()?.jobs.genotype?.state === "completed" &&
+        (step === "expression" || source()?.jobs.expression?.state === "completed") &&
+        (!cis || source()?.jobs.adjust?.state === "completed");
       const terminal = terminalStates.has(state);
       panel.dataset[`${prefix}State`] = state;
       panel.dataset[`${prefix}RunId`] = selectedRun;
@@ -549,9 +582,9 @@
       part("readiness").textContent = !selectedRun ? local("empty") : !allowed ? local("prerequisite")
         : item.checking ? local("checking") : item.review && !hasAttempt ? local(item.review.ready === false ? "unavailable" : "ready") : "";
       part("guidance").textContent = allowed && item?.review && !hasAttempt && item.review.ready !== false ? local("readyPrompt") : "";
-      part("review").hidden = !(adjustment ? selectedRun : allowed) || hasAttempt;
+      part("review").hidden = !(alwaysVisible ? selectedRun : allowed) || hasAttempt;
       part("review").disabled = Boolean(item?.checking);
-      form.hidden = !adjustment && (!allowed || !(hasAttempt ? saved?.inputs : item?.review));
+      form.hidden = !alwaysVisible && (!allowed || !(hasAttempt ? saved?.inputs : item?.review));
       for (const field of fields) field.disabled = hasAttempt || !selectedRun;
       if (adjustment) {
         panel.querySelector('[data-adjust-input="cli.file"]').disabled = hasAttempt || Boolean(item?.checking) || !selectedRun;
@@ -559,6 +592,22 @@
         part("clinical-summary").textContent = clinical
           ? (context.language === "en" ? `${clinical.rows ?? 0} clinical rows · ${(clinical.columns ?? []).join(", ")}`
             : `${clinical.rows ?? 0} 筆臨床資料 · ${(clinical.columns ?? []).join("、")}`) : "";
+      }
+      if (cis) {
+        const inputSources = saved?.input_sources ?? item?.review?.input_sources ?? source()?.jobs.cis?.input_sources ?? {};
+        const entries = Object.entries(inputSources);
+        const inputs = part("input-sources");
+        inputs.replaceChildren();
+        for (const [key, path] of entries) {
+          const label = document.createElement("dt");
+          const value = document.createElement("dd");
+          const code = document.createElement("code");
+          label.textContent = key;
+          code.textContent = path;
+          value.append(code);
+          inputs.append(label, value);
+        }
+        inputs.hidden = !entries.length;
       }
       part("submit").hidden = hasAttempt;
       part("submit").disabled = !allowed || !item?.review || item.review.ready === false || item.checking || item.submitting || hasAttempt;
@@ -629,7 +678,7 @@
     async function review() {
       const id = selectedRun;
       const item = current();
-      if (!id || !item || !source() || item.checking || item.submitting || item.uncertain || item.record && !item.retry || !adjustment && source()?.jobs.genotype?.state !== "completed") return;
+      if (!id || !item || !source() || item.checking || item.submitting || item.uncertain || item.record && !item.retry || !alwaysVisible && source()?.jobs.genotype?.state !== "completed") return;
       item.checking = item.attempted = true;
       item.error = "";
       render();
@@ -637,12 +686,12 @@
         const clinicalPath = adjustment ? panel.querySelector('[data-adjust-input="cli.file"]').value.trim() : "";
         const query = clinicalPath ? `?clinical=${encodeURIComponent(clinicalPath)}` : "";
         const next = await request(`/signet/runs/${encodeURIComponent(id)}/${step}/example${query}`);
-        const preserve = adjustment || item.review && fileKeys.every(key => item.review.inputs[key] === next.inputs[key]);
+        const preserve = adjustment || (cis ? Boolean(item.draft) : item.review && fileKeys.every(key => item.review.inputs[key] === next.inputs[key]));
         item.review = next;
         item.error = next.issues?.join(" ") || next.reason || "";
         if (id === selectedRun) {
           fillReview(next, Boolean(preserve));
-          saveAdjustmentDraft();
+          saveDraft();
         }
       } catch (error) {
         item.review = null;
@@ -655,7 +704,7 @@
 
     function selectRun(id) {
       const changed = selectedRun !== id;
-      if (changed) saveAdjustmentDraft();
+      if (changed) saveDraft();
       selectedRun = id;
       clearTimeout(pollTimer);
       const item = id ? stateFor(id) : null;
@@ -665,10 +714,10 @@
       if (received) item.record = saved;
       if ((changed || received) && item?.record?.inputs && !item.retry) fillReview(item.record);
       else if (changed && item?.review) fillReview(item.review);
-      else if (changed && adjustment) fillReview({options: {npc: 3}, resources: {cpus: 4, mem_gb: 16, hours: 2}});
-      if (changed && adjustment && item?.draft && (!item.record || item.retry)) {
-        panel.querySelector('[data-adjust-input="cli.file"]').value = item.draft.clinical;
-        for (const [key, input] of parameterInputs) input.value = item.draft.options[key];
+      else if (changed && alwaysVisible) fillReview({[parameterGroup]: Object.fromEntries(parameterDefinitions.map(({key, value}) => [key, value])), resources: initialResources});
+      if (changed && alwaysVisible && item?.draft && (!item.record || item.retry)) {
+        if (adjustment) panel.querySelector('[data-adjust-input="cli.file"]').value = item.draft.clinical;
+        for (const [key, input] of parameterInputs) input.value = item.draft.parameters[key];
         for (const [key, input] of resourceInputs) input.value = item.draft.resources[key];
       }
       render();
@@ -680,7 +729,12 @@
     async function submit() {
       const id = selectedRun;
       const item = current();
-      if (!item || part("submit").disabled || !form.reportValidity()) return;
+      if (!item || part("submit").disabled) return;
+      if (cis) {
+        const alpha = parameterInputs.get("alpha.cis");
+        alpha.setCustomValidity(alpha.valueAsNumber > 0 ? "" : local("positiveAlpha"));
+      }
+      if (!form.reportValidity()) return;
       const values = inputs => Object.fromEntries([...inputs].map(([key, element]) => [key, element.valueAsNumber]));
       const body = {inputs: item.review.inputs, [parameterGroup]: values(parameterInputs), resources: values(resourceInputs)};
       item.submitting = true;
@@ -715,10 +769,12 @@
         item.review = null;
         item.attempted = true;
         item.error = "";
-        saveAdjustmentDraft();
+        saveDraft();
         render();
       });
-      for (const input of [...parameterInputs.values(), ...resourceInputs.values()]) input.addEventListener("input", saveAdjustmentDraft);
+    }
+    if (alwaysVisible) for (const input of [...parameterInputs.values(), ...resourceInputs.values()]) {
+      input.addEventListener("input", () => { input.setCustomValidity(""); saveDraft(); });
     }
     picker.addEventListener("change", () => selectRun(picker.value));
     part("review").addEventListener("click", () => void review());
@@ -743,6 +799,7 @@
   }
 
   window.mountExpressionRun = options => mountContinuationRun(options);
-  window.mountAdjustmentRun = options => mountContinuationRun(options, true);
+  window.mountAdjustmentRun = options => mountContinuationRun(options, "adjust");
+  window.mountCisRun = options => mountContinuationRun(options, "cis");
 
 })();

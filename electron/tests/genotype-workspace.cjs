@@ -23,7 +23,7 @@ process.env.SIGNET_PYTHON = pythonWrapper;
 
 let running;
 const deadline = setTimeout(async () => {
-  console.error('Workspace genotype/expression/adjustment test timed out');
+  console.error('Workspace manual stages test timed out');
   await running?.backend.forceStop();
   rmSync(temp, {recursive: true, force: true});
   app.exit(1);
@@ -370,7 +370,92 @@ async function verify() {
   assert.equal(readFileSync(path.join(localRun, 'work/res/rest/signet_gexp'), 'utf8'), expressionMatrix);
   assert.deepEqual(readFileSync(sbatchCalls, 'utf8').trim().split('\n'), ['submitted', 'submitted', 'submitted']);
   assert.deepEqual(readdirSync(path.join(fixture.project, 'runs')).sort(), ['step_test', runId].sort());
-  console.log('PASS: manual same-run Stages 1–3, live polling, active/completed reload, immutable prior stages, and actual-shaped PCA/matching/comparison');
+  const originalAdjustmentRecord = readFileSync(adjustmentJson, 'utf8');
+  const originalAdjustedExpression = readFileSync(path.join(localRun, 'work/res/resa/signet_gexp_rmpc.data'), 'utf8');
+  const cisPanel = '#lens-stage4';
+  const cisStage = `[data-run-stage="4"][data-run-id="${runId}"]`;
+  const cisState = () => js(`document.querySelector('${cisPanel}')?.dataset.cisState`);
+  async function openCis() {
+    await click(history);
+    await until(() => js(`Boolean(document.querySelector(${JSON.stringify(row)})?.getClientRects().length)`),
+      'The original run was missing while opening Stage 4');
+    await click(row);
+    await click(cisStage);
+  }
+  await openCis();
+  await until(() => js(`document.querySelector('${cisPanel} [data-cis-submit]')?.disabled === false`),
+    'Stage 4 input review did not enable manual submission');
+  assert.ok(await js(`document.querySelector('${cisPanel} [data-cis-form]')?.getClientRects().length > 0`));
+  assert.equal(await js(`document.querySelector('[data-cis-setting="alpha.cis"]').value`), '0.05');
+  for (const [key, value] of Object.entries({'alpha.cis':'0.01', upstream:'2000', downstream:'500', nperms:'200'})) {
+    await setReviewValue(`[data-cis-setting="${key}"]`, value);
+  }
+  await setReviewValue('[data-cis-resource="cpus"]', '2');
+  assert.deepEqual(readFileSync(sbatchCalls, 'utf8').trim().split('\n'), ['submitted', 'submitted', 'submitted'],
+    'Reviewing Stage 4 submitted before confirmation');
+  writeFileSync(path.join(fixture.slurm, 'sbatch_reply'), '444\n');
+  writeFileSync(path.join(fixture.slurm, 'sacct'), '');
+  writeFileSync(path.join(fixture.slurm, 'squeue'), 'PENDING\n');
+  await js(`(() => {
+    const button = document.querySelector('${cisPanel} [data-cis-submit]');
+    button.click(); button.click();
+  })()`);
+  await until(async () => await cisState() === 'pending', 'Stage 4 did not show its queued state');
+  const cisJson = path.join(localRun, 'steps/cis.json');
+  const readCis = () => JSON.parse(readFileSync(cisJson, 'utf8'));
+  assert.equal(readCis().run_id, runId);
+  assert.equal(readCis().job_id, '444');
+  assert.deepEqual(readCis().settings, {'alpha.cis':'0.01', nperms:'200', upstream:'2000', downstream:'500'});
+  assert.deepEqual(readFileSync(sbatchCalls, 'utf8').trim().split('\n'), Array(4).fill('submitted'));
+  writeFileSync(path.join(fixture.slurm, 'squeue'), 'RUNNING\n');
+  await until(async () => await cisState() === 'running', 'Stage 4 polling did not report execution');
+  const cisReload = once(window.webContents, 'did-finish-load');
+  window.webContents.reload();
+  await cisReload;
+  await openCis();
+  await until(async () => await cisState() === 'running', 'Stage 4 did not resume after reload');
+  assert.deepEqual(readFileSync(sbatchCalls, 'utf8').trim().split('\n'), Array(4).fill('submitted'));
+  const cisOutput = path.join(remoteRun, 'work/res/resc');
+  mkdirSync(cisOutput, {recursive: true});
+  const cisFiles = {
+    'signet_all.sig.pValue_0.01': '1 1 0.001\n2 2 0.009\n1 3 0.002\n2 4 0.004\n',
+    'signet_common.eQTL.data': '0 1\n1 0\n2 1\n',
+    'signet_low.eQTL.data': '0\n1\n0\n',
+    'signet_rare.eQTL.data': '1\n0\n0\n',
+    'signet_all.eQTL.data': '0 1 0 1\n1 0 1 0\n2 1 0 0\n',
+    'signet_net.gexp.data': files['signet_gexp.data'],
+    'signet_net.genepos': 'GENE1 chr1 100 200\nMEGF6 chr1 300 400\n',
+    'signet_net.genename': 'GENE1\nMEGF6\n',
+  };
+  for (const [name, content] of Object.entries(cisFiles)) writeFileSync(path.join(cisOutput, name), content);
+  writeFileSync(path.join(remoteRun, 'steps/cis.done'), '0 2026-11-17T14:00:00\n');
+  writeFileSync(path.join(fixture.slurm, 'sacct'), 'COMPLETED\n');
+  writeFileSync(path.join(fixture.slurm, 'squeue'), '');
+  await until(async () => await cisState() === 'completed', 'Stage 4 did not collect completed results');
+  await until(() => js(`(() => {
+    const panel = document.querySelector('#lens-history-stage');
+    return panel.dataset.stage === '4' && panel.dataset.runState === 'ready';
+  })()`), 'Stage 4 did not open its completed association result');
+  assert.equal(await js(`document.querySelectorAll('#lens-history-stage [data-stage-table] tbody tr').length`), 4);
+  const bars = await js(`[...document.querySelectorAll('#lens-history-stage .ml-count-label')].map(n => Number(n.textContent))`);
+  assert.deepEqual(bars, [2, 1, 1]);
+  for (const [key, expected] of Object.entries({'alpha.cis':'0.01', nperms:'200', upstream:'2000', downstream:'500'})) {
+    assert.equal(await js(`document.querySelector('#lens-history-stage [data-stage-setting="${key}"]').textContent`), expected);
+  }
+  const cisFinishedReload = once(window.webContents, 'did-finish-load');
+  window.webContents.reload();
+  await cisFinishedReload;
+  await openCis();
+  await until(() => js(`document.querySelector('#lens-history-stage')?.dataset.runState === 'ready'`),
+    'Stage 4 associations did not reopen from saved history');
+  assert.ok(await js(`document.querySelector('#lens-history-stage [data-stage-table]').textContent.includes('MEGF6')`));
+  assert.equal(readFileSync(stepJson, 'utf8'), genotypeRecord);
+  assert.equal(readFileSync(expressionJson, 'utf8'), originalExpressionRecord);
+  assert.equal(readFileSync(adjustmentJson, 'utf8'), originalAdjustmentRecord);
+  assert.equal(readFileSync(path.join(localRun, 'work/res/resa/signet_gexp_rmpc.data'), 'utf8'), originalAdjustedExpression);
+  assert.deepEqual(readFileSync(sbatchCalls, 'utf8').trim().split('\n'), Array(4).fill('submitted'));
+  assert.deepEqual(readdirSync(path.join(fixture.project, 'runs')).sort(), ['step_test', runId].sort());
+  console.log('PASS: manual same-run Stages 1–4, progress, active/completed reload, immutable prior stages, and saved associations');
   await running.quit();
 }
 

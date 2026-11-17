@@ -90,6 +90,7 @@
   let genotypeRun;
   let expressionRun;
   let adjustmentRun;
+  let cisRun;
   let restoredGenotypeRun = false;
   let historyRequest = 0;
   let historyRuns = [];
@@ -282,10 +283,10 @@
     },
     {
       name: "近端表現量關聯分析", note: "找出與鄰近基因表現量相關的變異。",
-      settings: "顯著門檻 0.05，上下游各 1,000 個鹼基對，置換 100 次",
-      output: "常見 156 筆、低頻 35 筆、罕見 15 筆",
+      settings: "在右側確認顯著門檻、分析範圍與置換次數。",
+      output: "完成後從歷次執行查看關聯結果。",
       icon: "bar-chart-3",
-      preview: barPreview([156, 35, 15], ["#4380b2", "#85afcf", "#b7cfe2"]),
+      preview: barPreview([3, 2, 1], ["#4380b2", "#85afcf", "#b7cfe2"]),
     },
     {
       name: "網路推論", note: "重抽樣推論基因間可能的調控方向。",
@@ -462,6 +463,8 @@
     ["初步配對 473 位個體，校正後保留 471 位", "473 matched · 471 retained after adjustment"],
     ["近端表現量關聯分析", "Cis-eQTL analysis"],
     ["找出與鄰近基因表現量相關的變異。", "Test variants for associations with nearby genes."],
+    ["在右側確認顯著門檻、分析範圍與置換次數。", "Review the threshold, range and permutations on the right."],
+    ["完成後從歷次執行查看關聯結果。", "Open the association results from run history after completion."],
     ["顯著門檻 0.05，上下游各 1,000 個鹼基對，置換 100 次", "p < 0.05, ±1 kb, 100 permutations (low-frequency and rare)"],
     ["常見 156 筆、低頻 35 筆、罕見 15 筆", "156 common, 35 low-frequency, 15 rare pairs"],
     ["網路推論", "Network inference"],
@@ -672,6 +675,10 @@
   const stageButtons = timeline.querySelectorAll(".ml-stage-button");
   const stageResults = root.querySelectorAll(".ml-workspace");
   function syncGenotypeContext() {
+    const activeStage = timeline.querySelector('[aria-current="step"]')?.dataset.stage;
+    const stageContext = activeStage === "5" ? ["模擬分析", "Simulated analysis"]
+      : activeStage === "6" ? ["執行結果", "Saved results"] : ["手動執行", "Manual execution"];
+    byId("stage-header").querySelector("span").textContent = stageContext[root.lang === "en" ? 1 : 0];
     genotypeRun?.setContext({
       datasetId: activeDataset.id,
       language: root.lang,
@@ -695,6 +702,15 @@
         app.dataset.nav === "history" && historyResult?.stage === 3,
       runs: activeDataset.id === exampleDataset.id ? runsForDataset().filter(run => run.source === "live") : [],
       runId: app.dataset.nav === "history" && historyResult?.stage === 3 ? historyResult.runId : null,
+    });
+    cisRun?.setContext({
+      datasetId: activeDataset.id,
+      language: root.lang,
+      visible: app.dataset.nav === "analysis" &&
+        timeline.querySelector('[aria-current="step"]')?.dataset.stage === "4" ||
+        app.dataset.nav === "history" && historyResult?.stage === 4,
+      runs: activeDataset.id === exampleDataset.id ? runsForDataset().filter(run => run.source === "live") : [],
+      runId: app.dataset.nav === "history" && historyResult?.stage === 4 ? historyResult.runId : null,
     });
   }
 
@@ -951,13 +967,14 @@
       const stages = historySteps.map((key, offset) => {
         const job = run.jobs[key];
         if (!job && !(run.source === "live" && (offset === 1 && run.jobs.genotype?.state === "completed" ||
-          offset === 2 && run.jobs.genotype?.state === "completed" && run.jobs.expression?.state === "completed"))) return "";
+          offset === 2 && run.jobs.genotype?.state === "completed" && run.jobs.expression?.state === "completed" ||
+          offset === 3 && ["genotype", "expression", "adjust"].every(step => run.jobs[step]?.state === "completed")))) return "";
         const number = offset + 1;
         const icon = job?.state === "completed" ? "circle-check" : "history";
         const title = `<i data-lucide="${icon}" aria-hidden="true"></i>
           ${historyText(`第 ${number} 階段`, `Stage ${number}`)}<strong>${historyLabel(stageData[offset].name)}</strong>
           <time datetime="${escapeHistory(job?.finished_at)}">${escapeHistory(clockTime(job?.finished_at))}</time>`;
-        const panel = [2, 3].includes(number) && run.source === "live" && job?.state !== "completed" ? `lens-stage${number}`
+        const panel = [2, 3, 4].includes(number) && run.source === "live" && job?.state !== "completed" ? `lens-stage${number}`
           : number === 3 ? "lens-history-stage3" : number === 6 ? "lens-stage6" : "lens-history-stage";
         const legacy = number === 3 ? `data-run-adjustment="${id}"` : number === 6 ? `data-run-network="${id}"` : "";
         return `<li><button type="button" class="ml-run-step-link" data-run-stage="${number}"
@@ -1282,8 +1299,8 @@
     int: ["插補分塊長度（鹼基對）", "Imputation block size (bp)"],
     "alpha.cis": ["顯著性門檻", "Significance cutoff"],
     nperms: ["低頻及罕見區域置換", "Permutations (low/rare)"],
-    upstream: ["上游範圍（鹼基對）", "Upstream window (bp)"],
-    downstream: ["下游範圍（鹼基對）", "Downstream window (bp)"],
+    upstream: ["基因終點後的範圍（鹼基對）", "After gene end (base pairs)"],
+    downstream: ["基因起點前的範圍（鹼基對）", "Before gene start (base pairs)"],
     nboots: ["重抽樣次數", "Bootstrap runs"],
     ncis: ["每個基因的標記數上限", "Max. markers per gene"],
     cor: ["標記間絕對相關性上限", "Max. absolute marker correlation"],
@@ -1363,6 +1380,9 @@
     const run = archiveSteps.has(stage)
       ? runsForDataset().find(({run_id}) => run_id === historyResult.runId) : null;
     const view = run && archivedStepResult ? viewArchivedStep(stage, archivedStepResult.summary, language) : null;
+    if (view && stage === 4 && run.source === "live") {
+      view.tableTitle = local("顯著基因與變異關聯", "Significant gene–variant associations");
+    }
     const state = archivedStepPanel.dataset.runState;
     const name = run ? stageData[stage - 1].name : "";
     const job = run ? archivedStepResult?.job ?? run.jobs[historySteps[stage - 1]] : null;
@@ -1743,8 +1763,10 @@
       selectedRun.jobs.expression?.state !== "completed";
     const showAdjustment = showResult && historyResult.stage === 3 && selectedRun?.source === "live" &&
       selectedRun.jobs.adjust?.state !== "completed";
+    const showCis = showResult && historyResult.stage === 4 && selectedRun?.source === "live" &&
+      selectedRun.jobs.cis?.state !== "completed";
     stage3HistoryPanel.hidden = !showResult || historyResult.stage !== 3 || showAdjustment;
-    archivedStepPanel.hidden = !showResult || showExpression || !archiveSteps.has(historyResult.stage);
+    archivedStepPanel.hidden = !showResult || showExpression || showCis || !archiveSteps.has(historyResult.stage);
     const expressionPanel = root.querySelector("#lens-stage2");
     expressionPanel.classList.toggle("ml-workspace", !showExpression);
     expressionPanel.classList.toggle("ml-nav-workspace", showExpression);
@@ -1753,6 +1775,10 @@
     adjustmentPanel.classList.toggle("ml-workspace", !showAdjustment);
     adjustmentPanel.classList.toggle("ml-nav-workspace", showAdjustment);
     adjustmentPanel.hidden = inHistory ? !showAdjustment : timeline.querySelector('[aria-current="step"]').dataset.stage !== "3";
+    const cisPanel = root.querySelector("#lens-stage4");
+    cisPanel.classList.toggle("ml-workspace", !showCis);
+    cisPanel.classList.toggle("ml-nav-workspace", showCis);
+    cisPanel.hidden = inHistory ? !showCis : timeline.querySelector('[aria-current="step"]').dataset.stage !== "4";
     runDetails.hidden = !inHistory || !selected || showResult;
     byId("empty-history").hidden = !inHistory || Boolean(selected);
     byId("empty-run-list").hidden = Boolean(selected);
@@ -1779,16 +1805,16 @@
     timeline.hidden = !hasSavedResults;
     byId("stage-header").querySelector("span").hidden = !hasSavedResults;
     byId("empty-stage").hidden = hasSavedResults || historyState !== "ready";
-    // Stages 1–3 use manual jobs; the later stages retain the saved walkthrough.
+    // Stages 1–4 use manual jobs; Stage 5 retains the saved walkthrough.
     const showWalkthrough = isExample && stage6RunsForDataset().length > 0;
     const activeStage = timeline.querySelector('[aria-current="step"]').dataset.stage;
-    if (!isExample || (!showWalkthrough && !["1", "2", "3", "6"].includes(activeStage))) {
+    if (!isExample || (!showWalkthrough && !["1", "2", "3", "4", "6"].includes(activeStage))) {
       const lastStage = stageButtons[stageButtons.length - 1];
       showStage(lastStage, true);
     }
     for (const button of stageButtons) {
       button.closest(".ml-stage-entry").hidden = !showWalkthrough && button.dataset.stage !== "6" &&
-        !(isExample && ["1", "2", "3"].includes(button.dataset.stage));
+        !(isExample && ["1", "2", "3", "4"].includes(button.dataset.stage));
     }
     syncGenotypeContext();
   }
@@ -1820,6 +1846,10 @@
       renderHistoryRecords();
       if (historyResult?.stage === 2 && historyRuns.find(run => run.run_id === historyResult.runId)?.jobs.expression?.state === "completed" &&
         (archivedStepPanel.dataset.runId !== historyResult.runId || archivedStepPanel.dataset.stage !== "2")) {
+        void loadArchivedStep();
+      }
+      if (historyResult?.stage === 4 && historyRuns.find(run => run.run_id === historyResult.runId)?.jobs.cis?.state === "completed" &&
+        (archivedStepPanel.dataset.runId !== historyResult.runId || archivedStepPanel.dataset.stage !== "4")) {
         void loadArchivedStep();
       }
       if (historyResult?.stage === 3 && historyRuns.find(run => run.run_id === historyResult.runId)?.jobs.adjust?.state === "completed" &&
@@ -1874,6 +1904,16 @@
     clearHistoryResult();
     updateHistoryView();
     runDetails.querySelector(`[data-run-stage="3"][data-run-id="${CSS.escape(runId)}"]`)?.focus({preventScroll: true});
+  }
+
+  async function openCisHistory(runId) {
+    openNavigation("history");
+    await loadWorkspaceHistory();
+    if (app.dataset.nav !== "history" || !runsForDataset().some(run => run.run_id === runId)) return;
+    selectedRuns.set(activeDataset.id, runId);
+    clearHistoryResult();
+    updateHistoryView();
+    runDetails.querySelector(`[data-run-stage="4"][data-run-id="${CSS.escape(runId)}"]`)?.focus({preventScroll: true});
   }
 
   function closeDatasetForm() {
@@ -1987,15 +2027,17 @@
     historyResult = {runId, stage};
     if (stage === 3 && !(runsForDataset().find(run => run.run_id === runId)?.source === "live" &&
       runsForDataset().find(run => run.run_id === runId)?.jobs.adjust?.state !== "completed")) void loadStage3Run();
-    else if (archiveSteps.has(stage) && !(stage === 2 &&
+    else if (archiveSteps.has(stage) && !([2, 4].includes(stage) &&
       runsForDataset().find(run => run.run_id === runId)?.source === "live" &&
-      runsForDataset().find(run => run.run_id === runId)?.jobs.expression?.state !== "completed")) void loadArchivedStep();
+      runsForDataset().find(run => run.run_id === runId)?.jobs[historySteps[stage - 1]]?.state !== "completed")) void loadArchivedStep();
     updateHistoryView();
     syncStage6Picker();
     const expressionBack = root.querySelector("#lens-stage2 [data-expression-back]");
     const adjustmentBack = root.querySelector("#lens-stage3 [data-adjust-back]");
+    const cisBack = root.querySelector("#lens-stage4 [data-cis-back]");
     const back = stage === 2 && !root.querySelector("#lens-stage2").hidden ? expressionBack
       : stage === 3 && !root.querySelector("#lens-stage3").hidden ? adjustmentBack
+      : stage === 4 && !root.querySelector("#lens-stage4").hidden ? cisBack
       : stage === 3 ? stage3Back : stage === 6 ? stage6Back : archivedStepBack;
     back.focus({ preventScroll: true });
   });
@@ -2135,6 +2177,13 @@
     token: chatToken,
     onHistoryChanged: () => void loadWorkspaceHistory(),
     onOpenHistory: (runId) => void openAdjustmentHistory(runId),
+    onBack: backToRunTimeline,
+  });
+  cisRun = globalThis.mountCisRun({
+    panel: root.querySelector("#lens-stage4"),
+    token: chatToken,
+    onHistoryChanged: () => void loadWorkspaceHistory(),
+    onOpenHistory: (runId) => void openCisHistory(runId),
     onBack: backToRunTimeline,
   });
   updateAnalysisView();

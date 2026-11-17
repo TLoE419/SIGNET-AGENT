@@ -182,6 +182,23 @@ Poll `GET /signet/runs/{run_id}/steps/adjust` for progress. The original
 genotype and expression records remain associated with this run. Clinical
 input and principal component choices appear with the Stage 3 history entry.
 
+`GET /signet/runs/{run_id}/cis/example` reviews Stage 4 in the original
+workspace run. It returns the current numeric `settings` (`alpha.cis`,
+`upstream`, `downstream`, `nperms`), scheduler `resources` and `limits`, and
+an `input_sources` map of the linked earlier-stage files. `ready`, `issues`
+and `reason` report whether all three previous stages completed in this run
+and whether its own remote output files are present. Reviewing creates no job.
+
+`POST /signet/runs/{run_id}/cis/example` accepts `inputs` as `{}`, all four
+reviewed `settings`, and `resources`. It validates the original run and input
+files again, records the confirmed request and submits the existing `cis`
+step. Poll `GET /signet/runs/{run_id}/steps/cis` for queue and execution status.
+The saved history retains the parameters and linked input paths used for each
+attempt. Duplicate requests for an active or completed step are rejected before
+the saved review or settings are modified. Completed results are available from
+`GET /stage/results?run={run_id}&stage=4&source=live`, using the submitted
+significance threshold to select the correct downloaded result file.
+
 ### 5.1 `GET /signet/catalog`
 
 What the app may offer. The panel builds its forms from this instead of hard-coding them.
