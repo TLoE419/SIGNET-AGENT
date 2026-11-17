@@ -30,7 +30,8 @@ export function SshStatusBlock({name,host,status,error,phase,busy,onEdit,onToggl
  return <section className="ssh-status-block" data-status={status} aria-label="SSH connection" data-expanded={expanded}>
   {pending&&<svg className="ssh-status-outline" aria-hidden="true"><rect x="1" y="1" width="calc(100% - 2px)" height="calc(100% - 2px)" rx="13"/></svg>}
   <button type="button" className="ssh-collapse" onClick={()=>setManual({key:stateKey,expanded:!expanded})} aria-expanded={expanded} aria-controls={detailsId} aria-label={expanded?'Collapse SSH connection':'Expand SSH connection'} title={`${name} — ${host}\n${description}${environment?' · '+environmentLabels[environment.phase]:''}`}>
-   <svg className="ssh-disclosure-arrow" aria-hidden="true" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="m9 5 7 7-7 7"/></svg>
+   <svg className="ssh-disclosure-arrow" aria-hidden="true" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m9 6 6 6-6 6"/></svg>
+   {!expanded&&<span className="ssh-collapsed-label">SSH</span>}
   </button>
   <div className="ssh-status-details" id={detailsId} inert={!expanded} aria-hidden={!expanded}>
   <button type="button" className="ssh-identity" onClick={onEdit} aria-label={`Edit SSH connection: ${name}`} title={`${name} — ${host}\n${description}`}>

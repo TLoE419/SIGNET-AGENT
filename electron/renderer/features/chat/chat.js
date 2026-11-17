@@ -52,6 +52,19 @@ const initialChat = JSON.parse($('initial-chat')?.textContent || '{}');
 const session = initialChat.session || crypto.randomUUID();
 if (initialChat.session) history.replaceState(null, '', '/?session=' + session);
 let busy = false, turns = 0;
+// Drafts stay in this window's session storage and are isolated by conversation.
+const draftKey = 'signet-chat-draft:' + session;
+function saveDraft() {
+  try { sessionStorage.setItem(draftKey, $('prompt').value); return true; } catch (_) { return false; }
+}
+try { $('prompt').value = sessionStorage.getItem(draftKey) || ''; } catch (_) {}
+$('prompt').addEventListener('input', saveDraft);
+window.addEventListener('pagehide', saveDraft);
+function navigateChat(path) {
+  if ($('prompt').value.trim() && !saveDraft() && !window.confirm(translateUI('無法保留草稿。仍要離開並捨棄未送出的內容嗎？'))) return;
+  location.assign(path);
+}
+
 // Saved conversations are listed in the rail; the current one is marked and not a link.
 const chatList = $('chat-list');
 for (const saved of initialChat.sessions || []) {
@@ -63,7 +76,7 @@ for (const saved of initialChat.sessions || []) {
   item.title = saved.title;
   if (saved.session === initialChat.session) item.setAttribute('aria-current', 'page');
   item.addEventListener('click', () => {
-    if (!busy && saved.session !== initialChat.session) location.assign('/?session=' + encodeURIComponent(saved.session));
+    if (!busy && saved.session !== initialChat.session) navigateChat('/?session=' + encodeURIComponent(saved.session));
   });
   chatList?.append(item);
 }
@@ -159,6 +172,7 @@ async function send(text) {
   $('activity-empty')?.remove();
   message('user', text);
   $('prompt').value = '';
+  saveDraft();
   const answer = message('assistant', '處理中…請查看聊天下方的執行過程。');
   uiText(answer, '處理中…請查看聊天下方的執行過程。');
   const turn = createTurn();
@@ -176,6 +190,8 @@ async function send(text) {
     let buffer = '';
     function consume(line) {
       if (!line.trim()) return;
+      const messages = $('messages');
+      const follow = messages.scrollHeight - messages.scrollTop - messages.clientHeight < 100;
       const event = JSON.parse(line);
       if (event.type === 'workspace') window.dispatchEvent(new CustomEvent('stage6-update', {detail:event.text}));
       if (event.type === 'ui') window.dispatchEvent(new CustomEvent('panel-request', {detail:event.text}));
@@ -191,6 +207,7 @@ async function send(text) {
         }
       }
       if (event.type === 'error') {failed = true; uiText(answer, event.text); answer.parentElement.classList.add('error');}
+      if (follow && (event.type === 'answer' || event.type === 'error')) messages.scrollTop = messages.scrollHeight;
       if (event.type === 'done') {done = true; history.replaceState(null, '', '/?session=' + session); card(turn,'本回合已結束','end').append(node('div','step-line',event.text));}
     }
     while (true) {
@@ -219,8 +236,11 @@ async function send(text) {
     $('send').disabled = false;
     $('new-chat').disabled = false;
     setChatListDisabled(false);
-    $('prompt').focus();
-    $('messages').scrollTop = $('messages').scrollHeight;
+    // Keep the user's place and focus when they are reading or editing settings.
+    const messages = $('messages');
+    const follow = messages.scrollHeight - messages.scrollTop - messages.clientHeight < 100;
+    if (document.activeElement === $('send') || document.activeElement === document.body) $('prompt').focus();
+    if (follow) messages.scrollTop = messages.scrollHeight;
   }
 }
 $('composer').addEventListener('submit', event => {event.preventDefault(); send($('prompt').value.trim());});
@@ -228,7 +248,7 @@ $('prompt').addEventListener('keydown', event => {
   if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {event.preventDefault(); $('composer').requestSubmit();}
 });
 document.querySelectorAll('[data-prompt]').forEach(button => button.addEventListener('click', () => send(button.dataset.prompt)));
-$('new-chat').addEventListener('click', () => {if (!busy) location.assign('/?new=1');});
+$('new-chat').addEventListener('click', () => {if (!busy) navigateChat('/?new=1');});
 if (initialChat.messages?.length) {
   $('welcome')?.remove();
   for (const saved of initialChat.messages) {

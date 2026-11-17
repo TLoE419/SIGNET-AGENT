@@ -4,6 +4,7 @@ import {SshControls} from '../features/ssh/SshControls';
 // Stable shell. Chat and graph controllers own their dynamic DOM regions.
 export function App({model}:{model:string}){
  return <>
+  <a className="skip-link" href="#prompt" data-i18n="跳至輸入研究需求">Skip to research request</a>
   <aside className="rail">
     <a className="brand" href="/" aria-label="SIGNET home" data-i18n-aria="SIGNET 首頁"><span className="logo">S</span><span>SIGNET<small><span data-i18n="研究工作台">Research workspace</span></small></span></a>
     <button id="new-chat" className="new-chat"><span data-i18n="＋ 開始新對話">+ New chat</span></button>
@@ -36,13 +37,13 @@ export function App({model}:{model:string}){
             <li className="workflow-stage locked" data-stage="preprocess">
               <details>
                 <summary className="workflow-stage-head"><span className="workflow-step">2</span><strong data-i18n="資料前處理">Data preprocessing</strong></summary>
-                <p className="workflow-stage-body workflow-note" >Not implemented in this version</p>
+                <p className="workflow-stage-body workflow-note" data-i18n="此版本尚未提供">Not available in this version</p>
               </details>
             </li>
             <li className="workflow-stage locked" data-stage="results">
               <details>
                 <summary className="workflow-stage-head"><span className="workflow-step">3</span><strong data-i18n="分析與結果">Analysis and results</strong></summary>
-                <p className="workflow-stage-body workflow-note" >Not implemented in this version</p>
+                <p className="workflow-stage-body workflow-note" data-i18n="此版本尚未提供">Not available in this version</p>
               </details>
             </li>
           </ol>
@@ -54,16 +55,16 @@ export function App({model}:{model:string}){
           <summary><span data-i18n="執行過程">Activity</span><span id="state" role="status" data-i18n="等待需求">Ready</span></summary>
           <div id="activity" className="activity"><div id="activity-empty" className="activity-empty"><div className="empty-path"><i></i><i></i><i></i></div><h3><span data-i18n="每一步，都有跡可循">Follow every step</span></h3><p><span data-i18n="送出需求後，這裡會依序顯示<br>模型回覆、選擇理由與工具結果。">After you send a request, see model responses,<br/>tool-selection notes and tool results here.</span></p><div className="legend"><span><span data-i18n="01 理解需求">01 Understand</span></span><span><span data-i18n="02 呼叫工具">02 Use tools</span></span><span><span data-i18n="03 整理結果">03 Summarize</span></span></div></div></div>
         </details>
-        <form id="composer"><label className="sr-only" htmlFor="prompt"><span data-i18n="輸入研究需求">Enter your research request</span></label><textarea id="prompt" rows={2} maxLength={8000} placeholder="Describe your research goal, or add more details…" data-i18n-placeholder="描述你的研究目的，或接著補充資料…" required></textarea><div className="composer-bottom"><span><span data-i18n="Enter 送出 · Shift + Enter 換行">Enter to send · Shift + Enter for a new line</span></span><button id="send" type="submit"><span data-i18n="送出">Send</span> <span>↑</span></button></div></form>
-        <p className="footnote"><span data-i18n="送出後會使用目前模型帳號的額度。關閉頁面不會取消已啟動的工具。">Sending uses your model account quota. Closing this page does not cancel running tools.</span></p>
+        <form id="composer"><label className="sr-only" htmlFor="prompt"><span data-i18n="輸入研究需求">Enter your research request</span></label><textarea aria-describedby="composer-hint composer-notice" id="prompt" rows={2} maxLength={8000} placeholder="Describe your research goal, or add more details…" data-i18n-placeholder="描述你的研究目的，或接著補充資料…" required></textarea><div className="composer-bottom"><span id="composer-hint"><span data-i18n="Enter 送出 · Shift + Enter 換行">Enter to send · Shift + Enter for a new line</span></span><button id="send" type="submit"><span data-i18n="送出">Send</span> <span>↑</span></button></div></form>
+        <p id="composer-notice" className="footnote"><span data-i18n="送出後會使用目前模型帳號的額度。關閉頁面不會取消已啟動的工具。">Sending uses your model account quota. Closing this page does not cancel running tools.</span></p>
       </section>
       <section id="stage6-pane" className="activity-pane stage6-pane" aria-label="Stage 6 workspace" hidden>
         <div className="pane-title"><h2>Stage 6 · <span data-i18n="網路視覺化">Network visualization</span></h2><div className="s6-pane-actions"><button id="s6-close" type="button" aria-controls="stage6-pane" aria-expanded="true">Collapse</button></div></div>
         <div className="stage6-tabs" role="tablist" aria-label="Workspace tabs"><button id="s6-parameters-tab" role="tab" data-tab="parameters" aria-selected="true">Parameters</button><button id="s6-comparison-tab" role="tab" data-tab="comparison" aria-selected="false">Comparison</button><button id="s6-history-tab" role="tab" data-tab="history" aria-selected="false">Run history</button></div>
         <div id="s6-error" role="alert" hidden></div>
-        <div id="s6-parameters" className="s6-content" role="tabpanel"></div>
-        <div id="s6-comparison" className="s6-content" role="tabpanel" hidden></div>
-        <div id="s6-history" className="s6-content" role="tabpanel" hidden></div>
+        <div id="s6-parameters" className="s6-content" role="tabpanel" aria-labelledby="s6-parameters-tab" tabIndex={0}></div>
+        <div id="s6-comparison" className="s6-content" role="tabpanel" aria-labelledby="s6-comparison-tab" tabIndex={0} hidden></div>
+        <div id="s6-history" className="s6-content" role="tabpanel" aria-labelledby="s6-history-tab" tabIndex={0} hidden></div>
         <div className="activity-footer"><span className="local-dot"></span> <span data-i18n="保留實際狀態與耗時，不顯示私密推理或金鑰。">Actual status and timing. Private reasoning and credentials stay hidden.</span></div>
       </section>
     </div>

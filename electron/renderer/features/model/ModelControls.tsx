@@ -1,3 +1,4 @@
+import {DialogActions} from '../../components/Modal';
 import {useEffect,useId,useRef,useState} from 'react';
 
 export type Provider='codex'|'gemini'|'groq';
@@ -42,7 +43,7 @@ export function GeminiKeyModal({open,status,onSave,onClear,onClose}:{open:boolea
  }
  const unavailable=status?.encryptionAvailable===false;
  return <dialog ref={dialog} className="ssh-modal model-key-modal" aria-labelledby={id} onCancel={e=>{e.preventDefault();close()}}><form onSubmit={e=>{e.preventDefault();void run('saving')}}>
-  <button type="button" className="ssh-modal-close" aria-label="Close" title="Close" onClick={close}><svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+  <button type="button" className="ssh-modal-close" aria-label="Close" title="Close" disabled={!!working} onClick={close}><svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
   <h2 id={id}>Gemini API</h2>
   <p>Chat uses Google Gemini with your own API key. Create one in <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer">Google AI Studio</a>.</p>
   <p className="model-key-note">The key is encrypted with your system keychain and is never shown again. Chat messages and tool results are sent to Google; on the free tier Google may use them to improve its products.</p>
@@ -52,9 +53,9 @@ export function GeminiKeyModal({open,status,onSave,onClear,onClose}:{open:boolea
   </fieldset>
   {unavailable&&<p role="alert">System keychain encryption is unavailable, so a key cannot be saved here.</p>}
   {notice&&<p role="status">{notice}</p>}{error&&<p role="alert">{error}</p>}
-  <footer>{status?.geminiConfigured&&<button type="button" className="ssh-danger" disabled={!!working} onClick={()=>void run('clearing')}>{working==='clearing'?'Removing…':'Remove key'}</button>}
+  <DialogActions>{status?.geminiConfigured&&<button type="button" className="ssh-danger" disabled={!!working} onClick={()=>void run('clearing')}>{working==='clearing'?'Removing…':'Remove key'}</button>}
    <button type="button" disabled={!!working} onClick={close}>Cancel</button>
-   <button type="submit" className="ssh-primary" disabled={!!working||unavailable||!key.trim()}>{working==='saving'?'Verifying key…':'Save and use Gemini'}</button></footer>
+   <button type="submit" className="ssh-primary" disabled={!!working||unavailable||!key.trim()}>{working==='saving'?'Verifying key…':'Save and use Gemini'}</button></DialogActions>
  </form></dialog>;
 }
 

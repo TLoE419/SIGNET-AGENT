@@ -15,10 +15,10 @@ interface ModalProps {
 export function Modal({open=true,title,ariaLabel,className='',onClose,dismissDisabled=false,children}:ModalProps){
  const ref=useRef<HTMLDialogElement>(null),content=useRef<HTMLDivElement>(null),titleId=useId();
  useEffect(()=>{
-  const dialog=ref.current;
+  const dialog=ref.current,trigger=document.activeElement;
   if(open&&!dialog?.open)dialog?.showModal();
   else if(!open&&dialog?.open)dialog.close();
-  return()=>{if(dialog?.open)dialog.close()};
+  return()=>{if(dialog?.open)dialog.close();if(trigger instanceof HTMLElement&&trigger.isConnected)trigger.focus()};
  },[open]);
  useResizeTransition(ref,content,open);
  const close=()=>{if(!dismissDisabled)onClose()};

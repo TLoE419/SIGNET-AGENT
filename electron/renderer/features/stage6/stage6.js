@@ -331,7 +331,7 @@
   $('s6-open').addEventListener('click',()=>setCollapsed(!collapsed));
   $('s6-close').addEventListener('click',()=>setCollapsed(true));
   const tabs=[...document.querySelectorAll('[data-tab]')];
-  tabs.forEach((b,i)=>{b.addEventListener('click',()=>{tab=b.dataset.tab;render();});b.addEventListener('keydown',e=>{if(['ArrowLeft','ArrowRight'].includes(e.key)){e.preventDefault();const next=tabs[(i+(e.key==='ArrowRight'?1:tabs.length-1))%tabs.length];next.click();next.focus();}});});
+  tabs.forEach((b,i)=>{b.addEventListener('click',()=>{tab=b.dataset.tab;render();});b.addEventListener('keydown',e=>{if(['ArrowLeft','ArrowRight','Home','End'].includes(e.key)){e.preventDefault();const next=tabs[e.key==='Home'?0:e.key==='End'?tabs.length-1:(i+(e.key==='ArrowRight'?1:tabs.length-1))%tabs.length];next.click();next.focus();}});});
   window.addEventListener('stage6-update',e=>accept(e.detail));
   window.addEventListener('panel-request',e=>{if(e.detail?.panel==='visualization'&&collapsed===e.detail.visible)setCollapsed(!e.detail.visible);});
   window.addEventListener('languagechange',render);

@@ -41,7 +41,11 @@
   function say(source, kind = '') {
     notice.hidden = !source;
     notice.className = 'workflow-message ' + kind;
-    if (source) uiText(notice, source);
+    const messages = {
+      'Connect SSH to prepare the remote environment.': '請先連線 SSH，再準備遠端環境。',
+      'Connect SSH before checking the environment.': '請先連線 SSH，再檢查環境。',
+    };
+    if (source) uiText(notice, messages[source] || source);
   }
 
   async function call(path, body = {}) {
