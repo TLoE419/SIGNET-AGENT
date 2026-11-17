@@ -58,6 +58,15 @@ the chromosome 1 execution controls.
 Connect to HPC3 from **Settings → Remote compute**. The same panel can check
 the remote resources and open the existing environment settings. Use **View →
 Classic Interface** when installing missing resources from its Workflow panel.
+While Settings is open, connecting automatically checks the remote connection,
+writable work directory, scheduler, container runtime, audited SIGNET source,
+container image, reference panel, genetic map, gene annotation, clinical file,
+and prepared imputation reference. Each row shows its status and the returned
+reason directly; **Check again** refreshes the read-only report. Incomplete or
+contradictory replies and existing environment-verification errors cannot mark
+the environment ready. Disconnecting or changing the account or installation
+clears the previous report. These checks do not install resources or start an
+analysis; the individual stage input reviews still apply.
 In **Analysis → Stage → Stage 1**
 of the chromosome 1 example, check the four prepared input files. Review the
 fixed chromosome, thresholds, and resource settings, then select **Submit Stage 1**.

@@ -440,9 +440,14 @@ code:not(pre code) {
 #signet-lens-left-preview .ml-settings-block p[role="alert"] { color: var(--ml-red); overflow-wrap: anywhere; }
 #signet-lens-left-preview .ml-settings-checks { margin: 0; padding: 0; list-style: none; }
 #signet-lens-left-preview .ml-settings-checks li {
-  display: flex; align-items: center; justify-content: space-between; gap: 8px;
-  min-height: 34px; border-bottom: 1px solid var(--ml-rule);
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 4px 8px;
+  min-height: 34px; padding: 8px 0; border-bottom: 1px solid var(--ml-rule);
 }
+#signet-lens-left-preview .ml-settings-checks .ml-settings-check-detail {
+  grid-column: 1 / -1; margin: 0; color: var(--ml-muted); font-size: 12px; line-height: 1.45;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+#signet-lens-left-preview .ml-settings-checks li:is([data-status="missing"], [data-status="problem"]) .ml-settings-check-detail { color: var(--ml-red); }
 #signet-lens-left-preview .ml-settings-checks li:last-child { border-bottom: 0; }
 #signet-lens-left-preview .ml-remote-readiness > button { margin-top: 8px; }
 #signet-lens-left-preview .ml-nav-pane-title {

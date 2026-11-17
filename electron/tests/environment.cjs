@@ -12,10 +12,14 @@ const {HostKeyTrustStore}=require('../build/ssh/index.cjs');
 const inventory=require('../../signet_inventory.json');
 const directory=mkdtempSync(path.join(os.tmpdir(),'signet-environment-local-'));
 let running,server,source=false,image=false,failVerification=true,connections=0;
-const commands=[];
-const deadline=setTimeout(()=>{console.error('Local environment smoke timeout');app.exit(1)},45000);
+let readinessMode='normal',readinessDelay=80;
+const commands=[],readinessCommands=[];
+const setupCommands=()=>commands.filter(script=>!script.includes('say workspace_path "$W"'));
+const checkIds=['connection','workspace','slurm','apptainer','signet_source','container','reference_ref',
+ 'reference_gmap','reference_gtf','reference_clinical','imputation_reference'];
+const deadline=setTimeout(()=>{console.error('Local environment smoke timeout');app.exit(1)},60000);
 app.on('will-quit',()=>{clearTimeout(deadline);server?.close();rmSync(directory,{recursive:true,force:true})});
-async function until(check){for(let i=0;i<200;i++){if(await check())return;await new Promise(r=>setTimeout(r,25))}throw Error('Local environment condition timed out')}
+async function until(check,description='Local environment condition timed out'){for(let i=0;i<200;i++){if(await check())return;await new Promise(r=>setTimeout(r,25))}throw Error(description)}
 (async()=>{
  const host=utils.generateKeyPairSync('ed25519',{}),key=utils.generateKeyPairSync('ed25519',{passphrase:'local-test-passphrase',cipher:'aes256-ctr',rounds:4});
  const keyPath=path.join(directory,'key');writeFileSync(keyPath,key.private,{mode:0o600});
@@ -25,18 +29,27 @@ async function until(check){for(let i=0;i<200;i++){if(await check())return;await
    const session=accept();session.on('pty',acceptPty=>acceptPty?.());
    session.on('shell',acceptShell=>{const stream=acceptShell();stream.write('[testuser@login-mock:~] $ ')});
    session.on('exec',(acceptExec,_reject,info)=>{
-    const stream=acceptExec();
+    const stream=acceptExec();stream.on('error',()=>{});
     if(info.command!=='bash -s'){stream.write('host=login-mock\nuser=testuser\nslurm=yes\n');stream.exit(0);stream.end();return}
     let script='';stream.on('data',chunk=>{script+=chunk.toString()});stream.on('end',()=>{
-     commands.push(script);let out='',err='',code=0;
+     commands.push(script);let out='',err='',code=0,delay=80;
      if(script.includes("printf 'home="))out=`home=/home/testuser\nroot=/home/testuser/mock-signet\n${['bash','git','tar','sha256sum','timeout','python3','setsid','sbatch','scontrol','sinfo','squeue'].map(t=>t+'=yes').join('\n')}\nexecutor=/usr/bin/apptainer\npartition=mock\nwritable=yes\nsource=${source?'exists':'missing'}\nexample=${source?'exists':'missing'}\nimage=${image?'exists':'missing'}\n`;
-     else if(script.includes('say workspace_path "$W"'))out=Object.entries({
-      workspace_path:'/home/testuser/mock-signet',signet:'yes',signet_integrity:'verified',signet_revision:inventory.revision,
-      signet_example:'verified',file_container:'4096',
-     }).map(([key,value])=>`@@${key}\t${value}\n`).join('');
+     else if(script.includes('say workspace_path "$W"')){
+      readinessCommands.push(script);delay=readinessDelay;
+      const values={user:'testuser',host:'login-mock',workspace_path:'/home/testuser/mock-signet',
+       workspace:'yes',workspace_writable:'yes',sbatch:'yes',apptainer:'apptainer version 1.3.2',
+       signet:source?'yes':'no',signet_integrity:'verified',signet_revision:inventory.revision,
+       signet_example:'verified',file_container:image?'4096':'no',file_ref:'8192',file_gmap:'2048',
+       file_gtf:'16384',file_clinical:'1024',file_prepare:'512'};
+      if(['infra-failed','workspace'].includes(readinessMode))values.workspace_writable='no';
+      if(['infra-failed','slurm'].includes(readinessMode))values.sbatch='no';
+      if(['infra-failed','apptainer'].includes(readinessMode))values.apptainer='no';
+      if(readinessMode==='missing-file')values.file_gtf='no';
+      out=Object.entries(values).map(([key,value])=>`@@${key}\t${value}\n`).join('');
+     }
      else if(script.includes('git -C'))source=true;
      else if(script.includes('Rscript -e')&&failVerification){err='MOCK: SIGNET settings verification failed: config.ini unreadable\n';code=1}
-     setTimeout(()=>{if(out)stream.write(out);if(err)stream.stderr.write(err);stream.exit(code);stream.end()},80);
+     setTimeout(()=>{if(stream.destroyed)return;if(out)stream.write(out);if(err)stream.stderr.write(err);stream.exit(code);stream.end()},delay);
     });
    });
   }));
@@ -50,9 +63,38 @@ async function until(check){for(let i=0;i<200;i++){if(await check())return;await
   await loaded;
  };
  const clickSelector=selector=>js(`document.querySelector(${JSON.stringify(selector)}).click()`);
+ const geometry=()=>js(`(()=>{const root=document.querySelector('.ml-app');return [root.offsetWidth,root.offsetHeight,root.querySelector('.ml-rail').offsetWidth,root.querySelector('.ml-chat').offsetWidth]})()`);
+ const readiness=()=>js(`(()=>{const section=document.querySelector('.ml-remote-readiness');return {
+  summary:document.querySelector('#ml-check-summary').textContent,
+  overall:section.dataset.ready,disabled:document.querySelector('#ml-check-environment').disabled,
+  rows:[...document.querySelectorAll('#ml-environment-checks li')].map(row=>({
+   id:row.dataset.checkId,status:row.dataset.status,ready:row.querySelector('[data-ready]')?.dataset.ready,
+   detail:row.querySelector('.ml-settings-check-detail')?.textContent||'',
+   visibleDetail:!!row.querySelector('.ml-settings-check-detail')?.getClientRects().length}))}})()`);
+ const settled=async(ready,statuses={})=>{
+  await until(async()=>{const state=await readiness();return !state.disabled&&state.summary.includes(ready+'/11')&&
+   Object.entries(statuses).every(([id,status])=>state.rows.find(row=>row.id===id)?.status===status)},
+  'Full readiness results did not settle: '+ready+'/11 '+JSON.stringify(statuses));
+  const result=await readiness();
+  assert.deepEqual(result.rows.map(row=>row.id),checkIds,'Every readiness prerequisite has its own row');
+  assert.equal(result.rows.filter(row=>row.ready==='true').length,ready);
+  assert.equal(result.overall,ready===11?'true':'false','Overall readiness must include all eleven prerequisites');
+  assert.equal(result.summary.includes('7/7'),false,'The old seven-file summary must not imply full readiness');
+  return result;
+ };
+ const checkAgain=async(mode,ready,statuses)=>{
+  readinessMode=mode;
+  const before=readinessCommands.length;
+  await clickSelector('#ml-check-environment');
+  const result=await settled(ready,statuses);
+  assert.equal(readinessCommands.length,before+1,'A manual recheck issues one read-only inspection');
+  return result;
+ };
  const connectionSwitch=()=>js(`document.querySelector('#ml-remote-switch')?.getAttribute('aria-checked')`);
  const connectionState=async()=> (await js('window.signetDesktop.ssh.getSnapshot()')).value.connection?.status;
  const observeEnvironment=phases=>js(`window.envPhases=${JSON.stringify(phases)};window.signetDesktop.environment.subscribe(s=>window.envPhases.push(s.phase));true;`);
+ const originalGeometry=await geometry();
+ assert.deepEqual(originalGeometry,[1650,894,53,542]);
  await clickSelector('[data-nav-target="settings"]');
  await observeEnvironment([]);
  const saved=await js(`window.signetDesktop.ssh.saveProfile(${JSON.stringify({name:'Local mock',host:'127.0.0.1',port,username:'testuser',auth:{method:'private-key',privateKeyPath:keyPath}})})`);assert.ok(saved.ok);
@@ -71,11 +113,13 @@ async function until(check){for(let i=0;i<200;i++){if(await check())return;await
  await until(async()=>await connectionSwitch()==='true');
  await until(()=>js(`document.querySelector('.ml-remote-readiness')?.dataset.phase==='needs-install'`));
  assert.equal(await connectionState(),'connected');
+ await settled(9,{connection:'ok',workspace:'ok',slurm:'ok',apptainer:'ok',signet_source:'missing',container:'missing'});
+ assert.ok(readinessCommands.length>=1,'Connecting while Settings is open automatically inspects readiness');
  const startingPhases=await js('window.envPhases');
  await switchView('classic-view');
  await until(()=>js(`document.querySelector('.ssh-environment-status')?.dataset.phase==='needs-install'`));
  await observeEnvironment(startingPhases);
- assert.equal(commands.length,1,'automatic probe must not install software');
+ assert.equal(setupCommands().length,1,'automatic probes and readiness inspection must not install software');
  assert.ok(await js(`document.querySelector('.ssh-status-subtitle').textContent.includes('testuser@127.0.0.1:')`));
  await js(`document.querySelector('.ssh-environment-status').click()`);
  const click=label=>js(`[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent===${JSON.stringify(label)}).click()`);
@@ -88,7 +132,7 @@ async function until(check){for(let i=0;i<200;i++){if(await check())return;await
  assert.ok((await js('window.signetDesktop.environment.install()')).ok);
  await until(()=>js(`document.querySelector('.ssh-environment-status')?.dataset.phase==='needs-install'&&window.envPhases.includes('installing-source')`));
  assert.equal(commands.some(s=>s.includes(' pull ')||s.includes('library://')),false,'the login node must not download the container');
- assert.equal(commands.length,4,'probe, source install, probe, source integrity');
+ assert.equal(setupCommands().length,4,'probe, source install, probe, source integrity');
  image=true;await click('Check environment');
  await until(()=>js(`document.querySelector('.ssh-environment-status')?.dataset.phase==='error'`));
  await until(()=>js(`document.querySelector('.ssh-environment-modal').textContent.includes('runtime-verification failed')`));
@@ -115,6 +159,7 @@ async function until(check){for(let i=0;i<200;i++){if(await check())return;await
  const python=await pythonEnvironment('environment');
  assert.equal(JSON.parse(python.stdout).image,config.value.config.image);assert.equal(JSON.parse(python.stdout).partition,'mock');
  writeFileSync(path.join(os.tmpdir(),'signet-environment-local.png'),(await window.webContents.capturePage()).toPNG());
+ const beforeSettings=readinessCommands.length;
  await switchView('workspace-view');
  await clickSelector('[data-nav-target="settings"]');
  await until(async()=>await connectionSwitch()==='true');
@@ -125,11 +170,59 @@ async function until(check){for(let i=0;i<200;i++){if(await check())return;await
  assert.equal(await connectionSwitch(),'true');
  assert.equal(connections,1,'switching interfaces keeps the original SSH connection');
  await until(()=>js(`document.querySelector('.ml-remote-readiness')?.dataset.phase==='ready'`));
+ await settled(11);
+ assert.equal(readinessCommands.length,beforeSettings+1,'Opening Settings on an existing connection automatically inspects all prerequisites');
+ assert.deepEqual(await geometry(),originalGeometry,'Full readiness leaves workspace width and sidebar dimensions unchanged');
+ await checkAgain('normal',11);
+
+ const blocked=await checkAgain('infra-failed',8,{workspace:'problem',slurm:'problem',apptainer:'problem'});
+ const detail=(state,id)=>state.rows.find(row=>row.id===id);
+ for(const id of ['workspace','slurm','apptainer'])assert.equal(detail(blocked,id).visibleDetail,true,id+' failure details must be visible');
+ assert.match(detail(blocked,'workspace').detail,/\/home\/testuser\/mock-signet.*not writable/);
+ assert.match(detail(blocked,'slurm').detail,/sbatch.*unavailable/);
+ assert.match(detail(blocked,'apptainer').detail,/Singularity or Apptainer.*not found/);
+ for(const [mode,id,expected] of [['workspace','workspace',/not writable/],['slurm','slurm',/sbatch.*unavailable/],
+  ['apptainer','apptainer',/not found/],['missing-file','reference_gtf',/refdata\/gencode\.v22\.genes\.gtf.*missing/]]){
+  const result=await checkAgain(mode,10,{[id]:mode==='missing-file'?'missing':'problem'});
+  assert.equal(detail(result,id).visibleDetail,true,'The affected readiness explanation is visible without hovering');
+  assert.match(detail(result,id).detail,expected);
+ }
+
+ // An incomplete response must remain incomplete even if its overall flag says
+ // ready. Only this isolated renderer's next real /hpc/check response is varied.
+ await js(`window.readinessOriginalFetch=window.fetch;window.omitReadinessItem='apptainer';window.fetch=async(...args)=>{
+  const reply=await window.readinessOriginalFetch(...args);
+  if(String(args[0]).includes('/hpc/check')&&window.omitReadinessItem){
+   const result=await reply.json(),id=window.omitReadinessItem;window.omitReadinessItem=null;
+   return new Response(JSON.stringify({...result,ready:true,checks:result.checks.filter(check=>check.item!==id)}),
+    {status:reply.status,headers:reply.headers});
+  }return reply};true`);
+ await checkAgain('normal',10,{apptainer:'unknown'});
+ await js(`window.fetch=window.readinessOriginalFetch;delete window.readinessOriginalFetch;true`);
+ await checkAgain('normal',11);
+ assert.deepEqual(await geometry(),originalGeometry,'Error and missing rows do not change the original layout widths');
+
+ const beforeReopen=readinessCommands.length;
+ await clickSelector('[data-nav-target="data"]');
+ await clickSelector('[data-nav-target="settings"]');
+ await settled(11);
+ assert.equal(readinessCommands.length,beforeReopen+1,'Re-entering Settings refreshes the existing connection’s readiness');
+ readinessDelay=500;
+ const beforeDisconnect=readinessCommands.length;
  await clickSelector('#ml-check-environment');
- await until(()=>js(`document.querySelector('#ml-check-summary').textContent.includes('2/7')`));
- assert.equal(await js(`document.querySelectorAll('#ml-environment-checks [data-ready="true"]').length`),2);
+ await until(()=>readinessCommands.length===beforeDisconnect+1,'The delayed read-only inspection did not start');
  await clickSelector('#ml-remote-switch');
  await until(async()=>await connectionSwitch()==='false'&&await connectionState()==='disconnected');
  await until(()=>js(`document.querySelector('#ml-check-environment').disabled&&document.querySelectorAll('#ml-environment-checks [data-ready="true"]').length===0`));
- await running.quit();console.log('PASS: workspace SSH login and disconnect, shared connection across views, and localhost environment setup and verification');
+ const disconnected=await readiness();
+ assert.equal(disconnected.overall,'false');
+ assert.equal(disconnected.rows.length,11);
+ assert.ok(disconnected.rows.every(row=>row.status==='unknown'&&!row.detail),'Disconnect clears all old readiness states and details');
+ await new Promise(resolve=>setTimeout(resolve,650));
+ const afterLateReply=await readiness();
+ assert.ok(afterLateReply.rows.every(row=>row.status==='unknown'&&row.ready!=='true'&&!row.detail),
+  'A late inspection reply must not restore readiness after disconnect');
+ assert.equal(afterLateReply.overall,'false');
+ assert.deepEqual(await geometry(),originalGeometry);
+ await running.quit();console.log('PASS: workspace SSH login, full eleven-item readiness with automatic and manual inspection, visible prerequisite failures, incomplete-response handling, stale-reply disconnect clearing, unchanged layout, shared connection, and localhost setup verification');
 })().catch(async error=>{console.error(error);await running?.backend.forceStop();app.exit(1)});

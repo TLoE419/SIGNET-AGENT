@@ -61,7 +61,7 @@ export function WorkspaceSshSettings({workspace, readiness, pane, sidebar}: {
         <button type="button" className="ml-settings-action" onClick={onEdit}>{edit}</button>
       </div>
       {error && <p className="ml-settings-note" role="alert">{error.message}</p>}
-      {createPortal(<RemoteReadiness {...{english, active, connected, environment, onEnvironment}}/>, readiness)}
+      {createPortal(<RemoteReadiness {...{english, active, connected, environment, onEnvironment}} connectionIdentity={host}/>, readiness)}
     </>;
   }}/>;
 }
