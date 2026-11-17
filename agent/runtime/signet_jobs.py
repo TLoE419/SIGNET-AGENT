@@ -259,6 +259,13 @@ STEPS = {
 
 
 ANALYSIS_STEPS = ('genotype', 'expression', 'adjust', 'cis', 'network', 'visualize')
+# Results of -g, -t, -a and -c hold one row per person (genotypes, expression, sample IDs), so they
+# stay on HPC3, where the next steps read them. Only these steps' gene-level results (network
+# matrices, graphs and edge tables) are copied to this computer, for the chat graph, the result
+# download and the Stage 6 comparison. Every step's counts are summarized on HPC3 (_output_summary).
+DOWNLOADED_STEPS = ('network', 'visualize')
+# Inputs whose size the summary reports, so "before" and "after" both come from HPC3.
+_COUNTED_INPUTS = {'genotype': ('ped.file', 'map.file'), 'expression': ('gexp.file',)}
 
 # Each manifest is paired with the completion file(s) written by ParaFly.
 COMMAND_PROGRESS = {
@@ -1296,6 +1303,61 @@ def status(run_id, name, refresh=False):
     return _save(root, record)
 
 
+def _summary_script(record, step):
+    """Login-node shell: row count and first-row field count of each output and counted input. Numbers only."""
+    q = shlex.quote
+    lines = [_say(), f'D={q(record["remote_dir"])}',
+             # Non-empty lines, and the fields of the first one (comma-separated for .csv).
+             'count() { awk -v sep="$2" \'BEGIN { if (sep != "") FS = sep } NF { n++; if (!c) c = NF } '
+             'END { printf "%d %d", n, c }\' "$1" 2>/dev/null; }']
+    for index, path in enumerate(_required(step, record)):
+        sep = ',' if path.endswith('.csv') else ''
+        lines.append(f'if [ -f "$D/work/"{q(path)} ]; then say out_{index} "$(count "$D/work/"{q(path)} {q(sep)})"; fi')
+    for key in _COUNTED_INPUTS.get(record['step'], ()):
+        path = record.get('inputs', {}).get(key)
+        if path:
+            lines.append(f'if [ -f {q(path)} ]; then say in_{key.replace(".", "_")} "$(count {q(path)} \'\')"; fi')
+    return '\n'.join(lines) + '\n'
+
+
+def _output_summary(record, step):
+    """Counts of the step's outputs and inputs, computed on HPC3; never values, IDs or rows."""
+    code, values, _ = _shell(_summary_script(record, step), timeout=120)
+    if code:
+        raise OSError('the summary did not complete on HPC3')
+    def counts(value):
+        rows, columns = (int(part) for part in value.split())
+        return {'rows': rows, 'columns': columns}
+    summary = {'outputs': [], 'inputs': {}}
+    for index, path in enumerate(_required(step, record)):
+        entry = {'file': path.rsplit('/', 1)[-1]}
+        value = values.get(f'out_{index}', '')
+        entry.update(counts(value) if re.fullmatch(r'[0-9]+ [0-9]+', value) else {'available': False})
+        summary['outputs'].append(entry)
+    for key in _COUNTED_INPUTS.get(record['step'], ()):
+        value = values.get(f'in_{key.replace(".", "_")}', '')
+        if re.fullmatch(r'[0-9]+ [0-9]+', value):
+            summary['inputs'][key] = {'file': record['inputs'][key].rsplit('/', 1)[-1], **counts(value)}
+    return summary
+
+
+@_one_at_a_time
+def ensure_summary(run_id, name):
+    """The completed step's counts, computing them on HPC3 once for records made before summaries existed."""
+    step = _step(name)
+    root = _root(run_id)
+    record = _load(root, name)
+    if record.get('state') != 'completed' or record.get('summary'):
+        return record.get('summary')
+    _environment()
+    try:
+        record['summary'] = _output_summary(record, step)
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return None
+    _save(root, record)
+    return record['summary']
+
+
 def _finish(root, record, step, done, missing, hints):
     """The job ended: decide completed or failed (spec §7), and on success copy the results here."""
     # Slurm completion can be visible before the exit marker is readable in full.
@@ -1323,6 +1385,17 @@ def _finish(root, record, step, done, missing, hints):
         return
     record.pop('finished_at', None)
     record.pop('missing_outputs_since', None)
+    try:
+        record['summary'] = _output_summary(record, step)
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        pass   # counted later, when the assistant asks (ensure_summary)
+    if record['step'] not in DOWNLOADED_STEPS:
+        # Person-level results stay on HPC3; the next steps read them there.
+        record['outputs'] = []
+        record['remote_outputs'] = ['work/' + path for path in _required(step, record)]
+        _change(record, 'completed', finished_at=_now(), exit_code='0', missing_outputs=[], failure_hints=[],
+                reason='Outputs present and logs clean; results stay on HPC3. This is not scientific validation.')
+        return
     _change(record, 'validating', exit_code='0', download_pending=True,
             reason='Results passed the checks on HPC3; downloading them now.')
     _save(root, record)  # The local analysis view can see this while the transfer runs.

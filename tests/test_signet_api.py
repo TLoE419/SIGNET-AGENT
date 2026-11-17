@@ -242,6 +242,10 @@ class SignetApiTest(unittest.TestCase):
         self.assertEqual(sum('sbatch --parsable' in command for command in self.calls), 1)
 
     def test_six_reviewed_steps_share_one_run_and_download_its_results(self):
+        # The real default: person-level results (-g, -t, -a, -c) stay on HPC3; -n and -v come here.
+        default = patch.object(jobs, 'DOWNLOADED_STEPS', ('network', 'visualize'))
+        default.start()
+        self.addCleanup(default.stop)
         path, body = self.genotype_review()
         session = body['session']
         run = '/signet/runs/step_test'
@@ -395,7 +399,10 @@ class SignetApiTest(unittest.TestCase):
             self.assertEqual(archive.read('work/res/resv/signet-edges.csv').decode(), edges)
             self.assertEqual(archive.read('work/res/resv/signet_top1_freq0.75.html').decode(), original_plot)
             self.assertIn('work/res/resv/signet_top1_freq0.75_files/widget.js', archive.namelist())
-            self.assertIn('work/res/resg/signet_Geno', archive.namelist())
+            self.assertIn('work/res/resn/signet_Afreq', archive.namelist())
+            # Person-level results stay on HPC3, so the download holds none of them.
+            self.assertFalse([name for name in archive.namelist() if name.split('/')[2] in ('resg', 'rest', 'resa', 'resc')])
+        self.assertFalse((self.root / 'work/res/resg/signet_Geno').exists())
         self.assertEqual(self.call('GET', ticket, headers={})[0], 403)
 
         stages = jobs.ANALYSIS_STEPS

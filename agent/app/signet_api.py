@@ -444,6 +444,8 @@ def download_results(handler, url):
         with tempfile.TemporaryFile() as archive:
             with ZipFile(archive, 'w') as zip_file:
                 for stage in jobs.ANALYSIS_STEPS:
+                    if stage not in jobs.DOWNLOADED_STEPS:
+                        continue   # person-level results stay on HPC3
                     for name in records[stage].get('outputs', ()):
                         relative = Path(name)
                         if (relative.is_absolute() or '..' in relative.parts or chr(92) in name

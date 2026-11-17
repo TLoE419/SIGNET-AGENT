@@ -41,7 +41,7 @@ Workflow panel / AI tool
 
 - One step is one Slurm job. A submit call returns as soon as Slurm accepts the job; the client then polls the status route. The job keeps running if the app or the SSH connection goes away, and the next status call picks it up.
 - SIGNET itself runs only inside the container in the Slurm job, never on the login node.
-- Run records and downloaded results live on this computer under `runs/<run_id>/`; the job's working files live in the run's HPC3 folder (section 8).
+- Run records live on this computer under `runs/<run_id>/`; the job's working files and all person-level results (`-g`, `-t`, `-a`, `-c`) stay in the run's HPC3 folder (section 8). Only the gene-level results of `-n` and `-v` are copied here, for the chat graph, the result download and the Stage 6 comparison.
 
 ## 2. Concepts: runs, steps, attempts
 
@@ -278,7 +278,7 @@ When preflight checks refuse the submission before remote files move (400, 409 o
 The step's current record (section 7).
 
 - Slurm is asked at most once every 15 seconds per step. `refresh=1` asks now.
-- When Slurm reports the job ended, this call validates it (section 2): exit marker, required outputs, log lines. On success it downloads the step's result folder into the local run, so that one call takes longer.
+- When Slurm reports the job ended, this call validates it (section 2): exit marker, required outputs, log lines. On success it counts the step's outputs and counted inputs on HPC3 (`summary`: rows and first-row fields only), and for `-n` and `-v` downloads the result folder into the local run, so that one call takes longer. Results of `-g`, `-t`, `-a` and `-c` stay on HPC3 (`remote_outputs`).
 - If the exit marker is missing or incomplete, the step stays `validating`. A later call decides.
 - For a step with child jobs, a terminal control job is insufficient: a successful queue check must confirm that its children also stopped. While they drain (or the queue check fails), the run stays locked in `cancelling` for a cancelled parent or `validating` for a completed/failed parent. This also applies to normal status polling without an earlier cancel request.
 - An exit marker cannot bypass that child check when the control job's scheduler state is temporarily absent. Results are not downloaded and settings remain locked until the queue check succeeds and related jobs are gone.
@@ -491,7 +491,7 @@ submitting ──► submitted ──► pending ──► running ──► val
 | `running` | Running | Poll status; read logs |
 | `validating` | Job ended; checking outputs and logs, downloading, or waiting for a complete exit marker | Poll status |
 | `cancelling` | Cancellation accepted, but termination of the job and its children is not confirmed | Poll status; do not resubmit or change settings |
-| `completed` | Outputs present, logs clean, results downloaded | Go on to the next step |
+| `completed` | Outputs present, logs clean; `-n`/`-v` results downloaded | Go on to the next step |
 | `failed` | Slurm failure (OUT_OF_MEMORY, TIMEOUT, …), nonzero exit, missing outputs, or a failure line in the logs | Read `reason`, `missing_outputs`, `failure_hints`; fix; resubmit in the same run |
 | `cancelled` | Cancelled by the user or Slurm | Resubmit in the same run if wanted |
 | `unknown` | No job could be confirmed (lost connection during `sbatch`, or Slurm has no record) | Check status again; inspect the HPC3 folder. **Do not resubmit** |
@@ -506,7 +506,10 @@ Record fields (route 7 and route 4):
 | `job_id`, `slurm_state`, `exit_code` | Slurm job, its last Slurm state, and SIGNET's exit code |
 | `submitted_at`, `finished_at`, `checked_at` | Times |
 | `missing_outputs`, `failure_hints`, `reason` | Why it failed, or the validation note on success |
-| `outputs` | Files downloaded into the local run |
+| `outputs` | Files downloaded into the local run (`-n`, `-v` only) |
+| `remote_outputs` | Results kept on HPC3 (`-g`, `-t`, `-a`, `-c`), relative to the run folder |
+| `summary` | Counts computed on HPC3: rows and first-row fields of each output, and of the counted inputs (`-g` PED/MAP, `-t` expression matrix) |
+| `clinical` | `-a` only: the researcher's table, race choices, matched patients and races after the choices |
 | `required_outputs` | Present when output names depend on settings (`cis`): the exact files this attempt must produce |
 | `progress` | `network` reports both ParaFly batches. Other stages report their own measured work units |
 | `attempt`, `previous_job_id` | Present on a retry |
@@ -541,7 +544,7 @@ This computer, `runs/<run_id>/`:
 
 ```
 work/config.ini              settings, including the input paths last submitted
-work/res/...                 downloaded results of completed steps
+work/res/resn, work/res/resv downloaded gene-level results of -n and -v
 steps/<step>.json            current record of each step
 steps/<step>.attempt<N>.json records of earlier attempts
 steps/<step>.attempt<N>.results/ earlier attempts' local result folders
@@ -590,7 +593,7 @@ If `adjust` fails (for example because of the clinical file), fix the cause and 
 
 ## 10. Known limits
 
-- **Clinical file and SIGNET's race handling.** `script/adj/adj_adjust.R` (official SIGNET) drops `american indian or alaska native`, turns `not reported` into `white`, and then expects exactly three race levels, named by position as asian, black or african american, white. Any other value (an empty race, `Unknown`) stops `-a` with `number of levels differs`. Worse, three different levels would be renamed silently. The app does not yet check race values before submitting. It also requires a `gender` column, which the clinical file downloaded by the environment panel does not yet include.
+- **Clinical file and SIGNET's race handling.** `script/adj/adj_adjust.R` (official SIGNET) drops `american indian or alaska native`, turns `not reported` into `white`, and then expects exactly three race levels, named by position as asian, black or african american, white. Any other value (an empty race, `Unknown`) stops `-a` with `number of levels differs`. Worse, three different levels would be renamed silently. The `-a` card therefore counts the matched patients' race values and asks the researcher how to treat any other value (section 5.12); submission is refused until every value is handled and exactly those three races remain.
 - **IMPUTE2 seed.** SIGNET runs IMPUTE2 without `-seed`, so two `-g` runs on the same data differ slightly (about 0.01 % of genotype calls in one test).
 - **No job confirmed.** A step that ends `unknown` without a job ID has no way out yet other than inspecting the HPC3 folder: it cannot be retried, and it blocks the run's other steps and settings.
 - **One run per analysis.** Results are never taken from another run. Copying `-t` or `-g` results between runs would also need `-g`'s `tmp/tmpg/impute/` and a check that both runs used the same samples.

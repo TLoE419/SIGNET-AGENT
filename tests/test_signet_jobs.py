@@ -68,7 +68,10 @@ class StepsTest(unittest.TestCase):
         self.remote_dir = self.hpc / 'ws/work/step_test'
         self.calls = []
         self.lose_connection_on = None
+        # Most tests use -t to exercise the transfer of results itself; by default only -n and -v
+        # results are copied here (see test_person_level_results_stay_on_hpc3).
         patches = [patch.object(st, 'PROJECT', self.project),
+                   patch.object(steps, 'DOWNLOADED_STEPS', steps.ANALYSIS_STEPS),
                    patch.object(ssh_transport, 'available', return_value=True),
                    patch.object(ssh_transport, 'environment', side_effect=lambda: dict(self.config)),
                    patch.object(ssh_transport, 'remote', side_effect=self.remote)]
@@ -1257,23 +1260,43 @@ class StepsTest(unittest.TestCase):
         self.assertNotIn('TCGA-44', text)
         self.assertNotIn(str(self.hpc), text, 'no HPC3 folder reaches the model')
         self.assertEqual(self.code_of(step_report.report, 'step_test', '-x'), 'not_found')
-        # A completed step reports counts of its downloaded outputs, never their contents.
+        # A completed step reports counts computed on HPC3 (inputs and outputs), never their contents.
         self.slurm(sbatch_reply='222')
         steps.submit('step_test', 'expression', self.inputs)
+        # The input matrix: header, 3 genes, and the 5 HTSeq summary rows SIGNET drops; 3 samples.
+        self.gexp.write_text('Ensembl_ID TCGA-AA-0001-01A TCGA-AA-0002-01A TCGA-AA-0003-01A\n'
+                             + 'ENSG1 1 2 3\n' * 3 + '0 0 0 0\n' * 5)
         self.finish_job()
+        (self.remote_dir / 'work/res/rest/signet_gexpID').write_text('TCGA-95-7947-01C\nTCGA-44-2668-01C\n')
+        (self.remote_dir / 'work/res/rest/signet_gexp').write_text('1.5 2.5 3.5\n4.5 5.5 6.5\n')
         self.assertEqual(steps.status('step_test', 'expression', refresh=True)['state'], 'completed')
-        (self.root / 'work/res/rest/signet_gexpID').write_text('TCGA-95-7947-01C\nTCGA-44-2668-01C\n')
-        (self.root / 'work/res/rest/signet_gexp').write_text('1.5 2.5 3.5\n4.5 5.5 6.5\n')
         done = step_report.report('step_test', '-t')
         outputs = {item['file']: item for item in done['summary']['outputs']}
         self.assertEqual((outputs['signet_gexpID']['rows'], outputs['signet_gexpID']['rows_are']), (2, 'samples'))
         self.assertEqual((outputs['signet_gexp']['rows'], outputs['signet_gexp']['columns']), (2, 3))
         self.assertEqual(outputs['signet_gexp']['columns_are'], 'genes')
+        self.assertEqual(done['summary']['inputs']['gexp.file'],
+                         {'file': 'example_gexp', 'samples': 3, 'genes_after_dropping_the_last_5_rows': 3})
         self.assertNotIn('TCGA-', json.dumps(done))
         self.assertNotIn('1.5', json.dumps(done['summary']), 'no values, only counts')
         steps.link_conversation('step_test', 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee')
         self.assertEqual(self.code_of(step_report.report, 'step_test', '-t', '12345678-1234-1234-1234-123456789abc'),
                          'not_found', 'another conversation cannot read this analysis')
+
+    def test_person_level_results_stay_on_hpc3(self):
+        # The default: only -n and -v results come to this computer.
+        with patch.object(steps, 'DOWNLOADED_STEPS', ('network', 'visualize')):
+            steps.submit('step_test', 'expression', self.inputs)
+            self.finish_job()
+            record = steps.status('step_test', 'expression', refresh=True)
+        self.assertEqual(record['state'], 'completed')
+        self.assertEqual(record['outputs'], [])
+        self.assertEqual(record['remote_outputs'], ['work/' + path for path in OUTPUTS])
+        self.assertFalse((self.root / 'work/res/rest').exists() and any((self.root / 'work/res/rest').iterdir()),
+                         'nothing of -t was copied here')
+        self.assertFalse(any('tar czf' in command for command in self.calls), 'no transfer was started')
+        self.assertEqual([item['rows'] for item in record['summary']['outputs']], [1, 1, 1, 1])
+        self.assertIn('stay on HPC3', record['reason'])
 
 if __name__ == '__main__':
     unittest.main()

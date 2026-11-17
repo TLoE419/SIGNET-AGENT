@@ -132,6 +132,16 @@ def _seed(root, child, name, config, records, reused, settings, proposal_id, pai
         record = records[stage]
         step = jobs.STEPS[stage]
         required = {'work/' + path for path in jobs._required(step, record)}
+        if stage not in jobs.DOWNLOADED_STEPS:
+            # Person-level results stay on HPC3: they are copied there only (_copy_remote below).
+            files = sorted(required)
+            all_files.update(dict.fromkeys(files, True))
+            copied = {key: record[key] for key in ('step', 'flag', 'settings', 'inputs', 'resources', 'options',
+                                                   'required_outputs', 'progress', 'finished_at', 'summary', 'clinical')
+                      if key in record}
+            jobs._save(child, {**copied, 'state': 'completed', 'run_id': child.name, 'remote_dir': destination,
+                              'outputs': [], 'remote_outputs': files, 'reused_from': root.name})
+            continue
         files = record.get('outputs') or sorted(required)
         if not required.issubset(files):
             raise jobs.StepError('conflict', 'The original analysis is missing required local results.')
@@ -146,7 +156,7 @@ def _seed(root, child, name, config, records, reused, settings, proposal_id, pai
             shutil.copy2(original, target)
             all_files[relative] = relative in required
         copied = {key: record[key] for key in ('step', 'flag', 'settings', 'inputs', 'resources', 'options',
-                                               'required_outputs', 'progress', 'finished_at') if key in record}
+                                               'required_outputs', 'progress', 'finished_at', 'summary') if key in record}
         jobs._save(child, {**copied, 'state': 'completed', 'run_id': child.name, 'remote_dir': destination,
                           'outputs': files, 'reused_from': root.name})
 

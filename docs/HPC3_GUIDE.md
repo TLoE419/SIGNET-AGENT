@@ -30,11 +30,14 @@ if `/pub` is not writable). Change it in **HPC3 settings**.
 │   ├── prepared/example/       IMPUTE2 inputs for the example study, summary.json
 │   ├── selected.tsv            your own files chosen instead of downloads
 │   └── SOURCES.tsv             download record: date, size, checksum, URL
-├── runs/<analysis>/            one folder per analysis
+├── runs/<analysis>/            one folder per analysis; all results, including person-level ones
 └── .signet-agent/steps/        setup logs and state
 ```
 
 Nothing is overwritten or deleted. A replaced file is kept as `<name>.replaced-<time>`.
+
+Person-level results (genotypes, expression, sample IDs from `-g`, `-t`, `-a`, `-c`) stay on HPC3.
+This computer keeps the run records and the gene-level results of `-n` and `-v` (network and graph).
 
 ### 1.3 Reference data sources
 
