@@ -51,8 +51,7 @@ and reference downloads that do not use the container. Python uses its image, ex
 upload audited per-run scripts and inputs. Workflow checks rehash the scripts and
 support files using the same `signet_inventory.json` manifest. An archive needs no
 `.git` directory; missing or modified audited files and revision mismatches still
-block source readiness. Extra files, including user `config.ini`, are preserved. `network_worker` accepts this shared
-work root and uses the account's environment instead of root/VM-specific defaults.
+block source readiness. Extra files, including user `config.ini`, are preserved.
 
 Validation: `npm run test:environment --prefix electron` starts a local SSH server
 on 127.0.0.1 and simulates remote installation (no HPC3/VPN/image download). It

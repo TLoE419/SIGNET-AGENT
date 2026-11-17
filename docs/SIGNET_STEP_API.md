@@ -308,7 +308,9 @@ Last lines of the job's stdout (`out`, default) or stderr (`err`) on HPC3. `line
 ### 5.10 `PATCH /signet/runs/{run_id}/conversation`
 
 Body: `{"session": "<saved conversation ID>"}`. Returns `{"run_id": "...", "session": "..."}`.
-A run may be linked to one saved conversation; a conversation can have several runs. Linking the
+A run may be linked to one saved conversation. A conversation holds one analysis and the reruns
+made from it, so linking a second, unrelated run returns 409, as does `POST /signet/analyses` for a
+conversation that already has one; a new analysis starts in a new conversation. Linking the
 same pair again is safe, and changing a linked run to a different conversation returns 409.
 Invalid IDs return 400; unknown runs or conversations return 404. Existing runs can be linked
 without starting or repeating any computation. The association is stored locally in
@@ -321,10 +323,14 @@ Returns `{"analyses": [...]}` for TCGA runs linked to this conversation. Each en
 `run_id`, `session`, `completed_steps`, `total_steps`, and the six ordered `steps` described in
 section 5.4. Each step has `step`, `flag`, `phase`, and measured `progress` when available.
 Submitted steps include their latest job parameters so the chat can restore each stage card.
+Each entry's `family` says which run of the conversation's analysis it is: `{"number": 0}` for the
+original; for rerun N, `number`, `source_run`, `from_step` and `changes` (the settings, options,
+input files and clinical choices of its first stage that differ from the source run, inputs by file
+name). The most recent run has `"latest": true`; the assistant uses it when no run is named.
 Earlier attempts are available in the full analysis view. `next_step` identifies the first
 incomplete stage. Its current review is returned as `proposal`, with reviewed parameters. The separate `resource_limits` field describes the stage’s resource bounds. Both `next_step` and `proposal` are null after completion.
 
-In a saved chat, **Track an existing analysis** links an unassigned run. The chat updates one
+In a saved chat without an analysis, **Track an existing analysis** links an unassigned run. The chat updates one
 progress card per run and checks active jobs separately via route 7. A lost connection leaves the
 last recorded phase visible. Each stage card shows a bar and finished and total work units when measured records exist. Genotype counts imputation segments. Expression counts the two completed preprocessing operations. Adjustment counts chromosome filtering jobs. Cis mapping counts low-frequency and rare-variant batches. Network construction keeps the two ParaFly batch counts separate, and visualization counts completed subnetwork plots.
 

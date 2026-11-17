@@ -139,7 +139,11 @@ test('stage 2 shows -g, -t and -a, links to the chat card, and starts an analysi
  assert.deepEqual(rows,[['genotype','ok'],['expression','in_progress'],['adjust','unknown']]);
  assert.match(f.w.document.getElementById('workflow-preprocess-body').textContent,/1\/2/);
  assert.equal(f.w.document.getElementById('workflow-preprocess-status').textContent,'1/3');
- assert.equal(f.w.document.querySelectorAll('#workflow-preprocess-body [data-mode]').length,0,'no second analysis while one is unfinished');
+ assert.equal(f.w.document.querySelectorAll('#workflow-preprocess-body [data-mode]').length,0,'one conversation, one analysis');
+ const newChat=[...f.w.document.querySelectorAll('#workflow-preprocess-body button')].find(b=>b.textContent==='開新對話來跑新分析');
+ assert.ok(newChat,'a new analysis is offered in a new conversation');
+ let opened=0;const chatButton=f.w.document.createElement('button');chatButton.id='new-chat';chatButton.addEventListener('click',()=>opened++);
+ f.w.document.body.append(chatButton);newChat.click();assert.equal(opened,1,'it opens a new conversation');
  // Stage 3 lists the other three steps, so the two stages match the chat's six-step card.
  const results=f.w.document.getElementById('workflow-results');results.open=true;results.dispatchEvent(new f.w.Event('toggle'));for(let i=0;i<4;i++)await settle();
  assert.deepEqual([...f.w.document.querySelectorAll('#workflow-results-body .workflow-item')].map(row=>row.dataset.step),['cis','network','visualize']);

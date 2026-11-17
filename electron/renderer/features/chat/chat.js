@@ -176,7 +176,6 @@ async function send(text) {
     function consume(line) {
       if (!line.trim()) return;
       const event = JSON.parse(line);
-      if (event.type === 'workspace') window.dispatchEvent(new CustomEvent('stage6-update', {detail:event.text}));
       if (event.type === 'ui') window.dispatchEvent(new CustomEvent('panel-request', {detail:event.text}));
       if (event.type === 'progress') progress(turn, event.text);
       if (event.type === 'answer') {

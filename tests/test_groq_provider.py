@@ -215,13 +215,12 @@ class GroqTest(unittest.TestCase):
 
     def test_all_tools_have_required_and_optional_typed_schemas(self):
         schemas = [tool_schema(function) for function in main.config.tools]
-        self.assertEqual(len(schemas), 24)
+        self.assertEqual(len(schemas), 17)
         configure = next(x['function'] for x in schemas if x['function']['name'] == 'configure_signet')
         self.assertEqual(configure['parameters']['required'], ['run_id'])
         self.assertEqual(configure['parameters']['properties']['nchr'], {'type':'integer', 'default':22})
-        cis = next(x['function'] for x in schemas if x['function']['name'] == 'cis_eqtl')
-        self.assertEqual(cis['parameters']['properties']['alpha']['default'], 0.05)
-        self.assertIn('alpha', set(cis['parameters']['properties']) - set(cis['parameters']['required']))
+        report = next(x['function'] for x in schemas if x['function']['name'] == 'get_step_report')
+        self.assertEqual(set(report['parameters']['required']), {'run_id', 'step'})
         files = next(x['function'] for x in schemas if x['function']['name'] == 'list_files')
         self.assertEqual(files['parameters']['properties']['folder'].get('enum'), [str(PROJECT)])
 
@@ -243,7 +242,7 @@ class GroqTest(unittest.TestCase):
         self.assertEqual(messages[-1]['role'], 'tool')
         compact = json.loads(messages[-1]['content'])
         self.assertNotIn('scripts', compact)
-        self.assertEqual(compact['all_tools_including_list_files'], 24)
+        self.assertEqual(compact['all_tools_including_list_files'], 17)
         self.assertTrue(compact['scripts_omitted'])
         self.assertIn('scripts', history[2].parts[0].function_response.response)
         self.assertIn(GROQ_MODEL, events[0])

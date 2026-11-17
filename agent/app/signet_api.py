@@ -37,9 +37,9 @@ import sys
 import traceback
 from urllib.parse import parse_qs
 
-from agent.runtime import analysis_rerun, step_proposal
+from agent.runtime import analysis_family, analysis_rerun, step_proposal
 from agent.runtime import signet_jobs as jobs
-from agent.runtime.visualization import read_graph
+from agent.runtime.visualization import read_graph, threshold_counts
 import agent.tools.signet as signet
 
 MAX_BODY = 32768
@@ -51,6 +51,8 @@ _STEP = r'(?P<step>[a-z_]{1,32})'
 _SESSION = re.compile(r'[a-f0-9-]{36}')  # same session IDs accepted by ChatHandler
 _PREVIEW = re.compile(r'/signet/result-preview/(?P<ticket>[A-Za-z0-9_-]{32})/(?P<name>[A-Za-z0-9_.+/-]+)')
 _NETWORK_HTML = re.compile(r'signet_top([1-9][0-9]*)_freq[0-9.eE+-]+\.html')
+# PNG copies of SIGNET's own PDF plots, rendered on HPC3 at the end of -v.
+_SIGNET_PLOT = re.compile(r'signet_(circular|enrichment_radar|enrichment_hist)_top([1-9][0-9]*)_freq[0-9.eE+-]+\.png')
 _PREVIEW_TYPES = {'.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
                   '.css': 'text/css; charset=utf-8', '.png': 'image/png'}
 _EMBED_STYLE = b'''<style>
@@ -189,6 +191,7 @@ def get_progress(handler, url):
     if not _SESSION.fullmatch(session):
         raise ApiError(400, 'invalid_request', 'A valid conversation session is required.')
     analyses = []
+    labels = analysis_family.labels(session)
     for root, manifest, _ in _runs(session):
         cohort = json.loads(manifest.read_text()).get('cohort')
         if cohort == 'TCGA':
@@ -198,7 +201,8 @@ def get_progress(handler, url):
                              'proposal': step_proposal.view(root, upcoming) if upcoming else None,
                              'resource_limits': jobs.STEPS[upcoming].limits if upcoming else None,
                              'genotype_proposal': step_proposal.view(root),
-                             **jobs.analysis_view(root, cohort, records, include_attempts=False)})
+                             **jobs.analysis_view(root, cohort, records, include_attempts=False),
+                             'family': labels.get(root.name, {})})
     return 200, {'analyses': analyses}
 
 
@@ -239,6 +243,9 @@ def start_analysis(handler, url):
         raise ApiError(400, 'invalid_request', 'Invalid conversation session.')
     if mode not in ('example', 'custom'):
         raise ApiError(400, 'invalid_request', 'mode must be example or custom.')
+    if analysis_family.original(session):
+        raise ApiError(409, 'conflict', 'This conversation already has an analysis. '
+                                        'Start a new conversation for a new analysis.')
     jobs._environment()  # 412 before anything is created when HPC3 is not ready
     server = handler.server
     if not server.turn_lock.acquire(blocking=False):
@@ -290,7 +297,7 @@ def link_conversation(handler, url, run_id):
     if not isinstance(session, str) or not _SESSION.fullmatch(session):
         raise ApiError(400, 'invalid_request', 'Invalid conversation session.')
     server = handler.server
-    if session not in server.histories and session not in server.stage6.sessions:
+    if session not in server.histories:
         raise ApiError(404, 'not_found', 'No such conversation.')
     return 200, jobs.link_conversation(run_id, session)
 
@@ -335,8 +342,14 @@ def get_results(handler, url, run_id):
     root, records = _finished_analysis(run_id, session)
     settings = records['visualize']['settings']
     graph = read_graph(root / jobs.STEPS['visualize'].download / 'signet-edges.csv', int(settings['ntop']))
-    previews = _issue_previews(handler.server, root, records['visualize'].get('outputs', ()))
-    return 200, {'graph': graph, 'previews': previews}
+    previews, images = _issue_previews(handler.server, root, records['visualize'].get('outputs', ()))
+    try:
+        # Optional: the card still shows the network if the -n matrix cannot be read.
+        thresholds = threshold_counts(root / jobs.STEPS['network'].download / 'signet_Afreq')
+    except (OSError, ValueError):
+        thresholds = None
+    return 200, {'graph': graph, 'previews': previews, 'images': images, 'thresholds': thresholds,
+                 'freq': float(settings['freq'])}
 
 
 def _issue_previews(server, root, outputs):
@@ -346,19 +359,26 @@ def _issue_previews(server, root, outputs):
         path = Path(name)
         if path.is_relative_to(directory) and '..' not in path.parts:
             paths.append(path.relative_to(directory))
-    plots = []
+    plots, images = [], []
     for path in paths:
         match = _NETWORK_HTML.fullmatch(path.name)
-        if path.parent == Path('.') and match:
-            try:
-                if signet._no_links(root / directory / path).is_file():
-                    plots.append((int(match[1]), path))
-            except ValueError:
+        image = _SIGNET_PLOT.fullmatch(path.name)
+        if path.parent != Path('.') or not (match or image):
+            continue
+        try:
+            if not signet._no_links(root / directory / path).is_file():
                 continue
-    if not plots:
-        return []
+        except ValueError:
+            continue
+        if match:
+            plots.append((int(match[1]), path))
+        else:
+            images.append((image[1], int(image[2]), path))
+    if not plots and not images:
+        return [], []
     assets = {plot.stem + '_files' for _, plot in plots}
     files = {plot.as_posix(): plot for _, plot in plots}
+    files.update({path.as_posix(): path for _, _, path in images})
     for path in paths:
         if path.parts and path.parts[0] in assets and path.suffix in ('.js', '.css', '.png'):
             files[path.as_posix()] = path
@@ -369,8 +389,11 @@ def _issue_previews(server, root, outputs):
             key: grant for key, grant in server.analysis_previews.items() if grant[0] > now
         }
         server.analysis_previews[ticket] = (now + 300, root / directory, files)
-    return [{'subnetwork': number, 'url': f'/signet/result-preview/{ticket}/{plot.name}'}
-            for number, plot in sorted(plots)]
+    order = ('circular', 'enrichment_hist', 'enrichment_radar')
+    return ([{'subnetwork': number, 'url': f'/signet/result-preview/{ticket}/{plot.name}'}
+             for number, plot in sorted(plots)],
+            [{'kind': kind, 'subnetwork': number, 'url': f'/signet/result-preview/{ticket}/{path.name}'}
+             for kind, number, path in sorted(images, key=lambda item: (item[1], order.index(item[0])))])
 
 
 def preview_result(handler, url):

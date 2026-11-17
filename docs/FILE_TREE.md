@@ -29,20 +29,16 @@ SIGNET-agent/
 │   │   ├── general.py            # Restricted file listing and paginated text reading
 │   │   ├── registry.py           # Every model-callable tool; also the dispatch allow-list
 │   │   ├── hpc.py                # HPC3 readiness check, shared environment boundary, reference preparation, setup logs
-│   │   └── signet.py             # Scientific tools, parameter validation, and isolated job preparation
+│   │   └── signet.py             # SIGNET catalog, run setup, card preparation and step reports (no execution)
 │   ├── runtime/
 │   │   ├── hpc.py                # HPC3 workspace layout, read-only checks, background setup steps
 │   │   ├── hpc_files.py          # Desktop file window: browse HPC3 and choose reference files (not a model tool)
 │   │   ├── jobs/
 │   │   │   └── prepare_reference.py  # Runs on HPC3: detects ref/gmap formats and converts them for one study
-│   │   ├── remote.py             # Remote connection, packaging, and output collection
+│   │   ├── remote.py             # Packs a run for HPC3 and unpacks downloaded results
 │   │   ├── ssh_transport.py      # Private Electron broker client for SSH command transport
-│   │   ├── network.py            # Network inference submission, queries, cancellation, and result checks
-│   │   ├── network_worker.py     # Uploaded on its own; supervises owned jobs on the remote host
 │   │   ├── signet_jobs.py        # One SIGNET step (signet -t, -g, -a, -c, -n) as a Slurm job: prerequisites, submit, status, cancel, logs, output checks
-│   │   └── visualization.py      # Stage 6 plotting and input/output checks
-│   └── stage6/
-│       └── workspace.py          # Parameter proposals, human confirmation, history, and comparison
+│   │   └── visualization.py      # Reads -v exports for the results card (edges, count-vs-frequency)
 ├── assets/
 │   └── tokenizers/
 │       ├── qwen3.8-27b.json       # About 12.8 MB of tokenizer data; no study data or model weights
@@ -50,7 +46,7 @@ SIGNET-agent/
 │       └── LICENSE               # Upstream license for tokenizer data
 ├── docs/
 │   ├── INSTALL.md                # First installation, model sign-in, and interface startup
-│   ├── SCIENTIFIC_SETUP.md       # Scientific software, VM, data, and six-stage readiness guide
+│   ├── SCIENTIFIC_SETUP.md       # Scientific software, data, and six-stage readiness guide
 │   ├── ADVANCED.md               # Official source, user-supplied data, and advanced scientific environment
 │   ├── SIGNET_STEP_API.md        # /signet/* HTTP API: runs, settings, SIGNET steps as HPC3 Slurm jobs, retries, states
 │   ├── THIRD_PARTY.md            # Third-party sources and pending licensing decision
@@ -58,11 +54,7 @@ SIGNET-agent/
 │   └── DEMO.md                   # No-data demonstration and operations with user-supplied results
 ├── scripts/
 │   ├── setup_source.py           # Obtains and checks pinned scientific code without installing data
-│   ├── prepare_genotype_reference.py  # Converts user-supplied reference files
-│   ├── check_genotype_example.py  # Checks user inputs inside an existing VM
-│   └── advanced/
-│       ├── start_scientific_vm.sh # Advanced startup script for the existing recovery environment
-│       └── verify_network.cjs     # Verifies scheduler, matrices, commands, and resampling results
+│   └── prepare_genotype_reference.py  # Converts user-supplied reference files
 ├── electron/
 │   ├── main/
 │   │   ├── app/                  # Entry, windows and application lifecycle
@@ -76,7 +68,7 @@ SIGNET-agent/
 │   ├── preload/                  # Restricted desktop API bridge
 │   ├── renderer/
 │   │   ├── app/                  # React root and application shell
-│   │   ├── features/             # chat/, stage6/, ssh/, model/, environment/, remote-files/, devtools/
+│   │   ├── features/             # chat/, ssh/, model/, environment/, remote-files/, devtools/
 │   │   ├── components/           # Shared dialogs, actions and icons
 │   │   ├── styles/               # Colors, spacing and interface styles
 │   │   ├── i18n/                 # English / Traditional Chinese
@@ -109,20 +101,15 @@ SIGNET-agent/
     ├── test_list_files.py      # Recursive file listing and hidden-file / symlink exclusion
     ├── test_markdown.cjs       # Response formatting and unsafe-content handling
     ├── test_model_timing.py    # Model transport timing
-    ├── test_network_runtime.py # Scheduling, cancellation, and the actual verifier
     ├── test_portability.py     # Portable paths, source installation, and configuration protection
     ├── test_read_file.py       # Text-reading boundaries and pagination
     ├── test_signet_api.py      # /signet/* token, Origin and Host checks, status codes and JSON shapes
     ├── test_signet_jobs.py     # SIGNET step jobs against a fake HPC3 folder and fake Slurm commands
-    ├── test_signet_runtime.py  # VM packaging, collection, and unknown status
+    ├── test_run_bundle.py      # Run packaging for HPC3 and safe unpacking of results
     ├── test_ssh_transport.py   # Electron broker protocol and runtime transport selection
-    ├── test_signet_tools.py    # Source, tools, and execution restrictions
-    ├── test_stage6_graph.cjs   # Network graph dragging, viewport, and comparison
-    ├── test_stage6_workspace.py # Proposals, human confirmation, and workspace isolation
-    ├── test_visualization_runtime.py # Stage 6 inputs and outputs
-    └── test_vm_start.py        # Startup-script disk and container protection
+    └── test_signet_tools.py    # Source, tools, and execution restrictions
 ```
 
-Excluded from uploads: `data/`, `runs/`, `.env`, chat/workspace state, `.venv/`, `.dependencies/`, caches, `evidence/`, `artifacts/`, `.archify/`.
+Excluded from uploads: `data/`, `runs/`, `.env`, chat state, `.venv/`, `.dependencies/`, caches, `evidence/`, `artifacts/`, `.archify/`.
 
 Existing local data is retained. Code obtained by the source-preparation script also stays in an excluded directory and is not part of the upload list.

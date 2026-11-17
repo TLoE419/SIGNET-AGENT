@@ -292,6 +292,10 @@
       const block = element('div', 'workflow-analysis');
       const head = element('div', 'workflow-analysis-head');
       head.append(Object.assign(element('span', 'workflow-analysis-id'), {textContent: analysis.run_id}));
+      const family = analysis.family || {};
+      const reruns = analyses.some(item => item.family?.number);
+      const label = family.number ? `重跑 ${family.number}` : reruns ? '原始分析' : '';
+      if (label) head.append(element('span', 'workflow-analysis-family', label + (reruns && family.latest ? ' · 最新' : '')));
       const open = element('button', 'workflow-action', '到聊天中的卡片');
       open.type = 'button';
       open.addEventListener('click', () => showCard(analysis.run_id));
@@ -315,9 +319,15 @@
       nodes.push(block);
     }
     const ready = environmentReady();
-    // A new analysis is offered only when none of this conversation's analyses is unfinished.
-    const unfinished = analyses.some(analysis => analysis.completed_steps < analysis.total_steps);
-    if (group.start && !unfinished) {
+    // One conversation, one analysis (plus its reruns): a new analysis starts in a new conversation.
+    if (group.start && analyses.length) {
+      const actions = element('div', 'workflow-stage-actions workflow-start');
+      const button = element('button', 'workflow-action', '開新對話來跑新分析');
+      button.type = 'button';
+      button.addEventListener('click', () => document.getElementById('new-chat')?.click());
+      actions.append(button);
+      nodes.push(actions);
+    } else if (group.start) {
       const actions = element('div', 'workflow-stage-actions workflow-start');
       for (const [mode, label] of [['example', '用官方示範資料開始'], ['custom', '用自己的資料開始']]) {
         const button = element('button', 'workflow-action', label);

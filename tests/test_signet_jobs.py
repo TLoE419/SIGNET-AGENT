@@ -1298,5 +1298,16 @@ class StepsTest(unittest.TestCase):
         self.assertEqual([item['rows'] for item in record['summary']['outputs']], [1, 1, 1, 1])
         self.assertIn('stay on HPC3', record['reason'])
 
+    def test_summary_counts_comma_separated_matrices_and_recounts_older_summaries(self):
+        steps.submit('step_test', 'expression', self.inputs)
+        self.finish_job()
+        (self.remote_dir / 'work/res/rest/signet_gexp').write_text('0.1,0.2,0.3\n0.4,0.5,0.6\n')
+        record = steps.status('step_test', 'expression', refresh=True)
+        self.assertEqual(record['summary']['outputs'][0]['columns'], 3, 'commas without spaces separate fields')
+        self.assertEqual(record['summary']['version'], steps.SUMMARY_VERSION)
+        record['summary'] = {'outputs': [{'file': 'signet_gexp', 'rows': 2, 'columns': 1}], 'inputs': {}}
+        steps._save(self.root, record)
+        self.assertEqual(steps.ensure_summary('step_test', 'expression')['outputs'][0]['columns'], 3)
+
 if __name__ == '__main__':
     unittest.main()

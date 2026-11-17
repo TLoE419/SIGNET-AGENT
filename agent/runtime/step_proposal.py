@@ -26,7 +26,7 @@ def view(root, step='genotype'):
     record = _read(root, step)
     if record is None:
         return None
-    return {key: record[key] for key in ('id', 'state', 'mode', 'parameters')}
+    return {key: record[key] for key in ('id', 'state', 'mode', 'parameters', 'error') if key in record}
 
 
 def _write(root, step, record):
@@ -239,8 +239,9 @@ def confirm(run_id, session, proposal_id, inputs, settings, resources, options=N
     try:
         result = jobs.submit(run_id, step_name, inputs, resources, parameters.get('options'), settings_override=settings,
                              clinical=clinical)
-    except jobs.StepError:
-        record['state'] = 'submission_error'
+    except jobs.StepError as error:
+        # Kept so the card and the step report can say why, not just that it failed.
+        record.update(state='submission_error', error={'code': error.code, 'message': str(error)})
         _write(root, step_name, record)
         raise
     record['state'] = 'unknown' if result['state'] == 'unknown' else 'sent'

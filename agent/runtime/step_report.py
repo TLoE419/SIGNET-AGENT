@@ -33,8 +33,8 @@ _MEANING = {
     'signet_all.sig.pValue': ('significant gene-SNP pairs', None),
     'signet_net.genename': ('genes', None),
     'signet_net.genepos': ('genes', None),
-    'signet_Afreq': ('genes', 'genes'),
-    'signet_CoeffMat0': ('genes', 'genes'),
+    'signet_Afreq': ('genes', 'genes with cis-eQTL'),
+    'signet_CoeffMat0': ('genes', 'genes with cis-eQTL'),
 }
 
 
@@ -91,6 +91,15 @@ def redact(value):
     return value
 
 
+def _card(root, name):
+    """The step's latest confirmation card: its state and, if sending failed, why."""
+    from agent.runtime import step_proposal
+    proposal = step_proposal.view(root, name)
+    if not proposal:
+        return None
+    return {key: proposal[key] for key in ('state', 'error') if key in proposal}
+
+
 def report(run_id, step, session=None):
     name = FLAGS.get(step, step)
     jobs._step(name)
@@ -99,12 +108,16 @@ def report(run_id, step, session=None):
     if session is not None and owner is not None and owner != session:
         raise jobs.StepError('not_found', 'This analysis belongs to another conversation.')
     flag = jobs.STEPS[name].flag
+    card = _card(root, name)
     if name not in jobs.run_records(root):
-        return {'status': 'ok', 'run_id': run_id, 'step': name, 'flag': flag, 'state': 'not_started',
-                'note': 'This step has not been submitted in this analysis.'}
+        result = {'status': 'ok', 'run_id': run_id, 'step': name, 'flag': flag, 'state': 'not_started',
+                  'note': 'This step has not been submitted in this analysis.'}
+        return redact({**result, 'card': card} if card else result)
     record = jobs.status(run_id, name)
     result = {'status': 'ok', 'run_id': run_id, 'step': name, 'flag': flag,
               **{key: record[key] for key in _FIELDS if record.get(key) not in (None, '', [], {})}}
+    if card:
+        result['card'] = card
     if record.get('inputs'):
         result['inputs'] = {key: path.rsplit('/', 1)[-1] for key, path in record['inputs'].items()}
     if record.get('connection') == 'interrupted':
@@ -118,6 +131,7 @@ def report(run_id, step, session=None):
                 logs[stream] = [f'(log unavailable: {error})']
         result['log_tail'] = logs
     elif record['state'] == 'completed':
-        result['summary'] = label_summary(name, record, record.get('summary') or jobs.ensure_summary(run_id, name))
+        current = record.get('summary') if record.get('summary', {}).get('version') == jobs.SUMMARY_VERSION else None
+        result['summary'] = label_summary(name, record, current or jobs.ensure_summary(run_id, name))
     result['privacy'] = 'Paths are cut to file names and TCGA barcodes are masked.'
     return redact(result)

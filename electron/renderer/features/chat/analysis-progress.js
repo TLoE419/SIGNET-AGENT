@@ -44,13 +44,13 @@
     const id = node('small', 'analysis-progress-id');
     id.textContent = analysis.run_id;
     identity.append(id);
-    if (analysis.rerun) {
-      const origin = node('small', 'analysis-progress-id');
-      const source = node('span', '');
-      source.textContent = ` ${analysis.rerun.source_run}`;
-      origin.append(node('span', '', '重新執行自'), source);
-      identity.append(origin);
-    }
+    // Which run of this conversation's analysis this is: the original, or rerun N and what it changed.
+    const family = node('small', 'analysis-progress-family');
+    const familyName = node('span', '');
+    const latest = node('span', 'analysis-progress-latest', '最新');
+    const changed = node('span', 'analysis-progress-changes');
+    family.append(familyName, latest, changed);
+    identity.append(family);
     const count = node('span', 'analysis-progress-count');
     const bar = node('progress', 'analysis-progress-bar');
     bar.setAttribute('aria-label', translateUI('已完成階段'));
@@ -90,7 +90,8 @@
       request(path + '/steps/' + encodeURIComponent(step) + (rerun ? '/rerun/' : '/proposal/') + action,
               state, {session, ...body}, 'POST'), poll, phases, active);
     const results = createAnalysisResults(path, session, request);
-    return {root, count, bar, current, notice, stages, review, results, stale:false};
+    return {root, count, bar, current, notice, stages, review, results, stale:false,
+      family:{root:family, name:familyName, latest, changed}};
   }
 
   function note(card, localUnavailable) {
@@ -100,7 +101,28 @@
     card.notice.hidden = !text;
   }
 
-  function updateCard(analysis) {
+  const shownValue = value => value && typeof value === 'object'
+    ? Object.entries(value).map(([key, item]) => `${key}=${item}`).join(', ') || '—'
+    : value === undefined || value === null || value === '' ? '—' : String(value);
+
+  function updateFamily(card, analysis, hasReruns) {
+    const info = analysis.family || {};
+    let name = '', changes = '';
+    if (info.number) {
+      const stage = analysis.steps.findIndex(item => item.step === info.from_step) + 1;
+      name = `重跑 ${info.number}：從第 ${stage} 階段開始`;
+      changes = info.changes?.length
+        ? '改了：' + info.changes.map(item => `${item.key} ${shownValue(item.before)} → ${shownValue(item.after)}`).join('；')
+        : '設定與原分析相同';
+    } else if (hasReruns) name = '原始分析';
+    if (card.family.name.dataset.i18n !== name) uiText(card.family.name, name);
+    if (card.family.changed.dataset.i18n !== changes) uiText(card.family.changed, changes);
+    card.family.changed.hidden = !changes;
+    card.family.latest.hidden = !(hasReruns && info.latest);
+    card.family.root.hidden = !name;
+  }
+
+  function updateCard(analysis, hasReruns = false) {
     let card = cards.get(analysis.run_id);
     if (!card) {
       card = createCard(analysis);
@@ -121,6 +143,7 @@
       const text = phases[step.phase] || phases.unknown;
       if (status.dataset.i18n !== text) uiText(status, text);
     }
+    updateFamily(card, analysis, hasReruns);
     note(card, false);
     return card;
   }
@@ -162,8 +185,12 @@
           state.nextCheck.delete(run);
         }
       }
+      // One conversation, one analysis: once it has one, linking another is not offered.
+      tracking.hidden = linked.length > 0;
+      if (linked.length) tracking.open = false;
+      const hasReruns = linked.some(analysis => analysis.family?.number);
       for (const analysis of linked) {
-        const card = updateCard(analysis);
+        const card = updateCard(analysis, hasReruns);
         const lastStageCard = card.review.update(analysis, state);
         if (analysis.completed_steps === 6) card.results.show(state, lastStageCard);
         const step = analysis.steps.find(item => active.has(item.phase));

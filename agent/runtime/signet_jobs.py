@@ -264,6 +264,8 @@ ANALYSIS_STEPS = ('genotype', 'expression', 'adjust', 'cis', 'network', 'visuali
 # matrices, graphs and edge tables) are copied to this computer, for the chat graph, the result
 # download and the Stage 6 comparison. Every step's counts are summarized on HPC3 (_output_summary).
 DOWNLOADED_STEPS = ('network', 'visualize')
+# Raised when the counting changes, so summaries saved by an older version are counted again.
+SUMMARY_VERSION = 2
 # Inputs whose size the summary reports, so "before" and "after" both come from HPC3.
 _COUNTED_INPUTS = {'genotype': ('ped.file', 'map.file'), 'expression': ('gexp.file',)}
 
@@ -423,6 +425,12 @@ def link_conversation(run_id, session):
     previous = analysis_session(root)
     if previous is not None and previous != session:
         raise StepError('conflict', 'This analysis already belongs to another conversation.')
+    if previous is None and not (root / 'rerun.json').is_file():
+        # One conversation, one analysis: its reruns join it, a new analysis needs a new conversation.
+        from agent.runtime import analysis_family
+        if analysis_family.original(session, ignore=run_id):
+            raise StepError('conflict', 'This conversation already has an analysis. '
+                                        'Start a new conversation for a new analysis.')
     if previous is None:
         path = root / 'conversation.json'
         temporary = path.with_suffix('.tmp')
@@ -889,6 +897,19 @@ stopifnot(file.exists(edges), file.info(edges)$size > 0)
 stopifnot(file.copy(edges, file.path(dirname(prefix), "signet-edges.csv")))
 SIGNET_EXPORT_CHECK
 """ + run
+    after = ''
+    if name == 'visualize':
+        # SIGNET's own plots are PDFs, which the app window cannot show. Ghostscript on the
+        # HPC3 node renders a PNG copy beside each one; if it is missing, the PDFs remain.
+        after = r'''if [ "$rc" -eq 0 ] && command -v gs >/dev/null 2>&1; then
+  for pdf in res/resv/signet_circular_top*.pdf res/resv/signet_enrichment_*.pdf; do
+    if [ -f "$pdf" ]; then
+      gs -q -dSAFER -dBATCH -dNOPAUSE -sDEVICE=png16m -r150 -sOutputFile="${pdf%.pdf}.png" "$pdf" \
+        || { rm -f "${pdf%.pdf}.png"; echo "[SIGNET-AGENT] could not render $pdf as PNG"; }
+    fi
+  done
+fi
+'''
     return f'''#!/bin/bash
 #SBATCH --job-name=signet-{name}-{run_id}
 #SBATCH --output={directory}/steps/{name}.out
@@ -900,7 +921,7 @@ echo "[SIGNET-AGENT] START step={name} job=$SLURM_JOB_ID ts=$(date -Iseconds)"
 sed -i -e 's/^forcerm *=.*/forcerm = T/' -e "s/^ncore_local *=.*/ncore_local = ${{SLURM_CPUS_PER_TASK:-1}}/" config.ini
 {run}
 rc=$?
-echo "[SIGNET-AGENT] END step={name} exit=$rc ts=$(date -Iseconds)"
+{after}echo "[SIGNET-AGENT] END step={name} exit=$rc ts=$(date -Iseconds)"
 printf '%s %s\\n' "$rc" "$(date -Iseconds)" > {q(directory + '/steps/' + name + '.done')}
 '''
 
@@ -926,7 +947,7 @@ def _upload(root, directory, token):
                'if [ -d "$D" ]; then [ "$(cat "$D/.owner" 2>/dev/null)" = "$T" ] || exit 3; '
                'else mkdir -p "$(dirname "$D")" && mkdir "$D" && printf \'%s\\n\' "$T" > "$D/.owner" || exit 4; fi; '
                'mkdir -p "$D/steps" && tar xzf - -C "$D"')
-    result = ssh_transport.remote(command, input=vm.bundle(root, signet._settings(root), directory, input_keys=()),
+    result = ssh_transport.remote(command, input=vm.bundle(root, signet._settings(root), directory),
                                   capture_output=True, timeout=120)
     if result.returncode == 3:
         raise StepError('conflict', f'{directory} already exists on HPC3 and belongs to another run; use a new run_id.')
@@ -1307,8 +1328,10 @@ def _summary_script(record, step):
     """Login-node shell: row count and first-row field count of each output and counted input. Numbers only."""
     q = shlex.quote
     lines = [_say(), f'D={q(record["remote_dir"])}',
-             # Non-empty lines, and the fields of the first one (comma-separated for .csv).
-             'count() { awk -v sep="$2" \'BEGIN { if (sep != "") FS = sep } NF { n++; if (!c) c = NF } '
+             # Non-empty lines, and the fields of the first one: comma-separated for .csv, and for a first
+             # line with commas but no spaces or tabs (signet_Afreq is comma-separated without the suffix).
+             'count() { awk -v sep="$2" \'BEGIN { if (sep != "") FS = sep } NF { n++; if (!c) '
+             '{ if (sep == "" && $0 ~ /,/ && $0 !~ /[ \\t]/) c = split($0, f, ","); else c = NF } } '
              'END { printf "%d %d", n, c }\' "$1" 2>/dev/null; }']
     for index, path in enumerate(_required(step, record)):
         sep = ',' if path.endswith('.csv') else ''
@@ -1328,7 +1351,7 @@ def _output_summary(record, step):
     def counts(value):
         rows, columns = (int(part) for part in value.split())
         return {'rows': rows, 'columns': columns}
-    summary = {'outputs': [], 'inputs': {}}
+    summary = {'outputs': [], 'inputs': {}, 'version': SUMMARY_VERSION}
     for index, path in enumerate(_required(step, record)):
         entry = {'file': path.rsplit('/', 1)[-1]}
         value = values.get(f'out_{index}', '')
@@ -1347,7 +1370,7 @@ def ensure_summary(run_id, name):
     step = _step(name)
     root = _root(run_id)
     record = _load(root, name)
-    if record.get('state') != 'completed' or record.get('summary'):
+    if record.get('state') != 'completed' or record.get('summary', {}).get('version') == SUMMARY_VERSION:
         return record.get('summary')
     _environment()
     try:

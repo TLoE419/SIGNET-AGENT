@@ -17,6 +17,7 @@ class Element {
   append(...children){for(const child of children){child.parentElement=this;this.children.push(child);}}
   replaceChildren(...children){this.children=[];this.append(...children);}
   after(child){child.parentElement=this.parentElement;const siblings=this.parentElement.children;siblings.splice(siblings.indexOf(this)+1,0,child);}
+  before(...children){const siblings=this.parentElement.children;for(const child of children){child.parentElement=this.parentElement;siblings.splice(siblings.indexOf(this),0,child);}}
   reportValidity(){return true;}
   showModal(){this.open=true;}
   close(){this.open=false;this.events.close?.();}
@@ -48,7 +49,6 @@ function setup(initial={}, analysisApi) {
   const find=selector=>selector.startsWith('#')?ids.get(selector.slice(1)):all.find(el=>el.className.split(' ').includes(selector.slice(1)));
   let finish, calls=0;
   const gate=new Promise(resolve=>finish=resolve);
-  const workspace={active:false,runs:[],baseline:null,comparison:null,proposals:[],graphs:{}};
   const events={};const storage=new Map();const navigation=[];
   const timers=new Map();let nextTimer=0, now=0;
   const timersApi=analysisApi ? {
@@ -56,7 +56,7 @@ function setup(initial={}, analysisApi) {
     clearTimeout(id){timers.delete(id);},
     Date:{now:()=>now}
   } : {setTimeout,clearTimeout};
-  const context=vm.createContext({document:{getElementById:id=>ids.get(id),createElement:tag=>new Element(tag),
+  const context=vm.createContext({document:{getElementById:id=>ids.get(id),createElement:tag=>new Element(tag),createElementNS:(_,tag)=>new Element(tag),
     querySelector:selector=>selector.startsWith('meta')?{content:'token'}:find(selector),
     querySelectorAll:selector=>selector==='[data-tab]'?all.filter(e=>e.dataset.tab):[],addEventListener(){}},
     uiLanguage:'en',uiText(el,text){el.dataset.i18n=text;el.textContent=text;},
@@ -67,7 +67,6 @@ function setup(initial={}, analysisApi) {
     setInterval(){return 1;},clearInterval(){},...timersApi,AbortController,translateUI:text=>text,
     fetch:async (path, options)=>{
       if(path.startsWith('/signet/'))return analysisApi(path, options);
-      if(path.startsWith('/stage6'))return {ok:true,json:async()=>structuredClone(workspace)};
       calls++;
       if(context.failRequest)return {ok:false,json:async()=>({error:'Controlled service failure'})};
       let read=0;
@@ -75,15 +74,13 @@ function setup(initial={}, analysisApi) {
       return {ok:true,body:{getReader:()=>({read:async()=>{
         if(read++===0)return chunk([{type:'progress',text:'模型請求 1/5：等待回覆。'},
           {type:'progress',text:'工具 1/1：signet_catalog；驗證參數並呼叫。'},
-          {type:'progress',text:'工具結果：signet_catalog；status=ok；executed=False。'},
-          {type:'workspace',text:structuredClone(workspace)}]);
+          {type:'progress',text:'工具結果：signet_catalog；status=ok；executed=False。'}]);
         if(read===2){await gate;return chunk([{type:'answer',text:'Completed capability lookup.'},{type:'done',text:'Completed'}]);}
         return {done:true};
       }})}};
     }});
   context.window=context;
   vm.runInContext(fs.readFileSync('electron/renderer/features/chat/chat.js','utf8'),context);
-  vm.runInContext(fs.readFileSync('electron/renderer/features/stage6/stage6.js','utf8'),context);
   if(analysisApi)for(const file of ['step-review.js','analysis-results.js','analysis-progress.js'])
     vm.runInContext(fs.readFileSync('electron/renderer/features/chat/'+file,'utf8'),context);
   async function tick(){
@@ -100,7 +97,7 @@ function setup(initial={}, analysisApi) {
     }
     return true;
   }
-  return {context,ids,events,visible,finish,workspace,navigation,tick,timers,calls:()=>calls};
+  return {context,ids,events,visible,finish,navigation,tick,timers,calls:()=>calls};
 }
 
 (async()=>{
@@ -113,17 +110,10 @@ function setup(initial={}, analysisApi) {
   assert.equal(app.navigation.length,0,'history must not navigate away during an active turn');
   assert.equal(app.visible(app.ids.get('activity')),false,'tool details stay collapsed during an ordinary turn');
   app.ids.get('chat-progress').open=true;
-  assert.equal(app.visible(app.ids.get('activity')),true,'ordinary chat activity can be opened without a Stage 6 baseline');
+  assert.equal(app.visible(app.ids.get('activity')),true,'ordinary chat activity can be opened');
   assert.equal(app.visible(app.ids.get('state')),true,'live status must have no hidden ancestor');
   assert.match(app.ids.get('activity').textContent,/signet_catalog/);
-  assert.equal(app.ids.get('stage6-pane').hidden,true,'chat must not activate visualization');
-  app.events['stage6-update']({detail:{...structuredClone(app.workspace),active:true}});
-  app.ids.get('s6-close').events.click();
-  assert.equal(app.visible(app.ids.get('activity')),true,'collapsing visualization must not hide chat activity');
-  for(const tab of ['parameters','comparison','history']){
-    const button=app.ids.get('s6-'+tab+'-tab');button.events.click();
-    assert.equal(app.visible(app.ids.get('activity')),true,'visualization tabs must not hide chat activity');
-  }
+  assert.equal(app.ids.get('stage6-pane'),undefined,'the old Stage 6 panel is gone');
   app.finish();await pending;
   assert.equal(savedLink.disabled,false);
   assert.equal(app.visible(app.ids.get('activity')),true,'finished tool records remain accessible');
@@ -339,7 +329,11 @@ function setup(initial={}, analysisApi) {
     }]});
     if(path==='/signet/runs/same-run/results?session='+session) {
       const ticket=(++resultsReads===1?'a':'b').repeat(32);
-      return json({graph:{counts:{genes:2,connections:1}},previews:[
+      return json({freq:0.5,thresholds:[{cutoff:0.8,connections:2,genes:3},{cutoff:1,connections:1,genes:2}],
+        images:[{kind:'circular',subnetwork:1,url:`/signet/result-preview/${ticket}/signet_circular_top1_freq0.5.png`},
+          {kind:'circular',subnetwork:2,url:'https://example.test/circular.png'}],
+        graph:{counts:{genes:3,connections:2},edges:[{source:'A',target:'B',frequency:0.5,coefficient:0.25},
+          {source:'C',target:'A',frequency:1,coefficient:-0.4}]},previews:[
         {subnetwork:1,url:previewUrl(1,ticket)}, {subnetwork:2,url:previewUrl(2,ticket)},
         {subnetwork:3,url:'https://example.test/plot.html'}
       ]});
@@ -434,7 +428,18 @@ function setup(initial={}, analysisApi) {
   assert.equal(sequenceLog.children.filter(el=>el.className==='analysis-progress-card').length,1);
   const resultCard=sequenceLog.children.find(el=>el.className.startsWith('analysis-result-card'));
   assert.equal(sequenceLog.children[sequenceLog.children.indexOf(retained[5])+1],resultCard);
-  assert.match(resultCard.textContent,/2 個基因 · 1 條連線/);
+  assert.match(resultCard.textContent,/3 個基因 · 2 條連線/);
+  assert.equal(resultCard.querySelectorAll('rect').length,4,'a connection bar and a gene bar per cutoff');
+  assert.deepEqual(resultCard.querySelectorAll('img').map(image=>image.src),
+    ['/signet/result-preview/'+'a'.repeat(32)+'/signet_circular_top1_freq0.5.png'],'only granted local plots are shown');
+  assert.match(resultCard.textContent,/圓形染色體圖（子網路 1）.*沒有找到顯著的富集路徑/);
+  const edgeRows=resultCard.querySelectorAll('tbody')[0].children;
+  assert.deepEqual(edgeRows.map(row=>row.textContent),['CA1-0.4','AB0.50.25'],'most stable connection first');
+  const [edgeSearch]=resultCard.querySelectorAll('input');
+  edgeSearch.value='b';
+  edgeSearch.events.input();
+  assert.deepEqual(edgeRows.map(row=>row.hidden),[true,false]);
+  assert.match(resultCard.textContent,/顯示 1\/2 條連線/);
   const [frame]=resultCard.querySelectorAll('iframe');
   assert.equal(frame.src,previewUrl(1));
   assert.equal(frame.attributes.sandbox,'allow-scripts');
@@ -518,5 +523,26 @@ function setup(initial={}, analysisApi) {
   await measuredApp.tick();
   assert.equal(stageCards(measuredApp.ids.get('messages'))[0],measuredStages[0]);
   assert.equal(measuredStages[0].querySelectorAll('progress')[0].value,36);
-  console.log('Chat progress visibility, status, history, errors and Stage 6 independence passed.');
+  // One analysis per conversation: reruns say which they are and what they changed.
+  const familyApp=setup({session},async path=>{
+    if(path.startsWith('/signet/progress?'))return json({analyses:[
+      {run_id:'original',session,total_steps:6,completed_steps:6,next_step:null,proposal:null,steps:metricSteps,
+        family:{number:0}},
+      {run_id:'original-rerun-a',session,total_steps:6,completed_steps:6,next_step:null,proposal:null,steps:metricSteps,
+        family:{number:1,source_run:'original',from_step:'visualize',changes:[]}},
+      {run_id:'original-rerun-b',session,total_steps:6,completed_steps:6,next_step:null,proposal:null,steps:metricSteps,
+        family:{number:2,source_run:'original',from_step:'genotype',latest:true,
+          changes:[{group:'settings',key:'restrict.tcga.geno',before:'1',after:'2'}]}}]});
+    if(path.includes('/results?'))return json({graph:{counts:{genes:1,connections:1},edges:[]},previews:[]});
+    return json({state:'completed'});
+  });
+  await new Promise(setImmediate);
+  const familyCards=familyApp.ids.get('messages').children.filter(el=>el.className==='analysis-progress-card');
+  const headings=familyCards.map(card=>card.children[0].textContent);
+  assert.match(headings[0],/原始分析/);
+  assert.match(headings[1],/重跑 1：從第 6 階段開始.*設定與原分析相同/);
+  assert.match(headings[2],/重跑 2：從第 1 階段開始.*改了：restrict\.tcga\.geno 1 → 2/);
+  const latestTag=card=>{const find=el=>el.className==='analysis-progress-latest'?el:el.children.map(find).find(Boolean);return find(card);};
+  assert.deepEqual(familyCards.map(card=>latestTag(card).hidden),[true,true,false],'only the latest run is marked');
+  console.log('Chat progress visibility, status, history, errors and analysis cards passed.');
 })().catch(error=>{console.error(error);process.exitCode=1;});

@@ -9,7 +9,6 @@ export function App({model}:{model:string}){
     <button id="new-chat" className="new-chat"><span data-i18n="＋ 開始新對話">+ New chat</span></button>
     <div className="nav-label"><span data-i18n="工作空間">WORKSPACE</span></div>
     <div className="nav-item active"><span>◉</span> <span data-i18n="研究助手">Research assistant</span> <span className="nav-dot"></span></div>
-    <button id="s6-open" className="nav-item nav-button" type="button" aria-controls="stage6-pane" aria-expanded="false" hidden><span id="s6-open-label">Network visualization</span></button>
     <div id="chat-list-label" className="nav-label" data-i18n="聊天紀錄">CHATS</div>
     <nav id="chat-list" className="chat-list" aria-label="Saved conversations" data-i18n-aria="已存對話"></nav>
     <div className="environment"><span className="local-dot"></span> <span data-i18n="本機工作階段">Local session</span><small>{model}</small></div>
@@ -66,15 +65,6 @@ export function App({model}:{model:string}){
         </details>
         <form id="composer"><label className="sr-only" htmlFor="prompt"><span data-i18n="輸入研究需求">Enter your research request</span></label><textarea id="prompt" rows={2} maxLength={8000} placeholder="Describe your research goal, or add more details…" data-i18n-placeholder="描述你的研究目的，或接著補充資料…" required></textarea><div className="composer-bottom"><span><span data-i18n="Enter 送出 · Shift + Enter 換行">Enter to send · Shift + Enter for a new line</span></span><button id="send" type="submit"><span data-i18n="送出">Send</span> <span>↑</span></button></div></form>
         <p className="footnote"><span data-i18n="送出後會使用目前模型帳號的額度。關閉頁面不會取消已啟動的工具。">Sending uses your model account quota. Closing this page does not cancel running tools.</span></p>
-      </section>
-      <section id="stage6-pane" className="activity-pane stage6-pane" aria-label="Stage 6 workspace" hidden>
-        <div className="pane-title"><h2>Stage 6 · <span data-i18n="網路視覺化">Network visualization</span></h2><div className="s6-pane-actions"><button id="s6-close" type="button" aria-controls="stage6-pane" aria-expanded="true">Collapse</button></div></div>
-        <div className="stage6-tabs" role="tablist" aria-label="Workspace tabs"><button id="s6-parameters-tab" role="tab" data-tab="parameters" aria-selected="true">Parameters</button><button id="s6-comparison-tab" role="tab" data-tab="comparison" aria-selected="false">Comparison</button><button id="s6-history-tab" role="tab" data-tab="history" aria-selected="false">Run history</button></div>
-        <div id="s6-error" role="alert" hidden></div>
-        <div id="s6-parameters" className="s6-content" role="tabpanel"></div>
-        <div id="s6-comparison" className="s6-content" role="tabpanel" hidden></div>
-        <div id="s6-history" className="s6-content" role="tabpanel" hidden></div>
-        <div className="activity-footer"><span className="local-dot"></span> <span data-i18n="保留實際狀態與耗時，不顯示私密推理或金鑰。">Actual status and timing. Private reasoning and credentials stay hidden.</span></div>
       </section>
     </div>
   </main>

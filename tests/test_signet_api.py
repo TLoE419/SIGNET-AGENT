@@ -150,13 +150,23 @@ class SignetApiTest(unittest.TestCase):
         self.assertIn(value['run_id'], self.server.histories[session][1].parts[0].text)
         analysis = self.call('GET', '/signet/progress?session=' + session)[1]['analyses'][0]
         self.assertEqual((analysis['run_id'], analysis['genotype_proposal']['state']), (value['run_id'], 'pending'))
-        second = self.call('POST', '/signet/analyses', {'session': session, 'mode': 'custom'})[1]
-        self.assertNotEqual(second['run_id'], value['run_id'], 'each start creates a fresh run')
-        self.assertEqual(second['proposal']['mode'], 'custom')
+        # One conversation, one analysis: a second start is refused and creates nothing.
+        runs_before = sorted(path.name for path in (self.project / 'runs').iterdir())
+        status, second = self.call('POST', '/signet/analyses', {'session': session, 'mode': 'custom'})
+        self.assertEqual((status, second['code']), (409, 'conflict'))
+        self.assertIn('new conversation', second['error'])
+        self.assertEqual(sorted(path.name for path in (self.project / 'runs').iterdir()), runs_before)
+        other = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+        fresh = self.call('POST', '/signet/analyses', {'session': other, 'mode': 'custom'})[1]
+        self.assertNotEqual(fresh['run_id'], value['run_id'], 'a new conversation starts a fresh run')
+        self.assertEqual(fresh['proposal']['mode'], 'custom')
+        # Nor can another existing analysis be linked to a conversation that has one.
+        self.assertEqual(self.call('PATCH', '/signet/runs/step_test/conversation', {'session': session})[0], 409)
         self.assertFalse(any('sbatch' in command for command in self.calls), 'nothing is submitted before the card')
         self.server.turn_lock.acquire()
         try:
-            self.assertEqual(self.call('POST', '/signet/analyses', {'session': session, 'mode': 'example'})[0], 409)
+            third = 'bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee'
+            self.assertEqual(self.call('POST', '/signet/analyses', {'session': third, 'mode': 'example'})[0], 409)
         finally:
             self.server.turn_lock.release()
 
@@ -231,6 +241,23 @@ class SignetApiTest(unittest.TestCase):
         progress = self.call('GET', '/signet/progress?session=' + body['session'])[1]['analyses'][0]
         self.assertEqual(progress['genotype_proposal']['state'], 'sent')
         self.assertEqual(progress['steps'][0]['phase'], 'submitted')
+
+    def test_failed_sending_keeps_its_reason_for_the_card_and_the_step_report(self):
+        from agent.runtime import step_report
+        path, body = self.genotype_review()
+        self.lose_connection_on = 'tar xzf'
+        status, value = self.call('POST', path + 'confirm', body)
+        self.assertEqual((status, value['code']), (502, 'remote_failed'))
+        self.lose_connection_on = None
+        progress = self.call('GET', '/signet/progress?session=' + body['session'])[1]['analyses'][0]
+        card = progress['genotype_proposal']
+        self.assertEqual(card['state'], 'submission_error')
+        self.assertEqual(card['error'], {'code': 'remote_failed',
+                                         'message': 'HPC3 connection failed before anything was submitted.'})
+        report = step_report.report('step_test', '-g')
+        self.assertEqual((report['state'], report['card']['state']), ('not_started', 'submission_error'))
+        self.assertIn('before anything was submitted', report['card']['error']['message'])
+        self.assertNotIn('sbatch --parsable', ' '.join(self.calls))
 
     def test_unknown_genotype_submission_cannot_reuse_approval(self):
         path, body = self.genotype_review()
@@ -327,19 +354,21 @@ class SignetApiTest(unittest.TestCase):
                 self.assertIn('bash ./signet -v', script)
                 self.assertIn('cloud=T', script)
                 self.assertIn('signet-edges.csv', script)
+                self.assertIn('gs -q -dSAFER', script, 'SIGNET PDFs get PNG copies on HPC3')
                 config = (self.remote_dir / 'work/config.ini').read_text()
                 self.assertIn('freq = 0.75', config)
                 self.assertIn('Afreq = ' + str(self.remote_dir / 'work/res/resn/signet_Afreq'), config)
             outputs = record.get('required_outputs') or jobs.STEPS[step].required
             extra = {
                 'genotype': ['tmp/tmpg/impute/impute_Genotype.sizes'],
-                'visualize': ['res/resv/signet_top1_freq0.75.html',
+                'visualize': ['res/resv/signet_top1_freq0.75.html', 'res/resv/signet_circular_top1_freq0.75.png',
                               'res/resv/signet_top1_freq0.75_files/widget.js'],
             }.get(step, [])
             for name in [*outputs, *extra]:
                 file = self.remote_dir / 'work' / name
                 file.parent.mkdir(parents=True, exist_ok=True)
                 content = {'signet-edges.csv': edges, 'signet_top1_freq0.75.html': original_plot,
+                           'signet_Afreq': '0,0.9\n1,0\n',
                            'signet_Genotype.sampleID': sample_ids, 'signet_gexpID': sample_ids}
                 file.write_text(content.get(file.name, step))
             (self.remote_dir / f'steps/{step}.done').write_text('0 2026-11-01T10:00:00\n')
@@ -376,6 +405,12 @@ class SignetApiTest(unittest.TestCase):
         graph = response['graph']
         self.assertEqual(graph['edges'], [{'source': 'A', 'target': 'B', 'frequency': .75, 'coefficient': .2}])
         self.assertEqual([plot['subnetwork'] for plot in response['previews']], [1])
+        # SIGNET's count-vs-frequency plot is recounted here from the downloaded -n matrix, at its cutoffs.
+        self.assertEqual([(point['cutoff'], point['connections'], point['genes']) for point in response['thresholds']],
+                         [(.8, 2, 2), (.85, 2, 2), (.9, 2, 2), (.95, 1, 2), (1, 1, 2)])
+        [image] = response['images']
+        self.assertEqual((image['kind'], image['subnetwork']), ('circular', 1))
+        self.assertEqual(self.call('GET', image['url'], headers={}), (200, 'visualize'))
         preview = response['previews'][0]['url']
         status, embedded = self.call('GET', preview, headers={})
         self.assertEqual(status, 200)
@@ -486,6 +521,18 @@ class SignetApiTest(unittest.TestCase):
         self.assertEqual(branched['rerun']['source_run'], 'step_test')
         self.assertEqual(branched['steps'][0]['reused_from'], 'step_test')
         self.assertEqual(branched['steps'][3]['phase'], 'not_started')
+        # Each rerun is numbered in the order it was made and says what it changed; the latest is the default.
+        families = {item['run_id']: item['family'] for item in analyses}
+        self.assertEqual(families['step_test'], {'number': 0})
+        self.assertEqual(sorted(family['number'] for family in families.values()), list(range(8)))
+        latest = families[moved['run_id']]
+        self.assertEqual((latest['number'], latest['from_step'], latest.get('latest')), (7, 'genotype', True))
+        self.assertIn({'group': 'settings', 'key': 'restrict.tcga.geno', 'before': '1', 'after': '2'}, latest['changes'])
+        self.assertEqual(families[branched['run_id']]['changes'], [], 'the -a rerun kept every setting')
+        from agent.runtime import analysis_family
+        note = analysis_family.describe(session)
+        self.assertIn(f"{moved['run_id']}: rerun 7 of step_test from -g (changed restrict.tcga.geno 1 -> 2", note)
+        self.assertIn('[latest]', note)
 
     def test_progress_is_scoped_to_conversation_and_readable_while_downloading(self):
         session = '12345678-1234-1234-1234-123456789abc'

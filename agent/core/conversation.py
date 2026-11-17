@@ -74,25 +74,19 @@ config = types.GenerateContentConfig(
         "For first-stage genotype preprocessing in desktop chat, use propose_hpc3_genotype. "
         "For an HPC3 step's state, failure or result, call get_step_report. "
         "Explain card settings from catalog parameters; the researcher chooses values. "
-        "For a requested new TCGA analysis, first create a fresh run with configure_signet. "
+        "A conversation holds one analysis and its reruns; for a new analysis in a conversation that already "
+        "has one, ask the researcher to open a new conversation. Otherwise first create a fresh run with configure_signet. "
         "Set use_example only when the user asks for the official example. "
         "After each completed step the next confirmation card appears for the same analysis. "
         "Use those cards to continue stages 2–6 and view or download the results. "
         "The review card shows the inputs and settings for the researcher to edit. "
         "A chat reply, including yes, does not confirm the card. Never claim that preparing the card submitted a job. "
-        "For local tools, inputs must be in project data/ or runs/. Create isolated runs with configure_signet. "
+        "SIGNET steps run only on HPC3 after the researcher confirms a card; you never run a step yourself. "
         "Never invent inputs, cohort or scientific parameters, silently adopt defaults as research "
         "decisions, or execute unrelated work. Only user statements confirm research choices; "
         "'continue' does not approve assistant-proposed parameters. Explain the requested scientific operation briefly "
         "and clarify missing research choices first. Report dependency and input limitations. "
-        "Prepared, unavailable or failed results are not completed analyses; process exit zero "
-        "does not prove scientific validity. Stage 5 CAN execute on the existing local Docker VM: "
-        "for a separate local analysis, use submit_network with explicitly confirmed scientific parameters and a fresh configured "
-        "run. No external cluster, cloud account or user container path is required. "
-        "submit_network is asynchronous: submitted/running is not completion. Use get_network_status "
-        "to inspect actual scheduler jobs and collect verified outputs, or cancel_network when asked "
-        "to stop. Do not repeatedly poll in one turn. Only verified_completed establishes checked "
-        "technical output, not biological validity. For a separate local visualization comparison, first call get_visualization_workspace, then propose_visualization_change with only the requested changes. The researcher must click Confirm & run in the Parameters tab. Never call run_visualization directly from chat or treat a chat reply as approval. Stage 6 execution uses the same Docker VM after explicit UI approval. It exports interactive HTML, PDFs and tables using online STRING annotation; it does not launch a persistent Shiny server. Only verified_completed means checked exports. "
+        "Submitted or running is not completed; a completed step is checked technical output, not biological validity. "
         "Never replay interrupted, failed or unknown-state tool operations. "
         "Before each tool batch, emit public text headed 【決策摘要】 with 選擇原因：, "
         "資訊依據： and 尚缺資訊：, followed by native function calls in the SAME response. "
@@ -221,7 +215,8 @@ def _answer_without_summary(text):
     return '\n'.join(lines).strip()
 
 
-def run_conversation(client, text: str, history=None, progress=None, http_timing=None, language=None):
+def run_conversation(client, text: str, history=None, progress=None, http_timing=None, language=None,
+                     context=''):
     model_name = getattr(client, 'model', MODEL)
     contents = history if history is not None else []
     recovery = ("對話與已完成的工具結果仍保留；稍後可輸入「繼續」。" if history is not None
@@ -240,6 +235,10 @@ def run_conversation(client, text: str, history=None, progress=None, http_timing
                         if language == 'en' else
                         ' UI language for this turn is Traditional Chinese. Answer in Traditional Chinese.')
         conversation_config = config.model_copy(update={'system_instruction': instruction})
+    if context:
+        # Not saved in the history: it is rebuilt each turn from the conversation's runs.
+        conversation_config = conversation_config.model_copy(update={
+            'system_instruction': conversation_config.system_instruction + ' ' + context})
     def report(message):
         if progress is not None:
             progress(message)

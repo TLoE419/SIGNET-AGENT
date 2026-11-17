@@ -7,7 +7,6 @@ const assets=new Map([
  ['/workspace.js',['workspace.js','text/javascript']],
  ['/chat.css',['chat.css','text/css']],
  ['/ssh.css',['ssh.css','text/css']],
- ['/vendor/vis-network.min.js',['vendor/vis-network.min.js','text/javascript']],
 ]);
 const escapeHtml=value=>String(value).replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
 function headers(type,devMode,origin){return {'Content-Type':type+'; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer',

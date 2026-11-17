@@ -431,6 +431,11 @@ function createStageCard(name, request, poll, phases) {
       controls.append(form);
     } else {
       if (proposal) say(summaries[proposal.state] || '');
+      if (proposal?.state === 'submission_error' && proposal.error?.message) {
+        const detail = node('small', 'step-review-error-detail');
+        detail.textContent = proposal.error.message;
+        notice.append(detail);
+      }
       if (canPrepare && proposal?.state !== 'confirmed') {
         const actions = node('div', 'step-review-actions');
         const prepare = button(name === 'genotype' ? '設定第一階段' : '準備本階段設定',
@@ -479,9 +484,10 @@ function createStageCard(name, request, poll, phases) {
           : error.code === 'conflict' ? '確認卡已過期或已使用，請重新準備設定。'
           : error.code === 'not_ready' ? '請先連線到 HPC3，再重試。'
           : error.code === 'invalid_request' ? '請檢查輸入資料與設定。'
+          : error.code === 'remote_failed' ? '送算時 HPC3 出了問題，原因如下：'
           : '無法確認操作結果，請先查看進度。';
         say(message);
-        if (['invalid_request', 'needs_choice'].includes(error.code) && error.message) {
+        if (['invalid_request', 'needs_choice', 'remote_failed'].includes(error.code) && error.message) {
           const detail = node('small', 'step-review-error-detail');
           detail.textContent = error.message;
           notice.append(detail);

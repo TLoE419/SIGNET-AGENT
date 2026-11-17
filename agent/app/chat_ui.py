@@ -18,11 +18,19 @@ from agent.core.conversation import MODEL, run_conversation
 from agent.core.model_timing import ModelRequestTiming
 from agent.paths import PROJECT_ROOT
 from agent.providers import PROVIDERS, create_provider_adapter
+from agent.runtime import analysis_family
 from agent.runtime.step_proposal import CHAT_SESSION
-from agent.stage6.workspace import Workspace, CHAT_CONTEXT
 from agent.tools.ui import UI_CHANNEL
 
 ROOT = PROJECT_ROOT
+
+
+def _analysis_context(session):
+    """This conversation's runs and the default one, for the assistant (rebuilt every turn)."""
+    try:
+        return analysis_family.describe(session)
+    except OSError:
+        return ''
 
 
 class ChatServer(ThreadingHTTPServer):
@@ -52,7 +60,6 @@ class ChatServer(ThreadingHTTPServer):
                                     for item in state.get('pending_history', [])]
         # Scientific tools share local runs, so serialize turns across browser tabs.
         self.turn_lock = threading.Lock()
-        self.stage6 = Workspace(self)
         super().__init__(address, ChatHandler)
 
     def server_bind(self):
@@ -122,8 +129,6 @@ class ChatHandler(BaseHTTPRequestHandler):
             if not secrets.compare_digest(self.headers.get('X-Chat-Token', ''), self.server.token):
                 return self._error(403, 'Page token required.')
             return signet_api.handle(self, 'GET', url)
-        if url.path in ('/stage6', '/stage6/file'):
-            return self.stage6_get(url)
         if url.path != '/bootstrap':
             return self._error(404, '找不到此 API。')
         if not self.server.turn_lock.acquire(blocking=False):
@@ -131,7 +136,7 @@ class ChatHandler(BaseHTTPRequestHandler):
         try:
             query = parse_qs(url.query)
             session = query.get('session', [None])[0]
-            saved = list(dict.fromkeys([*self.server.histories, *self.server.stage6.sessions]))
+            saved = list(self.server.histories)
             saved = [key for key in saved if re.fullmatch(r'[a-f0-9-]{36}', key)]
             if session is None and query.get('new') != ['1']:
                 active = self.server.active_session
@@ -177,8 +182,6 @@ class ChatHandler(BaseHTTPRequestHandler):
             return self._error(403, '請從本機聊天頁面送出。')
         if self.path.startswith('/signet/'):
             return signet_api.handle(self, 'POST', urlsplit(self.path))
-        if self.path.startswith('/stage6/'):
-            return self.stage6_post()
         if self.path.startswith('/hpc/'):
             return self.hpc_post()
         if self.path != '/chat':
@@ -228,19 +231,16 @@ class ChatHandler(BaseHTTPRequestHandler):
             try:
                 timing = ModelRequestTiming()
                 with self.server.client_factory(timing) as client:
-                    context_token = CHAT_CONTEXT.set((self.server.stage6, session))
                     genotype_token = CHAT_SESSION.set(session)
                     # Panel requests from show_panel go straight to this page as they happen.
                     ui_token = UI_CHANNEL.set(lambda request: emit('ui', request))
                     try:
                         answer = run_conversation(client, text.strip(), history,
                                               progress=lambda message: emit('progress', message), http_timing=timing,
-                                                  language=language)
+                                                  language=language, context=_analysis_context(session))
                     finally:
                         UI_CHANNEL.reset(ui_token)
                         CHAT_SESSION.reset(genotype_token)
-                        CHAT_CONTEXT.reset(context_token)
-                emit('workspace', self.server.stage6.view(session))
                 emit('answer', answer)
             except Exception:
                 emit('error', '回合發生非預期錯誤；操作狀態可能未知，請核對工作狀態後再繼續。')
@@ -306,78 +306,6 @@ class ChatHandler(BaseHTTPRequestHandler):
         if action is None:
             return self._error(404, '找不到此操作。')
         return self.json_response(action())
-
-    def stage6_get(self, url):
-        query = parse_qs(url.query)
-        session = query.get('session', [''])[0]
-        if not re.fullmatch(r'[a-f0-9-]{36}', session):
-            return self._error(400, 'Invalid session.')
-        try:
-            if url.path == '/stage6':
-                if not secrets.compare_digest(self.headers.get('X-Chat-Token', ''), self.server.token):
-                    return self._error(403, 'Workspace token required.')
-                return self.json_response(self.server.stage6.view(session))
-            if url.path == '/stage6/file':
-                import agent.tools.signet as st
-                from agent.stage6.workspace import load_run
-                run = query.get('run', [''])[0]
-                name = query.get('name', [''])[0]
-                if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*', name):
-                    raise ValueError('Invalid result filename.')
-                root, _, _ = load_run(run)
-                path = st._no_links(root / 'work/res/resv' / name)
-                if not path.is_file():
-                    return self._error(404, 'Output file not found.')
-                data = path.read_bytes()
-                self.send_response(200)
-                self.send_header('Content-Type', 'application/octet-stream')
-                self.send_header('Content-Disposition', 'attachment; filename="' + name + '"')
-                self.send_header('Content-Security-Policy', "sandbox; default-src 'none'")
-                self.send_header('X-Content-Type-Options', 'nosniff')
-                self.send_header('Content-Length', str(len(data)))
-                self.end_headers()
-                self.wfile.write(data)
-                return
-            return self._error(404, 'Unknown workspace operation.')
-        except (OSError, ValueError, KeyError) as exc:
-            return self._error(400, str(exc))
-
-    def stage6_post(self):
-        self.connection.settimeout(10)
-        locked = False
-        try:
-            size = int(self.headers.get('Content-Length', '0'))
-            if not 0 < size <= 32768:
-                raise ValueError('Invalid request length.')
-            payload = json.loads(self.rfile.read(size))
-            session = payload.get('session', '')
-            if not isinstance(session, str) or not re.fullmatch(r'[a-f0-9-]{36}', session):
-                raise ValueError('Invalid session.')
-            if not self.server.turn_lock.acquire(blocking=False):
-                return self._error(409, 'A conversation turn or visualization is running.')
-            locked = True
-            if self.path == '/stage6/select':
-                value = self.server.stage6.select(session, payload.get('run_id', ''))
-            elif self.path == '/stage6/compare':
-                value = self.server.stage6.compare(session, payload.get('proposal_id', ''))
-            elif self.path == '/stage6/cancel':
-                value = self.server.stage6.cancel(session, payload.get('proposal_id', ''))
-            elif self.path == '/stage6/confirm':
-                proposal = self.server.stage6.approve(session, payload.get('proposal_id', ''))
-                self.server.histories.setdefault(session, [])
-                self.server.save_state()
-                worker = threading.Thread(target=self.server.stage6.execute, args=(session, proposal))
-                worker.start()
-                locked = False  # The worker releases this lock after saving results, even on failure.
-                return self.json_response({'status': 'running', 'run_id': proposal['run_id']}, 202)
-            else:
-                return self._error(404, 'Unknown workspace operation.')
-            return self.json_response(value)
-        except (OSError, ValueError, KeyError, TypeError) as exc:
-            return self._error(400, str(exc))
-        finally:
-            if locked:
-                self.server.turn_lock.release()
 
 
 def create_server(provider='codex', port=8880, state_file=ROOT / '.chat-state.json'):

@@ -11,7 +11,7 @@ function navigationAllowed(value, origin) {
   return url.pathname === '/' || resultDownloadPath(url.pathname);
 }
 function resultDownloadPath(pathname) {
-  return pathname === '/stage6/file' || pathname === '/signet/result-download';
+  return pathname === '/signet/result-download';
 }
 function resultPreviewPath(pathname) {
   return /^\/signet\/result-preview\/[A-Za-z0-9_-]{32}\/signet_top[1-9][0-9]*_freq[0-9.eE+-]+\.html$/.test(pathname);
