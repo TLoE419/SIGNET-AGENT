@@ -17,6 +17,7 @@ SNAPSHOT = 'workspace-genotype.json'
 EXPRESSION_SNAPSHOT = 'workspace-expression.json'
 ADJUST_SNAPSHOT = 'workspace-adjust.json'
 CIS_SNAPSHOT = 'workspace-cis.json'
+NETWORK_SNAPSHOT = 'workspace-network.json'
 _CLINICAL_REVIEW = (Path(__file__).with_name('jobs') / 'review_clinical.py').read_text()
 DEFAULT_SETTINGS = {'restrict.tcga.geno': 1, 'mind': 0.1, 'geno': 0.1, 'hwe': 0.0001, 'int': 5000000}
 
@@ -409,6 +410,116 @@ def submit_cis(run_id, inputs, settings, resources):
     return jobs.submit(run_id, 'cis', {}, resources)
 
 
+def _review_network(run_id):
+    root, history = _workspace_run(run_id)
+    config = jobs._environment()
+    step = jobs.STEPS['network']
+    current = signet._settings(root)
+    settings, applied = {}, []
+    resource_defaults = {'ncores': 16, 'memory': 32, 'walltime': '4:00:00'}
+    for key, rule in step.settings.items():
+        text = current[key]
+        try:
+            value = text if rule == 'hms' else float(text) if rule == 'alpha' else int(text)
+            jobs._setting(key, rule, value)
+        except (ValueError, jobs.StepError):
+            if key not in resource_defaults:
+                raise jobs.StepError('invalid_request', f'The saved {key} value is invalid. Review the run settings.')
+            value = resource_defaults[key]
+            applied.append(f'The saved {key} value {text} is outside the supported range. Review the proposed value {value}.')
+        settings[key] = value
+    cis = history['jobs'].get('cis')
+    saved_alpha = cis.get('settings', {}).get('alpha.cis') if cis else None
+    source_settings = {**current, **({'alpha.cis': saved_alpha} if saved_alpha is not None else {})}
+    jobs._setting('alpha.cis', 'alpha', float(source_settings['alpha.cis']))
+    directory = jobs._remote_dir(config, root, run_id)
+    sources = {key: directory + '/work/' + jobs._resolve(relative, source_settings)
+               for key, relative in step.links.items()}
+    result = {'run_id': run_id, 'inputs': {}, 'settings': settings,
+              'resources': step.resources.copy(), 'limits': step.limits.copy(),
+              'input_sources': sources, 'source_cis_alpha': saved_alpha,
+              'defaults_applied': applied, 'ready': False, 'issues': []}
+    issues = result['issues']
+    for name in ('genotype', 'expression', 'adjust', 'cis'):
+        record = history['jobs'].get(name)
+        if not record or record['state'] != 'completed':
+            issues.append(f'Wait for {name} to complete in this same run.')
+        elif record['remote_dir'] != directory:
+            issues.append(f'Select the remote environment used by {name} of this run.')
+    if cis and saved_alpha is None:
+        issues.append('The completed association step has no saved significance threshold.')
+    if issues:
+        result['reason'] = ' '.join(issues)
+        return result
+    q = shlex.quote
+    script = jobs._say() + jobs._input_checks([(key, path, directory) for key, path in sources.items()])
+    script += (f'if [ ! -s {q(config["image"])} ]; then say not_ready container; exit 5; fi\n'
+               + 'if ! command -v sbatch >/dev/null 2>&1; then say not_ready sbatch; exit 5; fi\n')
+    try:
+        code, values, _ = jobs._shell(script)
+    except OSError as error:
+        raise jobs.StepError('remote_failed', 'Could not check the Stage 5 inputs on HPC3.') from error
+    if 'missing_input' in values:
+        issues.append('This run is missing a Stage 5 input: ' + values['missing_file'])
+    elif 'not_ready' in values:
+        issues.append('The remote environment is missing ' + values['not_ready'] + '.')
+    elif code:
+        issues.append('The Stage 5 input check could not finish on HPC3.')
+    result['ready'] = not issues
+    result['reason'] = ' '.join(issues)
+    return result
+
+
+@jobs._one_at_a_time
+def review_network(run_id):
+    """Review the original association result and worker/control resources without submitting."""
+    return _review_network(run_id)
+
+
+@jobs._one_at_a_time
+def submit_network(run_id, inputs, settings, resources):
+    root, _ = _workspace_run(run_id)
+    record_path = jobs._record_path(root, 'network')
+    previous = jobs._load(root, 'network') if record_path.exists() else None
+    if previous and previous.get('state') not in jobs.RETRYABLE:
+        raise jobs.StepError('conflict', 'Stage 5 already has a recorded job. Check its status before submitting.')
+    if jobs._active_step(root) or (root / '.active').exists():
+        raise jobs.StepError('conflict', 'A step of this run is still active. Check its status first.')
+    if inputs != {}:
+        raise jobs.StepError('invalid_request', 'Stage 5 uses the preceding outputs of this run; inputs must be {}.')
+    step = jobs.STEPS['network']
+    if not isinstance(settings, dict) or set(settings) != set(step.settings):
+        raise jobs.StepError('invalid_request', 'Confirm the bootstrap, correlation and compute-job settings.')
+    checked = {key: jobs._setting(key, rule, settings[key]) for key, rule in step.settings.items()}
+    accepted_resources = jobs._resources(step, resources)
+    review = _review_network(run_id)
+    if not review['ready']:
+        raise jobs.StepError('not_ready', review['reason'])
+    if previous:
+        jobs._ensure_stopped(previous)
+    path = signet._no_links(root / NETWORK_SNAPSHOT)
+    attempt = 1
+    if path.exists():
+        saved = json.loads(path.read_text())
+        attempt = saved['review_attempt'] + 1
+        archive = root / f'workspace-network.review{saved["review_attempt"]}.json'
+        if archive.exists() or archive.is_symlink():
+            raise jobs.StepError('conflict', 'The previous Stage 5 review archive already exists.')
+        with archive.open('x') as stream:
+            stream.write(json.dumps(saved, indent=2) + '\n')
+    snapshot = {'run_id': run_id, 'dataset_id': DATASET_ID, 'review_attempt': attempt,
+                'submitted_at': jobs._now(), 'inputs': {}, 'settings': checked,
+                'input_sources': review['input_sources'], 'source_cis_alpha': review['source_cis_alpha'],
+                'resources': accepted_resources}
+    # The network's significance file belongs to the completed cis attempt even after later edits.
+    jobs.update_settings(run_id, settings)
+    signet._update(root, {'alpha.cis': review['source_cis_alpha']})
+    temporary = root / (NETWORK_SNAPSHOT + '.tmp')
+    temporary.write_text(json.dumps(snapshot, indent=2) + '\n')
+    temporary.replace(path)
+    return jobs.submit(run_id, 'network', {}, resources)
+
+
 def run_history(root):
     """Return the most recent recorded step alongside the immutable review snapshot."""
     run_id = root.name
@@ -480,18 +591,37 @@ def run_history(root):
         result['jobs']['cis'] = association_job
         result['status'] = association_job['state']
         result['name'] = ['第 1 號染色體 · 分析', 'Chromosome 1 · Analysis']
+    network_path = signet._no_links(root / NETWORK_SNAPSHOT)
+    if network_path.is_file():
+        network = json.loads(network_path.read_text(encoding='utf-8'))
+        if network['run_id'] != run_id or network['dataset_id'] != DATASET_ID:
+            raise ValueError('The network history does not identify this run.')
+        network_job = {key: network[key] for key in
+                       ('submitted_at', 'inputs', 'settings', 'resources', 'input_sources', 'source_cis_alpha')}
+        network_job['state'] = 'submitting' if (root / '.active').exists() else 'not_submitted'
+        if signet._no_links(root / 'steps/network.json').is_file():
+            record = jobs._load(root, 'network')
+            if record['run_id'] != run_id or record['step'] != 'network':
+                raise ValueError('The network step record does not belong to this run.')
+            network_job.update(record)
+        result['jobs']['network'] = network_job
+        result['status'] = network_job['state']
+        result['name'] = ['第 1 號染色體 · 分析', 'Chromosome 1 · Analysis']
     return result
 
 
 def completed_result(run_id, stage='1'):
     root = signet._run(run_id)
-    name = {'1': 'genotype', '2': 'expression', '4': 'cis'}[stage]
+    name = {'1': 'genotype', '2': 'expression', '4': 'cis', '5': 'network'}[stage]
     job = run_history(root)['jobs'][name]
     if job['state'] != 'completed':
         raise ValueError(f'The {name} step is not complete.')
     if stage == '4':
         from agent.runtime.workspace_cis import summary as cis_summary
         summary = cis_summary(root, job)
+    elif stage == '5':
+        from agent.runtime.workspace_network import summary as network_summary
+        summary = network_summary(root, job)
     else:
         summary = genotype_summary(root) if stage == '1' else expression_summary(root)
     return {'run_id': run_id, 'stage': int(stage), 'job': job, 'summary': summary}

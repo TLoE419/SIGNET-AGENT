@@ -199,6 +199,26 @@ the saved review or settings are modified. Completed results are available from
 `GET /stage/results?run={run_id}&stage=4&source=live`, using the submitted
 significance threshold to select the correct downloaded result file.
 
+`GET /signet/runs/{run_id}/network/example` reviews Stage 5 for the same run
+after the four preceding steps complete. It returns the statistical and child-job
+`settings` (`nboots`, `ncis`, `cor`, `ncores`, `memory`, `walltime`), separate
+controller-job `resources` and `limits`, `input_sources`, and `ready/issues/reason`.
+The significance file follows the completed Stage 4 job's saved threshold,
+exposed as `source_cis_alpha`, even if the current configuration was later edited.
+When upstream worker defaults exceed the supported limits, the review proposes
+16 cores, 32 GB or a four-hour worker limit and explains each change in
+`defaults_applied`. Reading the
+review does not modify the saved configuration or submit a job.
+
+`POST /signet/runs/{run_id}/network/example` accepts `inputs` as `{}`, all six
+reviewed `settings`, and the controller `resources`. It saves the confirmed
+settings and source paths before invoking the existing network step. The current
+`alpha.cis` is restored to the saved Stage 4 threshold for the network input
+links, while Stage 4's record and outputs remain intact. Poll
+`GET /signet/runs/{run_id}/steps/network` for queue, execution and child-stage
+progress. The completed candidate edges and bootstrap frequencies are available
+from `GET /stage/results?run={run_id}&stage=5&source=live`.
+
 ### 5.1 `GET /signet/catalog`
 
 What the app may offer. The panel builds its forms from this instead of hard-coding them.

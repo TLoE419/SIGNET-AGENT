@@ -1442,6 +1442,129 @@ class StepsTest(unittest.TestCase):
         self.assertEqual(set(step['settings']), {'nboots', 'ncis', 'cor', 'ncores', 'memory', 'walltime'})
         self.assertEqual(step['required_outputs'][0], 'res/resn/signet_Afreq')
 
+    def test_workspace_network_uses_saved_cis_and_preserves_previous_stages(self):
+        from agent.app.chat_ui import ChatServer
+        from agent.runtime import workspace_genotype as workspace
+
+        self.network_ready(settings=None)
+        (self.remote_dir / 'work/res/resc/signet_all.sig.pValue_0.05').rename(
+            self.remote_dir / 'work/res/resc/signet_all.sig.pValue_0.0500')
+        inputs = {'genotype': self.genotype_inputs(), 'expression': self.inputs,
+                  'adjust': {'cli.file': str(self.hpc / 'ws/refdata/clinical.tsv')}, 'cis': {}}
+        settings = {'genotype': {key: str(value) for key, value in workspace.DEFAULT_SETTINGS.items()},
+                    'expression': {'restrict.tcga': '1'}, 'adjust': {},
+                    'cis': {'alpha.cis': '0.0500', 'nperms': '100', 'upstream': '1000', 'downstream': '1000'}}
+        snapshots = {'genotype': workspace.SNAPSHOT, 'expression': workspace.EXPRESSION_SNAPSHOT,
+                     'adjust': workspace.ADJUST_SNAPSHOT, 'cis': workspace.CIS_SNAPSHOT}
+        for name in snapshots:
+            record = {'run_id': 'step_test', 'step': name, 'state': 'completed',
+                      'submitted_at': '2026-11-17T10:00:00-0800', 'remote_dir': str(self.remote_dir),
+                      'inputs': inputs[name], 'settings': settings[name],
+                      'resources': steps.STEPS[name].resources, 'options': {'npc': 3} if name == 'adjust' else {}}
+            (self.root / 'steps' / f'{name}.json').write_text(json.dumps(record))
+            snapshot = {**record, 'dataset_id': workspace.DATASET_ID, 'review_attempt': 1, 'input_sources': {}}
+            (self.root / snapshots[name]).write_text(json.dumps(snapshot))
+        preserved = {path: path.read_bytes() for path in [
+            *(self.root / name for name in snapshots.values()),
+            *(self.root / 'steps' / f'{name}.json' for name in snapshots),
+            *(self.remote_dir / 'work' / path.replace('{alpha.cis}', '0.0500')
+              for path in steps.STEPS['network'].needs),
+        ]}
+        st._update(self.root, {'ncores': '128', 'memory': '256', 'alpha.cis': '0.5'})
+        config_before = (self.root / 'work/config.ini').read_bytes()
+        self.server = ChatServer(('127.0.0.1', 0), lambda: None)
+        self.addCleanup(self.server.server_close)
+        worker = threading.Thread(target=self.server.serve_forever, kwargs={'poll_interval': 0.01}, daemon=True)
+        worker.start()
+        self.addCleanup(worker.join, 3)
+        self.addCleanup(self.server.shutdown)
+        origin = f'http://127.0.0.1:{self.server.server_port}'
+
+        def request(method, path, body=None):
+            connection = http.client.HTTPConnection('127.0.0.1', self.server.server_port, timeout=5)
+            headers = {'X-Chat-Token': self.server.token, 'Origin': origin, 'Content-Type': 'application/json'}
+            try:
+                connection.request(method, path, None if body is None else json.dumps(body), headers)
+                response = connection.getresponse()
+                return response.status, json.loads(response.read())
+            finally:
+                connection.close()
+
+        route = '/signet/runs/step_test/network/example'
+        status, review = request('GET', route)
+        self.assertEqual(status, 200)
+        self.assertTrue(review['ready'], review['reason'])
+        self.assertEqual((review['settings']['ncores'], review['settings']['memory']), (16, 32))
+        self.assertEqual(len(review['defaults_applied']), 2)
+        self.assertEqual(review['source_cis_alpha'], '0.0500')
+        self.assertTrue(review['input_sources']['sig.pair'].endswith('signet_all.sig.pValue_0.0500'))
+        self.assertEqual((self.root / 'work/config.ini').read_bytes(), config_before)
+        self.assertFalse((self.root / workspace.NETWORK_SNAPSHOT).exists())
+        self.assertFalse((self.fake / 'sbatch_args').exists())
+        body = {key: review[key] for key in ('inputs', 'settings', 'resources')}
+        body['settings'] = {'nboots': 4, 'ncis': 2, 'cor': 0.25, 'ncores': 4, 'memory': 16, 'walltime': '0:30:00'}
+        body['resources'] = {'cpus': 1, 'mem_gb': 8, 'hours': 2}
+        prior = self.root / 'steps/cis.json'
+        unavailable = json.loads(prior.read_text())
+        unavailable['state'] = 'failed'
+        prior.write_text(json.dumps(unavailable))
+        self.assertFalse(request('GET', route)[1]['ready'])
+        self.assertEqual(request('POST', route, body)[0], 412)
+        prior.write_bytes(preserved[prior])
+        source = self.remote_dir / 'work/res/resc/signet_all.sig.pValue_0.0500'
+        source.unlink()
+        self.assertFalse(request('GET', route)[1]['ready'])
+        self.assertEqual(request('POST', route, body)[0], 412)
+        source.write_bytes(preserved[source])
+        for bad in ({'nboots': 0}, {'cor': 0}, {'ncores': 65}, {'memory': 256}, {'walltime': '0:01:00'}):
+            self.assertEqual(request('POST', route, {**body, 'settings': {**body['settings'], **bad}})[0], 400)
+        self.assertEqual(request('POST', route, {**body, 'inputs': {'sig.pair': str(source)}})[0], 400)
+        self.assertFalse((self.root / workspace.NETWORK_SNAPSHOT).exists())
+        self.lose_connection_on = 'tar xzf'
+        self.assertEqual(request('POST', route, body)[0], 502)
+        self.lose_connection_on = None
+        status, submitted = request('POST', route, body)
+        self.assertEqual((status, submitted['state'], submitted['run_id']), (202, 'submitted', 'step_test'))
+        self.assertEqual(submitted['settings'], {key: str(value) for key, value in body['settings'].items()})
+        self.assertEqual(submitted['resources']['time'], '02:00:00')
+        self.assertIn('signet_all.sig.pValue_0.0500', (self.remote_dir / 'work/config.ini').read_text())
+        self.assertNotIn('signet_all.sig.pValue_0.5', (self.remote_dir / 'work/config.ini').read_text())
+        self.assertTrue((self.root / 'workspace-network.review1.json').is_file())
+        snapshot = (self.root / workspace.NETWORK_SNAPSHOT).read_bytes()
+        calls = len(self.calls)
+        self.assertEqual(request('POST', route, body)[0], 409)
+        self.assertEqual(len(self.calls), calls)
+        self.assertEqual((self.root / workspace.NETWORK_SNAPSHOT).read_bytes(), snapshot)
+        step_route = '/signet/runs/step_test/steps/network?refresh=1'
+        self.slurm(squeue='PENDING')
+        self.assertEqual(request('GET', step_route)[1]['state'], 'pending')
+        stage = self.remote_dir / 'work/tmp/tmpn/stage1'
+        stage.mkdir(parents=True, exist_ok=True)
+        (stage / 'params.txt').write_text('first\nsecond\n')
+        (stage / 'params1.txt.completed').write_text('first\n')
+        self.slurm(squeue='RUNNING')
+        running = request('GET', step_route)[1]
+        self.assertEqual((running['state'], running['progress']), ('running', {'stage1': '1 2'}))
+        for relative in steps.STEPS['network'].required:
+            target = self.remote_dir / 'work' / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text('data\n')
+        (self.remote_dir / 'steps/network.done').write_text('0 2026-11-17T12:00:00-08:00\n')
+        self.slurm(squeue='', sacct='COMPLETED')
+        self.assertEqual(request('GET', step_route)[1]['state'], 'completed')
+        steps.update_settings('step_test', {'nboots': 99, 'cor': 0.9, 'alpha.cis': 0.2})
+        calls = len(self.calls)
+        row = next(row for row in request('GET', '/stage6/history')[1]['runs'] if row['run_id'] == 'step_test')
+        self.assertEqual(set(row['jobs']), {'genotype', 'expression', 'adjust', 'cis', 'network'})
+        self.assertEqual(row['jobs']['network']['settings'], submitted['settings'])
+        self.assertEqual(row['jobs']['network']['source_cis_alpha'], '0.0500')
+        self.assertEqual(row['jobs']['network']['input_sources'], review['input_sources'])
+        self.assertEqual(len(self.calls), calls)
+        self.assertEqual(request('POST', route, body)[0], 409)
+        for path, contents in preserved.items():
+            self.assertEqual(path.read_bytes(), contents, str(path))
+        self.assertEqual(set(path.name for path in (self.project / 'runs').iterdir()), {'step_test'})
+
     def test_network_refused_while_the_run_keeps_signets_default_job_memory(self):
         self.network_ready(settings=None)   # config.ini.default has memory = 256
         with self.assertRaises(steps.StepError) as caught:

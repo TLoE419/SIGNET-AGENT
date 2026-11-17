@@ -43,8 +43,8 @@ archived expression comparison. Stage 4 shows significant association pairs,
 and Stage 5 shows candidate edges grouped by their recorded bootstrap frequency.
 Stage 6 opens the network and edge table, with a filter for the selected gene.
 Each stage uses the settings preserved with its job. The Stage 6 selector in
-**Analysis** also follows the selected dataset. The Stage 5 preview in
-**Analysis** still uses simulated data.
+**Analysis** also follows the selected dataset. Stages 1–5 can be submitted
+manually for the chromosome 1 example.
 
 ### Submit the chromosome 1 example
 
@@ -87,6 +87,20 @@ output files without creating a job. **Submit Stage 4** submits the reviewed
 values through the existing cis-eQTL workflow and tracks its queue and progress.
 The saved result lists all associations, with the submitted settings, category
 counts, gene names, category-local variant or region indices, and p-values.
+
+After Stage 4 completes, **Stage 5** reviews the bootstrap count, the correlation
+limit for selecting instrumental variants, and each compute job's cores, memory
+and time limit. Its controller has separate resources and stays active while
+the model jobs run. Existing valid settings are retained. Unsupported upstream
+resource defaults are replaced in the review with explicit proposals, which are
+saved only when **Submit Stage 5** is selected.
+
+The existing network workflow submits its own model jobs and reports completed
+work items for each of its two calculation batches. Reopening an active run
+resumes status tracking. Saved results read the actual normalized bootstrap
+frequency matrix and preserve the official direction from source columns to
+target rows, including every positive candidate. Stage 5 uses the significance
+file from the completed Stage 4 job even if the run's current threshold changes.
 
 The local installation needs the audited SIGNET source, as described under
 [installation](../docs/INSTALL.md). The existing desktop SSH environment

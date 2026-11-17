@@ -27,7 +27,7 @@ const deadline = setTimeout(async () => {
   await running?.backend.forceStop();
   rmSync(temp, {recursive: true, force: true});
   app.exit(1);
-}, 180000);
+}, 240000);
 app.on('will-quit', () => {
   clearTimeout(deadline);
   rmSync(temp, {recursive: true, force: true});
@@ -455,7 +455,92 @@ async function verify() {
   assert.equal(readFileSync(path.join(localRun, 'work/res/resa/signet_gexp_rmpc.data'), 'utf8'), originalAdjustedExpression);
   assert.deepEqual(readFileSync(sbatchCalls, 'utf8').trim().split('\n'), Array(4).fill('submitted'));
   assert.deepEqual(readdirSync(path.join(fixture.project, 'runs')).sort(), ['step_test', runId].sort());
-  console.log('PASS: manual same-run Stages 1–4, progress, active/completed reload, immutable prior stages, and saved associations');
+  const originalCisRecord = readFileSync(cisJson, 'utf8');
+  const networkPanel = '#lens-stage5';
+  const networkStage = `[data-run-stage="5"][data-run-id="${runId}"]`;
+  const networkState = () => js(`document.querySelector('${networkPanel}')?.dataset.networkState`);
+  async function openNetwork() {
+    await click(history);
+    await until(() => js(`Boolean(document.querySelector(${JSON.stringify(row)})?.getClientRects().length)`),
+      'The original run was missing while opening Stage 5');
+    await click(row);
+    await click(networkStage);
+  }
+  await openNetwork();
+  await until(() => js(`document.querySelector('${networkPanel} [data-network-submit]')?.disabled === false`),
+    'Stage 5 review did not enable manual submission');
+  assert.ok(await js(`document.querySelector('${networkPanel} [data-network-form]')?.getClientRects().length > 0`));
+  assert.equal(await js(`document.querySelector('[data-network-setting="nboots"]').value`), '100');
+  for (const [key, value] of Object.entries({nboots:'2', cor:'0.25', ncores:'4', memory:'8', walltime:'1:30:00'})) {
+    await setReviewValue(`[data-network-setting="${key}"]`, value);
+  }
+  await setReviewValue('[data-network-resource="hours"]', '3');
+  assert.deepEqual(readFileSync(sbatchCalls, 'utf8').trim().split('\n'), Array(4).fill('submitted'));
+  writeFileSync(path.join(fixture.slurm, 'sbatch_reply'), '555\n');
+  writeFileSync(path.join(fixture.slurm, 'sacct'), '');
+  writeFileSync(path.join(fixture.slurm, 'squeue'), 'PENDING\n');
+  await js(`(() => {
+    const button = document.querySelector('${networkPanel} [data-network-submit]');
+    button.click(); button.click();
+  })()`);
+  await until(async () => await networkState() === 'pending', 'Stage 5 did not show its queued state');
+  const networkJson = path.join(localRun, 'steps/network.json');
+  const readNetwork = () => JSON.parse(readFileSync(networkJson, 'utf8'));
+  assert.equal(readNetwork().run_id, runId);
+  assert.equal(readNetwork().job_id, '555');
+  assert.deepEqual(readNetwork().settings, {nboots:'2', ncis:'3', cor:'0.25', ncores:'4', memory:'8', walltime:'1:30:00'});
+  assert.equal(readNetwork().resources.hours, 3);
+  assert.match(readFileSync(path.join(remoteRun, 'steps/network.sbatch'), 'utf8'), /bash \.\/signet -n/);
+  assert.deepEqual(readFileSync(sbatchCalls, 'utf8').trim().split('\n'), Array(5).fill('submitted'));
+  for (const [phase, completed] of [['stage1', 'one\n'], ['stage2', '']]) {
+    const directory = path.join(remoteRun, 'work/tmp/tmpn', phase);
+    mkdirSync(directory, {recursive:true});
+    writeFileSync(path.join(directory, 'params.txt'), 'first\nsecond\n');
+    writeFileSync(path.join(directory, 'params1.txt.completed'), completed);
+  }
+  writeFileSync(path.join(fixture.slurm, 'squeue'), 'RUNNING\n');
+  await until(async () => await networkState() === 'running', 'Stage 5 did not automatically report execution');
+  assert.deepEqual(readNetwork().progress, {stage1:'1 2', stage2:'0 2'});
+  assert.ok(await js(`document.querySelector('${networkPanel} [data-network-work-progress]')?.getClientRects().length > 0`),
+    'Stage 5 internal calculation progress is hidden');
+  const networkReload = once(window.webContents, 'did-finish-load');
+  window.webContents.reload();
+  await networkReload;
+  await openNetwork();
+  await until(async () => await networkState() === 'running', 'Stage 5 did not resume after reload');
+  const networkOutput = path.join(remoteRun, 'work/res/resn');
+  mkdirSync(networkOutput, {recursive:true});
+  writeFileSync(path.join(networkOutput, 'signet_Afreq'), '0,0.5\n1,0\n');
+  writeFileSync(path.join(networkOutput, 'signet_CoeffMat0'), '0,0.2\n-0.4,0\n');
+  writeFileSync(path.join(networkOutput, 'signet_net.genepos'), cisFiles['signet_net.genepos']);
+  writeFileSync(path.join(remoteRun, 'steps/network.done'), '0 2026-11-17T15:00:00\n');
+  writeFileSync(path.join(fixture.slurm, 'sacct'), 'COMPLETED\n');
+  writeFileSync(path.join(fixture.slurm, 'squeue'), '');
+  await until(async () => await networkState() === 'completed', 'Stage 5 did not collect completed matrices');
+  await until(() => js(`(() => {
+    const panel = document.querySelector('#lens-history-stage');
+    return panel.dataset.stage === '5' && panel.dataset.runState === 'ready';
+  })()`), 'Stage 5 did not display candidate edges from its saved matrices');
+  const candidates = await js(`[...document.querySelectorAll('#lens-history-stage [data-stage-table] tbody tr')]
+    .map(row => [...row.cells].map(cell => cell.textContent))`);
+  assert.deepEqual(candidates, [['MEGF6','GENE1','50%'], ['GENE1','MEGF6','100%']]);
+  assert.deepEqual(await js(`[...document.querySelectorAll('#lens-history-stage .ml-count-label')].map(n => Number(n.textContent))`), [1,1]);
+  assert.equal(await js(`document.querySelector('#lens-history-stage [data-stage-setting="nboots"]').textContent`), '2');
+  assert.equal(await js(`document.querySelector('#lens-history-stage [data-stage-setting="walltime"]').textContent`), '1:30:00');
+  const networkFinishedReload = once(window.webContents, 'did-finish-load');
+  window.webContents.reload();
+  await networkFinishedReload;
+  await openNetwork();
+  await until(() => js(`document.querySelector('#lens-history-stage')?.dataset.runState === 'ready'`),
+    'Stage 5 candidates did not reopen from saved history');
+  assert.equal(readFileSync(stepJson, 'utf8'), genotypeRecord);
+  assert.equal(readFileSync(expressionJson, 'utf8'), originalExpressionRecord);
+  assert.equal(readFileSync(adjustmentJson, 'utf8'), originalAdjustmentRecord);
+  assert.equal(readFileSync(cisJson, 'utf8'), originalCisRecord);
+  assert.equal(readFileSync(path.join(localRun, 'work/res/resa/signet_gexp_rmpc.data'), 'utf8'), originalAdjustedExpression);
+  assert.deepEqual(readFileSync(sbatchCalls, 'utf8').trim().split('\n'), Array(5).fill('submitted'));
+  assert.deepEqual(readdirSync(path.join(fixture.project, 'runs')).sort(), ['step_test',runId].sort());
+  console.log('PASS: manual same-run Stages 1–5, child progress, active/completed reload, preserved prior stages and directed candidate frequencies');
   await running.quit();
 }
 
