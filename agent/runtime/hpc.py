@@ -2,7 +2,8 @@
 
 The desktop EnvironmentService owns the verified workspace, pinned source,
 container executor and scheduler partition. Reference jobs reuse that configuration. Checks report only
-existence, file sizes, hashes of the pinned source files and the app's own step states.
+existence, file sizes, required clinical header names, prepared-input metadata,
+hashes of the pinned source files and the app's own step states.
 Source contents are hashed without being returned; research data is not read.
 
 Each setup step returns as soon as it has started: light steps run as a
@@ -15,6 +16,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import subprocess
 
 from agent.runtime import ssh_transport
@@ -39,7 +41,7 @@ _KG = ('https://ftp.1000genomes.ebi.ac.uk/vol1/ftp/data_collections/1000_genomes
        '20181203_biallelic_SNV/ALL.chr1.shapeit2_integrated_v1a.GRCh38.20181129.phased.vcf.gz')
 _GDC_LUAD = ('https://api.gdc.cancer.gov/cases?filters=%7B%22op%22%3A%22%3D%22%2C%22content%22%3A%7B%22field%22'
              '%3A%22project.project_id%22%2C%22value%22%3A%22TCGA-LUAD%22%7D%7D'
-             '&fields=submitter_id,demographic.race&format=TSV&size=5000')
+             '&fields=submitter_id,demographic.race,demographic.sex_at_birth&format=TSV&size=5000')
 REFERENCES = {
     'ref': {'path': 'refdata/ref/ALL.chr1.GRCh38.phased.vcf.gz', 'url': _KG,
             'source': '1000 Genomes GRCh38 chromosome 1 phased genotypes (about 950 MB)'},
@@ -54,7 +56,7 @@ REFERENCES = {
             'needs_container': True,
             'resources': ('--partition=free', '--cpus-per-task=1', '--mem=16G', '--time=04:00:00')},
     'clinical': {'path': 'refdata/clinical.tsv', 'url': _GDC_LUAD,
-                 'source': 'TCGA-LUAD case IDs and race from the GDC API (open access)'},
+                 'source': 'TCGA-LUAD case IDs, race and sex at birth from the GDC API (open access)'},
 }
 REFERENCE_FILES = {key: spec['path'] for key, spec in REFERENCES.items()}
 REFERENCE_RESOURCES = ('--partition=free', '--cpus-per-task=1', '--mem=2G', '--time=02:00:00')
@@ -63,6 +65,40 @@ REFERENCE_RESOURCES = ('--partition=free', '--cpus-per-task=1', '--mem=2G', '--t
 EXAMPLE_STUDY = f'{SIGNET_DIRECTORY}/example/geno/example'
 PREPARED = 'refdata/prepared/example'
 PREPARE_RESOURCES = ('--partition=free', '--cpus-per-task=1', '--mem=4G', '--time=02:00:00')
+# signet -a (script/adj/adj_adjust.R) reads these columns by name from the clinical table.
+CLINICAL_COLUMNS = ('submitter_id', 'race', 'gender')
+_CLINICAL_SHELL = r'''
+# Reads only the header line, with shell builtins: column names, never case rows.
+clinical_columns_ok() {
+  local header="" column
+  IFS= read -r header < "$1" || [ -n "$header" ] || return 1
+  header=$'\t'"${header%$'\r'}"$'\t'
+  for column in submitter_id race gender; do
+    case "$header" in *$'\t'"$column"$'\t'*) ;; *) return 1;; esac
+  done
+}
+'''
+# The converter records which files it read (inputs.json). A later check compares them with the
+# files that would be used now, so a changed or newly selected ref/gmap means converting again.
+_PREPARED_STATE = r'''
+prepared_state() {
+  [ -s "$W/@PREPARED@/summary.json" ] || { printf none; return 0; }
+  python3 - "$W/@PREPARED@/inputs.json" "$@" <<'SIGNET_INPUTS'
+import json, os, sys
+names = ('reference', 'genetic_map', 'study_ped', 'study_map')
+try:
+    with open(sys.argv[1]) as stream:
+        recorded = json.load(stream)
+    current = {}
+    for name, path in zip(names, sys.argv[2:]):
+        info = os.stat(path)
+        current[name] = {'path': os.path.realpath(path), 'size': info.st_size, 'mtime_ns': info.st_mtime_ns}
+    print('current' if recorded == current else 'stale', end='')
+except (OSError, ValueError):
+    print('stale', end='')
+SIGNET_INPUTS
+}
+'''.replace('@PREPARED@', PREPARED)
 _PREPARE_SOURCE = (Path(__file__).with_name('jobs') / 'prepare_reference.py').read_text()
 # Every Slurm step records its job ID as <step>.job in the state directory.
 JOB_STEPS = ('container', *REFERENCES, 'prepare')
@@ -201,7 +237,7 @@ def _check_script(root):
   else say signet_example mismatch; fi
 ''' if example_hashes else ''
     files = ' '.join(f'{key}:{path}' for key, path in _checked_files().items())
-    return _prelude(root) + f'''
+    return _prelude(root) + _CLINICAL_SHELL + _PREPARED_STATE + f'''
 say user "$(id -un)"
 say host "$(hostname)"
 if [ -d "$W" ]; then say workspace yes; if [ -w "$W" ]; then say workspace_writable yes; else say workspace_writable no; fi
@@ -232,7 +268,13 @@ for item in {files}; do
   if [ -s "$rel" ]; then say "file_$key" "$(stat -c %s "$rel" 2>/dev/null || stat -f %z "$rel")"
   elif [ -e "$rel" ]; then say "file_$key" empty
   else say "file_$key" no; fi
+  if [ "$key" = clinical ] && [ -s "$rel" ]; then
+    if clinical_columns_ok "$rel"; then say clinical_columns ok; else say clinical_columns missing; fi
+  fi
 done
+chosen_ref="$(selected_of ref)"; chosen_gmap="$(selected_of gmap)"
+say prepare_state "$(prepared_state "${{chosen_ref:-$W/{REFERENCE_FILES['ref']}}}" "${{chosen_gmap:-$W/{REFERENCE_FILES['gmap']}}}" \
+  "$S/example/geno/example.ped" "$S/example/geno/example.map")"
 ''' + _report_steps()
 
 
@@ -290,8 +332,21 @@ awk -F '\t' '$3 == "gene" {{ found = 1; exit !($9 ~ /transcript_type/) }} END {{
   echo "The collapsed GTF has no gene rows with transcript_type." >&2
   exit 1
 }}''',
-    # GDC sends CRLF lines, and R would keep the \r on submitter_id; SIGNET reads a "race" column.
-    'clinical': 'curl -fsSL --retry 3 "$URL" | tr -d "\\r" | sed "1s/demographic\\.race/race/" > "$TARGET.partial"',
+    # GDC sends CRLF lines, and R would keep the \r on submitter_id. SIGNET reads "race" and
+    # "gender"; GDC now calls the second one demographic.sex_at_birth. Values are left as GDC
+    # gives them: how to treat blank or Unknown entries is the researcher's decision.
+    'clinical': _CLINICAL_SHELL + r'''curl -fsSL --retry 3 "$URL" | tr -d "\r" |
+  sed "1s/demographic\.race/race/; 1s/demographic\.sex_at_birth/gender/" > "$TARGET.partial"
+clinical_columns_ok "$TARGET.partial" || {
+  rm -f "$TARGET.partial"
+  echo "GDC did not return submitter_id, race and gender columns; nothing was saved." >&2
+  exit 1
+}
+# Counts only, so the log (which the assistant may read) holds no case IDs.
+awk -F '\t' 'NR == 1 { for (i = 1; i <= NF; i++) col[$i] = i; next }
+  { n++; r = $col["race"]; g = $col["gender"]; race[r == "" ? "(blank)" : r]++; sex[g == "" ? "(blank)" : g]++ }
+  END { line = "Clinical cases: " n "; race:"; for (v in race) line = line " " v "=" race[v]
+        line = line "; gender:"; for (v in sex) line = line " " v "=" sex[v]; print line }' "$TARGET.partial"''',
 }
 
 
@@ -329,10 +384,15 @@ trap 'rmdir "$D/{step}.lock"' EXIT
 def _reference_script(root, key):
     """Submit one reference download as a Slurm job unless the file exists or is already downloading."""
     path = REFERENCES[key]['path']
+    outdated = '' if key != 'clinical' else _CLINICAL_SHELL + f'''
+if [ -z "$running" ] && [ -z "$(selected_of clinical)" ] && [ -s "$W/{path}" ] && ! clinical_columns_ok "$W/{path}"; then
+  mv -n "$W/{path}" "$W/{path}.replaced-$(date +%s)-$$"; [ ! -e "$W/{path}" ] || exit 1; say clinical_replaced yes
+fi
+'''
     return _prelude(root) + _step_lock(key) + f'''
 running=""
 if [ -s "$D/{key}.job" ]; then read -r job < "$D/{key}.job"; running="$(squeue -h -j "$job" -o %T 2>/dev/null)"; fi
-if [ -n "$running" ]; then say {key} in_progress; say {key}_job "$job"
+{outdated}if [ -n "$running" ]; then say {key} in_progress; say {key}_job "$job"
 elif [ -n "$(selected_of {key})" ] || [ -s "$W/{path}" ]; then say {key} existing
 {'elif [ -z "$E" ] || [ ! -s "$I" ]; then say ' + key + ' needs_container' if REFERENCES[key].get('needs_container') else ''}
 else
@@ -401,7 +461,7 @@ set -euo pipefail
 python3 "$D/prepare_reference.py" --study-ped "{study}.ped" --study-map "{study}.map" \\
   --reference "$SIGNET_REF" --genetic-map "$SIGNET_GMAP" --out "$W/{PREPARED}"
 '''
-    return _prelude(root) + _step_lock('selected', busy_step='prepare') + f'''
+    return _prelude(root) + _PREPARED_STATE + _step_lock('selected', busy_step='prepare') + f'''
 # A file chosen on HPC3 takes the place of the downloaded one; sbatch passes these on to the job.
 chosen_ref="$(selected_of ref)"; SIGNET_REF="${{chosen_ref:-$W/{REFERENCE_FILES['ref']}}}"
 chosen_gmap="$(selected_of gmap)"; SIGNET_GMAP="${{chosen_gmap:-$W/{REFERENCE_FILES['gmap']}}}"
@@ -409,7 +469,7 @@ export SIGNET_REF SIGNET_GMAP
 running=""
 if [ -s "$D/prepare.job" ]; then read -r job < "$D/prepare.job"; running="$(squeue -h -j "$job" -o %T 2>/dev/null)"; fi
 if [ -n "$running" ]; then say prepare in_progress; say prepare_job "$job"
-elif [ -s "$W/{PREPARED}/summary.json" ]; then say prepare existing
+elif [ "$(prepared_state "$SIGNET_REF" "$SIGNET_GMAP" "{study}.ped" "{study}.map")" = current ]; then say prepare existing
 elif [ ! -s "{study}.ped" ] || [ ! -s "{study}.map" ]; then say prepare needs_signet
 elif [ ! -s "$SIGNET_REF" ]; then say prepare needs_ref
 elif [ ! -s "$SIGNET_GMAP" ]; then say prepare needs_gmap
@@ -417,6 +477,8 @@ elif {{ [ -n "$chosen_ref" ] && [ "$(selected_access ref "$chosen_ref")" != ok ]
      {{ [ -n "$chosen_gmap" ] && [ "$(selected_access gmap "$chosen_gmap")" != ok ]; }}; then
   say prepare needs_verified_selection
 else
+  # Built from other files than the ones used now: keep it under another name, never delete it.
+  if [ -e "$W/{PREPARED}" ]; then mv -n "$W/{PREPARED}" "$W/{PREPARED}.replaced-$(date +%s)-$$"; [ ! -e "$W/{PREPARED}" ] || exit 1; say prepare_replaced yes; fi
   mkdir -p "$D" && chmod 700 "$D"
   cat > "$D/prepare_reference.py" <<'SIGNET_PY'
 {_PREPARE_SOURCE}SIGNET_PY
@@ -428,6 +490,98 @@ else
   else say prepare failed; fi
 fi
 '''
+
+
+def _source_install(config):
+    """Shell that fetches the pinned SIGNET commit and publishes only its audited, hash-verified files.
+
+    A fresh installation also includes the official example data. An installation made
+    before the example data was added gains only the example folder; nothing that already
+    exists is replaced. Files are staged beside the destination and moved in only after
+    every hash matches.
+    """
+    inventory = SOURCE_INVENTORY
+    q = shlex.quote
+    root, source, revision, repository = config['root'], config['source'], inventory['revision'], inventory['repository']
+    sums = lambda items: ''.join(f"{item['sha256']}  {item['path']}\n" for item in items)
+    source_sums = sums(inventory['scripts'] + inventory['support_files'])
+    example_sums = sums(inventory.get('example_files', []))
+    source_files = [item['path'] for item in inventory['scripts'] + inventory['support_files'] + inventory.get('example_files', [])]
+    source_files += ['LICENSE.txt', 'LICENSE_THIRD_PARTY.md']
+    example_files = [item['path'] for item in inventory.get('example_files', [])]
+
+    def fetch(files):
+        return f"""git -C "$stage/repository" init -q
+git -C "$stage/repository" fetch -q --depth=1 {q(repository)} {q(revision)}
+git -C "$stage/repository" archive {q(revision)} -- {' '.join(q(name) for name in files)} | tar -xf - -C "$stage/source"
+"""
+
+    return f"""set -euo pipefail
+umask 077
+S={q(source)}
+mkdir -p {q(root + '/software')}
+if [ ! -e "$S" ]; then
+  echo "Installing SIGNET {revision} with its example data into $S"
+  stage=$(mktemp -d {q(root + '/software/.install-XXXXXX')})
+  trap 'rm -rf -- "$stage"' EXIT
+  mkdir "$stage/repository" "$stage/source"
+{fetch(source_files)}  (cd "$stage/source" && sha256sum --check --status <<'SIGNET_HASHES'
+{source_sums}{example_sums}SIGNET_HASHES
+  )
+  # -T refuses replacement if a directory appeared while downloading.
+  mv -T -n "$stage/source" "$S"
+elif [ ! -e "$S/example" ]; then
+  echo "Adding the SIGNET example data to $S"
+  stage=$(mktemp -d {q(root + '/software/.example-XXXXXX')})
+  trap 'rm -rf -- "$stage"' EXIT
+  mkdir "$stage/repository" "$stage/source"
+{fetch(example_files)}  (cd "$stage/source" && sha256sum --check --status <<'SIGNET_EXAMPLE_HASHES'
+{example_sums}SIGNET_EXAMPLE_HASHES
+  )
+  mv -T -n "$stage/source/example" "$S/example"
+else
+  echo "SIGNET and its example data are already installed; nothing was changed."
+  exit 0
+fi
+(cd "$S" && sha256sum --check --status <<'SIGNET_HASHES'
+{source_sums}SIGNET_HASHES
+)
+(cd "$S" && sha256sum --check --status <<'SIGNET_EXAMPLE_HASHES'
+{example_sums}SIGNET_EXAMPLE_HASHES
+)
+echo "Installed and verified SIGNET {revision}."
+"""
+
+
+
+def _signet_script(root):
+    """Start the source installation as a detached login-node process unless it is present or running.
+
+    It is light (one shallow fetch of the pinned commit), so it does not wait in the Slurm queue.
+    Its state (running, done, failed), host and process ID go to $D/signet.status for the check.
+    """
+    config = _CONFIG.get() or {'root': root, 'source': f'{root}/{SIGNET_DIRECTORY}'}
+    if config.get('revision', SOURCE_INVENTORY['revision']) != SOURCE_INVENTORY['revision']:
+        raise ValueError('Desktop source revision does not match the audited inventory; recheck the remote environment.')
+    return _prelude(root) + _step_lock('signet') + f"""
+st="$(state_of signet)"; host="$(field_of signet host)"; pid="$(field_of signet pid)"
+if [ "$st" = running ] && {{ [ "$host" != "$(hostname)" ] || kill -0 "$pid" 2>/dev/null; }}; then say signet in_progress
+elif [ -L "$S" ] || {{ [ -e "$S" ] && [ ! -d "$S" ]; }}; then say signet failed
+elif [ -d "$S" ] && [ -d "$S/example" ]; then say signet existing
+elif ! command -v git >/dev/null 2>&1; then say signet needs_git
+else
+{_NOTE_MISSING_WORKSPACE}  {_ensure_workspace()}
+  mkdir -p "$D" && chmod 700 "$D"
+  cat > "$D/signet.install" <<'SIGNET_INSTALL'
+{_source_install(config)}SIGNET_INSTALL
+  printf 'state=running\\nhost=%s\\n' "$(hostname)" > "$D/signet.status"
+  # Output goes to the log; only the final state line goes to the status file.
+  nohup setsid bash -c 'if bash "$1/signet.install"; then s=done; else s=failed; fi; printf "state=%s\\n" "$s" >> "$1/signet.status"' _ "$D" > "$D/signet.log" 2>&1 < /dev/null &
+  printf 'pid=%s\\n' "$!" >> "$D/signet.status"
+  say signet started
+fi
+"""
+
 
 
 def _log_script(step, root='/'):
@@ -518,7 +672,8 @@ def _checks(values, revision):
     elif signet != 'yes' or values.get('signet_integrity') != 'verified' or values.get('signet_revision') != revision:
         add('signet_source', 'problem', f'Audited source verification failed for revision {revision[:12]}; files may be missing or modified. Recheck HPC3 settings.')
     elif values.get('signet_example') == 'missing':
-        add('signet_source', 'missing', 'The SIGNET example data has not been installed; press Install to add it.')
+        add('signet_source', *(_step_status(values, 'signet') or
+                               ('missing', 'The SIGNET example data has not been installed; press Install to add it.')))
     elif values.get('signet_example') == 'mismatch':
         add('signet_source', 'problem', 'The SIGNET example data differs from the pinned revision; move the example folder aside, then install again.')
     else:
@@ -526,6 +681,13 @@ def _checks(values, revision):
     for key, path in _checked_files().items():
         value = values.get(f'file_{key}', 'no')
         item = {'container': 'container', 'prepare': 'imputation_reference'}.get(key, f'reference_{key}')
+        if key == 'clinical' and value not in ('no', 'empty') and values.get('clinical_columns') == 'missing':
+            columns = ', '.join(CLINICAL_COLUMNS)
+            add(item, 'problem', f'The selected clinical file lacks the columns signet -a reads ({columns}); choose another file.'
+                if values.get('selected_clinical') == 'yes' else
+                f'{path} is an older download without the columns signet -a reads ({columns}). '
+                'Download again: the old file is kept under another name.')
+            continue
         if values.get(f'selected_{key}') == 'yes':
             add(item, *_selected_status(value, values.get(f'access_{key}')))
             continue
@@ -539,6 +701,10 @@ def _checks(values, revision):
             add(item, 'missing', f'{path} is missing.')
         elif value == 'empty':
             add(item, 'problem', f'{path} is empty.')
+        elif key == 'prepare' and values.get('prepare_state') == 'stale':
+            add(item, 'missing', 'ref, gmap or the example study differ from the files used by the last conversion '
+                                 '(or that conversion predates this record). Convert again: the previous result is kept '
+                                 'under another name.')
         else:
             add(item, 'ok', f'{path} ({_size(value)})')
     return checks
@@ -593,7 +759,7 @@ def check_environment(revision):
     missing = [check['item'] for check in checks if check['status'] != 'ok']
     return {'status': 'ok', 'executed': False, 'read_only': True, 'ready': not missing,
             'workspace': values.get('workspace_path'), 'checks': checks, 'not_ready': missing,
-            'evidence_scope': 'Existence, file sizes, audited source hashes and the app\'s own setup states only. '
+            'evidence_scope': 'Existence, file sizes, required clinical headers, prepared-input metadata, audited source hashes and the app\'s own setup states only. '
                               'Only pinned source files were read for hashing; no contents or research data were returned and nothing on HPC3 was changed. '
                               'Readiness here does not establish scientific validity.'}
 
@@ -607,6 +773,7 @@ _OUTCOMES = {
     'needs_ref': 'Download the ref file first.',
     'needs_verified_selection': 'Verify the selected reference files with the current container before converting.',
     'needs_gmap': 'Download the gmap file first.',
+    'needs_git': 'git is not available on the HPC3 login node, so SIGNET cannot be downloaded.',
     'failed': 'Could not start this step; nothing was changed.',
 }
 
@@ -616,15 +783,17 @@ def start_step(step, repository=None, revision=None):
     if step == 'signet' and (not re.fullmatch(r'https://[A-Za-z0-9./_-]+\.git', repository or '')
                              or not re.fullmatch(r'[0-9a-f]{40}', revision or '')):
         return {'status': 'invalid', 'executed': False, 'error': 'Invalid pinned SIGNET repository or revision.'}
+    if step == 'signet' and (repository != SOURCE_INVENTORY['repository'] or revision != SOURCE_INVENTORY['revision']):
+        return {'status': 'invalid', 'executed': False, 'error': 'SIGNET installation must match the audited repository and revision.'}
     if step not in STEPS:
         return {'status': 'invalid', 'executed': False, 'error': f'step must be one of {", ".join(STEPS)}.'}
-    if step in ('workspace', 'signet'):
+    if step == 'workspace':
         return {'status': 'blocked', 'executed': False, 'step': step,
-                'reason': 'Use the Install button on the SIGNET row of the Workflow panel. No second installation was started.'}
+                'reason': 'Installing SIGNET creates the workspace; no separate step is needed.'}
     if step == 'container' and not CONTAINER_SHA256:
         return {'status': 'blocked', 'executed': False, 'step': step,
                 'reason': 'The container checksum has not been pinned in this version of the app, so nothing was downloaded.'}
-    script = {'prepare': _prepare_script, 'container': _container_script,
+    script = {'prepare': _prepare_script, 'container': _container_script, 'signet': _signet_script,
               **{key: (lambda root, key=key: _reference_script(root, key)) for key in REFERENCES}}[step]
     values, error = _run(script, timeout=120, required=step)
     if error:

@@ -30,48 +30,6 @@ if [ -s "$root/images/signet-0.0.6.sif" ]; then printf 'image=exists\\n'; else p
 parent="$root"; while [ ! -e "$parent" ]; do parent=$(dirname "$parent"); done
 if [ -d "$parent" ] && [ -w "$parent" ]; then printf 'writable=yes\\n'; else printf 'writable=no\\n'; fi
 `}
-export function installSource(c:EnvironmentConfig,i:Inventory){
- const files=[...i.scripts,...i.support_files,...(i.example_files||[])].map(x=>x.path).concat(['LICENSE.txt','LICENSE_THIRD_PARTY.md']);
- return `set -euo pipefail
-umask 077
-mkdir -p ${quote(c.root+'/software')}
-[ ! -e ${quote(c.source)} ] || { echo 'Source destination already exists; choose a new root.' >&2; exit 1; }
-stage=$(mktemp -d ${quote(c.root+'/software/.install-XXXXXX')})
-trap 'rm -rf -- "$stage"' EXIT
-mkdir "$stage/repository" "$stage/source"
-git -C "$stage/repository" init -q
-git -C "$stage/repository" fetch -q --depth=1 ${quote(i.repository)} ${quote(i.revision)}
-git -C "$stage/repository" archive ${quote(i.revision)} -- ${files.map(quote).join(' ')} | tar -xf - -C "$stage/source"
-(cd "$stage/source" && sha256sum --check --status <<'SIGNET_HASHES'
-${checksums(i)}${exampleSums(i)}SIGNET_HASHES
-)
-# -T refuses replacement if a directory appeared while downloading.
-mv -T -n "$stage/source" ${quote(c.source)}
-${sourceCheck(c,i)}
-${exampleCheck(c,i)}
-`;
-}
-/** Adds the example folder to an existing installation; nothing already there is replaced. */
-export function installExample(c:EnvironmentConfig,i:Inventory){
- const files=(i.example_files||[]).map(x=>x.path);
- return `set -euo pipefail
-umask 077
-[ -d ${quote(c.source)} ] || { echo 'SIGNET source is not installed.' >&2; exit 1; }
-[ ! -e ${quote(c.source+'/example')} ] || { echo 'An example folder already exists but does not match the pinned data. Move it aside, then install again.' >&2; exit 1; }
-stage=$(mktemp -d ${quote(c.root+'/software/.example-XXXXXX')})
-trap 'rm -rf -- "$stage"' EXIT
-mkdir "$stage/repository" "$stage/source"
-git -C "$stage/repository" init -q
-git -C "$stage/repository" fetch -q --depth=1 ${quote(i.repository)} ${quote(i.revision)}
-git -C "$stage/repository" archive ${quote(i.revision)} -- ${files.map(quote).join(' ')} | tar -xf - -C "$stage/source"
-(cd "$stage/source" && sha256sum --check --status <<'SIGNET_EXAMPLE_HASHES'
-${exampleSums(i)}SIGNET_EXAMPLE_HASHES
-)
-# The stage is on the same filesystem, so this is a rename; -T refuses a folder that appeared meanwhile.
-mv -T -n "$stage/source/example" ${quote(c.source+'/example')}
-${exampleCheck(c,i)}
-`;
-}
 export function verify(c:EnvironmentConfig){
  const settingsCheck=`set -euo pipefail
 command -v Rscript >/dev/null
