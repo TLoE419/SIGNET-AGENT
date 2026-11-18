@@ -550,6 +550,14 @@ code:not(pre code) {
 #signet-lens-left-preview .ml-history-job-content { padding: 10px; }
 #signet-lens-left-preview .ml-history-job-content h4 { margin: 12px 0 6px; font-size: 13px; }
 #signet-lens-left-preview .ml-history-job-content p { margin: 0 0 9px; color: var(--ml-muted); }
+#signet-lens-left-preview .ml-history-attempt-count { margin-left: auto; color: var(--ml-muted); font-size: 12px; }
+#signet-lens-left-preview .ml-history-attempts { display: grid; gap: 8px; padding: 10px; }
+#signet-lens-left-preview .ml-history-attempt { min-width: 0; border: 1px solid var(--ml-rule); border-radius: 5px; overflow: hidden; }
+#signet-lens-left-preview .ml-history-attempt > summary { display: list-item; list-style: revert; list-style-position: inside; min-height: 0; background: #f8fafb; }
+#signet-lens-left-preview .ml-history-attempt > summary::-webkit-details-marker { display: revert; }
+#signet-lens-left-preview .ml-history-attempt-state { display: block; margin: 3px 0 0 16px; color: var(--ml-muted); font-size: 12px; }
+#signet-lens-left-preview .ml-history-attempt :is(.ml-history-attempt-events, .ml-history-attempt-outputs) { margin: 7px 0; padding-left: 20px; overflow-wrap: anywhere; }
+#signet-lens-left-preview .ml-history-attempt-events time { font-variant-numeric: tabular-nums; }
 #signet-lens-left-preview .ml-run-inputs { margin-bottom: 12px; }
 #signet-lens-left-preview .ml-run-inputs summary { color: #24618f; cursor: pointer; }
 #signet-lens-left-preview .ml-run-inputs[open] summary { margin-bottom: 8px; }

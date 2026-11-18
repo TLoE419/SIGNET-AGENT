@@ -214,6 +214,43 @@ supports verified legacy exports only when their frequency/subnetwork settings
 were explicitly saved. An old record without those settings remains visible
 but cannot reconstruct a historical graph from today's configuration.
 
+### Individual submission attempts
+
+The unified history response adds `attempts`, keyed by step, without changing
+the existing `jobs` snapshots. Each step maps to its attempts in numeric order;
+an unknown current number sorts last. Each entry contains:
+
+| Field | Meaning |
+|---|---|
+| `number`, `current` | Attempt number or null when not preserved; whether this is the current record |
+| `record_file` | The saved metadata path relative to this source's run folder |
+| `availability` | `recorded`, `missing`, or `invalid` |
+| `record` | The original saved step snapshot, or null for an unavailable record |
+| `issues` | Missing, unreadable, conflicting, or incomplete attempt evidence |
+| `result.status` | `recorded_completed`, `recorded_failed`, `recorded_cancelled`, `pending`, or `not_recorded` |
+| `result.outputs` | Saved paths and their recorded `downloaded`, `missing`, or `not_recorded` evidence |
+
+Workspace and generic runs read prior attempts only from
+`steps/<step>.attempt<N>.json`, with the current record in `steps/<step>.json`.
+Each readable record must identify the same run/step and agree with its filename
+and explicit attempt number. Parsing is bounded. Missing earlier numbers remain
+visible gaps; malformed, linked, or foreign records never become a different
+attempt's settings. Revisions include attempt metadata, so a source change
+invalidates an in-flight organizational assignment.
+
+The first implicit attempt is numbered 1 only for the established local step
+format when no archived sibling contradicts it. An archive without an explicit
+attempt number retains null. Old Agent operations/plans without a retry format
+keep their original operation evidence, without invented attempt lists.
+
+Inputs, settings, options, resources, job IDs, times, state transitions, failure
+reasons, exit status and output evidence come from each entry's own `record`.
+No mutable config, present-day `work/res` contents, logs, or remote status fills
+missing historical evidence. Output paths describe what the snapshot recorded;
+they are not downloads or links to another attempt's current outputs. A saved
+completed state is technical evidence, not biological validation. This history
+extension does not submit, retry, cancel, or change any execution record.
+
 The workspace browser reuses `POST /hpc/files/shortcuts` and
 `POST /hpc/files/list`. Before saving a selection, `POST /hpc/files/inspect`
 accepts only `{"paths": ["/absolute/input/path"]}` (1–128 paths; 32 KiB body

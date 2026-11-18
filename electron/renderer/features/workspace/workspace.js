@@ -992,31 +992,83 @@
   const recordedValue = value => value == null ? notRecorded() : escapeHistory(typeof value === "object" ? JSON.stringify(value) : value);
   const savedDefinitions = value => Object.entries(value ?? {}).map(([key, item]) =>
     `<dt>${escapeHistory(key)}</dt><dd>${recordedValue(item)}</dd>`).join("") || `<dt>${historyText("內容", "Contents")}</dt><dd>${notRecorded()}</dd>`;
-  function savedJobDetails(job, key, operation = false, savedOnly = false) {
+  function savedJobContent(job, operation = false) {
     const evidence = job.settings_evidence ?? (Object.keys(job.settings ?? {}).length || Object.keys(job.options ?? {}).length ? "recorded" : "not_recorded");
     const evidenceCopy = ({recorded: ["實際保存的設定", "Recorded settings"], prepared_snapshot: ["準備時的設定；不代表已執行", "Prepared settings; execution not implied"],
       not_recorded: ["設定未記錄", "Settings not recorded"]})[evidence] ?? [evidence, evidence];
-    return `<details class="ml-run-step ml-history-saved-job" ${operation ? `data-history-operation="${escapeHistory(key)}"` : `data-history-job="${escapeHistory(key)}"`}>
-      <summary>${escapeHistory(key)} · <span data-history-job-state>${historyStateLabel(job.state ?? job.status, savedOnly || operation)}</span></summary>
-      <div class="ml-history-job-content">
-        <p data-settings-evidence="${escapeHistory(evidence)}">${historyText(...evidenceCopy)}</p>
+    return `<p data-settings-evidence="${escapeHistory(evidence)}">${historyText(...evidenceCopy)}</p>
         <dl class="ml-key-values"><dt>${historyText("工作編號", "Job ID")}</dt><dd>${recordedValue(job.job_id)}</dd>
-          <dt>${historyText("開始時間", "Started at")}</dt><dd>${recordedValue(job.submitted_at ?? job.started_at)}</dd>
+          <dt>${historyText("送出時間", "Submitted at")}</dt><dd>${recordedValue(job.submitted_at)}</dd>
+          <dt>${historyText("開始時間", "Started at")}</dt><dd>${recordedValue(job.started_at)}</dd>
           <dt>${historyText("結束時間", "Finished at")}</dt><dd>${recordedValue(job.finished_at ?? job.ended_at)}</dd>
           ${operation ? `<dt>${historyText("實際執行", "Executed")}</dt><dd>${job.executed === true ? historyText("是", "Yes") : job.executed === false ? historyText("否", "No") : notRecorded()}</dd>` : ""}
           <dt>${historyText("紀錄來源", "Record source")}</dt><dd>${recordedValue(job.record_file)}</dd>
           ${job.reason ? `<dt>${historyText("說明", "Reason")}</dt><dd>${recordedValue(job.reason)}</dd>` : ""}</dl>
         ${[["inputs", ["保存的輸入檔案", "Saved inputs"]], ["settings", ["保存的設定", "Saved settings"]], ["options", ["保存的選項", "Saved options"]], ["resources", ["保存的資源", "Saved resources"]]]
           .filter(([field]) => field !== "options" || Object.keys(job.options ?? {}).length)
-          .map(([field, title]) => `<h4>${historyText(...title)}</h4><dl class="ml-key-values" data-history-saved="${field}">${savedDefinitions(job[field])}</dl>`).join("")}
-      </div></details>`;
+          .map(([field, title]) => `<h4>${historyText(...title)}</h4><dl class="ml-key-values" data-history-saved="${field}">${savedDefinitions(job[field])}</dl>`).join("")}`;
+  }
+  const attemptResultNames = {
+    recorded_completed: ["紀錄顯示已完成", "Recorded as completed"],
+    recorded_failed: ["紀錄顯示失敗", "Recorded as failed"],
+    recorded_cancelled: ["紀錄顯示已取消", "Recorded as cancelled"],
+    pending: ["尚未記錄最終結果", "Final result not recorded"],
+    not_recorded: ["結果未記錄", "Result not recorded"],
+  };
+  function savedAttemptResult(attempt) {
+    const result = attempt.result ?? {};
+    const record = attempt.record ?? {};
+    const outputs = Array.isArray(result.outputs) ? result.outputs.filter(output => output && typeof output.path === "string") : [];
+    const outputStatus = {downloaded: ["紀錄顯示已下載", "Recorded as downloaded"], missing: ["紀錄顯示缺少", "Recorded as missing"],
+      not_recorded: ["檔案狀態未記錄", "File status not recorded"]};
+    return `<section class="ml-history-attempt-result" data-history-attempt-result>
+      <h4>${historyText("保存的結果", "Saved result")}</h4>
+      <p>${historyText(...(attemptResultNames[result.status] ?? attemptResultNames.not_recorded))}</p>
+      <dl class="ml-key-values">${[["slurm_state", ["排程器狀態", "Scheduler state"]], ["exit_code", ["結束代碼", "Exit code"]],
+        ["failure_hints", ["保存的失敗提示", "Recorded failure hints"]], ["missing_outputs", ["當時缺少的檔案", "Missing outputs at the time"]]]
+        .filter(([field]) => record[field] != null)
+        .map(([field, label]) => `<dt>${historyText(...label)}</dt><dd>${recordedValue(record[field])}</dd>`).join("")}</dl>
+      ${outputs.length ? `<ul class="ml-history-attempt-outputs">${outputs.map(output => `<li><code>${recordedValue(output.path)}</code> · ${historyText(...(outputStatus[output.status] ?? outputStatus.not_recorded))}</li>`).join("")}</ul>` : ""}
+    </section>`;
+  }
+  function savedAttempts(attempts) {
+    return `<div class="ml-history-attempts">${[...attempts].sort((a, b) => Number(b.current) - Number(a.current) || (b.number ?? 0) - (a.number ?? 0)).map(attempt => {
+      const number = attempt.number ?? "unknown";
+      const available = attempt.availability === "recorded" && Boolean(attempt.record);
+      const title = attempt.number == null ? historyText("嘗試次數未記錄", "Attempt number not recorded")
+        : historyText(`第 ${attempt.number} 次嘗試`, `Attempt ${attempt.number}`);
+      const state = available ? historyStateLabel(attempt.record.state ?? attempt.record.status, true)
+        : historyText(attempt.availability === "invalid" ? "保存的紀錄無法讀取" : "缺少保存的紀錄", attempt.availability === "invalid" ? "Saved record unreadable" : "Saved record missing");
+      const savedEvents = attempt.record?.history;
+      const events = Array.isArray(savedEvents) ? savedEvents.filter(event => event && typeof event.state === "string" && typeof event.at === "string") : [];
+      const unreadableEvents = savedEvents != null && (!Array.isArray(savedEvents) || events.length !== savedEvents.length);
+      return `<details class="ml-history-attempt" data-history-attempt="${escapeHistory(number)}" data-attempt-record="${escapeHistory(attempt.record_file)}" data-attempt-current="${attempt.current === true}" data-attempt-available="${available}">
+        <summary>${title}${attempt.current ? ` · ${historyText("目前紀錄", "Current record")}` : ""}<span class="ml-history-attempt-state">${state}</span></summary>
+        <div class="ml-history-job-content">
+          ${available ? savedJobContent({...attempt.record, record_file: attempt.record_file}) + savedAttemptResult(attempt) : `<p>${historyText("這次嘗試的檔案、設定與結果無法從現有紀錄確認。", "The inputs, settings and results of this attempt cannot be confirmed from the saved records.")}</p><p>${historyText("紀錄來源", "Record source")} · <code>${recordedValue(attempt.record_file)}</code></p>`}
+          ${(attempt.issues ?? []).length ? `<p class="ml-history-record-note">${attempt.issues.map(escapeHistory).join(" ")}</p>` : ""}
+          ${events.length ? `<h4>${historyText("保存的狀態時間線", "Recorded state timeline")}</h4><ol class="ml-history-attempt-events" data-history-attempt-events>${events.map(event => `<li>${historyText(...genotypeHistoryState(event.state))} · <time>${recordedValue(event.at)}</time>${event.reason ? ` · ${recordedValue(event.reason)}` : ""}</li>`).join("")}</ol>` : ""}
+          ${unreadableEvents ? `<p data-history-attempt-event-warning>${historyText("部分保存的時間線無法讀取。", "Part of the recorded timeline is unreadable.")}</p>` : ""}
+        </div></details>`;
+    }).join("")}</div>`;
+  }
+  function savedJobDetails(job, key, operation = false, savedOnly = false, attempts = []) {
+    return `<details class="ml-run-step ml-history-saved-job" ${operation ? `data-history-operation="${escapeHistory(key)}"` : `data-history-job="${escapeHistory(key)}"`}>
+      <summary>${escapeHistory(key)} · <span data-history-job-state>${historyStateLabel(job.state ?? job.status, savedOnly || operation)}</span>
+        ${attempts.length ? `<span class="ml-history-attempt-count">${historyText(`嘗試紀錄（${attempts.length}）`, `Attempt records (${attempts.length})`)}</span>` : ""}</summary>
+      ${attempts.length ? savedAttempts(attempts) : `<div class="ml-history-job-content">${savedJobContent(job, operation)}</div>`}</details>`;
   }
   function canStartStage(run, number) {
     return canContinue(run) && number > 1 && historySteps.slice(0, number - 1).every(step => run.jobs?.[step]?.state === "completed");
   }
+  function historyDisclosureKey(details) {
+    const job = details.closest("[data-history-job], [data-history-operation]");
+    const scope = job?.dataset.historyJob ?? job?.dataset.historyOperation ?? (details.hasAttribute("data-history-provenance") ? "provenance" : "inputs");
+    return `${details.closest("[data-history-id]")?.dataset.historyId}|${scope}|${details.dataset.attemptRecord ?? details.dataset.historyAttempt ?? ""}`;
+  }
   function renderHistoryRecords() {
     const expanded = new Set([...runDetails.querySelectorAll("details[open]")].map(details =>
-      `${details.closest("[data-history-id]")?.dataset.historyId}|${details.dataset.historyJob ?? details.dataset.historyOperation ?? "inputs"}`));
+      historyDisclosureKey(details)));
     runList.innerHTML = historyRuns.map(run => {
       const key = escapeHistory(historyKey(run)), id = escapeHistory(run.run_id);
       const state = run.status ?? historyJob(run)?.state;
@@ -1035,9 +1087,10 @@
       const summary = canReadGraph(run) && run.graph ? historyText(...networkOutput([run.graph.genes, run.graph.connections])) : "";
       const stages = historySteps.map((step, offset) => {
         const job = run.jobs?.[step], number = offset + 1;
+        const attempts = run.attempts?.[step] ?? [];
         const linked = canReadStage(run, number) || number === 6 && canReadGraph(run) ||
           canContinue(run) && number > 1 && (Boolean(job) || canStartStage(run, number));
-        if (!job && !linked) return "";
+        if (!job && !linked && !attempts.length) return "";
         const title = `<i data-lucide="${job?.state === "completed" ? "circle-check" : "history"}" aria-hidden="true"></i>
           ${historyText(`第 ${number} 階段`, `Stage ${number}`)}<strong>${historyLabel(stageData[offset].name)}</strong>
           <time datetime="${escapeHistory(job?.finished_at)}">${escapeHistory(clockTime(job?.finished_at))}</time>`;
@@ -1046,10 +1099,10 @@
           : number === 3 ? "lens-history-stage3" : number === 6 ? "lens-stage6" : "lens-history-stage";
         const link = linked ? `<button type="button" class="ml-run-step-link" data-run-stage="${number}" data-run-id="${id}" data-history-id="${key}" aria-controls="${panel}">
           ${title}<i data-lucide="arrow-right" aria-hidden="true"></i></button>` : "";
-        return `<li>${link}${job ? savedJobDetails(job, step, false, run.source === "recorded") : ""}</li>`;
+        return `<li>${link}${job || attempts.length ? savedJobDetails(job ?? {}, step, false, run.source === "recorded", attempts) : ""}</li>`;
       }).join("");
-      const genericJobs = Object.entries(run.jobs ?? {}).filter(([step]) => !historySteps.includes(step))
-        .map(([step, job]) => savedJobDetails(job, step, false, run.source === "recorded")).join("");
+      const genericJobs = [...new Set([...Object.keys(run.jobs ?? {}), ...Object.keys(run.attempts ?? {})])].filter(step => !historySteps.includes(step))
+        .map(step => savedJobDetails(run.jobs?.[step] ?? {}, step, false, run.source === "recorded", run.attempts?.[step])).join("");
       const operations = (run.operations ?? []).map(operation => savedJobDetails(operation, operation.operation ?? "operation", true)).join("");
       const snapshot = inputTypes.map(([type, zh, en]) => {
         const files = run.inputs?.[type] ?? [];
@@ -1077,7 +1130,7 @@
       </article>`;
     }).join("");
     for (const details of runDetails.querySelectorAll("details")) {
-      if (expanded.has(`${details.closest("[data-history-id]")?.dataset.historyId}|${details.dataset.historyJob ?? details.dataset.historyOperation ?? "inputs"}`)) details.open = true;
+      if (expanded.has(historyDisclosureKey(details))) details.open = true;
     }
     renderHistoryLanguage();
     globalThis.lucide?.createIcons();

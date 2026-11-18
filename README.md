@@ -31,6 +31,9 @@ configuration. Unclassified records can be assigned to a dataset for
 organization, with that assignment saved separately from the original records.
 This does not validate sample compatibility or enable a legacy run to continue.
 History reads local records without querying remote jobs or rerunning analysis.
+Each stage can expand its individual submission attempts, showing that attempt's
+saved settings, job ID, times, failure reason and result evidence. Earlier
+attempts remain separate from the latest one; missing records stay explicit.
 
 ## Replacing the Former Desktop Workbench
 

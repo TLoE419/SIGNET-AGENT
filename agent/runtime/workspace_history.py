@@ -5,6 +5,7 @@ sample identity, supplies missing historical settings, or enables execution.
 """
 import copy
 import hashlib
+from itertools import islice
 import json
 import os
 from pathlib import Path
@@ -18,6 +19,7 @@ from agent.runtime import signet_jobs as jobs, workspace_datasets
 
 MAX_BYTES = 2 * 1024 * 1024
 MAX_ASSOCIATIONS = 10000
+MAX_ATTEMPTS = 1000
 HISTORY_ID = r'[A-Za-z0-9][A-Za-z0-9_-]{0,95}'
 _LOCK = threading.RLock()
 _SNAPSHOTS = ('genotype', 'expression', 'adjust', 'cis', 'network', 'visualize')
@@ -61,15 +63,150 @@ def _metadata(root, archive=False):
              [root / 'steps' / (step + '.json') for step in jobs.STEPS] +
              sorted(root.glob('*.json')))
     records, digests, issues = {}, {}, []
+    try:
+        folder = signet._no_links(root / 'steps')
+    except ValueError:
+        folder = None
+        issues.append('The saved steps folder is reached through a link; attempt archives were not read.')
+    for step in jobs.STEPS:
+        attempts = list(islice(folder.glob(step + '.attempt*.json'), MAX_ATTEMPTS + 1)) if folder else []
+        if len(attempts) > MAX_ATTEMPTS:
+            issues.append('Too many saved attempt records; only the first 1000 are listed for ' + step + '.')
+        paths.extend(sorted(attempts[:MAX_ATTEMPTS]))
     for path in dict.fromkeys(paths):
         if not path.exists() and not path.is_symlink():
             continue
         relative = str(path.relative_to(root))
+        # Keep unreadable filenames too, so a damaged snapshot is a visible gap.
+        digests[relative] = None
         try:
             records[relative], digests[relative] = _json(path)
         except (OSError, ValueError, TypeError):
+            try:
+                saved = signet._no_links(path).stat()
+                digests[relative] = _digest([saved.st_dev, saved.st_ino, saved.st_size, saved.st_mtime_ns])
+            except (OSError, ValueError):
+                pass
             issues.append('A saved metadata record is unreadable: ' + relative)
     return records, digests, issues
+
+
+def _attempt_number(value):
+    if type(value) is not int or not 1 <= value <= MAX_ATTEMPTS:
+        raise ValueError('The saved attempt number must be an integer from 1 to 1000.')
+    return value
+
+
+def _attempt_record(record, run_id, step, number=None, partial=False):
+    if not isinstance(record, dict):
+        raise ValueError('The saved attempt snapshot is unavailable or unreadable.')
+    for key, expected in (('run_id', run_id), ('step', step)):
+        if record.get(key) != expected and (not partial or key in record):
+            raise ValueError('The saved attempt does not identify this run and step.')
+    if record.get('state') not in (*jobs.ACTIVE, *jobs.TERMINAL):
+        raise ValueError('The saved attempt state is invalid.')
+    if any(key in record and not isinstance(record[key], dict) for key in ('inputs', 'settings', 'resources', 'options')):
+        raise ValueError('The saved attempt settings or input fields are invalid.')
+    for key in ('outputs', 'required_outputs', 'missing_outputs', 'failure_hints'):
+        if key in record and (not isinstance(record[key], list) or
+                              any(not isinstance(value, str) for value in record[key])):
+            raise ValueError('The saved attempt output or error evidence is invalid.')
+    if 'history' in record and (not isinstance(record['history'], list) or
+                                any(not isinstance(event, dict) or
+                                    any(key in event and not isinstance(event[key], str) for key in ('state', 'at'))
+                                    for event in record['history'])):
+        raise ValueError('The saved attempt timeline is invalid.')
+    if any(key in record and record[key] is not None and not isinstance(record[key], str)
+           for key in ('submitted_at', 'started_at', 'finished_at', 'ended_at')):
+        raise ValueError('The saved attempt timestamps are invalid.')
+    saved_number = _attempt_number(record['attempt']) if 'attempt' in record else None
+    if number is not None and (saved_number if saved_number is not None else 1) != number:
+        raise ValueError('The saved attempt number disagrees with its archive filename.')
+    return copy.deepcopy(record)
+
+
+def _attempt_result(record):
+    if record is None:
+        return {'status': 'not_recorded', 'outputs': []}
+    state = record.get('state')
+    status = 'recorded_' + state if state in jobs.TERMINAL else 'pending' if state in jobs.ACTIVE else 'not_recorded'
+    # These are saved observations, never checks of today's mutable work/res.
+    required = record.get('required_outputs', [])
+    downloaded = record.get('outputs', [])
+    missing = record.get('missing_outputs', [])
+    relative = lambda path: path[5:] if path.startswith('work/') else path
+    saved_downloaded = {relative(path) for path in downloaded}
+    saved_missing = {relative(path) for path in missing}
+    paths = dict.fromkeys([*required, *downloaded, *missing])
+    seen, outputs = set(), []
+    for path in paths:
+        key = relative(path)
+        if key not in seen:
+            outputs.append({'path': path, 'status': 'missing' if key in saved_missing else
+                            'downloaded' if key in saved_downloaded else 'not_recorded'})
+            seen.add(key)
+    return {'status': status, 'outputs': outputs}
+
+
+def _attempts(row, records, digests, issues):
+    """Expose exact retry snapshots without borrowing current settings/results."""
+    result = {}
+    archive = row['source'] == 'archive'
+    for step in jobs.STEPS:
+        prefix = 'steps/' + step + '.attempt'
+        filenames = [path for path in digests if path.startswith(prefix)]
+        current_path = 'verification.json#jobs.' + step if archive else 'steps/' + step + '.json'
+        current = row.get('jobs', {}).get(step) if archive else records.get(current_path)
+        if (current is None or isinstance(current, dict) and current.get('state') == 'not_submitted') and not filenames and current_path not in digests:
+            continue
+        entries, known, number = [], set(), None
+        current_issues = []
+        availability = 'recorded'
+        try:
+            current = _attempt_record(current, row['run_id'], step, partial=archive)
+            if 'attempt' in current:
+                number = _attempt_number(current['attempt'])
+            elif not archive and not filenames:
+                number = 1
+            else:
+                current_issues.append('The current attempt number was not recorded; it is not inferred from other files.')
+        except ValueError as error:
+            availability = 'invalid' if current_path in digests or current is not None else 'missing'
+            current = None
+            current_issues.append(str(error))
+        for filename in sorted(filenames):
+            match = re.fullmatch(re.escape(prefix) + r'([1-9][0-9]{0,3})\.json', filename)
+            prior_number = int(match[1]) if match and int(match[1]) <= MAX_ATTEMPTS else None
+            prior_issues = []
+            prior = None
+            try:
+                if prior_number is None:
+                    raise ValueError('The saved attempt archive filename has an invalid number.')
+                if number is not None and prior_number >= number:
+                    raise ValueError('The archived attempt is not earlier than the current attempt.')
+                prior = _attempt_record(records.get(filename), row['run_id'], step, prior_number)
+                known.add(prior_number)
+            except ValueError as error:
+                prior_issues.append(str(error))
+            entries.append({'number': prior_number, 'current': False, 'record_file': filename,
+                            'availability': 'recorded' if prior is not None else 'invalid',
+                            'record': prior, 'issues': prior_issues, 'result': _attempt_result(prior)})
+        slots = set(range(1, number)) if number is not None else set(range(1, max(known, default=0) + 1))
+        existing = {entry['number'] for entry in entries}
+        for missing in sorted(slots - existing):
+            entries.append({'number': missing, 'current': False,
+                            'record_file': f'steps/{step}.attempt{missing}.json', 'availability': 'missing',
+                            'record': None, 'issues': ['This prior attempt snapshot was not saved or is missing.'],
+                            'result': _attempt_result(None)})
+        entries.append({'number': number, 'current': True, 'record_file': current_path,
+                        'availability': availability, 'record': current, 'issues': current_issues,
+                        'result': _attempt_result(current)})
+        entries.sort(key=lambda entry: (entry['number'] is None, entry['number'] or 0, entry['current']))
+        result[step] = entries
+        for entry in entries:
+            if not archive or entry['availability'] != 'recorded':
+                issues.extend(entry['record_file'] + ': ' + message for message in entry['issues'])
+    return result
 
 
 def _identity(root, digests, archive=False):
@@ -141,6 +278,8 @@ def _ownership(records, run_id, existing=None):
     if existing is not None and existing.get('dataset_id') is not None:
         claims.add(signet._name(existing['dataset_id']))
     for relative, record in records.items():
+        if relative.startswith('steps/') and '.attempt' in relative:
+            continue
         if 'dataset_id' not in record:
             continue
         # The configured manifest has no run_id; all execution snapshots must
@@ -234,7 +373,8 @@ def _recorded(root, records, digests, issues, include_steps=True):
               'operations': operations,
               # File/catalog order cannot establish which of several operations
               # is the freshest. Each saved step retains its own exact state.
-              'status': (states[0] if len(states) == 1 else 'recorded') if states else 'configured',
+              'status': (states[0] if len(states) == 1 else 'recorded') if states else
+                        'recorded' if any(path.startswith('steps/') and '.attempt' in path for path in digests) else 'configured',
               'graph': None}
     timestamps = [value for record in [*step_records.values(), *operations]
                   for key in ('submitted_at', 'started_at') for value in [record.get(key)]
@@ -380,6 +520,7 @@ def merge(history):
                                    'assign_dataset': source in ('recorded', 'archive') and not claims and not invalid_claim}
             if conflict or invalid_claim:
                 row['capabilities']['stage_results'] = []
+            row['attempts'] = _attempts(row, records, digests, issues)
             row['issues'] = list(dict.fromkeys([*row.get('issues', []), *issues]))
             result.append(row)
         return {'datasets': list(datasets.values()), 'runs': result}

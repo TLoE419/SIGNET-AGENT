@@ -143,7 +143,12 @@ async function verify() {
   assert.deepEqual(await rows(), Object.values(ids).sort(), 'All history lost a source or a retired dataset archive');
 
   await open(ids.generic);
-  for (const step of ['genotype', 'expression']) await click(`#ml-run-${ids.generic} [data-history-job="${step}"] summary`);
+  for (const step of ['genotype', 'expression']) {
+    const job = `#ml-run-${ids.generic} [data-history-job="${step}"]`;
+    await click(job + ' > summary');
+    const current = job + ' [data-attempt-current="true"]';
+    if (await js(`!!document.querySelector(${JSON.stringify(current)})`)) await click(current + ' > summary');
+  }
   const genericText = await detailText(ids.generic);
   assert.ok(genericText.includes('0.2') && genericText.includes('fixture-31') && genericText.includes('fixture-32'));
   for (const filename of datasetA.inputs.genotype) assert.ok(genericText.includes(filename));
