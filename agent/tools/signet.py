@@ -59,7 +59,7 @@ def _verify_source(root=None):
     source = source_path()
     root = source if root is None else root
     if not source.is_dir() and root == source:
-        raise ValueError('Official source unavailable. Run python scripts/setup_source.py or set SIGNET_SOURCE; see docs/INSTALL.md.')
+        raise ValueError('Official source unavailable. Run python scripts/setup_source.py or set SIGNET_SOURCE.')
     items = INVENTORY['scripts'] + (INVENTORY['support_files'] if root == source else [])
     for item in items:
         if root != source and re.fullmatch(r'script/adj/genosum_chr[0-9]+[.]R', item['path']):

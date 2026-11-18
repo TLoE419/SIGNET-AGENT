@@ -16,7 +16,7 @@ The application has been checked on macOS with Python 3.11. Python 3.11 or later
 
 Download and extract this project, then run these commands from its root directory:
 
-If Python is not installed yet or you need to set up Codex CLI, follow the [from-scratch installation guide](docs/INSTALL.md) first.
+If Python is not installed yet or you need to set up Codex CLI, follow the [user guide](docs/USER_GUIDE.md) first.
 
 ```sh
 python3 -m venv .venv
@@ -29,7 +29,7 @@ Electron opens the application and starts its Python API automatically. Requires
 
 When Gemini is selected, chat starts with `gemini-3.8-flash`. On HTTP 500, 502, 503, 504 or a transport timeout, the failed model request is sent once to `gemini-3.5-flash-lite` with the same conversation and tool results. The activity log and answer identify the fallback; completed tools are not replayed. The rest of that turn stays on Flash-Lite, while each new user turn starts with 3.8 again. Authentication, request-format, model-name and quota errors do not trigger fallback. If Flash-Lite also fails, the turn stops and preserves existing results.
 
-Chat uses your own signed-in Codex CLI by default. See the [installation guide](docs/INSTALL.md) for installation, sign-in checks, and other model providers. The CLI version checked for this project is `0.162.1`; other versions need compatible command arguments and structured responses.
+Chat uses your own signed-in Codex CLI by default. See the [user guide](docs/USER_GUIDE.md) for installation and sign-in. The CLI version checked for this project is `0.162.1`; other versions need compatible command arguments and structured responses.
 
 ## Desktop client and independent Python backend
 
@@ -58,9 +58,9 @@ There are **5 SIGNET tools, 3 general file tools, 8 HPC3 setup tools and 1 page 
 
 ## Usage and Data
 
-Follow the [no-data demonstration guide](docs/DEMO.md) to try chat, capability queries, and missing-prerequisite reporting. For scientific analysis, start with the [scientific setup guide](docs/SCIENTIFIC_SETUP.md), then consult the [advanced environment guide](docs/ADVANCED.md) for runtime configuration. To run SIGNET steps on HPC3 through the app's local API, see the [SIGNET step API](docs/SIGNET_STEP_API.md). For what the app sets up on HPC3, where the reference data comes from and how it is checked, see the [HPC3 guide](docs/HPC3_GUIDE.md).
+To run an analysis on HPC3 from start to finish, follow the [user guide](docs/USER_GUIDE.md). For where the reference data comes from and how it is processed, see [reference data](docs/REFERENCE_DATA.md). For the local API that runs SIGNET steps on HPC3, see the [SIGNET step API](docs/SIGNET_STEP_API.md).
 
-Create `data/` yourself for inputs; scientific tools create `runs/`. Both directories are excluded from version control. Credentials in `.env`, chat histories, execution logs and screenshots are also excluded. For the scientific software, data, and six-stage workflow requirements, follow the [scientific setup guide](docs/SCIENTIFIC_SETUP.md); it also explains what a clean download still cannot provision.
+Create `data/` yourself for inputs; scientific tools create `runs/`. Both directories are excluded from version control. Credentials in `.env`, chat histories, execution logs and screenshots are also excluded.
 
 The **Activity** control below the conversation opens when you send a request. It shows status, elapsed time, and tool records, and you can collapse and reopen it after completion. 
 
@@ -82,7 +82,7 @@ Pull-request and main-branch CI runs this process on Ubuntu 24.04 with Python 3.
 
 Source preparation needs Git and network access. Frontend checks and network-output verification need Node.js 20 or later. Tests create minimal synthetic content in temporary directories; that content is not a bundled research or demonstration dataset and does not provide biological validation.
 
-See the [file tree](docs/FILE_TREE.md) for file responsibilities and [third-party notes](docs/THIRD_PARTY.md) for source and licensing status. The project owner has not yet selected a license for the project itself.
+See [third-party notes](docs/THIRD_PARTY.md) for source and licensing status. The project owner has not yet selected a license for the project itself.
 
 ## Terminology
 
