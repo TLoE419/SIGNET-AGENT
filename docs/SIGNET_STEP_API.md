@@ -141,6 +141,7 @@ Inside the API:
 | 13 | `POST /signet/datasets/{dataset_id}/validate` | no | Read-only structure and preliminary sample matching checks |
 | 14 | `POST /signet/datasets/{dataset_id}/genotype/review` | no | Review this dataset's Stage 1 inputs and reference resources |
 | 15 | `POST /signet/datasets/{dataset_id}/genotype` | yes | Manually submit a dataset-bound genotype run |
+| 16 | `PATCH /signet/history/{history_id}/dataset` | no | Save organizational ownership for an unclassified recorded run |
 
 ### Workspace dataset metadata
 
@@ -169,8 +170,49 @@ is never silently replaced. The trusted process environment variable
 
 `/stage6/history` includes the saved datasets while keeping each run's input,
 settings, and dataset ID from its original snapshots. Changing current dataset
-files cannot alter an existing run. The chromosome 1-only execution controls
-retain their existing scope.
+files cannot alter an existing run.
+
+### Complete recorded history
+
+`GET /stage6/history` merges workspace snapshots (`source: live`), archived
+results (`source: archive`), and generic Slurm/old Agent records
+(`source: recorded`). It reads local metadata, without scheduler polling or
+analysis execution. Each row has a source-scoped `history_id`, the original
+`run_id`, `origin`, `revision`, `record_identity`, `association`, `capabilities`,
+`issues`, and saved `jobs`/`operations`. Same `run_id` values in different
+sources remain distinct; use `history_id` for UI selection and caching, and
+`run_id` with explicit `source` for result requests.
+
+Capabilities declare `continue_analysis`, available `stage_results` as stage
+strings, `stage6_graph`, and `assign_dataset`. A recorded process completion
+does not imply verified scientific outputs. Missing historical settings remain
+absent. Only a prepared plan's fixed sibling settings snapshot may supplement
+its plan; today's mutable configuration is never historical evidence. Stored
+job states are recorded observations, not refreshed remote state. Conflicting
+dataset claims remain unclassified, with continuation/results disabled.
+
+The list retains unclassified records and archives whose recorded dataset is
+no longer in the catalog. Clients can filter the current dataset, unclassified
+records (`association.status: unclassified`), or all rows. They must not create
+an editable dataset from an unclassified historical record.
+
+`PATCH /signet/history/{history_id}/dataset` accepts only
+`{"dataset_id": "...", "revision": "..."}` and returns the canonical updated
+row. It permits unclassified or previously manually assigned recorded/archive
+rows, rejects replacing explicit original ownership, and returns 409 for stale
+revisions. The atomic `data/workspace-history.json` overlay preserves original
+run files/settings. Its source identity prevents a reused folder from inheriting
+an assignment. Assignment is organizational; it does not validate sample
+compatibility or enable continuation. Tests may isolate this overlay with
+`SIGNET_HISTORY_STATE_FILE`.
+
+`GET /stage/results?run={run_id}&stage={1|2|4|5}&source={live|archive}` and
+`GET /stage3/results?run={run_id}&source={live|archive}` select only the named
+source, without falling back. Omitted source retains the existing archive
+default. `GET /stage6/results?run={run_id}&source={live|archive|recorded}` also
+supports verified legacy exports only when their frequency/subnetwork settings
+were explicitly saved. An old record without those settings remains visible
+but cannot reconstruct a historical graph from today's configuration.
 
 The workspace browser reuses `POST /hpc/files/shortcuts` and
 `POST /hpc/files/list`. Before saving a selection, `POST /hpc/files/inspect`

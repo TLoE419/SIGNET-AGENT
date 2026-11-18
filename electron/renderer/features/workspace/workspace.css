@@ -538,6 +538,18 @@ code:not(pre code) {
 }
 #signet-lens-left-preview .ml-nav-action:hover { background: #eaf3fa; }
 #signet-lens-left-preview .ml-run-overview { margin: 0 0 18px; color: var(--ml-muted); }
+#signet-lens-left-preview .ml-history-scope { display: grid; gap: 5px; margin: 0 0 12px; color: var(--ml-muted); }
+#signet-lens-left-preview .ml-history-scope select,
+#signet-lens-left-preview .ml-history-assignment select { width: 100%; min-width: 0; padding: 6px 8px; border: 1px solid var(--ml-rule); border-radius: 5px; background: #fff; color: var(--ml-ink); font: inherit; }
+#signet-lens-left-preview .ml-history-assignment { margin-bottom: 16px; padding: 12px; border: 1px solid var(--ml-rule); border-radius: 5px; }
+#signet-lens-left-preview .ml-history-assignment label { display: grid; gap: 6px; }
+#signet-lens-left-preview .ml-history-assignment p,
+#signet-lens-left-preview .ml-history-record-note { margin: 8px 0; color: var(--ml-muted); overflow-wrap: anywhere; }
+#signet-lens-left-preview [data-save-state="error"] [data-history-assignment-status] { color: var(--ml-red); }
+#signet-lens-left-preview .ml-history-saved-job { margin-bottom: 8px; }
+#signet-lens-left-preview .ml-history-job-content { padding: 10px; }
+#signet-lens-left-preview .ml-history-job-content h4 { margin: 12px 0 6px; font-size: 13px; }
+#signet-lens-left-preview .ml-history-job-content p { margin: 0 0 9px; color: var(--ml-muted); }
 #signet-lens-left-preview .ml-run-inputs { margin-bottom: 12px; }
 #signet-lens-left-preview .ml-run-inputs summary { color: #24618f; cursor: pointer; }
 #signet-lens-left-preview .ml-run-inputs[open] summary { margin-bottom: 8px; }

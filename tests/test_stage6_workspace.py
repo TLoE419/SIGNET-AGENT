@@ -47,6 +47,28 @@ class WorkspaceTest(unittest.TestCase):
         self.assertTrue(Workspace(self.server).view('fresh')['active'])
         self.assertFalse(self.w.view('another-chat')['active'])
 
+    def test_recorded_history_graph_requires_saved_settings_and_never_reads_current_config(self):
+        from agent.stage6.workspace import recorded_completed_result
+        with self.assertRaises(ValueError):
+            recorded_completed_result('baseline')
+        for malformed in ([], {'status': 'verified_completed', 'settings': {'freq': 1, 'ntop': float('inf')}}):
+            (self.root / 'visualization.json').write_text(json.dumps(malformed))
+            with self.assertRaises(ValueError):
+                recorded_completed_result('baseline')
+        saved = {'status': 'verified_completed', 'settings': {'freq': '1', 'ntop': '1'}}
+        (self.root / 'visualization.json').write_text(json.dumps(saved))
+        with patch.object(st, '_settings', side_effect=AssertionError('Current settings are not historical evidence')):
+            result = recorded_completed_result('baseline')
+            selected = self.w.completed_result('baseline', recorded_only=True)
+        self.assertEqual(result['frequency'], 1)
+        self.assertEqual(result['source'], 'recorded')
+        self.assertEqual(result['graph']['counts']['connections'], 2)
+        self.assertEqual(selected, result)
+        saved['settings']['resv'] = str(self.project / 'outside/signet')
+        (self.root / 'visualization.json').write_text(json.dumps(saved))
+        with self.assertRaises(ValueError):
+            recorded_completed_result('baseline')
+
     def test_proposal_never_executes_and_confirmation_consumed_once(self):
         with patch.object(st,'run_visualization') as run:
             p=self.w.propose('s1',.8)['proposal']
@@ -243,10 +265,19 @@ class WorkspaceTest(unittest.TestCase):
                 self.assertEqual(history['datasets'], [dataset, {
                     **empty, 'inputs': {'genotype': [], 'expression': [], 'clinical': []},
                 }])
-                self.assertEqual(history['runs'], [{
+                runs = {run['history_id']: run for run in history['runs']}
+                self.assertEqual(set(runs), {'archive--baseline', 'archive--missing-output',
+                                             'archive--no-dataset', 'recorded--baseline'})
+                expected = {
                     **snapshot, 'jobs': report['jobs'], 'graph': report['graph'],
                     'frequency': 0.45, 'top_networks': 1, 'status': 'completed', 'source': 'archive',
-                }])
+                }
+                self.assertEqual({key: runs['archive--baseline'][key] for key in expected}, expected)
+                self.assertEqual(runs['archive--baseline']['association']['status'], 'recorded')
+                self.assertEqual(runs['archive--no-dataset']['dataset_id'], 'missing')
+                self.assertEqual(runs['archive--missing-output']['status'], 'unknown')
+                self.assertFalse(runs['archive--missing-output']['capabilities']['stage6_graph'])
+                self.assertIsNone(runs['recorded--baseline']['dataset_id'])
                 self.assertEqual(request('/stage6/results?run=baseline')[1]['graph']['counts']['connections'], 2)
                 status, archived = request('/stage6/results?run=baseline&source=archive')
                 self.assertEqual(status, 200)
@@ -259,7 +290,8 @@ class WorkspaceTest(unittest.TestCase):
                 write_json(catalog_path, dataset)
                 refreshed = request('/stage6/history')[1]
                 self.assertEqual(refreshed['datasets'][0]['inputs']['genotype'], ['replacement.ped', 'replacement.map'])
-                self.assertEqual(refreshed['runs'][0]['inputs'], recorded)
+                self.assertEqual(next(run for run in refreshed['runs']
+                                      if run['history_id'] == 'archive--baseline')['inputs'], recorded)
                 self.assertEqual(json.loads(metadata.read_text()), snapshot)
                 self.assertEqual(json.loads((archive / 'verification.json').read_text()), report)
                 self.assertEqual(self.w.path.read_bytes(), saved_state)

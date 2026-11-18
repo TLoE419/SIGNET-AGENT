@@ -83,7 +83,7 @@ async function verify() {
   const stageState = step => panelState({genotype:1,expression:2,adjust:3}[step], step);
   const openRunStage = async (runId, stage) => {
     await click('[data-nav-target="history"]');
-    const row = `[data-run-target="${runId}"]`;
+    const row = `[data-run-target][data-run-id="${runId}"]`;
     await until(() => js(`!!document.querySelector(${JSON.stringify(row)})?.getClientRects().length`), 'The run is missing from its dataset history');
     await click(row);
     await click(`[data-run-stage="${stage}"][data-run-id="${runId}"]`);
@@ -216,7 +216,7 @@ async function verify() {
 
   await selectDataset(datasetB.id);
   await click('[data-nav-target="history"]');
-  const visibleRuns = () => js(`[...document.querySelectorAll('#ml-run-list [data-run-target]')].filter(row=>row.getClientRects().length).map(row=>row.dataset.runTarget).sort()`);
+  const visibleRuns = () => js(`[...document.querySelectorAll('#ml-run-list [data-run-target]')].filter(row=>row.getClientRects().length).map(row=>row.dataset.runId).sort()`);
   assert.deepEqual(await visibleRuns(), [fixture.archived], 'Dataset B inherited the new custom dataset A run');
   for (const stage of [1, 2, 3, 4, 5, 6]) {
     await openRunStage(fixture.archived, stage);

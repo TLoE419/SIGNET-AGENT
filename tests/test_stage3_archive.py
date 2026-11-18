@@ -82,7 +82,8 @@ class Stage3ArchiveTest(unittest.TestCase):
         self.assertEqual(self.request('?run=first', authenticated=False)[0], 403)
         self.assertEqual(self.request()[0], 400)
         self.assertEqual(self.request('?run=first&run=second')[0], 400)
-        self.assertEqual(self.request('?run=first&source=archive')[0], 400)
+        self.assertEqual(self.request('?run=first&source=archive'), (200, first_snapshot))
+        self.assertEqual(self.request('?run=first&source=invalid')[0], 400)
         self.assertEqual(self.request('?run=first'), (200, first_snapshot))
         self.assertEqual(self.request('?run=second'), (200, second_snapshot))
         self.assertEqual(json.loads(first.read_text()), first_snapshot)
@@ -119,8 +120,22 @@ class Stage3ArchiveTest(unittest.TestCase):
         path.unlink()
         path.write_text(json.dumps(snapshot))
         (path.parent / 'history.json').unlink()
-        self.assertEqual(self.request('?run=first'), unavailable)
+        # Missing dataset labels must not hide separately verified stage artifacts.
+        self.assertEqual(self.request('?run=first&source=archive'), (200, snapshot))
+        self.assertIsNone(self.server.stage6.history()['runs'][0]['dataset_id'])
 
+    def test_explicit_sources_dispatch_without_falling_back_to_a_same_name(self):
+        _, snapshot = self.archive('shared')
+        self.saved_steps_fixture('saved')
+        with patch('agent.runtime.workspace_adjustment.completed_result', return_value={'live': True}) as live_pca:
+            self.assertEqual(self.request('?run=shared&source=archive'), (200, snapshot))
+            live_pca.assert_not_called()
+            self.assertEqual(self.request('?run=shared&source=live'), (200, {'live': True}))
+        with patch('agent.runtime.workspace_genotype.completed_result', return_value={'live': True}) as live_step:
+            self.assertEqual(self.request_saved_step('?run=saved&stage=1&source=archive')[0], 200)
+            self.assertEqual(self.request_saved_step('?run=absent&stage=1&source=archive')[0], 404)
+            live_step.assert_not_called()
+            self.assertEqual(self.request_saved_step('?run=saved&stage=1&source=live'), (200, {'live': True}))
 
     def saved_steps_fixture(self, run_id, chromosome='1'):
         path, _ = self.archive(run_id)
@@ -178,7 +193,7 @@ class Stage3ArchiveTest(unittest.TestCase):
         unavailable = (404, {'error': 'No readable archived result for this stage.'})
         self.assertEqual(self.request_saved_step(query, authenticated=False)[0], 403)
         for invalid in ('', '?run=first&stage=3', '?run=first&stage=6', query + '&stage=2',
-                        query + '&run=second', query + '&source=archive'):
+                        query + '&run=second', query + '&source=invalid', query + '&source=archive&source=archive'):
             with self.subTest(query=invalid):
                 self.assertEqual(self.request_saved_step(invalid)[0], 400)
         self.assertEqual(self.request_saved_step('?run=missing&stage=1'), unavailable)
@@ -204,4 +219,6 @@ class Stage3ArchiveTest(unittest.TestCase):
         verification['jobs']['genotype']['state'] = 'completed'
         report_path.write_text(json.dumps(verification))
         (path.parent / 'history.json').unlink()
-        self.assertEqual(self.request_saved_step(query), unavailable)
+        status, result = self.request_saved_step(query + '&source=archive')
+        self.assertEqual((status, result['summary']), (200, stages['1']))
+        self.assertIsNone(self.server.stage6.history()['runs'][0]['dataset_id'])

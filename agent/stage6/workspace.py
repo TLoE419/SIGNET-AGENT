@@ -149,6 +149,49 @@ def _completed_run_summary(run_id, settings, record):
             'top_networks': int(settings['ntop']), 'status': record['status']}
 
 
+def recorded_completed_result(run_id):
+    """A history graph needs saved parameters, never today's mutable config."""
+    root = st._run(run_id)
+    path = st._no_links(root / 'visualization.json')
+    if path.stat().st_size > 2 * 1024 * 1024:
+        raise ValueError('The visualization record is too large.')
+    record = json.loads(path.read_text(encoding='utf-8'))
+    if not isinstance(record, dict):
+        raise ValueError('The visualization record must be an object.')
+    settings = record.get('settings')
+    if (record.get('status') != 'verified_completed' or not isinstance(settings, dict)
+            or any(key not in settings for key in ('freq', 'ntop'))):
+        raise ValueError('The original visualization settings were not recorded.')
+    if any(isinstance(settings[key], bool) for key in ('freq', 'ntop')):
+        raise ValueError('Invalid saved visualization settings.')
+    try:
+        frequency = float(settings['freq'])
+        top_networks = int(settings['ntop'])
+    except (TypeError, ValueError, OverflowError) as error:
+        raise ValueError('Invalid saved visualization settings.') from error
+    st._number(frequency, 0, 1)
+    st._number(top_networks, 1, 100, integer=True)
+    if float(settings['ntop']) != top_networks:
+        raise ValueError('Invalid saved subnetwork count.')
+    prefix = settings.get('resv', str(root / 'work/res/resv/signet'))
+    saved = {'freq': frequency, 'ntop': top_networks, 'resv': prefix}
+    try:
+        result = graph(root, saved)
+    except csv.Error as error:
+        raise ValueError('The recorded graph is unreadable.') from error
+    seen = set()
+    for edge in result['edges']:
+        identity = edge['source'], edge['target']
+        if (identity in seen or not frequency - 2.220446049250313e-16 <= edge['frequency'] <= 1
+                or any(len(edge[key]) > 240 or '\x00' in edge[key] for key in ('source', 'target'))):
+            raise ValueError('The recorded graph does not match its saved settings.')
+        seen.add(identity)
+    if not seen or top_networks > result['counts']['subnetworks']:
+        raise ValueError('The recorded graph is incomplete.')
+    return {'run_id': run_id, 'frequency': frequency, 'top_networks': top_networks,
+            'status': 'verified_completed', 'source': 'recorded', 'graph': result}
+
+
 def _archive_directory():
     return st.PROJECT / 'data/stage6-results'
 
@@ -357,9 +400,11 @@ class Workspace:
                 continue
         return list(runs.values())
 
-    def completed_result(self, run_id, *, archive_only=False, live_only=False):
-        if archive_only and live_only:
+    def completed_result(self, run_id, *, archive_only=False, live_only=False, recorded_only=False):
+        if sum((archive_only, live_only, recorded_only)) > 1:
             raise ValueError('Select one completed-result source.')
+        if recorded_only:
+            return recorded_completed_result(run_id)
         if not archive_only:
             try:
                 result = live_completed_result(run_id)
@@ -390,28 +435,59 @@ class Workspace:
             datasets[record['id']] = dataset
 
         runs = []
-        for path in sorted(_archive_directory().glob('*/history.json')):
+        folders = {path.parent for pattern in ('*/history.json', '*/verification.json')
+                   for path in _archive_directory().glob(pattern)}
+        for folder in sorted(folders):
             try:
-                saved = json.loads(st._no_links(path).read_text(encoding='utf-8'))
-                run_id = st._name(saved['run_id'])
-                dataset_id = st._name(saved['dataset_id'])
-                if run_id != path.parent.name or dataset_id not in datasets:
-                    continue
-                summary, _, verification = _load_archive(run_id)
-                runs.append({**summary, 'dataset_id': dataset_id, 'name': _history_name(saved['name']),
-                             'inputs': _history_inputs(saved['inputs']), 'jobs': verification['jobs'],
-                             'graph': verification['graph']})
+                run_id = st._name(folder.name)
+                path = st._no_links(folder / 'history.json')
+                saved = None
+                issues = []
+                if path.is_file():
+                    try:
+                        if path.stat().st_size > 2 * 1024 * 1024:
+                            raise ValueError('Archive history metadata is too large.')
+                        saved = json.loads(path.read_text(encoding='utf-8'))
+                        if not isinstance(saved, dict) or saved.get('run_id') != run_id:
+                            raise ValueError('Archive history does not identify this run.')
+                    except (OSError, ValueError, TypeError):
+                        saved = None
+                        issues.append('The archived history metadata could not be read reliably.')
+                else:
+                    issues.append('Original dataset, input and setting metadata was not recorded with this archive.')
+                dataset_id = None
+                name = [run_id, run_id]
+                inputs = {'genotype': [], 'expression': [], 'clinical': []}
+                if saved:
+                    try:
+                        dataset_id = st._name(saved['dataset_id'])
+                    except (ValueError, KeyError, TypeError):
+                        issues.append('The archive does not record a valid dataset identity.')
+                    try:
+                        name = _history_name(saved['name'])
+                        inputs = _history_inputs(saved['inputs'])
+                    except (ValueError, KeyError, TypeError):
+                        issues.append('Some original archive labels or input files were not recorded reliably.')
+                try:
+                    verification_path = st._no_links(folder / 'verification.json')
+                    if verification_path.stat().st_size > 2 * 1024 * 1024:
+                        raise ValueError('Archive verification metadata is too large.')
+                    summary, _, verification = _load_archive(run_id)
+                except (OSError, ValueError, KeyError, TypeError):
+                    summary = {'run_id': run_id, 'status': 'unknown', 'source': 'archive'}
+                    verification = {'jobs': {}, 'graph': None}
+                    issues.append('Verified archive results are unavailable; no completed result is inferred.')
+                runs.append({**summary, 'dataset_id': dataset_id, 'name': name,
+                             'inputs': inputs, 'jobs': verification['jobs'], 'graph': verification['graph'],
+                             **({'issues': issues} if issues else {})})
             except (OSError, ValueError, KeyError, TypeError):
                 continue
         return {'datasets': list(datasets.values()), 'runs': runs}
 
     def history(self):
         history = self.archived_history()
-        known = {entry['run_id'] for entry in history['runs']}
         live = []
         for snapshot in sorted((st.PROJECT / 'runs').glob(f'*/{workspace_genotype.SNAPSHOT}')):
-            if snapshot.parent.name in known:
-                continue
             try:
                 live.append(workspace_genotype.run_history(st._run(snapshot.parent.name)))
             except (OSError, ValueError, KeyError, TypeError):
@@ -429,7 +505,8 @@ class Workspace:
                 })
                 dataset_ids.add(run['dataset_id'])
         history['runs'].extend(live)
-        return history
+        from agent.runtime import workspace_history
+        return workspace_history.merge(history)
 
     def _archived_history_run(self, run_id):
         run_id = st._name(run_id)

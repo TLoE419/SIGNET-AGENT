@@ -106,7 +106,7 @@ class WorkspaceCisTest(unittest.TestCase):
         query = f'?run={self.run_id}&stage=4&source=live'
         self.assertEqual(request(query, False)[0], 403)
         self.assertEqual(request(query + '&stage=4')[0], 400)
-        self.assertEqual(request(query.replace('source=live', 'source=archive'))[0], 400)
+        self.assertEqual(request(query.replace('source=live', 'source=archive'))[0], 404)
         status, result = request(query)
         self.assertEqual((status, result['stage'], result['job']['settings']['alpha.cis']), (200, 4, '0.01'))
         self.assertEqual(result['summary']['counts'], {'common': 4, 'low': 1, 'rare': 1})

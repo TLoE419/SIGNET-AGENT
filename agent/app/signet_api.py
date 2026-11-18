@@ -33,6 +33,7 @@ from agent.runtime import signet_jobs as jobs
 from agent.runtime import workspace_genotype
 from agent.runtime import workspace_datasets
 from agent.runtime import workspace_validation
+from agent.runtime import workspace_history
 import agent.tools.signet as signet
 
 MAX_BODY = 32768
@@ -107,6 +108,13 @@ def get_catalog(handler, url):
 def list_datasets(handler, url):
     _query(url, ())
     return 200, {'datasets': workspace_datasets.list_datasets()}
+
+
+def assign_history_dataset(handler, url, history_id):
+    _query(url, ())
+    return 200, workspace_history.assign_dataset(
+        history_id, **_body(handler, ('dataset_id', 'revision'), required=('dataset_id', 'revision')),
+        history_loader=handler.server.stage6.history)
 
 
 def create_dataset(handler, url):
@@ -364,6 +372,8 @@ def get_log(handler, url, run_id, step):
 # Each path pattern maps HTTP methods to the function above that serves it.
 ROUTES = [
     (re.compile(r'/signet/catalog'), {'GET': get_catalog}),
+    (re.compile(rf'/signet/history/(?P<history_id>{workspace_history.HISTORY_ID})/dataset'),
+     {'PATCH': assign_history_dataset}),
     (re.compile(r'/signet/datasets'), {'GET': list_datasets, 'POST': create_dataset}),
     (re.compile(rf'/signet/datasets/(?P<dataset_id>{_RUN_NAME})'), {'PATCH': update_dataset}),
     (re.compile(rf'/signet/datasets/(?P<dataset_id>{_RUN_NAME})/validate'), {'POST': validate_dataset}),
