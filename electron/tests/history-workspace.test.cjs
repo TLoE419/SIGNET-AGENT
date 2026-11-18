@@ -175,9 +175,13 @@ test('completed live stage forks only after review, then separately confirms sub
  await h.ready();h.click('[data-nav-target="history"]');h.click('[data-run-target="workspace--original"]');
  h.click('[data-rerun-review]');await until(()=>h.q('[data-rerun-create]'));
  assert.match(h.q('[data-rerun-content]').textContent,/adjust/);
+ assert.equal(h.q('[data-rerun-parameters]'),null,'Researchers edit labelled fields instead of raw parameter objects');
+ const missingness=h.q('[data-rerun-group="settings"][data-rerun-field="mind"]');
+ assert.match(missingness.closest('label').textContent,/樣本缺失率上限/);missingness.value='0.2';
  assert.equal(h.calls.filter(call=>call.options.method==='POST').length,0);
  h.click('[data-rerun-create]');await until(()=>h.q('[data-rerun-submit]'));
  const creation=h.calls.find(call=>call.options.method==='POST');assert.equal(creation.body.revision,'rev');
+ assert.equal(creation.body.parameters.settings.mind,0.2);assert.equal(review.parameters.settings.mind,0.1);
  assert.equal(h.calls.some(call=>call.url.endsWith('/rerun/submit')),false);
  h.click('[data-rerun-submit]');await until(()=>h.calls.some(call=>call.url.endsWith('/rerun/submit')));
  assert.deepEqual(h.calls.find(call=>call.url.endsWith('/rerun/submit')).body,{confirmed:true});

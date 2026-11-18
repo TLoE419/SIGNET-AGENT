@@ -1780,7 +1780,22 @@
     npc: ["主成分數", "Principal components"],
     freq: ["頻率門檻", "Frequency threshold"],
     ntop: ["顯示的子網路數上限", "Maximum displayed subnetworks"],
+    cpus: ["核心數", "CPU cores"],
+    mem_gb: ["記憶體（GB）", "Memory (GB)"],
+    hours: ["時間上限（小時）", "Time limit (hours)"],
   };
+  function rerunParameterFields(parameters) {
+    const integerFields = new Set(["restrict.tcga.geno", "restrict.tcga", "int", "nperms", "upstream", "downstream", "nboots", "ncis", "ncores", "memory", "npc", "ntop", "cpus", "mem_gb"]);
+    return [["settings", ["設定", "Settings"]], ["options", ["分析選項", "Analysis options"]], ["resources", ["運算資源", "Resources"]]]
+      .filter(([group]) => Object.keys(parameters[group] ?? {}).length)
+      .map(([group, title]) => `<fieldset><legend>${historyText(...title)}</legend>${Object.entries(parameters[group]).map(([key, value]) => {
+        const label = Object.hasOwn(savedSettingLabels, key) ? historyText(...savedSettingLabels[key]) : key;
+        const number = typeof value === "number";
+        return `<label>${escapeHistory(label)}<input name="${escapeHistory(group + "-" + key)}" data-rerun-group="${group}" data-rerun-field="${escapeHistory(key)}" required
+          type="${number ? "number" : "text"}" ${number ? `step="${integerFields.has(key) ? "1" : "any"}" min="0"` : 'spellcheck="false"'}
+          ${key.startsWith("restrict.") ? "readonly" : ""} value="${escapeHistory(value)}"></label>`;
+      }).join("")}</fieldset>`).join("");
+  }
   const savedStepStates = {
     loading: ["讀取階段封存結果…", "Loading the archived stage result…"],
     empty: ["這次執行沒有可讀取的階段封存結果。", "This run has no readable result for this stage."],
@@ -2662,14 +2677,19 @@
         content.innerHTML = `<p>${historyText("沿用上游", "Reuse upstream")}: ${escapeHistory(review.reuse.join(", ") || "—")}<br>${historyText("必須重新執行", "Recompute")}: ${escapeHistory(review.invalidated.join(", "))}</p>
           <p>${historyText("舊結果保留。建立後仍須另外確認送出；送出時核對遠端檔案。原始輸入固定，可編輯設定、資源及選項。", "Old results are preserved. Submission requires a separate confirmation and remote file checks. Keep original inputs; edit settings, resources and options.")}</p>
           <form data-rerun-editor aria-label="${historyText("關聯執行參數", "Linked run parameters")}"><label>${historyText("新執行名稱", "New run name")}<input name="run-name" data-rerun-name required maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9_-]*" spellcheck="false" value="${escapeHistory(source.slice(0, 58))}-rerun"></label>
-          <label>${historyText("執行參數", "Run parameters")}<textarea name="parameters" spellcheck="false" data-rerun-parameters rows="12" style="width:100%;box-sizing:border-box">${escapeHistory(JSON.stringify(review.parameters, null, 2))}</textarea></label>
+          ${Object.keys(review.parameters.inputs ?? {}).length ? `<details><summary>${historyText("沿用的輸入檔案", "Retained input files")}</summary><dl class="ml-key-values">${savedDefinitions(review.parameters.inputs)}</dl></details>` : ""}
+          ${rerunParameterFields(review.parameters)}
           <button type="button" data-rerun-create>${historyText("建立關聯執行（尚不送出）", "Create linked run (no submission)")}</button></form>`;
       } else if (button.hasAttribute("data-rerun-create")) {
         if (!content.querySelector("[data-rerun-editor]").reportValidity()) return;
         const review = container.rerunReview;
+        const parameters = Object.fromEntries(Object.entries(review.parameters).map(([group, values]) => [group, {...values}]));
+        for (const field of content.querySelectorAll("[data-rerun-group]")) {
+          parameters[field.dataset.rerunGroup][field.dataset.rerunField] = field.type === "number" ? field.valueAsNumber : field.value;
+        }
         const plan = await requestDataset(`/signet/runs/${encodeURIComponent(review.source_run_id)}/steps/${review.step}/rerun`, {
           new_run_id: content.querySelector("[data-rerun-name]").value,
-          revision: review.revision, parameters: JSON.parse(content.querySelector("[data-rerun-parameters]").value),
+          revision: review.revision, parameters,
         }, "POST");
         container.rerunPlan = plan;
         content.querySelectorAll("input, textarea, button").forEach(control => {control.disabled = true;});
