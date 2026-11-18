@@ -999,15 +999,38 @@
     : run.dataset_id ? ["已記錄資料組", "Recorded dataset"] : ["未分類", "Unclassified"];
   const historyStateLabel = (state, savedOnly = false) => (savedOnly ? historyText("最後保存的狀態：", "Last recorded state: ") : "") + historyText(...genotypeHistoryState(state));
   const assignmentStates = new Map();
+  const submissionReviews = new Map();
+  let recoveryRemote = "";
+  window.addEventListener("workspace-remote-context", event => {
+    const next = JSON.stringify({connected: event.detail?.connected === true, identity: event.detail?.identity ?? "", environmentKey: event.detail?.environmentKey ?? ""});
+    if (next !== recoveryRemote) submissionReviews.clear();
+    recoveryRemote = next;
+  });
+  function submissionRecovery(run, step, job) {
+    if (!canContinue(run) || !["unknown", "submitting"].includes(job?.state)) return "";
+    const key = `${historyKey(run)}:${step}:${job.attempt ?? 1}`;
+    const review = submissionReviews.get(key);
+    return `<form data-submission-recovery="${escapeHistory(key)}" data-step="${escapeHistory(step)}">
+      <p>${historyText("送出結果不明。核對只讀取本次嘗試的憑證與排程器證據，不會送算或取消工作。", "Submission is unconfirmed. Reconciliation only reads this attempt’s receipt and scheduler evidence; it never submits or cancels jobs.")}</p>
+      <button class="ml-nav-action" type="submit" value="review" ${review?.pending ? "disabled" : ""}>${historyText("人工核對送出狀態", "Review submission evidence")}</button>
+      <p role="status">${escapeHistory(review?.error ?? review?.result?.recovery?.detail ?? "")}</p>
+      ${review?.result ? `<dl class="ml-key-values">${savedDefinitions(review.result.recovery.evidence)}</dl>` : ""}
+      ${review?.result && ["adopt", "unsubmitted"].includes(review.result.recovery.outcome) ? `<p>${historyText("請核對來源、工作與嘗試次數；確認後僅更新紀錄。若確認未送出，仍須另行審閱一般重試表單。", "Review the source, job and attempt. Confirmation updates the record only; an unsubmitted attempt still requires the normal retry review.")}</p><button class="ml-nav-action" type="submit" value="${review.result.recovery.outcome}" ${review.pending ? "disabled" : ""}>${historyText("確認採用以上核對結果", "Confirm this recovery result")}</button>` : ""}
+      <p>${escapeHistory(run.run_id)} · ${escapeHistory(step)} · ${job.attempt ?? 1} · ${escapeHistory(job.job_id ?? "—")}</p>
+    </form>`;
+  }
+
   const historyDatasetName = id => datasets.find(dataset => dataset.id === id)?.name ?? (id ? [id, id] : ["未分類", "Unclassified"]);
   const recordedValue = value => value == null ? notRecorded() : escapeHistory(typeof value === "object" ? JSON.stringify(value) : value);
+  const submissionAudit = job => Array.isArray(job.submission_checks) && job.submission_checks.length ?
+    `<details><summary>${historyText("送出狀態核對紀錄", "Submission reconciliation audit")}</summary>${job.submission_checks.slice(-25).map(check => `<p>${recordedValue(check.at)} · ${recordedValue(check.action)} · ${recordedValue(check.outcome)}<br>${recordedValue(check.detail)}<br>${recordedValue(check.evidence)}</p>`).join("")}</details>` : "";
   const savedDefinitions = value => Object.entries(value ?? {}).map(([key, item]) =>
     `<dt>${escapeHistory(key)}</dt><dd>${recordedValue(item)}</dd>`).join("") || `<dt>${historyText("內容", "Contents")}</dt><dd>${notRecorded()}</dd>`;
   function savedJobContent(job, operation = false) {
     const evidence = job.settings_evidence ?? (Object.keys(job.settings ?? {}).length || Object.keys(job.options ?? {}).length ? "recorded" : "not_recorded");
     const evidenceCopy = ({recorded: ["實際保存的設定", "Recorded settings"], prepared_snapshot: ["準備時的設定；不代表已執行", "Prepared settings; execution not implied"],
       not_recorded: ["設定未記錄", "Settings not recorded"]})[evidence] ?? [evidence, evidence];
-    return `<p data-settings-evidence="${escapeHistory(evidence)}">${historyText(...evidenceCopy)}</p>
+    return `${submissionAudit(job)}<p data-settings-evidence="${escapeHistory(evidence)}">${historyText(...evidenceCopy)}</p>
         <dl class="ml-key-values"><dt>${historyText("工作編號", "Job ID")}</dt><dd>${recordedValue(job.job_id)}</dd>
           <dt>${historyText("送出時間", "Submitted at")}</dt><dd>${recordedValue(job.submitted_at)}</dd>
           <dt>${historyText("開始時間", "Started at")}</dt><dd>${recordedValue(job.started_at)}</dd>
@@ -1140,7 +1163,7 @@
           : number === 3 ? "lens-history-stage3" : number === 6 ? "lens-stage6" : "lens-history-stage";
         const link = linked ? `<button type="button" class="ml-run-step-link" data-run-stage="${number}" data-run-id="${id}" data-history-id="${key}" aria-controls="${panel}">
           ${title}<i data-lucide="arrow-right" aria-hidden="true"></i></button>` : "";
-        return `<li>${link}${job || attempts.length ? savedJobDetails(job ?? {}, step, false, run.source === "recorded", attempts) : ""}</li>`;
+        return `<li>${link}${job || attempts.length ? savedJobDetails(job ?? {}, step, false, run.source === "recorded", attempts) : ""}${submissionRecovery(run, step, job)}</li>`;
       }).join("");
       const genericJobs = [...new Set([...Object.keys(run.jobs ?? {}), ...Object.keys(run.attempts ?? {})])].filter(step => !historySteps.includes(step))
         .map(step => savedJobDetails(run.jobs?.[step] ?? {}, step, false, run.source === "recorded", run.attempts?.[step])).join("");
@@ -2330,6 +2353,30 @@
       form.querySelector("[data-history-assignment-status]").textContent = root.lang === "en"
         ? "Assignment not yet saved; sample matching is not verified." : "歸類尚未保存；尚未確認樣本配對。";
     }
+  });
+  runDetails.addEventListener("submit", async event => {
+    const form = event.target.closest("[data-submission-recovery]");
+    if (!form) return;
+    event.preventDefault();
+    const run = findHistoryRun(form.closest("[data-history-id]").dataset.historyId);
+    const step = form.dataset.step, job = run?.jobs?.[step], key = form.dataset.submissionRecovery;
+    if (!canContinue(run) || !["unknown", "submitting"].includes(job?.state)) return;
+    const action = event.submitter?.value ?? "review", prior = submissionReviews.get(key);
+    if (prior?.pending || action !== "review" && action !== prior?.result?.recovery?.outcome) return;
+    const scope = recoveryRemote, attempt = job.attempt ?? 1, jobId = job.job_id ?? null;
+    const state = {...prior, pending: true};submissionReviews.set(key, state);renderHistoryRecords();
+    try {
+      const result = await requestDataset(`/signet/runs/${encodeURIComponent(run.run_id)}/steps/${encodeURIComponent(step)}/reconcile`,
+        {expected_attempt: attempt, expected_job_id: jobId, action, confirmed: action !== "review"}, "POST");
+      if (scope !== recoveryRemote || submissionReviews.get(key) !== state || result.record?.run_id !== run.run_id ||
+          result.record?.step !== step || (result.record?.attempt ?? 1) !== attempt) return;
+      state.result = result;state.error = null;
+      if (action !== "review" && !result.applied) {
+        state.result = null;state.error = historyText("證據已變更或尚未完成審閱，請重新核對。", "Evidence changed or review is incomplete. Review the evidence again.");
+      }
+      if (result.applied) {submissionReviews.delete(key);await loadWorkspaceHistory();}
+    } catch (error) {state.error = error.message;}
+    finally {state.pending = false;renderHistoryRecords();}
   });
   runDetails.addEventListener("submit", async event => {
     const form = event.target.closest("[data-history-assignment]");

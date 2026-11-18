@@ -689,7 +689,8 @@ class StepsTest(unittest.TestCase):
         self.lose_connection_on = None
         self.slurm(squeue='RUNNING')
         record = steps.status('step_test', 'expression', refresh=True)
-        self.assertEqual((record['state'], record['job_id']), ('running', '777'))
+        self.assertEqual(record['state'], 'unknown')
+        self.assertNotIn('job_id', record)
 
     def test_simultaneous_status_checks_download_results_once(self):
         steps.submit('step_test', 'expression', self.inputs)
@@ -727,9 +728,8 @@ class StepsTest(unittest.TestCase):
                         (self.fake / 'bin' / name).write_text('#!/bin/bash\n' + FAKE_SLURM[name] + '\n')
                 self.slurm(queued_id='888', squeue='RUNNING')
                 record = steps.status(run_id, 'expression', refresh=True)
-                self.assertEqual((record['state'], record['job_id']), ('running', '888'))
-                self.finish_job()
-                self.assertEqual(steps.status(run_id, 'expression', refresh=True)['state'], 'completed')
+                self.assertEqual(record['state'], 'unknown')
+                self.assertNotIn('job_id', record)
 
     def test_results_already_downloaded_complete_instead_of_staying_validating(self):
         steps.submit('step_test', 'expression', self.inputs)
@@ -752,7 +752,8 @@ class StepsTest(unittest.TestCase):
         self.lose_connection_on = None
         self.slurm(queued_id='888', squeue='PENDING')
         record = steps.status('step_test', 'expression', refresh=True)
-        self.assertEqual((record['state'], record['job_id']), ('pending', '888'))
+        self.assertEqual(record['state'], 'unknown')
+        self.assertNotIn('job_id', record)
         st.configure_signet('never_queued')
         self.remote_dir = self.hpc / 'ws/work/never_queued'
         self.lose_connection_on = 'sbatch --parsable'
@@ -765,7 +766,8 @@ class StepsTest(unittest.TestCase):
         self.assertEqual(self.code_of(steps.update_settings, 'never_queued', {'restrict.tcga': 3}), 'conflict')
         self.slurm(sacct_id='999', sacct='RUNNING')
         record = steps.status('never_queued', 'expression', refresh=True)
-        self.assertEqual((record['state'], record['job_id']), ('running', '999'))
+        self.assertEqual(record['state'], 'unknown')
+        self.assertNotIn('job_id', record)
 
     def test_settings_whitelist_and_lock_while_active(self):
         self.assertEqual(steps.update_settings('step_test', {'restrict.tcga': 1})['restrict.tcga'], '1')
@@ -986,7 +988,8 @@ class StepsTest(unittest.TestCase):
         (self.fake / 'queued_id').write_text('44001')
         (self.fake / 'squeue').write_text('PENDING')
         status, recovered = request('GET', f'/signet/runs/{run_id_255}/steps/genotype?refresh=1')
-        self.assertEqual((status, recovered['state'], recovered['job_id']), (200, 'pending', '44001'))
+        self.assertEqual((status, recovered['state']), (200, 'unknown'))
+        self.assertNotIn('job_id', recovered)
 
     def test_workspace_expression_uses_same_run_and_preserves_stage1(self):
         from agent.app.chat_ui import ChatServer

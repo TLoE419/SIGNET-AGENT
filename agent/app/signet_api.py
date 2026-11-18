@@ -362,6 +362,14 @@ def revalidate_step(handler, url, run_id, step):
     return 200, {**record, 'output_revalidation': jobs.output_revalidation(record)}
 
 
+def reconcile_submission(handler, url, run_id, step):
+    from agent.runtime.submission_recovery import reconcile
+    _query(url, ())
+    body = _body(handler, ('expected_job_id', 'expected_attempt', 'action', 'confirmed'),
+                 required=('expected_job_id', 'expected_attempt', 'action'))
+    return 200, reconcile(run_id, step, **body)
+
+
 def cancel_step(handler, url, run_id, step):
     """POST /signet/runs/{run_id}/steps/{step}/cancel
 
@@ -452,6 +460,7 @@ ROUTES = [
     (re.compile(rf'/signet/runs/{_RUN}'), {'GET': get_run}),
     (re.compile(rf'/signet/runs/{_RUN}/settings'), {'PATCH': update_settings}),
     (re.compile(rf'/signet/runs/{_RUN}/steps/{_STEP}'), {'GET': get_step, 'POST': submit_step}),
+    (re.compile(rf'/signet/runs/{_RUN}/steps/{_STEP}/reconcile'), {'POST': reconcile_submission}),
     (re.compile(rf'/signet/runs/{_RUN}/steps/{_STEP}/cancel'), {'POST': cancel_step}),
     (re.compile(rf'/signet/runs/{_RUN}/steps/{_STEP}/revalidate'), {'POST': revalidate_step}),
     (re.compile(rf'/signet/runs/{_RUN}/steps/{_STEP}/log'), {'GET': get_log}),

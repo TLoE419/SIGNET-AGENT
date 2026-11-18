@@ -977,3 +977,39 @@ If `adjust` fails (for example because of the clinical file), fix the cause and 
 - **`network` holds a control job for hours.** It needs 1–2 CPUs while SIGNET's jobs run; a control job that hits its wall time stops SIGNET, and its remaining jobs are cancelled by the next status call.
 - **Stage 6 online dependencies.** The original visualization reads online enrichment/annotation services. A network or service failure is reported as a failed export, with its logs retained; the app does not substitute a generated graph.
 - **Not yet steps:** all GTEx steps. The chat tool `cis_eqtl` still uses the older login-node path.
+
+### Manual reconciliation of an uncertain submission
+
+`POST /signet/runs/{run_id}/steps/{step}/reconcile` accepts
+`expected_attempt` (positive integer), `expected_job_id` (saved ID or JSON null),
+`action` (`review`, `adopt`, `unsubmitted`), and `confirmed` (true for a change).
+The response contains `record`, `recovery` (outcome, explanation, source and
+scheduler evidence), and `applied`. The normal page token and Origin protections
+apply. The history pane exposes this flow for current workspace runs; archived
+records cannot invoke recovery controls.
+
+First send `review`. Then explicitly confirm the offered outcome with `adopt`
+or `unsubmitted`. Confirmation re-reads the owned receipt and scheduler evidence
+and requires them to match the immediately preceding review. A changed run,
+step, job or attempt is rejected. Each valid check is saved in
+`submission_checks`, including unsuccessful or ambiguous observations.
+
+New submissions save a random per-attempt receipt and pass the same token as the
+Slurm job comment. Recovery requires the original owned remote directory, an
+attempt receipt, and successful queue **and** accounting queries. Exactly one
+matching job can be adopted; a prepared receipt plus its unique scheduler comment
+also covers a connection loss before the job-ID marker was written. Adoption
+only restores a submitted record; normal status and output validation must still
+establish completion. A name-only match or a marker without scheduler evidence
+cannot adopt a job automatically through status polling.
+
+Only an explicit remote rejection receipt, absent job marker, and successful
+scheduler queries with no matching comment can offer `unsubmitted`. Confirming
+that outcome records a failed attempt eligible for the existing manual retry
+flow; it never submits work itself. Retrying creates a fresh attempt/token and
+keeps the earlier record and receipt. Missing receipts (including legacy runs),
+multiple matches, ownership mismatches, failed queries or a prepared receipt
+with empty scheduler results remain unresolved and blocked. A scheduler without
+comment/accounting support therefore needs external investigation; empty
+queries never establish safety to replay. Existing active-operation and output
+safety guards remain in force.

@@ -61,6 +61,7 @@ class SignetApiTest(unittest.TestCase):
                   ('GET', '/signet/runs/step_test'), ('PATCH', '/signet/runs/step_test/settings'),
                   ('POST', '/signet/runs/step_test/steps/expression'), ('GET', '/signet/runs/step_test/steps/expression'),
                   ('POST', '/signet/runs/step_test/steps/expression/cancel'),
+                  ('POST', '/signet/runs/step_test/steps/expression/reconcile'),
                   ('GET', '/signet/runs/step_test/steps/expression/log')]
         for method, path in routes:
             self.assertEqual(self.call(method, path, '{}', {'Origin': self.origin})[0], 403, path)
@@ -169,10 +170,26 @@ class SignetApiTest(unittest.TestCase):
             (self.fake / 'bin' / name).write_text('#!/bin/bash\n' + test_signet_jobs.FAKE_SLURM[name] + '\n')
         self.slurm(queued_id='888', squeue='RUNNING')
         status, value = self.call('GET', path + '?refresh=1')
-        self.assertEqual((status, value['state'], value['job_id']), (200, 'running', '888'))
-        self.finish_job()
-        status, value = self.call('GET', path + '?refresh=1')
-        self.assertEqual((status, value['state']), (200, 'completed'))
+        self.assertEqual((status, value['state']), (200, 'unknown'))
+        self.assertNotIn('job_id', value)
+
+    def test_reconciliation_route_requires_review_confirmation_and_current_attempt(self):
+        self.lose_connection_on = 'sbatch --parsable'
+        self.assertEqual(self.submit()[1]['state'], 'unknown')
+        self.lose_connection_on = None
+        path = '/signet/runs/step_test/steps/expression/reconcile'
+        body = {'expected_attempt': 1, 'expected_job_id': None, 'action': 'review'}
+        with patch('agent.runtime.submission_recovery._probe', return_value=(
+                'adopt', '12345', {'scheduler_checked': True, 'candidates': ['12345']})):
+            self.assertEqual(self.call('POST', path, {**body, 'expected_attempt': 2})[0], 409)
+            self.assertEqual(self.call('POST', path, {**body, 'action': 'adopt'})[0], 400)
+            status, review = self.call('POST', path, body)
+            self.assertEqual((status, review['recovery']['outcome'], review['applied']), (200, 'adopt', False))
+            status, result = self.call('POST', path, {**body, 'action': 'adopt', 'confirmed': True})
+            self.assertEqual((status, result['record']['state'], result['record']['job_id']),
+                             (200, 'submitted', '12345'))
+            self.assertTrue(result['applied'])
+            self.assertEqual(self.call('POST', path, body)[0], 409)
 
     def test_network_cancel_after_parent_ended_keeps_http_settings_locked(self):
         (self.root / 'steps').mkdir()

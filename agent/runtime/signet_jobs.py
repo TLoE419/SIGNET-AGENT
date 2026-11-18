@@ -746,7 +746,7 @@ def _input_checks(files):
 
 
 def _submit_script(config, run_id, name, step, directory, files, resources, options=None, archive=None,
-                   needs=None, settings=None, dataset_plan=None):
+                   needs=None, settings=None, dataset_plan=None, submission_token=None):
     """Login-node script: check every input file and earlier result, write the job script, sbatch it, record the job ID.
 
     archive=N (a retry): once every check passed, the previous attempt's files are renamed
@@ -769,8 +769,10 @@ def _submit_script(config, run_id, name, step, directory, files, resources, opti
                     for path in (step.needs if needs is None else needs))
     checks = _input_checks(files)
     job = _job_script(config, run_id, name, step, directory, binds, options, settings, dataset_plan)
+    receipt = f"$D/steps/{name}.submission.{submission_token}" if submission_token else "/dev/null"
+    comment = f" --comment={shlex.quote(submission_token)}" if submission_token else ""
     sbatch = (f'sbatch --parsable --partition={config["partition"]} --cpus-per-task={resources["cpus"]} '
-              f'--mem={resources["mem_gb"]}G --time={resources["time"]} "$D/steps/{name}.sbatch"')
+              f'--mem={resources["mem_gb"]}G --time={resources["time"]}{comment} "$D/steps/{name}.sbatch"')
     return _say() + f'''D={q(directory)}
 {checks}{needs}if [ ! -s {q(config['image'])} ]; then say not_ready container; exit 5; fi
 if ! command -v sbatch >/dev/null 2>&1; then say not_ready sbatch; exit 5; fi
@@ -778,9 +780,11 @@ if ! command -v sbatch >/dev/null 2>&1; then say not_ready sbatch; exit 5; fi
 say attempt_started yes
 cat > "$D/steps/{name}.sbatch" <<'SIGNET_JOB'
 {job}SIGNET_JOB
-job="$({sbatch} 2>"$D/steps/{name}.sbatch.err")" || {{ say sbatch_failed "$(head -c 300 "$D/steps/{name}.sbatch.err")"; exit 7; }}
+printf 'prepared\\n' > "{receipt}" || exit 8
+job="$({sbatch} 2>"$D/steps/{name}.sbatch.err")" || {{ printf 'rejected\\n' > "{receipt}"; say sbatch_failed "$(head -c 300 "$D/steps/{name}.sbatch.err")"; exit 7; }}
 job="${{job%%;*}}"   # --parsable prints "<id>;<cluster>" on multi-cluster setups
 printf '%s\\n' "$job" > "$D/steps/{name}.job"
+printf 'accepted %s\\n' "$job" > "{receipt}"
 say job "$job"
 '''
 
@@ -864,7 +868,7 @@ def _output_check(record, response=None):
         record.pop('output_revalidation_requested_at', None)
 
 
-def _output_guard(root, record):
+def _output_guard(root, record, *, ownership_only=False):
     from agent.runtime.workspace_history import _json
     config = _environment()
     directory = record.get('remote_dir')
@@ -878,9 +882,12 @@ def _output_guard(root, record):
         raise StepError('conflict', 'Select the original remote environment and owned run folder before checking outputs.')
     q = shlex.quote
     guard = (f'D={q(directory)}\nJ={q(directory + "/steps/" + record["step"] + ".job")}\n'
-            f'T={q(owner["token"])}\nE={q(record["job_id"])}\n'
+            f'T={q(owner["token"])}\n'
             '[ "$(readlink -f -- "$D")" = "$D" ] && [ -f "$D/.owner" ] && [ ! -L "$D/.owner" ] '
-            '&& [ "$(head -c 129 -- "$D/.owner" 2>/dev/null)" = "$T" ] || { say output_source_mismatch owner; exit 91; }\n'
+            '&& [ "$(head -c 129 -- "$D/.owner" 2>/dev/null)" = "$T" ] || { say output_source_mismatch owner; exit 91; }\n')
+    if ownership_only:
+        return guard
+    guard += (f'E={q(record["job_id"])}\n'
             '[ "$(readlink -f -- "$J")" = "$J" ] && [ -f "$J" ] '
             '&& [ "$(head -c 128 -- "$J" 2>/dev/null)" = "$E" ] || { say output_source_mismatch job; exit 92; }\n')
     paths = [directory + '/steps/' + record['step'] + '.' + suffix for suffix in ('done', 'out', 'err')]
@@ -1002,6 +1009,7 @@ def submit(run_id, name, inputs, resources=None, options=None):
         token = _owner(root, directory)
         record = {'step': name, 'run_id': run_id, 'flag': step.flag, 'remote_dir': directory,
                   'inputs': {key: path for key, (path, _) in checked.items()}, 'resources': request,
+                  'submission_token': secrets.token_hex(16),
                   'partition': config['partition'], 'image': config['image'], 'submitted_at': _now()}
         if answers:
             record['options'] = answers   # kept for reproducibility: the answers SIGNET was given
@@ -1044,7 +1052,7 @@ def submit(run_id, name, inputs, resources=None, options=None):
             code, values, _ = _shell(_submit_script(config, run_id, name, step, directory, files, request, answers,
                                                     archive=attempt - 1 if previous else None,
                                                     needs=[_resolve(path, settings) for path in step.needs],
-                                                    settings=settings, dataset_plan=dataset_plan))
+                                                    settings=settings, dataset_plan=dataset_plan, submission_token=record['submission_token']))
             if code == 255:
                 # OpenSSH can lose the connection after the scheduler accepted the job.
                 raise OSError('OpenSSH did not confirm the submission.')
@@ -1108,7 +1116,6 @@ def _status_script(record, step, *, read_only=False):
     q = shlex.quote
     directory, name = record['remote_dir'], record['step']
     job = record.get('job_id')
-    job_name = f'signet-{name}-{record["run_id"]}'
     outputs = ''.join(f'[ -s {q(directory + "/work/" + path)} ] && say output_{i} yes\n'
                       for i, path in enumerate(_required(step, record)))
     pattern = '|'.join(re.escape(p) for p in FAILURE_PATTERNS + step.failures)
@@ -1125,10 +1132,7 @@ def _status_script(record, step, *, read_only=False):
     export_check = ('grep -Fxq SIGNET_STAGE6_EXPORTS_COMPLETED "$D/steps/visualize.out" 2>/dev/null '
                     '&& say exports_completed yes\n') if name == 'visualize' else ''
     return _say() + f'''D={q(directory)}
-j={q(job) if job else '"$(head -n 1 "$D/steps/' + name + '.job" 2>/dev/null)"'}
-# No ID recorded (connection lost around sbatch): look for this step's own job name, ours only.
-if [ -z "$j" ]; then j="$(squeue -h -u "$(id -un)" -n {q(job_name)} -o %i 2>/dev/null | head -n 1)"; fi
-if [ -z "$j" ]; then j="$(sacct -n -X -P --name={q(job_name)} -S now-7days -o JobID 2>/dev/null | tail -n 1)"; fi
+j={q(job or '')}
 say job "$j"
 if [ -n "$j" ]; then
   say squeue "$(squeue -h -j "$j" -o %T 2>/dev/null)"
@@ -1154,6 +1158,8 @@ def status(run_id, name, refresh=False):
         return record
     if not refresh and time.time() - record.get('checked_at', 0) < CACHE_SECONDS:
         return record
+    if not record.get('job_id'):
+        return {**record, 'reason': 'Submission is unconfirmed. Use manual reconciliation. Do not resubmit.'}
     checking_outputs = bool(record.get('output_revalidation_requested_at'))
     _environment()
     guard = _output_guard(root, record) if checking_outputs else ''
@@ -1175,15 +1181,6 @@ def status(run_id, name, refresh=False):
             _save(root, record)
         return reply
     record['checked_at'] = time.time()
-    if (not record.get('job_id') and record.get('previous_job_id')
-            and values.get('job') == record['previous_job_id']):
-        # A retry lost its connection before the old attempt's files were renamed on HPC3:
-        # what was found belongs to the previous attempt, so this attempt has no job yet.
-        for key in ('job', 'squeue', 'sacct', 'done'):
-            values.pop(key, None)
-        hints = []
-    if not record.get('job_id') and re.fullmatch(r'[0-9]+', values.get('job', '')):
-        record['job_id'] = values['job']   # recovered after a lost connection during submit
     queued, accounted = values.get('squeue', ''), values.get('sacct', '').split(' ')[0]
     slurm = queued or accounted
     record['slurm_state'] = slurm or None
