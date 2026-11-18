@@ -12,8 +12,15 @@ to that dataset. Genotype selections can include multiple files. This selection
 checks file metadata only. **Validate input files** separately reads the saved
 remote files without changing them, checks the TCGA input structure, and
 reports preliminary sample overlap and compatibility warnings. It does not
-establish scientific validity; running another dataset is a separate
-integration step.
+establish scientific validity. In **Analysis → Stage 1**, **Review dataset
+files** checks the saved inputs and selected reference resources. After you
+confirm the warnings and submit, that run freezes its inputs, prepares its own
+imputation references, and starts the original SIGNET genotype workflow in one
+Slurm job. Stages 2–6 continue that same run manually. Stages 2 and 3 use its
+frozen expression, annotation, and clinical files, even if current Data settings
+change. Custom execution currently supports TCGA data for one autosome with a
+matching raw VCF reference and genetic map. The unchanged built-in chromosome 1
+example retains its existing path.
 
 ## Replacing the Former Desktop Workbench
 

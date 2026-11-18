@@ -1,4 +1,4 @@
-"""Manual workspace steps for the prepared chromosome 1 example."""
+"""Manual workspace steps for saved datasets and the original chromosome 1 example."""
 
 from bisect import bisect_right
 from collections import Counter
@@ -106,8 +106,78 @@ def _workspace_run(run_id):
         root = signet._run(run_id)
         history = run_history(root)
     except (ValueError, OSError, KeyError, TypeError) as error:
-        raise jobs.StepError('not_found', 'Select the chromosome 1 workspace run created in Stage 1.') from error
+        raise jobs.StepError('not_found', 'Select the workspace run created in Stage 1.') from error
     return root, history
+
+
+def _initial(root):
+    return json.loads(signet._no_links(root / SNAPSHOT).read_text())
+
+
+def _dataset_id(root):
+    return signet._name(_initial(root)['dataset_id'])
+
+
+def review_dataset(dataset_id, inputs):
+    from agent.runtime.workspace_inputs import review
+    return review(dataset_id, inputs)
+
+
+def submit_dataset(dataset_id, run_id, inputs, settings, resources, review_token, acknowledge_warnings):
+    try:
+        signet._name(run_id)
+    except ValueError as error:
+        raise jobs.StepError('invalid_request', str(error)) from error
+    return _submit_dataset(run_id, dataset_id, inputs, settings, resources, review_token, acknowledge_warnings)
+
+
+@jobs._one_at_a_time
+def _submit_dataset(run_id, dataset_id, inputs, settings, resources, review_token, acknowledge_warnings):
+    from agent.runtime import workspace_inputs
+    existing = signet.PROJECT / 'runs' / run_id
+    archived = signet.PROJECT / 'data/stage6-results' / run_id
+    if existing.exists() or archived.exists() or existing.is_symlink() or archived.is_symlink():
+        raise jobs.StepError('conflict', 'This run already exists. Check its saved status.')
+    if run_id in jobs.RESERVED_RUN_IDS:
+        raise jobs.StepError('invalid_request', 'This run name is reserved. Choose a different name.')
+    if type(acknowledge_warnings) is not bool or not isinstance(review_token, str):
+        raise jobs.StepError('invalid_request', 'Confirm the reviewed sources and warnings explicitly.')
+    source = workspace_inputs.saved(dataset_id)
+    review = workspace_inputs.review(dataset_id, source['inputs'])
+    if not review['ready']:
+        raise jobs.StepError('not_ready', ' '.join(review['issues']))
+    if review['review_token'] != review_token or inputs != review['inputs']:
+        raise jobs.StepError('conflict', 'The reviewed dataset or reference resources changed. Review Stage 1 again.')
+    if review['warnings'] and not acknowledge_warnings:
+        raise jobs.StepError('invalid_request', 'Acknowledge the input and reference-preparation warnings before submitting.')
+    if not isinstance(settings, dict) or set(settings) != set(DEFAULT_SETTINGS):
+        raise jobs.StepError('invalid_request', 'Confirm all genotype settings.')
+    checked = {key: jobs._setting(key, rule, settings[key]) for key, rule in jobs.STEPS['genotype'].settings.items()}
+    if checked['restrict.tcga.geno'] != str(review['settings']['restrict.tcga.geno']):
+        raise jobs.StepError('invalid_request', 'The selected chromosome must match the reviewed study and reference.')
+    accepted_resources = jobs._resources(jobs.STEPS['genotype'], resources)
+    if review['mode'] == 'example':
+        return _submit_example(run_id, inputs, settings, resources)
+    config = review['environment']
+    root = signet.PROJECT / 'runs' / run_id
+    directory = jobs._remote_dir(config, root, run_id)
+    frozen = workspace_inputs.frozen_paths(directory)
+    step_inputs = {'ped.file': frozen['genotype'][0], 'map.file': frozen['genotype'][1],
+                   'ref': frozen['ref'], 'gmap': frozen['gmap']}
+    created = signet.configure_signet(run_id, 'TCGA')
+    if created['status'] != 'created':
+        raise jobs.StepError('invalid_request', created['error'])
+    jobs.update_settings(run_id, settings)
+    snapshot = {'run_id': run_id, 'dataset_id': dataset_id, 'dataset_name': source['name'], 'mode': 'dataset',
+                'submitted_at': jobs._now(), 'inputs': step_inputs, 'settings': checked,
+                'resources': accepted_resources, 'remote_dir': directory, 'source_inputs': source['inputs'],
+                'frozen_inputs': frozen, 'source_files': review['source_files'],
+                'reference_sources': review['reference_sources'], 'environment': config,
+                'review_token': review_token, 'acknowledge_warnings': acknowledge_warnings}
+    temporary = root / (SNAPSHOT + '.tmp')
+    temporary.write_text(json.dumps(snapshot, indent=2) + '\n')
+    temporary.replace(root / SNAPSHOT)
+    return jobs.submit(run_id, 'genotype', step_inputs, resources)
 
 
 def _expression_run(run_id):
@@ -142,13 +212,19 @@ def _review_expression(run_id):
     config = jobs._environment()
     if history['jobs']['genotype']['remote_dir'] != jobs._remote_dir(config, root, run_id):
         raise jobs.StepError('not_ready', 'Select the remote environment used by Stage 1 of this run.')
-    inputs = _expression_inputs(config)
+    initial = _initial(root)
+    frozen = initial.get('frozen_inputs') if initial.get('mode') == 'dataset' else None
+    inputs = {'gexp.file': frozen['expression'][0], 'pmap.file': frozen['annotation']} if frozen else _expression_inputs(config)
+    chromosome = int(initial['settings']['restrict.tcga.geno'])
     step = jobs.STEPS['expression']
-    checked = jobs._inputs(step, inputs, (config['root'] + '/refdata', config['source'] + '/example'))
-    files = jobs._files(step, checked, {'restrict.tcga': '1'})
+    checked = jobs._inputs(step, inputs, (config['root'] + '/refdata', config['source'] + '/example', jobs._remote_dir(config, root, run_id)))
+    files = jobs._files(step, checked, {'restrict.tcga': str(chromosome)})
     script = (jobs._say() + jobs._input_checks(files)
               + f'if [ ! -s {shlex.quote(config["image"])} ]; then say not_ready container; exit 5; fi\n'
               + 'if ! command -v sbatch >/dev/null 2>&1; then say not_ready sbatch; exit 5; fi\n')
+    if frozen:
+        from agent.runtime.workspace_inputs import frozen_checks
+        script += frozen_checks(jobs._remote_dir(config, root, run_id))
     try:
         code, values, _ = jobs._shell(script)
     except OSError as error:
@@ -157,7 +233,7 @@ def _review_expression(run_id):
         raise jobs.StepError('not_ready', 'The Stage 2 input is unavailable: ' + values['missing_file'])
     if code or 'not_ready' in values:
         raise jobs.StepError('not_ready', 'The Stage 2 environment is not ready. Check remote settings.')
-    return {'run_id': run_id, 'inputs': inputs, 'settings': {'restrict.tcga': 1},
+    return {'run_id': run_id, 'inputs': inputs, 'settings': {'restrict.tcga': chromosome}, 'frozen': bool(frozen),
             'resources': step.resources.copy(), 'limits': step.limits.copy()}
 
 
@@ -182,8 +258,8 @@ def submit_expression(run_id, inputs, settings, resources):
     if not isinstance(settings, dict) or set(settings) != {'restrict.tcga'}:
         raise jobs.StepError('invalid_request', 'Confirm the chromosome 1 expression setting.')
     chromosome = jobs._setting('restrict.tcga', 'chromosome', settings['restrict.tcga'])
-    if chromosome != '1':
-        raise jobs.StepError('invalid_request', 'Stage 2 must use chromosome 1 for this run.')
+    if chromosome != _initial(root)['settings']['restrict.tcga.geno']:
+        raise jobs.StepError('invalid_request', 'Stage 2 must use the same chromosome as this run\'s genotype stage.')
     accepted_resources = jobs._resources(jobs.STEPS['expression'], resources)
     if previous:
         jobs._ensure_stopped(previous)
@@ -197,7 +273,7 @@ def submit_expression(run_id, inputs, settings, resources):
             raise jobs.StepError('conflict', 'The previous Stage 2 review archive already exists.')
         with archive.open('x') as stream:
             stream.write(json.dumps(saved, indent=2) + '\n')
-    snapshot = {'run_id': run_id, 'dataset_id': DATASET_ID, 'review_attempt': review_attempt,
+    snapshot = {'run_id': run_id, 'dataset_id': _dataset_id(root), 'review_attempt': review_attempt,
                 'submitted_at': jobs._now(), 'inputs': inputs,
                 'settings': {'restrict.tcga': chromosome}, 'resources': accepted_resources}
     jobs.update_settings(run_id, settings)
@@ -232,12 +308,16 @@ def _review_adjust(run_id, clinical=None):
     root, history = _workspace_run(run_id)
     config = jobs._environment()
     step = jobs.STEPS['adjust']
-    inputs = _adjust_inputs(config, clinical)
+    initial = _initial(root)
+    frozen = initial.get('frozen_inputs') if initial.get('mode') == 'dataset' else None
+    if frozen and clinical is not None and clinical != frozen['clinical'][0]:
+        raise jobs.StepError('invalid_request', 'This run uses its frozen clinical file; create a new run to use different inputs.')
+    inputs = {'cli.file': frozen['clinical'][0]} if frozen else _adjust_inputs(config, clinical)
     directory = jobs._remote_dir(config, root, run_id)
     checked = jobs._inputs(step, inputs, (config['root'] + '/refdata', config['source'] + '/example', directory))
     result = {'run_id': run_id, 'inputs': inputs, 'options': {'npc': 3},
               'resources': step.resources.copy(), 'limits': step.limits.copy(),
-              'ready': False, 'issues': [], 'clinical': None}
+              'ready': False, 'issues': [], 'clinical': None, 'frozen': bool(frozen)}
     issues = result['issues']
     for name in ('genotype', 'expression'):
         record = history['jobs'].get(name)
@@ -250,6 +330,9 @@ def _review_adjust(run_id, clinical=None):
         return result
     q = shlex.quote
     script = jobs._say() + jobs._input_checks(jobs._files(step, checked, {}))
+    if frozen:
+        from agent.runtime.workspace_inputs import frozen_checks
+        script += frozen_checks(directory)
     for relative in step.needs:
         path = directory + '/work/' + relative
         script += f'if [ ! -s {q(path)} ]; then say missing_prior {q(relative)}; exit 5; fi\n'
@@ -313,7 +396,7 @@ def submit_adjust(run_id, inputs, options, resources):
             raise jobs.StepError('conflict', 'The previous Stage 3 review archive already exists.')
         with archive.open('x') as stream:
             stream.write(json.dumps(saved, indent=2) + '\n')
-    snapshot = {'run_id': run_id, 'dataset_id': DATASET_ID, 'review_attempt': attempt,
+    snapshot = {'run_id': run_id, 'dataset_id': _dataset_id(root), 'review_attempt': attempt,
                 'submitted_at': jobs._now(), 'inputs': review['inputs'],
                 'options': answers, 'resources': accepted_resources}
     temporary = root / (ADJUST_SNAPSHOT + '.tmp')
@@ -401,7 +484,7 @@ def submit_cis(run_id, inputs, settings, resources):
             raise jobs.StepError('conflict', 'The previous Stage 4 review archive already exists.')
         with archive.open('x') as stream:
             stream.write(json.dumps(saved, indent=2) + '\n')
-    snapshot = {'run_id': run_id, 'dataset_id': DATASET_ID, 'review_attempt': attempt,
+    snapshot = {'run_id': run_id, 'dataset_id': _dataset_id(root), 'review_attempt': attempt,
                 'submitted_at': jobs._now(), 'inputs': {}, 'settings': checked,
                 'input_sources': review['input_sources'], 'resources': accepted_resources}
     jobs.update_settings(run_id, settings)
@@ -508,7 +591,7 @@ def submit_network(run_id, inputs, settings, resources):
             raise jobs.StepError('conflict', 'The previous Stage 5 review archive already exists.')
         with archive.open('x') as stream:
             stream.write(json.dumps(saved, indent=2) + '\n')
-    snapshot = {'run_id': run_id, 'dataset_id': DATASET_ID, 'review_attempt': attempt,
+    snapshot = {'run_id': run_id, 'dataset_id': _dataset_id(root), 'review_attempt': attempt,
                 'submitted_at': jobs._now(), 'inputs': {}, 'settings': checked,
                 'input_sources': review['input_sources'], 'source_cis_alpha': review['source_cis_alpha'],
                 'resources': accepted_resources}
@@ -613,7 +696,7 @@ def submit_visualize(run_id, inputs, settings, resources):
             raise jobs.StepError('conflict', 'The previous Stage 6 review archive already exists.')
         with archive.open('x') as stream:
             stream.write(json.dumps(saved, indent=2) + '\n')
-    snapshot = {'run_id': run_id, 'dataset_id': DATASET_ID, 'review_attempt': attempt,
+    snapshot = {'run_id': run_id, 'dataset_id': _dataset_id(root), 'review_attempt': attempt,
                 'submitted_at': jobs._now(), 'inputs': {}, 'settings': checked,
                 'input_sources': review['input_sources'], 'resources': accepted_resources,
                 'validation': review['validation']}
@@ -628,7 +711,8 @@ def run_history(root):
     """Return the most recent recorded step alongside the immutable review snapshot."""
     run_id = root.name
     snapshot = json.loads(signet._no_links(root / SNAPSHOT).read_text(encoding='utf-8'))
-    if snapshot['run_id'] != run_id or snapshot['dataset_id'] != DATASET_ID:
+    dataset_id = signet._name(snapshot['dataset_id'])
+    if snapshot['run_id'] != run_id:
         raise ValueError('The genotype history does not identify this run.')
     job = {key: snapshot[key] for key in ('submitted_at', 'inputs', 'settings', 'resources')}
     job['state'] = 'submitting' if (root / '.active').exists() else 'not_submitted'
@@ -641,7 +725,7 @@ def run_history(root):
     inputs = job['inputs']
     chromosome = job['settings']['restrict.tcga.geno']
     result = {
-        'run_id': run_id, 'dataset_id': DATASET_ID, 'source': 'live',
+        'run_id': run_id, 'dataset_id': dataset_id, 'source': 'live',
         'name': ['第 1 號染色體 · 基因型準備', 'Chromosome 1 · Genotype preparation'],
         'inputs': {'genotype': [inputs['ped.file'], inputs['map.file'],
                                 inputs['ref'] + chromosome + '.gen', inputs['gmap'] + chromosome + '.map'],
@@ -651,7 +735,7 @@ def run_history(root):
     expression_path = signet._no_links(root / EXPRESSION_SNAPSHOT)
     if expression_path.is_file():
         expression = json.loads(expression_path.read_text(encoding='utf-8'))
-        if expression['run_id'] != run_id or expression['dataset_id'] != DATASET_ID:
+        if expression['run_id'] != run_id or expression['dataset_id'] != dataset_id:
             raise ValueError('The expression history does not identify this run.')
         expression_job = {key: expression[key] for key in ('submitted_at', 'inputs', 'settings', 'resources')}
         expression_job['state'] = 'submitting' if (root / '.active').exists() else 'not_submitted'
@@ -667,7 +751,7 @@ def run_history(root):
     adjust_path = signet._no_links(root / ADJUST_SNAPSHOT)
     if adjust_path.is_file():
         adjustment = json.loads(adjust_path.read_text(encoding='utf-8'))
-        if adjustment['run_id'] != run_id or adjustment['dataset_id'] != DATASET_ID:
+        if adjustment['run_id'] != run_id or adjustment['dataset_id'] != dataset_id:
             raise ValueError('The adjustment history does not identify this run.')
         adjustment_job = {key: adjustment[key] for key in ('submitted_at', 'inputs', 'options', 'resources')}
         adjustment_job['state'] = 'submitting' if (root / '.active').exists() else 'not_submitted'
@@ -683,7 +767,7 @@ def run_history(root):
     cis_path = signet._no_links(root / CIS_SNAPSHOT)
     if cis_path.is_file():
         association = json.loads(cis_path.read_text(encoding='utf-8'))
-        if association['run_id'] != run_id or association['dataset_id'] != DATASET_ID:
+        if association['run_id'] != run_id or association['dataset_id'] != dataset_id:
             raise ValueError('The association history does not identify this run.')
         association_job = {key: association[key] for key in ('submitted_at', 'inputs', 'settings', 'resources', 'input_sources')}
         association_job['state'] = 'submitting' if (root / '.active').exists() else 'not_submitted'
@@ -698,7 +782,7 @@ def run_history(root):
     network_path = signet._no_links(root / NETWORK_SNAPSHOT)
     if network_path.is_file():
         network = json.loads(network_path.read_text(encoding='utf-8'))
-        if network['run_id'] != run_id or network['dataset_id'] != DATASET_ID:
+        if network['run_id'] != run_id or network['dataset_id'] != dataset_id:
             raise ValueError('The network history does not identify this run.')
         network_job = {key: network[key] for key in
                        ('submitted_at', 'inputs', 'settings', 'resources', 'input_sources', 'source_cis_alpha')}
@@ -714,7 +798,7 @@ def run_history(root):
     visualize_path = signet._no_links(root / VISUALIZE_SNAPSHOT)
     if visualize_path.is_file():
         visualization = json.loads(visualize_path.read_text(encoding='utf-8'))
-        if visualization['run_id'] != run_id or visualization['dataset_id'] != DATASET_ID:
+        if visualization['run_id'] != run_id or visualization['dataset_id'] != dataset_id:
             raise ValueError('The visualization history does not identify this run.')
         visualize_job = {key: visualization[key] for key in
                          ('submitted_at', 'inputs', 'settings', 'resources', 'input_sources')}
@@ -734,6 +818,13 @@ def run_history(root):
                 result['graph'] = live_completed_result(run_id)['graph']['counts']
             except (OSError, ValueError, KeyError, TypeError, OverflowError):
                 result['result_error'] = 'The saved Stage 6 graph could not be read.'
+    if snapshot.get('mode') == 'dataset':
+        result.update(input_mode='dataset', dataset_name=snapshot['dataset_name'],
+                      frozen_inputs=snapshot['frozen_inputs'], inputs=snapshot['source_inputs'],
+                      name=snapshot['dataset_name'])
+        summary = signet._no_links(root / 'work/res/resg/workspace-reference-preparation.json')
+        if summary.is_file():
+            result['reference_preparation'] = json.loads(summary.read_text())
     return result
 
 

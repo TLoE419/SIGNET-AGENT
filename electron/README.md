@@ -63,8 +63,25 @@ Expression scale and the meaning of its final five rows require researcher
 confirmation; the pinned SIGNET code transforms the matrix and discards those
 rows. Warnings and incomplete scans are displayed explicitly. Changing files,
 datasets, remote accounts, or environments invalidates the previous report.
-These checks do not change the inputs of the chromosome 1 execution controls
-or start an analysis.
+These checks do not start an analysis.
+
+To run the saved dataset, open **Analysis → Stage 1 → Review dataset files**.
+Review all study files, the inferred chromosome, reference resources, settings,
+and compute resources. The submission requires explicit acknowledgement of the
+input and reference-preparation warnings. It queues one genotype job, which
+first copies and fingerprints the reviewed inputs into its owned run folder,
+prepares study-specific imputation references, and then runs the original
+SIGNET workflow. It never borrows another study's prepared reference files.
+Current support is TCGA data on one autosome, a matching raw VCF reference, and
+a genetic map covering the study markers. Missing or incompatible resources
+block submission with a reason; selecting a dataset does not install or run it.
+
+Stages 2–6 use that run's prerequisites and snapshots. Expression, annotation,
+and clinical inputs are frozen at Stage 1, so later changes in Data or reference
+settings apply to new runs. Custom-run clinical paths are read-only in Stage 3.
+Run history retains the dataset name, original source paths, frozen paths,
+settings, and reference-preparation summary. The unchanged built-in chromosome 1
+example keeps its existing execution path.
 
 ### Submit the chromosome 1 example
 

@@ -624,7 +624,7 @@ def _remote_dir(config, root, run_id):
     return config['workRoot'] + '/' + run_id
 
 
-def _job_script(config, run_id, name, step, directory, binds, options=None, settings=None):
+def _job_script(config, run_id, name, step, directory, binds, options=None, settings=None, dataset_plan=None):
     """The Slurm batch script. Every value in it was validated; nothing comes from the caller as text.
 
     SIGNET's stdin is /dev/null, or, for a step with prompts, one line per answer in
@@ -658,6 +658,10 @@ export SINGULARITY_BIND={q(bind)} APPTAINER_BIND={q(bind)}
         env = f"--env {q(','.join(f'{k}={v}' for k, v in step.env.items()))} " if step.env else ''
         run = (f"{q(config['executor'])} exec --cleanenv --no-home {env}--bind {q(bind)} {q(config['image'])} "
                f"bash ./signet {step.flag} {stdin}")
+    if dataset_plan:
+        from agent.runtime.workspace_inputs import stage_command
+        run = ('(\n' + stage_command(dataset_plan)
+               + 'stage_rc=$?\n[ "$stage_rc" -eq 0 ] || exit "$stage_rc"\n' + run + '\n)')
     if name == 'adjust':
         # Keep the actual clinical input and smartpca outputs with the downloaded results.
         clinical = q((settings or {})['cli.file'])
@@ -739,7 +743,7 @@ def _input_checks(files):
 
 
 def _submit_script(config, run_id, name, step, directory, files, resources, options=None, archive=None,
-                   needs=None, settings=None):
+                   needs=None, settings=None, dataset_plan=None):
     """Login-node script: check every input file and earlier result, write the job script, sbatch it, record the job ID.
 
     archive=N (a retry): once every check passed, the previous attempt's files are renamed
@@ -756,12 +760,12 @@ def _submit_script(config, run_id, name, step, directory, files, resources, opti
         keep += 'say attempt_started yes\n'
         keep += ''.join(f'if [ -e "$D/"{q(src)} ]; then mv -- "$D/"{q(src)} "$D/"{q(dst)} || '
                         '{ say archive_failed yes; exit 8; }; fi\n' for src, dst in pairs)
-    binds = sorted({root for _, _, root in files if root != directory})
+    binds = [] if dataset_plan else sorted({root for _, _, root in files if root != directory})
     # Results of earlier steps must still be in this run's folder (nobody cleaned it up).
     needs = ''.join(f'if [ ! -s "$D/work/"{q(path)} ]; then say missing_prior {q(path)}; exit 4; fi\n'
                     for path in (step.needs if needs is None else needs))
     checks = _input_checks(files)
-    job = _job_script(config, run_id, name, step, directory, binds, options, settings)
+    job = _job_script(config, run_id, name, step, directory, binds, options, settings, dataset_plan)
     sbatch = (f'sbatch --parsable --partition={config["partition"]} --cpus-per-task={resources["cpus"]} '
               f'--mem={resources["mem_gb"]}G --time={resources["time"]} "$D/steps/{name}.sbatch"')
     return _say() + f'''D={q(directory)}
@@ -832,6 +836,10 @@ def submit(run_id, name, inputs, resources=None, options=None):
     _check_current(step, signet._settings(root))
     config = _environment()
     directory = _remote_dir(config, root, run_id)
+    dataset_plan = None
+    if name == 'genotype':
+        from agent.runtime.workspace_inputs import staging_plan
+        dataset_plan = staging_plan(root, directory)
     checked = _inputs(step, inputs, (config['root'] + '/refdata', config['source'] + '/example', directory))
     if previous:
         _ensure_stopped(previous)  # before uploading config.ini or touching any old result
@@ -868,6 +876,9 @@ def submit(run_id, name, inputs, resources=None, options=None):
                 prefix = f'res/resv/signet_top{number}_freq{settings["freq"]}'
                 record['required_outputs'].extend((prefix + '.html', prefix + '_name.txt',
                     f'res/resv/signet_circular_top{number}_freq{settings["freq"]}.pdf'))
+        if dataset_plan:
+            from agent.runtime.workspace_inputs import REQUIRED
+            record['required_outputs'] = list(step.required) + list(REQUIRED)
         if previous:
             record['attempt'] = attempt
             # A refused submission has no job of its own; retain the last real ID across it.
@@ -884,11 +895,13 @@ def submit(run_id, name, inputs, resources=None, options=None):
             _change(record, 'submitting')
             _save(root, record)
             files = _files(step, checked, signet._settings(root))
+            if dataset_plan:
+                files = [(item['role'], item['path'], str(Path(item['path']).parent)) for item in dataset_plan['source_files']]
             settings = signet._settings(root)
             code, values, _ = _shell(_submit_script(config, run_id, name, step, directory, files, request, answers,
                                                     archive=attempt - 1 if previous else None,
                                                     needs=[_resolve(path, settings) for path in step.needs],
-                                                    settings=settings))
+                                                    settings=settings, dataset_plan=dataset_plan))
             if code == 255:
                 # OpenSSH can lose the connection after the scheduler accepted the job.
                 raise OSError('OpenSSH did not confirm the submission.')

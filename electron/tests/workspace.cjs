@@ -660,7 +660,9 @@ async function verifyWorkspace({groups, runs, remote}) {
     check(visible('#lens-stage6') && stage6.dataset.runId === first.run_id &&
       stage6.dataset.selectedGene === 'MEGF6' && countRows() === first.incident, 'Stage 6 lost the selected run or gene');
   } else {
-    check(!visible(stageButton(3)), 'Another dataset inherited the example Stage 3 preview');
+    showStage(3);
+    check(!visible('#lens-history-stage3') && !visible('#lens-stage6'),
+      'The dataset’s manual stages inherited another run’s displayed results');
   }
 
   go('data');
@@ -676,6 +678,12 @@ async function verifyWorkspace({groups, runs, remote}) {
   check(Boolean(created), 'New dataset was missing from the backend catalog');
   check(['genotype', 'expression', 'clinical'].every(type => created.inputs[type].length === 0),
     'A newly created dataset must start with empty file selections');
+  go('analysis');
+  if (!visible(stageButton(1))) click('#ml-stage-tab');
+  showStage(1);
+  check(visible('#lens-stage1') && !visible('#lens-stage6') && !resultIds().length,
+    'A new dataset should start with its manual Stage 1 review and no inherited result');
+  go('data');
   for (const type of ['genotype', 'expression', 'clinical']) {
     await window.workspaceChooseRemoteFiles({type, remote, paths: remote[type], exerciseNavigation: type === 'genotype'});
   }
