@@ -7,18 +7,12 @@ This guide replaces the live demonstration script that depended on specific hist
 1. Follow the [installation guide](INSTALL.md), start Electron with `npm start --prefix electron`. Confirm that model sign-in or a key is configured.
 2. Select English and enter: "Describe the analyses currently available and the data each requires. Do not run anything yet." Expect only an explanation of capabilities and input requirements.
 3. Enter: "Check which data files and run records are in the current project. Do not run an analysis." A clean download has no data or historical results; the assistant should report the files actually present.
-4. Enter: "Open the Stage 6 workspace and query its current status only. Do not change parameters or run anything." The right-hand workspace should report that no verified baseline is available, without displaying a fabricated example graph.
-5. Inspect **Activity**, which opens automatically below the conversation. Confirm that status, elapsed time, and tool records are visible. Collapse and reopen it after completion; the records should remain. This does not require opening Stage 6. Listing filenames does not establish that their contents have been read or verified.
+4. Inspect **Activity**, which opens automatically below the conversation. Confirm that status, elapsed time, and tool records are visible. Collapse and reopen it after completion; the records should remain. Listing filenames does not establish that their contents have been read or verified.
 
 This procedure calls a real model, whose wording may vary. Acceptance depends on actual tool status and the correctness of the content.
 
-## After You Have Your Own Results
+## Running the Example Study
 
-First follow the [advanced guide](ADVANCED.md) to configure the official source, runtime, and input data. Complete Stage 6 and pass the technical output checks, then:
+With an HPC3 account, follow the [HPC3 guide](HPC3_GUIDE.md): prepare the environment in the Workflow panel, then start an analysis with the official example data. Each stage appears as a confirmation card in the chat; nothing runs until you confirm it. After stage 6 the results card shows the network, SIGNET's plots and the connection table, and offers a download. To change a setting, use **Rerun stage** on a completed card; the original analysis is kept.
 
-1. Select your own completed result as the workspace baseline.
-2. Use natural language to request a frequency-threshold or displayed-subnetwork-count change, preparing a proposal only.
-3. Check the before and after values, then confirm and run it yourself. Use a new working directory and retain the baseline.
-4. After completion, compare edge and gene counts, shared, added, and removed edges, and the network graph.
-
-This project includes none of these datasets, completed results, chat records, or predefined baseline IDs. Analysis speed depends on the environment, and external annotation services may be required. Passing technical checks does not establish biological validity.
+Passing technical checks does not establish biological validity.

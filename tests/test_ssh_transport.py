@@ -8,7 +8,6 @@ import threading
 import unittest
 from unittest.mock import patch
 
-import agent.runtime.remote as signet_runtime
 import agent.runtime.ssh_transport as ssh_transport
 
 
@@ -51,28 +50,11 @@ class TransportTest(unittest.TestCase):
             self.assertEqual(result.stdout, b'output')
             self.assertEqual(result.stderr, b'notice')
 
-    def test_signet_runtime_prefers_electron_transport_when_available(self):
-        with patch.dict(os.environ, {'SIGNET_SSH_BROKER': '/tmp/test', 'SIGNET_SSH_BROKER_TOKEN': 'secret'}), \
-                patch.object(signet_runtime, 'desktop_environment', return_value=None), \
-                patch.object(ssh_transport, 'remote', return_value='broker-result') as remote:
-            self.assertEqual(signet_runtime.remote('true', timeout=4), 'broker-result')
-            remote.assert_called_once_with('true', timeout=4)
-
-
 class EnvironmentContractTest(unittest.TestCase):
     def config(self):
         return {'root': '/home/user/signet', 'source': '/home/user/signet/software/rev',
                 'image': '/home/user/signet/images/signet.sif', 'executor': '/usr/bin/apptainer',
                 'workRoot': '/home/user/signet/runs', 'partition': 'standard', 'revision': 'rev'}
-
-    def test_runtime_uses_the_verified_desktop_configuration(self):
-        with patch.dict(os.environ, {'SIGNET_SSH_BROKER': '/tmp/test', 'SIGNET_SSH_BROKER_TOKEN': 'secret'}), \
-                patch.object(ssh_transport, 'request', return_value={'stdout': json.dumps(self.config()).encode()}):
-            self.assertEqual(signet_runtime.image_path(), self.config()['image'])
-            self.assertEqual(signet_runtime.container_command(), '/usr/bin/apptainer')
-            self.assertEqual(signet_runtime.partition(), 'standard')
-            self.assertEqual(signet_runtime.remote_work_root(), '/home/user/signet/runs/cis')
-            self.assertEqual(signet_runtime.remote_work_root(network=True), '/home/user/signet/runs/network')
 
     def test_module_metadata_is_validated_and_forwarded_to_scientific_commands(self):
         config = {**self.config(), 'runtimeModule': 'singularity/3.9.4'}
@@ -82,15 +64,6 @@ class EnvironmentContractTest(unittest.TestCase):
         with patch.object(ssh_transport, 'request', return_value={'stdout': json.dumps(config).encode()}):
             with self.assertRaisesRegex(OSError, 'module'):
                 ssh_transport.environment()
-
-    def test_scientific_remote_command_uses_the_verified_module_descriptor(self):
-        config = {**self.config(), 'runtimeModule': 'singularity/3.9.4'}
-        with patch.dict(os.environ, {'SIGNET_SSH_BROKER': '/tmp/test', 'SIGNET_SSH_BROKER_TOKEN': 'secret'}), \
-                patch.object(signet_runtime, 'desktop_environment', return_value=config), \
-                patch.object(ssh_transport, 'remote', return_value='result') as remote:
-            self.assertEqual(signet_runtime.remote('cat', input=b'binary\x00', capture_output=True), 'result')
-            self.assertEqual(remote.call_args.args[0], ssh_transport.with_runtime_module('cat', config))
-            self.assertEqual(remote.call_args.kwargs['input'], b'binary\x00')
 
     def test_module_wrapper_preserves_binary_stdin_in_fresh_shells(self):
         with tempfile.TemporaryDirectory() as directory:

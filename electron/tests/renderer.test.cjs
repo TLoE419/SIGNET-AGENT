@@ -2,6 +2,7 @@
 const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const {createRendererHandler}=require('../main/renderer/protocol.cjs');
+const {navigationAllowed,resultPreviewPath}=require('../main/security/policy.cjs');
 const origin='http://127.0.0.1:43210';
 test('Electron serves its renderer with escaped bootstrap data and strict production CSP',async()=>{
  const calls=[];
@@ -14,9 +15,18 @@ test('Electron serves its renderer with escaped bootstrap data and strict produc
  assert.equal(calls[0].url,origin+'/bootstrap?new=1');
  assert.equal(calls[0].options.bypassCustomProtocolHandlers,true);
  assert.doesNotMatch(response.headers.get('content-security-policy'),/unsafe-inline/);
+ assert.match(response.headers.get('content-security-policy'), /frame-src http:\/\/127\.0\.0\.1:43210\/signet\/result-preview\//);
  assert.match(html,/\/renderer.js/);assert.doesNotMatch(html,/ssh-ui.js/);
  const script=await handler(new Request(origin+'/renderer.js'));
  assert.equal(script.status,200);assert.match(script.headers.get('content-type'),/javascript/);
+});
+test('only the exported widget path is eligible for result frame navigation',()=>{
+ const root='/signet/result-preview/'+'a'.repeat(32);
+ const plot=root+'/signet_top2_freq0.5.html';
+ assert.equal(resultPreviewPath(plot),true);
+ assert.equal(resultPreviewPath(root+'/widget.js'),false);
+ assert.equal(resultPreviewPath('/'),false);
+ assert.equal(navigationAllowed(origin+plot,origin),false);
 });
 test('renderer forwards streaming API requests without consuming their bodies and rejects foreign origins',async()=>{
  const request=new Request(origin+'/chat',{method:'POST',headers:{Origin:origin,'X-Chat-Token':'test'},body:'{"text":"question"}'});

@@ -1,6 +1,6 @@
 # SIGNET Local Research Assistant
 
-Use a local chat interface to explore SIGNET's analysis capabilities, inspect files you provide, and run operations through controlled tools. The interface supports English and Traditional Chinese, tool progress, and parameter proposals and comparisons for Stage 6 network results.
+Use a local chat interface to explore SIGNET's analysis capabilities, inspect files you provide, and run operations through controlled tools. The interface supports English and Traditional Chinese and tool progress. SIGNET's six stages run on UCI HPC3 from confirmation cards in the chat, and the results card shows the network, SIGNET's plots and a connection table.
 
 **This version includes no study data, example datasets, reference datasets, or precomputed results.** After installation, you can open the Electron desktop client. With your own model sign-in configured, you can chat, query the analysis catalog, and list project files. Network visualization and comparison require your own analysis results that have passed the technical output checks; no example graph appears on first launch.
 
@@ -40,7 +40,7 @@ See [desktop setup and lifecycle](electron/README.md).
 
 For backend-only development, run `.venv/bin/python -m agent.app.chat_ui --port 8880`.
 This starts an API, not a browser interface. `GET /bootstrap` supplies initial
-conversation state; `/chat` and `/stage6` retain their existing request contracts.
+conversation state; `/chat` and the `/signet/` routes keep their request contracts.
 Standalone Python tools and tests remain available. Existing desktop state and
 scientific inputs/results are not moved or rewritten by the frontend migration.
 
@@ -51,31 +51,30 @@ scientific inputs/results are not moved or rewritten by the frontend migration.
 | Open the interface | Python dependencies and Electron/Node.js setup | Displays the chat page and guidance without calling a model |
 | Natural-language interaction | Your own model sign-in or key | Answers questions, queries the tool catalog, and lists project files; this does not establish that an analysis ran |
 | Prepare scientific operations | Pinned official source and your own inputs | Creates an isolated working directory and checks prerequisites |
-| Run scientific analysis | The corresponding scientific dependencies, VM, or scheduler | Runs within each tool's limits and retains logs; completion does not establish biological validity |
-| Compare Stage 6 results | Your own technically verified results and scientific environment | Proposes changes, starts a separate run after your confirmation, and compares results |
+| Run scientific analysis | An HPC3 account and the environment prepared in the Workflow panel | Each stage runs as a Slurm job after you confirm its card; completion does not establish biological validity |
+| Change settings | A completed analysis | **Rerun stage** starts a new run from that stage and keeps the original for comparison |
 
-There are **23 SIGNET tools, 2 general file tools, 7 HPC3 setup tools and 1 page control, for a total of 33 model tools**. See [signet_inventory.json](signet_inventory.json) for the complete scientific-source inventory. Scientific code is pinned to the [official SIGNET commit](https://github.com/signet4grn/SIGNET/tree/bed55b3e121de0edf5fd43da683dc59850ff82d3); the assistant does not execute arbitrary scripts.
+There are **5 SIGNET tools, 3 general file tools, 8 HPC3 setup tools and 1 page control, for a total of 17 model tools**. None of them runs a SIGNET stage; only a confirmed card does. See [signet_inventory.json](signet_inventory.json) for the complete scientific-source inventory. Scientific code is pinned to the [official SIGNET commit](https://github.com/signet4grn/SIGNET/tree/bed55b3e121de0edf5fd43da683dc59850ff82d3); the assistant does not execute arbitrary scripts.
 
 ## Usage and Data
 
-Follow the [no-data demonstration guide](docs/DEMO.md) to try chat, capability queries, and missing-prerequisite reporting. For scientific analysis, start with the [scientific setup guide](docs/SCIENTIFIC_SETUP.md), then consult the [advanced environment guide](docs/ADVANCED.md) for runtime configuration. To run SIGNET steps on HPC3 through the app's local API, see the [SIGNET step API](docs/SIGNET_STEP_API.md).
+Follow the [no-data demonstration guide](docs/DEMO.md) to try chat, capability queries, and missing-prerequisite reporting. For scientific analysis, start with the [scientific setup guide](docs/SCIENTIFIC_SETUP.md), then consult the [advanced environment guide](docs/ADVANCED.md) for runtime configuration. To run SIGNET steps on HPC3 through the app's local API, see the [SIGNET step API](docs/SIGNET_STEP_API.md). For what the app sets up on HPC3, where the reference data comes from and how it is checked, see the [HPC3 guide](docs/HPC3_GUIDE.md).
 
-Create `data/` yourself for inputs; scientific tools create `runs/`. Both directories are excluded from version control. Credentials in `.env`, chat histories, workspace state, execution logs, screenshots, and VM assets are also excluded. For the scientific software, VM, data, and six-stage workflow requirements, follow the [scientific setup guide](docs/SCIENTIFIC_SETUP.md); it also explains what a clean download still cannot provision.
+Create `data/` yourself for inputs; scientific tools create `runs/`. Both directories are excluded from version control. Credentials in `.env`, chat histories, execution logs and screenshots are also excluded. For the scientific software, data, and six-stage workflow requirements, follow the [scientific setup guide](docs/SCIENTIFIC_SETUP.md); it also explains what a clean download still cannot provision.
 
-The **Activity** control below the conversation opens when you send a request. It shows status, elapsed time, and tool records, and you can collapse and reopen it after completion. It is independent of Stage 6 activation; collapsing network visualization does not hide chat progress.
+The **Activity** control below the conversation opens when you send a request. It shows status, elapsed time, and tool records, and you can collapse and reopen it after completion. 
 
 The service listens only on `127.0.0.1`. Chat messages and content needed by the tools are sent to your selected model service; a local interface does not mean the model runs offline. Web chat history is saved locally in `.chat-state.json`; do not share this file. Closing a tab does not cancel tools that have already started. If a process is interrupted, inspect its recorded status before retrying instead of automatically running it again.
 
 ## Development and Checks
 
-The full tool test suite needs the audited official code, but no real datasets, model keys, or VM:
+The full tool test suite needs the audited official code, but no real datasets, model keys, or HPC3 account:
 
 ```sh
 .venv/bin/python scripts/setup_source.py
 .venv/bin/python -m unittest discover -s tests -v
 node tests/test_markdown.cjs
 node tests/test_i18n.cjs
-node tests/test_stage6_graph.cjs
 node tests/test_chat_progress.cjs
 ```
 
@@ -109,6 +108,6 @@ creates a second installation under `/pub`. Reference downloads and example
 reference conversion require confirmation and run as remote Slurm jobs. Their
 logs and state live in `<installation-root>/.signet-agent/steps`; raw reference
 files live in `<installation-root>/refdata`. Existing paths and data are not migrated.
-The preprocessing and results stages in this panel are placeholders; the existing
-analysis tools and Stage 6 workspace retain their own readiness requirements.
+The preprocessing and results stages of this panel list each analysis's six steps;
+the chat cards submit them.
 A passing setup check is not evidence of a biologically valid analysis.

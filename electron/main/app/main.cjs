@@ -6,7 +6,7 @@ const {GeminiKeyStore, ModelController, installModelHandlers} = require('../mode
 const {randomBytes} = require('node:crypto');
 const {Backend} = require('../backend/backend.cjs');
 const {createRendererHandler} = require('../renderer/protocol.cjs');
-const {localURL, navigationAllowed} = require('../security/policy.cjs');
+const {localURL, navigationAllowed, resultDownloadPath, resultPreviewPath} = require('../security/policy.cjs');
 const {SshConnectionService, SshProfileRepository, HostKeyTrustStore, AppManagedKeyStore, installSshHandlers, installDevTerminal, EnvironmentService, installEnvironmentHandlers} = require('../../build/ssh/index.cjs');
 const {SshBroker} = require('../ssh/ipc/broker.cjs');
 
@@ -148,7 +148,7 @@ async function launch({provider, visible = true, userData, stateFile, startupMs,
   isolated.setPermissionCheckHandler(() => false);
   isolated.webRequest.onBeforeRequest((details, callback) => callback({cancel: !localURL(details.url, origin)}));
   isolated.on('will-download', (event, item, contents) => {
-    if (contents !== window?.webContents || !localURL(item.getURL(), origin) || new URL(item.getURL()).pathname !== '/stage6/file') event.preventDefault();
+    if (contents !== window?.webContents || !localURL(item.getURL(), origin) || !resultDownloadPath(new URL(item.getURL()).pathname)) event.preventDefault();
     // Valid result downloads retain Chromium's normal save dialog.
   });
   window = new BrowserWindow({width: 1320, height: 900, minWidth: 760, minHeight: 540, show: false,
@@ -169,7 +169,9 @@ async function launch({provider, visible = true, userData, stateFile, startupMs,
   window.webContents.on('will-navigate', (event, url) => { if (!navigationAllowed(url, origin)) event.preventDefault(); });
   window.webContents.on('will-redirect', (event, url) => { if (!navigationAllowed(url, origin)) event.preventDefault(); });
   window.webContents.on('will-frame-navigate', event => {
-    if (!event.isMainFrame || !navigationAllowed(event.url, origin)) event.preventDefault();
+    const allowed = event.isMainFrame ? navigationAllowed(event.url, origin) :
+      localURL(event.url, origin) && resultPreviewPath(new URL(event.url).pathname);
+    if (!allowed) event.preventDefault();
   });
   window.webContents.on('did-start-navigation',event=>{if(event.isMainFrame)devTerminal?.close()});
   window.webContents.on('render-process-gone', () => { void quit(); });

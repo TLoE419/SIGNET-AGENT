@@ -8,6 +8,12 @@ function localURL(value, origin) {
 function navigationAllowed(value, origin) {
   if (!localURL(value, origin)) return false;
   const url = new URL(value);
-  return url.pathname === '/' || url.pathname === '/stage6/file';
+  return url.pathname === '/' || resultDownloadPath(url.pathname);
 }
-module.exports = {localURL, navigationAllowed};
+function resultDownloadPath(pathname) {
+  return pathname === '/signet/result-download';
+}
+function resultPreviewPath(pathname) {
+  return /^\/signet\/result-preview\/[A-Za-z0-9_-]{32}\/signet_top[1-9][0-9]*_freq[0-9.eE+-]+\.html$/.test(pathname);
+}
+module.exports = {localURL, navigationAllowed, resultDownloadPath, resultPreviewPath};

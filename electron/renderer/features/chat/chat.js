@@ -99,7 +99,6 @@ function createTurn() {
   root.append(head, steps, transport);
   $('activity').append(root);
   $('chat-progress').hidden = false;
-  $('chat-progress').open = true;
   return {root, steps, timer, transport:transport.lastChild, started:performance.now(), current:null, mode:null};
 }
 function card(turn, title, kind) {
@@ -177,7 +176,6 @@ async function send(text) {
     function consume(line) {
       if (!line.trim()) return;
       const event = JSON.parse(line);
-      if (event.type === 'workspace') window.dispatchEvent(new CustomEvent('stage6-update', {detail:event.text}));
       if (event.type === 'ui') window.dispatchEvent(new CustomEvent('panel-request', {detail:event.text}));
       if (event.type === 'progress') progress(turn, event.text);
       if (event.type === 'answer') {

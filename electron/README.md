@@ -1,8 +1,8 @@
 # Optional Electron shell
 
 Electron is the only supported UI. `renderer/` owns the application shell,
-styles, translations, chat and Stage 6 controllers. One React entry renders the
-shell and SSH controls. Existing chat/graph DOM controllers remain isolated in
+styles, translations and chat controllers. One React entry renders the
+shell and SSH controls. Existing chat DOM controllers remain isolated in
 `workspace.js` to preserve their behavior during integration.
 Python remains a separate API service and can be developed without Electron.
 
@@ -166,7 +166,7 @@ Standalone Python has no broker variables and continues to use its configured
 system OpenSSH transport.
 
 SSH UI lives in `renderer/features/ssh`, native SSH services in `main/ssh`,
-and their contracts in `shared/ssh`. Chat and Stage 6 retain their existing
+and their contracts in `shared/ssh`. Chat retains its existing
 JavaScript controllers under `renderer/features`.
 `npm start` builds the renderer and SSH Main/worker bundles automatically. A missing or corrupt SSH
 configuration is reported by the SSH controls without preventing chat startup.
@@ -192,10 +192,10 @@ Private key files and host pins are not migrated.
   mode adds the bounded PTY operations described above. Requests are restricted to the owned origin, permissions are denied,
   subframe navigation and popup windows are blocked. Existing Host, Origin, token
   and CSP protections remain in effect (with dev-only inline styles for xterm). Only the two official RCIC login/key guidance links open in the system browser.
-- Result downloads from `/stage6/file` retain the native save dialog. No generic
+- Result downloads from `/signet/result-download` retain the native save dialog. No generic
   filesystem or local shell API is exposed to the page.
 - Closing the window, quitting, or losing the renderer requests backend shutdown.
-  Python stops accepting requests, lets existing request/Stage 6 workers finish
+  Python stops accepting requests, lets existing request workers finish
   and save, then exits. After five seconds the native dialog offers waiting or
   explicit force quit. No tool is automatically replayed or retried.
 - If Main crashes, the Python control pipe reaches EOF and follows the same
@@ -215,7 +215,7 @@ Private key files and host pins are not migrated.
 
 ## State
 
-Desktop chat and Stage 6 session files live under `state/` within Electron's
+Desktop chat session files live under `state/` within Electron's
 `SIGNET Research Assistant` userData directory (normally
 `~/Library/Application Support/SIGNET Research Assistant/state/` on macOS).
 The last viewed saved conversation is restored on startup. Use the Saved conversations
@@ -239,7 +239,7 @@ work through separate processes (the turn lock is per process).
   `npm start --prefix electron`.
 - `python -m agent.app.chat_ui` still starts a standalone API. `/bootstrap` returns JSON with
   `token`, `model`, and `initial`; it replaces the former HTML bootstrap response.
-  `/chat`, `/stage6`, and file downloads retain their contracts and protections.
+  `/chat`, the `/signet/` routes, and file downloads retain their contracts and protections.
 - No stored-data migration is required. Preserve existing state files when
   switching revisions; returning to the previous revision restores its browser
   launcher without requiring a data conversion.
@@ -296,7 +296,6 @@ electron/
     app/          React root, application shell and feature composition
     features/
       chat/       Chat, streaming progress and Markdown controller
-      stage6/     Parameters, network graphs and comparisons
       ssh/        connection/, auth/, keys/, state/ and feature composition
       devtools/   Diagnostics and interactive terminal UI
     components/   Shared modal, confirmation, actions and icons
@@ -318,9 +317,10 @@ and root launcher files; no stored data or wire protocol changed.
 
 ## Remote environment setup
 
-After SSH connects, the status block shows environment checks and installation
-progress. The **Workflow** panel lists what is ready or missing, even before the
-environment is verified, and offers the SIGNET install and container download.
+After SSH connects, the status block shows environment checks. The **Workflow**
+panel lists what is ready or missing, even before the environment is verified, and
+offers the SIGNET install and container download; both run through the Python service,
+which the assistant also uses. After SIGNET is installed, the panel re-runs this check.
 **HPC3 settings** (or the status block's environment row) chooses the installation
 root and partition. The default root is `/pub/<user>/signet-agent` when that folder
 is writable, otherwise `~/.local/share/signet-agent`.
