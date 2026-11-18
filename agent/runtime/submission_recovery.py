@@ -45,10 +45,10 @@ say candidates "$(printf '%s' "$candidates" | tr '\\n' ' ')"
     candidate = next(iter(candidates)) if len(candidates) == 1 else ''
     if (re.fullmatch(r'[0-9]+', candidate) and candidate != record.get('previous_job_id')
             and record.get('job_id') in (None, candidate) and marker in ('', candidate)
-            and (receipt_value == 'prepared' or match and match[1] == candidate)):
+            and (receipt_value in ('prepared', 'dispatching') or match and match[1] == candidate)):
         return 'adopt', candidate, evidence
-    if receipt_value == 'rejected' and not marker and not candidates and not record.get('job_id'):
-        return 'unsubmitted', 'The owned attempt receipt confirms sbatch refused submission; both scheduler queries succeeded without a matching job.', evidence
+    if receipt_value == 'not_dispatched' and not marker and not candidates and not record.get('job_id'):
+        return 'unsubmitted', 'The owned attempt receipt confirms this script stopped before invoking sbatch; no matching job was found.', evidence
     return 'unresolved', 'The receipt, job marker and scheduler do not uniquely agree. Do not resubmit.', evidence
 
 

@@ -44,8 +44,8 @@ class RecoveryTest(fixtures.StepsTest):
         self.assertFalse(self.call('adopt', confirmed=True)['applied'])
         self.assertEqual(jobs._load(self.root, 'expression')['state'], 'unknown')
 
-    def test_explicit_rejection_requires_review_then_unlocks_normal_retry_only(self):
-        self.uncertain('rejected', candidates='', marker='')
+    def test_proven_pre_dispatch_stop_requires_review_then_unlocks_normal_retry_only(self):
+        self.uncertain('not_dispatched', candidates='', marker='')
         self.assertFalse(self.call('unsubmitted', confirmed=True)['applied'])
         self.assertEqual(self.call()['recovery']['outcome'], 'unsubmitted')
         result = self.call('unsubmitted', confirmed=True)
@@ -96,8 +96,43 @@ class RecoveryTest(fixtures.StepsTest):
         with patch.object(jobs, '_shell', side_effect=lose_reply):
             record = jobs.submit('step_test', 'expression', self.inputs)
         self.assertEqual(record['state'], 'unknown')
+        self.assertEqual(self.call()['recovery']['outcome'], 'unresolved')
+        self.assertFalse(self.call('unsubmitted', confirmed=True)['applied'])
+
+    def test_accepted_job_with_nonzero_client_and_delayed_accounting_never_unlocks(self):
+        batch = self.fake / 'bin/sbatch'
+        batch.write_text('#!/bin/bash\necho accepted > "$FAKE/actually-accepted"\nexit 1\n')
+        with self.assertRaises(jobs.StepError):
+            jobs.submit('step_test', 'expression', self.inputs)
+        record = jobs._load(self.root, 'expression')
+        self.assertEqual(record['state'], 'unknown')
+        self.assertTrue((self.fake / 'actually-accepted').exists())
+        for command in ('squeue', 'sacct'):
+            (self.fake / 'bin' / command).write_text('#!/bin/bash\nexit 0\n')
+        self.assertEqual(self.call()['recovery']['outcome'], 'unresolved')
+        self.assertFalse(self.call('unsubmitted', confirmed=True)['applied'])
+        with self.assertRaises(jobs.StepError):
+            jobs.submit('step_test', 'expression', self.inputs)
+
+    def test_real_preflight_stop_can_be_recovered_after_lost_reply_without_submission(self):
+        self.gexp.unlink()
+        shell = jobs._shell
+        def lose_reply(script, **kwargs):
+            result = shell(script, **kwargs)
+            if 'sbatch --parsable' in script:
+                raise OSError('lost after preflight refusal')
+            return result
+        with patch.object(jobs, '_shell', side_effect=lose_reply):
+            record = jobs.submit('step_test', 'expression', self.inputs)
+        self.assertEqual(record['state'], 'unknown')
+        self.assertFalse((self.fake / 'sbatch_args').exists())
         self.assertEqual(self.call()['recovery']['outcome'], 'unsubmitted')
         self.assertTrue(self.call('unsubmitted', confirmed=True)['applied'])
+
+    def test_legacy_rejected_receipt_is_not_proof_of_non_submission(self):
+        self.uncertain('rejected', candidates='', marker='')
+        self.assertEqual(self.call()['recovery']['outcome'], 'unresolved')
+        self.assertFalse(self.call('unsubmitted', confirmed=True)['applied'])
 
     def test_foreign_markers_old_jobs_and_incomplete_queries_cannot_unlock(self):
         record = self.uncertain()

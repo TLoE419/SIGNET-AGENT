@@ -275,12 +275,13 @@ class SignetApiTest(unittest.TestCase):
         batch.write_text('#!/bin/bash\necho temporarily-refused >&2\nexit 1\n')
         self.assertEqual(self.submit()[0], 502)
         record = self.call('GET', path)[1]
-        self.assertEqual((record['state'], record['attempt']), ('failed', 2))
+        self.assertEqual((record['state'], record['attempt']), ('unknown', 2))
         batch.write_text('#!/bin/bash\n' + test_signet_jobs.FAKE_SLURM['sbatch'] + '\n')
         self.slurm(sbatch_reply='222')
         status, record = self.submit()
-        self.assertEqual((status, record['attempt']), (202, 3))
-        self.assertIn('temporarily-refused', (self.remote_dir / 'steps/expression.attempt2.sbatch.err').read_text())
+        self.assertEqual(status, 409)
+        self.assertEqual(self.call('GET', path)[1]['attempt'], 2)
+        self.assertIn('temporarily-refused', (self.remote_dir / 'steps/expression.sbatch.err').read_text())
 
     def test_refresh_recovers_a_saved_missing_marker_failure_and_downloads_results(self):
         status, record = self.submit()

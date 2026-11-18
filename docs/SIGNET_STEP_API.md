@@ -647,7 +647,7 @@ If the connection dropped during `sbatch`, the response is 202 with `"state": "u
 | 412 | Not connected; container or `sbatch` missing |
 | 502 | Upload or `sbatch` failed |
 
-When preflight checks refuse the submission before remote files move (400, 409 or 412), the previous record and local results are restored. Once preparation starts, the new attempt number is consumed even if `sbatch` refuses the job (502): its record remains `failed` without a job ID, its script and error are kept, and the next retry gets the next number. Existing archives are never overwritten.
+When preflight checks refuse the submission before remote files move (400, 409 or 412), the previous record and local results are restored. Once preparation starts, the new attempt number is consumed and its script/error are retained. A failure proven to precede the scheduler invocation can remain `failed`; after invocation, a client failure or lost reply leaves acceptance `unknown` and blocks replay until evidence is reconciled. A nonzero client exit alone does not prove the scheduler rejected the job. Existing archives are never overwritten.
 
 ### 5.7 `GET /signet/runs/{run_id}/steps/{step}[?refresh=1]`
 
@@ -1003,13 +1003,16 @@ only restores a submitted record; normal status and output validation must still
 establish completion. A name-only match or a marker without scheduler evidence
 cannot adopt a job automatically through status polling.
 
-Only an explicit remote rejection receipt, absent job marker, and successful
-scheduler queries with no matching comment can offer `unsubmitted`. Confirming
+Only an owned `not_dispatched` receipt proving the script stopped before invoking
+`sbatch`, an absent job marker, and successful scheduler queries with no matching
+comment can offer `unsubmitted`. Confirming
 that outcome records a failed attempt eligible for the existing manual retry
 flow; it never submits work itself. Retrying creates a fresh attempt/token and
 keeps the earlier record and receipt. Missing receipts (including legacy runs),
 multiple matches, ownership mismatches, failed queries or a prepared receipt
-with empty scheduler results remain unresolved and blocked. A scheduler without
+with empty scheduler results remain unresolved and blocked. Legacy `rejected`
+receipts and ambiguous nonzero scheduler-client replies also remain unresolved.
+A scheduler without
 comment/accounting support therefore needs external investigation; empty
 queries never establish safety to replay. Existing active-operation and output
 safety guards remain in force.

@@ -770,18 +770,27 @@ def _submit_script(config, run_id, name, step, directory, files, resources, opti
     checks = _input_checks(files)
     job = _job_script(config, run_id, name, step, directory, binds, options, settings, dataset_plan)
     receipt = f"$D/steps/{name}.submission.{submission_token}" if submission_token else "/dev/null"
+    receipt_setup = ''
+    if submission_token:
+        receipt_setup = (f'R="{receipt}"\n'
+                         '(set -o noclobber; printf "checking\\n" > "$R") || { say conflict receipt; exit 6; }\n'
+                         'dispatched=no\n'
+                         'trap \'rc=$?; if [ "$dispatched" = no ] && [ "$rc" -ne 0 ]; then '
+                         'printf "not_dispatched\\n" > "$R"; fi\' EXIT\n')
     comment = f" --comment={shlex.quote(submission_token)}" if submission_token else ""
     sbatch = (f'sbatch --parsable --partition={config["partition"]} --cpus-per-task={resources["cpus"]} '
               f'--mem={resources["mem_gb"]}G --time={resources["time"]}{comment} "$D/steps/{name}.sbatch"')
     return _say() + f'''D={q(directory)}
-{checks}{needs}if [ ! -s {q(config['image'])} ]; then say not_ready container; exit 5; fi
+{receipt_setup}{checks}{needs}if [ ! -s {q(config['image'])} ]; then say not_ready container; exit 5; fi
 if ! command -v sbatch >/dev/null 2>&1; then say not_ready sbatch; exit 5; fi
 {keep}if [ -e "$D/steps/{name}.job" ]; then say conflict submitted; exit 6; fi
 say attempt_started yes
-cat > "$D/steps/{name}.sbatch" <<'SIGNET_JOB'
+cat > "$D/steps/{name}.sbatch" <<'SIGNET_JOB' || exit 8
 {job}SIGNET_JOB
-printf 'prepared\\n' > "{receipt}" || exit 8
-job="$({sbatch} 2>"$D/steps/{name}.sbatch.err")" || {{ printf 'rejected\\n' > "{receipt}"; say sbatch_failed "$(head -c 300 "$D/steps/{name}.sbatch.err")"; exit 7; }}
+printf 'dispatching\\n' > "{receipt}" || exit 8
+dispatched=yes
+say submission_dispatched yes
+job="$({sbatch} 2>"$D/steps/{name}.sbatch.err")" || {{ say sbatch_failed "$(head -c 300 "$D/steps/{name}.sbatch.err")"; exit 7; }}
 job="${{job%%;*}}"   # --parsable prints "<id>;<cluster>" on multi-cluster setups
 printf '%s\\n' "$job" > "$D/steps/{name}.job"
 printf 'accepted %s\\n' "$job" > "{receipt}"
@@ -1071,6 +1080,11 @@ def submit(run_id, name, inputs, resources=None, options=None):
         if code == 0:
             _change(record, 'unknown', reason='Submission returned no valid job ID; check status. Do not resubmit.')
             return _save(root, record)
+        if values.get('submission_dispatched') == 'yes':
+            _change(record, 'unknown', checked_at=0,
+                    reason='The submission client failed after contacting Slurm; acceptance is unconfirmed. Review recovery evidence before resubmitting.')
+            _save(root, record)
+            raise StepError('remote_failed', record['reason'])
         # Once remote files moved, consume this attempt even if sbatch refused it.
         # Reusing its number would archive the new script over the previous one.
         if values.get('attempt_started') == 'yes':

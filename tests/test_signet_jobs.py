@@ -322,7 +322,7 @@ class StepsTest(unittest.TestCase):
         self.assertEqual(steps.status('step_test', 'expression', refresh=True)['state'], 'completed')
         self.assertEqual((self.root / 'work' / OUTPUTS[0]).read_text(), 'data\n')
 
-    def test_sbatch_refusal_consumes_attempt_and_preserves_every_archive(self):
+    def test_sbatch_client_error_consumes_attempt_but_blocks_replay_and_preserves_archives(self):
         self.failed_expression()
         folder = self.remote_dir / 'steps'
         original = {suffix: (folder / f'expression.{suffix}').read_bytes()
@@ -335,27 +335,25 @@ class StepsTest(unittest.TestCase):
         batch.write_text('#!/bin/bash\necho temporarily-refused >&2\nexit 1\n')
         self.assertEqual(self.code_of(steps.submit, 'step_test', 'expression', inputs), 'remote_failed')
         refused = json.loads((self.root / 'steps/expression.json').read_text())
-        self.assertEqual((refused['state'], refused['attempt']), ('failed', 2))
+        self.assertEqual((refused['state'], refused['attempt']), ('unknown', 2))
         self.assertNotIn('job_id', refused)
         refused_script = (folder / 'expression.sbatch').read_bytes()
         batch.write_text('#!/bin/bash\n' + FAKE_SLURM['sbatch'] + '\n')
-        result = steps.submit('step_test', 'expression', inputs)
-        self.assertEqual(result['attempt'], 3)
+        self.assertEqual(self.code_of(steps.submit, 'step_test', 'expression', inputs), 'conflict')
         for suffix, data in original.items():
             self.assertEqual((folder / f'expression.attempt1.{suffix}').read_bytes(), data)
-        self.assertEqual((folder / 'expression.attempt2.sbatch').read_bytes(), refused_script)
-        self.assertIn('temporarily-refused', (folder / 'expression.attempt2.sbatch.err').read_text())
-        self.assertEqual(json.loads((self.root / 'steps/expression.attempt2.json').read_text()), refused)
+        self.assertEqual((folder / 'expression.sbatch').read_bytes(), refused_script)
+        self.assertIn('temporarily-refused', (folder / 'expression.sbatch.err').read_text())
+        self.assertFalse((self.root / 'steps/expression.attempt2.json').exists())
+        self.assertEqual(json.loads((self.root / 'steps/expression.json').read_text()), refused)
 
-    def test_connection_loss_after_a_refused_retry_never_adopts_the_older_job(self):
+    def test_failed_submission_client_never_adopts_the_older_job_or_replays(self):
         self.failed_expression()
         batch = self.fake / 'bin/sbatch'
         batch.write_text('#!/bin/bash\necho temporarily-refused >&2\nexit 1\n')
         self.assertEqual(self.code_of(steps.submit, 'step_test', 'expression', self.inputs), 'remote_failed')
         batch.write_text('#!/bin/bash\n' + FAKE_SLURM['sbatch'] + '\n')
-        self.lose_connection_on = 'sbatch --parsable'
-        self.assertEqual(steps.submit('step_test', 'expression', self.inputs)['state'], 'unknown')
-        self.lose_connection_on = None
+        self.assertEqual(self.code_of(steps.submit, 'step_test', 'expression', self.inputs), 'conflict')
         self.slurm(sacct_id='12345', sacct='COMPLETED')
         record = steps.status('step_test', 'expression', refresh=True)
         self.assertEqual(record['state'], 'unknown')
