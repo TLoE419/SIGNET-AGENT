@@ -828,6 +828,15 @@ def submit(run_id, name, inputs, resources=None, options=None):
         if previous.get('state') == 'completed':
             raise StepError('conflict', f'Step {name} already completed in this run; use a new run to compute it again.')
         raise StepError('conflict', f'Step {name} of this run is {previous.get("state")}; check its status first.')
+    workspace_retry = None
+    workspace_snapshot = root / 'workspace-genotype.json'
+    if previous and name == 'genotype' and (workspace_snapshot.exists() or workspace_snapshot.is_symlink()):
+        from agent.runtime.workspace_genotype import _retry_context
+        _, workspace_retry, _, _, _ = _retry_context(run_id, previous.get('job_id') or 'none', previous.get('attempt', 1))
+        if signet._settings(root).get('restrict.tcga.geno') != str(workspace_retry['settings']['restrict.tcga.geno']):
+            raise StepError('conflict', 'A workspace retry must retain the original chromosome.')
+        if workspace_retry.get('mode') != 'dataset' and inputs != workspace_retry['inputs']:
+            raise StepError('conflict', 'A workspace retry must retain the original genotype input files.')
     attempt = previous.get('attempt', 1) + 1 if previous else 1
     active = _active_step(root)
     if active:
@@ -835,17 +844,26 @@ def submit(run_id, name, inputs, resources=None, options=None):
     _prerequisites(root, step)
     _check_current(step, signet._settings(root))
     config = _environment()
+    if workspace_retry is not None:
+        from agent.runtime.workspace_genotype import _retry_environment
+        _retry_environment(root, workspace_retry, previous, config)
     directory = _remote_dir(config, root, run_id)
     dataset_plan = None
     if name == 'genotype':
         from agent.runtime.workspace_inputs import staging_plan
-        dataset_plan = staging_plan(root, directory)
+        dataset_plan = staging_plan(root, directory, attempt=attempt)
+        if dataset_plan and inputs != dataset_plan['inputs']:
+            raise StepError('invalid_request', 'Review the input namespace for this genotype attempt before submitting.')
     checked = _inputs(step, inputs, (config['root'] + '/refdata', config['source'] + '/example', directory))
     if previous:
         _ensure_stopped(previous)  # before uploading config.ini or touching any old result
         archived = _attempt_path(root, name, attempt - 1)
         local_results = root / 'steps' / f'{name}.attempt{attempt - 1}.results'
-        if archived.exists() or local_results.exists():
+        local_pairs = [(signet._no_links(root / 'steps' / f'{name}.{suffix}'),
+                        signet._no_links(root / 'steps' / f'{name}.attempt{attempt - 1}.{suffix}'))
+                       for suffix in _JOB_FILES]
+        local_pairs.append((signet._no_links(root / step.download), signet._no_links(local_results)))
+        if archived.exists() or any(destination.exists() for _, destination in local_pairs):
             raise StepError('conflict', 'The previous attempt archive already exists; it will not be overwritten.')
     try:
         fd = os.open(root / '.active', os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
@@ -884,13 +902,18 @@ def submit(run_id, name, inputs, resources=None, options=None):
             # A refused submission has no job of its own; retain the last real ID across it.
             record['previous_job_id'] = previous.get('job_id') or previous.get('previous_job_id')
         archived = _attempt_path(root, name, attempt - 1) if previous else None
+        moved_local = []
+        saved_previous = False
         try:
             _upload(root, directory, token)
             if previous:   # keep the failed attempt's record before the new one replaces it
                 with archived.open('x') as stream:
                     stream.write(json.dumps(previous, indent=2) + '\n')
-                if (root / step.download).exists():
-                    (root / step.download).rename(local_results)
+                saved_previous = True
+                for source, destination in local_pairs:
+                    if source.exists():
+                        source.rename(destination)
+                        moved_local.append((source, destination))
             # Record intent before sbatch: a lost connection from here on may have started a job.
             _change(record, 'submitting')
             _save(root, record)
@@ -907,7 +930,11 @@ def submit(run_id, name, inputs, resources=None, options=None):
                 raise OSError('OpenSSH did not confirm the submission.')
         except OSError as error:
             if record.get('state') != 'submitting':
-                raise StepError('remote_failed', 'HPC3 connection failed before anything was submitted.') from error
+                for source, destination in reversed(moved_local):
+                    destination.rename(source)
+                if saved_previous:
+                    archived.unlink()
+                raise StepError('remote_failed', f'Could not prepare the HPC3 submission; no job was submitted: {error}') from error
             _change(record, 'unknown', reason='Connection lost while submitting; check status before doing anything else.')
             return _save(root, record)
         if code == 0 and re.fullmatch(r'[0-9]+', values.get('job', '')):
@@ -925,8 +952,8 @@ def submit(run_id, name, inputs, resources=None, options=None):
         elif previous:
             _save(root, previous)
             archived.unlink(missing_ok=True)
-            if local_results.exists():
-                local_results.rename(root / step.download)
+            for source, destination in reversed(moved_local):
+                destination.rename(source)
         else:
             _record_path(root, name).unlink(missing_ok=True)
         if 'missing_input' in values:

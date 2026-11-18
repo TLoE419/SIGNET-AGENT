@@ -207,6 +207,63 @@ class StepsTest(unittest.TestCase):
         self.assertEqual(caught.exception.code, 'conflict')
         self.assertIn('already completed', str(caught.exception))
 
+    def test_retry_preserves_local_logs_and_starts_without_old_markers(self):
+        self.failed_expression()
+        folder = self.root / 'steps'
+        originals = {}
+        for suffix in steps._JOB_FILES:
+            originals[suffix] = f'original local {suffix}\n'.encode()
+            (folder / f'expression.{suffix}').write_bytes(originals[suffix])
+        self.assertEqual(steps.submit('step_test', 'expression', self.inputs)['attempt'], 2)
+        for suffix, content in originals.items():
+            self.assertEqual((folder / f'expression.attempt1.{suffix}').read_bytes(), content)
+            self.assertFalse((folder / f'expression.{suffix}').exists())
+
+    def test_retry_refusal_restores_all_local_logs(self):
+        self.failed_expression()
+        folder = self.root / 'steps'
+        originals = {}
+        for suffix in steps._JOB_FILES:
+            originals[suffix] = f'preserve local {suffix}\n'.encode()
+            (folder / f'expression.{suffix}').write_bytes(originals[suffix])
+        self.gexp.unlink()
+        self.assertEqual(self.code_of(steps.submit, 'step_test', 'expression', self.inputs), 'invalid_request')
+        for suffix, content in originals.items():
+            self.assertEqual((folder / f'expression.{suffix}').read_bytes(), content)
+            self.assertFalse((folder / f'expression.attempt1.{suffix}').exists())
+        self.assertFalse((folder / 'expression.attempt1.json').exists())
+
+    def test_retry_does_not_overwrite_an_existing_local_log_archive(self):
+        self.failed_expression()
+        archive = self.root / 'steps/expression.attempt1.out'
+        archive.write_bytes(b'irreplaceable local log\n')
+        calls = len(self.calls)
+        self.assertEqual(self.code_of(steps.submit, 'step_test', 'expression', self.inputs), 'conflict')
+        self.assertEqual(archive.read_bytes(), b'irreplaceable local log\n')
+        self.assertFalse(any('tar xzf' in call for call in self.calls[calls:]))
+        self.assertEqual(steps.status('step_test', 'expression')['job_id'], '12345')
+
+    def test_partial_local_archive_failure_restores_the_previous_attempt(self):
+        self.failed_expression()
+        folder = self.root / 'steps'
+        for suffix in steps._JOB_FILES:
+            (folder / f'expression.{suffix}').write_text(f'old {suffix}\n')
+        previous = (folder / 'expression.json').read_bytes()
+        rename = Path.rename
+
+        def fail_error_log(path, target):
+            if path == folder / 'expression.err':
+                raise OSError('simulated local archival failure')
+            return rename(path, target)
+
+        with patch.object(Path, 'rename', fail_error_log):
+            self.assertEqual(self.code_of(steps.submit, 'step_test', 'expression', self.inputs), 'remote_failed')
+        self.assertEqual((folder / 'expression.json').read_bytes(), previous)
+        self.assertFalse((folder / 'expression.attempt1.json').exists())
+        for suffix in steps._JOB_FILES:
+            self.assertEqual((folder / f'expression.{suffix}').read_text(), f'old {suffix}\n')
+            self.assertFalse((folder / f'expression.attempt1.{suffix}').exists())
+
     def test_unified_history_reads_attempts_created_by_the_existing_retry_flow(self):
         from agent.runtime import workspace_history
         self.failed_expression()

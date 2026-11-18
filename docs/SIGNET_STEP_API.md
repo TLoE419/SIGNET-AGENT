@@ -142,6 +142,8 @@ Inside the API:
 | 14 | `POST /signet/datasets/{dataset_id}/genotype/review` | no | Review this dataset's Stage 1 inputs and reference resources |
 | 15 | `POST /signet/datasets/{dataset_id}/genotype` | yes | Manually submit a dataset-bound genotype run |
 | 16 | `PATCH /signet/history/{history_id}/dataset` | no | Save organizational ownership for an unclassified recorded run |
+| 17 | `GET /signet/runs/{run_id}/genotype/retry` | yes | Review the original inputs and target of a failed or cancelled Stage 1 attempt |
+| 18 | `POST /signet/runs/{run_id}/genotype/retry` | yes | Manually submit the next Stage 1 attempt in that run |
 
 ### Workspace dataset metadata
 
@@ -365,6 +367,42 @@ compatibility. Dataset runs read expression, annotation, and clinical inputs
 from their frozen snapshot, not the current catalog or global selections.
 A differing clinical override is rejected for a frozen run. The original
 unchanged chromosome 1 example endpoints retain their existing behavior.
+
+### Workspace Stage 1 same-run retry
+
+`GET /signet/runs/{run_id}/genotype/retry?expected_job_id=<id|none>&expected_attempt=<N>`
+reviews a failed or cancelled workspace genotype attempt. The expected job ID
+and positive integer attempt must match the current saved record (`none` means
+the prior submission has no job ID). Active, unknown, completed and
+downstream-started runs are rejected. The service confirms scheduler and owned
+child-job termination before allowing a retry. This review does not submit work.
+
+The response includes the original `run_id`, `dataset_id`, `dataset_name`,
+`mode`, reviewed step `inputs`, original `source_inputs`, optional new
+`frozen_inputs`, saved `settings` and `resources`, `limits`, `ready`, `issues`,
+`warnings`, `review_token`, `expected_job_id`, `expected_attempt` and
+`next_attempt`. Source paths, chromosome and run environment remain fixed;
+`mind`, `geno`, `hwe`, interval and compute resources can be reviewed and changed.
+
+`POST /signet/runs/{run_id}/genotype/retry` requires `inputs`, `settings`,
+`resources`, `review_token`, `expected_job_id` (digits or `"none"`),
+`expected_attempt` (integer) and `acknowledge_warnings: true`. It rechecks the
+current attempt, original files, environment and review token before any new
+submission. It returns the ordinary step record with HTTP 202. Duplicate or
+stale requests are rejected; the original `workspace-genotype.json` remains
+unchanged and later reviews are saved separately.
+
+Custom retries freeze the exact original source files under
+`inputs/attempt<N>/{frozen,prepared}` and repeat reference preparation. They do
+not reuse partial preparation or current dataset/reference selections. Original
+source identities must still match. The first attempt retains its original
+`inputs/{frozen,prepared}` layout. Downstream stages use the successful genotype
+attempt's frozen paths. Legacy example runs without original file fingerprints
+state that limitation explicitly. Previous attempt JSON, local/remote saved
+logs, job/exit markers, submission files and results are archived without
+overwriting an existing archive. A pre-start refusal restores local artifacts.
+The shared step submission route also enforces the workspace run's original
+chromosome, input namespace, environment and absence of downstream records.
 
 ### Workspace chromosome 1 review and submission
 

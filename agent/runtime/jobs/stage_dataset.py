@@ -26,7 +26,12 @@ def digest(path):
 def stage(plan):
     print('SIGNET_DATASET_PHASE freezing-inputs', flush=True)
     directory = Path(plan['directory'])
-    base = directory / 'inputs'
+    attempt = plan.get('attempt', 1)
+    if type(attempt) is not int or not 1 <= attempt <= 1000:
+        raise StagingError('The input staging attempt is invalid.')
+    base = directory / 'inputs' / f'attempt{attempt}' if attempt > 1 else directory / 'inputs'
+    if plan.get('inputs_directory', str(base)) != str(base):
+        raise StagingError('The input staging directory does not match this run and attempt.')
     frozen = base / 'frozen'
     prepared = base / 'prepared'
     if base.exists():

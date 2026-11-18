@@ -156,6 +156,20 @@ def submit_genotype_example(handler, url):
     return 202, workspace_genotype.submit_example(**_body(handler, fields, required=fields))
 
 
+def review_genotype_retry(handler, url, run_id):
+    query = _query(url, ('expected_job_id', 'expected_attempt'))
+    attempt = query.get('expected_attempt', '')
+    if set(query) != {'expected_job_id', 'expected_attempt'} or not re.fullmatch(r'[0-9]{1,4}', attempt):
+        raise ApiError(400, 'invalid_request', 'Provide the displayed Stage 1 job ID and attempt number.')
+    return 200, workspace_genotype.review_genotype_retry(run_id, query['expected_job_id'], int(attempt))
+
+
+def submit_genotype_retry(handler, url, run_id):
+    _query(url, ())
+    fields = ('inputs', 'settings', 'resources', 'review_token', 'expected_job_id', 'expected_attempt', 'acknowledge_warnings')
+    return 202, workspace_genotype.submit_genotype_retry(run_id, **_body(handler, fields, required=fields))
+
+
 def review_expression_example(handler, url, run_id):
     _query(url, ())
     return 200, workspace_genotype.review_expression(run_id)
@@ -415,6 +429,7 @@ ROUTES = [
     (re.compile(rf'/signet/datasets/(?P<dataset_id>{_RUN_NAME})/genotype/review'), {'POST': review_dataset_genotype}),
     (re.compile(rf'/signet/datasets/(?P<dataset_id>{_RUN_NAME})/genotype'), {'POST': submit_dataset_genotype}),
     (re.compile(r'/signet/genotype/example'), {'GET': review_genotype_example, 'POST': submit_genotype_example}),
+    (re.compile(rf'/signet/runs/{_RUN}/genotype/retry'), {'GET': review_genotype_retry, 'POST': submit_genotype_retry}),
     (re.compile(rf'/signet/runs/{_RUN}/expression/example'),
      {'GET': review_expression_example, 'POST': submit_expression_example}),
     (re.compile(rf'/signet/runs/{_RUN}/adjust/example'),

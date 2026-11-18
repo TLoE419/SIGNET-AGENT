@@ -22,6 +22,14 @@ change. Custom execution currently supports TCGA data for one autosome with a
 matching raw VCF reference and genetic map. The unchanged built-in chromosome 1
 example retains its existing path.
 
+Failed or cancelled Stage 1 jobs can be reviewed and manually retried in the
+same run. The original files and chromosome remain fixed while quality
+thresholds and compute resources can change. Previous attempt records, saved
+logs and downloaded results are retained. Custom datasets use a fresh input
+directory and repeat reference preparation for every attempt; their original
+sources must remain unchanged and available. Completed runs or runs with
+later-stage records require a new analysis instead.
+
 **Run history** also lists recorded local Agent operations, generic Slurm run
 records, and archived results. Filter by the current dataset, unclassified
 records, or all runs. Same-named runs from different sources remain separate.

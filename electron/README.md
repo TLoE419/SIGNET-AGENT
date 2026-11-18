@@ -159,8 +159,9 @@ logs require the matching existing connection. Empty, missing, unreadable,
 disconnected and truncated logs are displayed explicitly. The response is
 limited to the requested tail and at most 64 KiB.
 Loose current local log files also need a matching saved job marker, because
-retry submission does not archive those local filenames. An old residual file
-is not treated as the new attempt's log.
+older retries may have left those filenames behind. New retries archive local
+job markers, exit markers, logs and submission files with their attempt number.
+An old residual file is not treated as the new attempt's log.
 
 Old Agent operations read only their fixed, owned local stdout/stderr files;
 saved plans do not imply execution. Archives do not borrow live or remote logs.
@@ -201,6 +202,23 @@ fixed chromosome, thresholds, and resource settings, then select **Submit Stage 
 The application tracks the saved job through the queue, execution, and output
 validation. From **Run history**, open the new run and select its Stage 1 result
 to read the collected data and the settings actually submitted.
+
+If Stage 1 failed or was cancelled, open that run's Stage 1 and select
+**Review a new attempt**. Review its original files, adjust quality thresholds,
+imputation chunk length and compute resources, acknowledge the warnings, then manually
+submit the next attempt. This keeps the run ID and dataset identity. **Prepare
+a new run** remains a separate action. Completed, active, unknown, or
+downstream-started runs cannot retry Stage 1; old jobs must be confirmed stopped.
+The original snapshot, previous attempt records, downloaded results and saved
+logs remain available in Run history.
+
+For a custom dataset, every retry copies the original source files into a new
+attempt-specific input directory and prepares its references again. The
+original files and their recorded identities must still match; changes in Data
+or global reference selections are not used. The chromosome and run environment
+remain fixed. After a successful retry, Stages 2 and 3 use its new frozen inputs.
+Legacy example runs without source fingerprints disclose that limitation in
+the review. Opening the review never submits work automatically.
 
 After Stage 1 completes, open the same run from **Run history** and select
 **Stage 2**. Confirm the example expression file, gene annotation, chromosome

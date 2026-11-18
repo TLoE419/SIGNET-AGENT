@@ -92,22 +92,30 @@ def review(dataset_id, inputs):
     return result
 
 
-def frozen_paths(directory):
-    base = directory + '/inputs'
+def frozen_paths(directory, attempt=1):
+    if type(attempt) is not int or not 1 <= attempt <= 1000:
+        raise jobs.StepError('invalid_request', 'The genotype attempt number is invalid.')
+    base = directory + '/inputs' + (f'/attempt{attempt}' if attempt > 1 else '')
     return {'genotype': [base + '/prepared/study.ped', base + '/prepared/study.map'],
             'expression': [base + '/frozen/expression'], 'clinical': [base + '/frozen/clinical'],
             'annotation': base + '/frozen/annotation', 'ref': base + '/prepared/ref/chr',
             'gmap': base + '/prepared/gmap/chr'}
 
 
-def frozen_checks(directory):
-    frozen = frozen_paths(directory)
+def frozen_checks(directory, attempt=1):
+    frozen = frozen_paths(directory, attempt)
     paths = [directory + '/work/' + relative for relative in REQUIRED]
     paths += [frozen['expression'][0], frozen['clinical'][0], frozen['annotation']]
     return jobs._input_checks([('frozen_dataset', path, directory) for path in paths])
 
 
-def staging_plan(root, directory):
+def step_inputs(directory, attempt=1):
+    frozen = frozen_paths(directory, attempt)
+    return {'ped.file': frozen['genotype'][0], 'map.file': frozen['genotype'][1],
+            'ref': frozen['ref'], 'gmap': frozen['gmap']}
+
+
+def staging_plan(root, directory, attempt=None):
     path = signet._no_links(root / SNAPSHOT)
     if not path.is_file():
         return None
@@ -123,7 +131,31 @@ def staging_plan(root, directory):
         if (hpc_files._safe_path(item['path']) != item['path'] or str(Path(item['path']).parent) == '/'
                 or not isinstance(item['identity'], list) or len(item['identity']) != 5):
             raise jobs.StepError('invalid_request', 'The frozen dataset source manifest is invalid.')
-    return {'run_id': root.name, 'dataset_id': snapshot['dataset_id'], 'directory': directory, 'source_files': files}
+    if attempt is None:
+        record_path = signet._no_links(root / 'steps/genotype.json')
+        attempt = jobs._load(root, 'genotype').get('attempt', 1) if record_path.is_file() else 1
+    frozen = frozen_paths(directory, attempt)
+    return {'run_id': root.name, 'dataset_id': snapshot['dataset_id'], 'directory': directory,
+            'attempt': attempt, 'inputs_directory': str(Path(frozen['expression'][0]).parent.parent),
+            'inputs': step_inputs(directory, attempt), 'source_files': files}
+
+
+def effective_snapshot(root, snapshot):
+    """Later stages consume the successful attempt's files, not the first failed freeze."""
+    if snapshot.get('mode') != 'dataset':
+        return snapshot
+    path = signet._no_links(root / 'steps/genotype.json')
+    if not path.is_file():
+        return snapshot
+    from agent.runtime.workspace_history import _json
+    record, _ = _json(path)
+    attempt = record.get('attempt', 1)
+    frozen = frozen_paths(snapshot['remote_dir'], attempt)
+    expected = step_inputs(snapshot['remote_dir'], attempt)
+    if (record.get('run_id') != root.name or record.get('step') != 'genotype'
+            or record.get('remote_dir') != snapshot['remote_dir'] or record.get('inputs') != expected):
+        raise jobs.StepError('conflict', 'The current genotype files do not match this run and attempt.')
+    return {**snapshot, 'frozen_inputs': frozen, 'genotype_attempt': attempt}
 
 
 def stage_command(plan):

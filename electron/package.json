@@ -15,6 +15,7 @@
     "test:attempts": "npm run build && electron tests/attempts.cjs",
     "test:cancellation": "npm run build && electron tests/cancellation.cjs",
     "test:logs": "npm run build && electron tests/logs.cjs",
+    "test:genotype-retry": "npm run build && electron tests/genotype-retry.cjs",
     "test:startup": "electron tests/startup.cjs",
     "build": "node scripts/build.mjs",
     "prestart": "npm run build",
