@@ -60,14 +60,27 @@ class VisualizationTest(unittest.TestCase):
         replies = [subprocess.CompletedProcess([], 0), subprocess.CompletedProcess([], 0),
                    subprocess.CompletedProcess([], 0, stdout=archive.getvalue())]
         with patch.object(vr, 'preflight', return_value=True), patch.object(vr.vm, 'remote', side_effect=replies):
-            result = st.dispatch_tool('run_visualization', dict(run_id='fixture', frequencies=str(self.a),
-                  coefficients=str(self.c), gene_positions=str(self.g), frequency=1, top_networks=1))
+            result = st.run_visualization(run_id='fixture', frequencies=str(self.a),
+                  coefficients=str(self.c), gene_positions=str(self.g), frequency=1, top_networks=1)
         self.assertEqual(result['status'], 'failed')
         self.assertGreater(len(result['missing_required_outputs']), 0)
-        result = st.dispatch_tool('run_visualization', dict(run_id='fixture', frequencies=str(self.a),
-                  coefficients=str(self.c), gene_positions=str(self.g), frequency=1, top_networks=1))
+        result = st.run_visualization(run_id='fixture', frequencies=str(self.a),
+                  coefficients=str(self.c), gene_positions=str(self.g), frequency=1, top_networks=1)
         self.assertEqual(result['status'], 'invalid')
         self.assertFalse((self.root/'.active').exists())
+
+    def test_model_dispatch_cannot_execute_the_legacy_visualization_runtime(self):
+        config = (self.root / 'work/config.ini').read_bytes()
+        with patch.object(vr, 'execute') as execute, patch.object(vr.vm, 'remote') as remote:
+            result = st.dispatch_tool('run_visualization', dict(run_id='fixture', frequencies=str(self.a),
+                  coefficients=str(self.c), gene_positions=str(self.g), frequency=1, top_networks=1))
+            self.assertEqual(result['status'], 'needs_review')
+            self.assertFalse(result['executed'])
+            execute.assert_not_called()
+            remote.assert_not_called()
+        self.assertEqual((self.root / 'work/config.ini').read_bytes(), config)
+        self.assertFalse((self.root / 'visualization.json').exists())
+        self.assertFalse((self.root / '.active').exists())
 
     def test_verification_normalizes_newline_and_checks_local_html_assets(self):
         self.root.joinpath('logs/visualization.stdout').write_text('SIGNET_STAGE6_EXPORTS_COMPLETED')

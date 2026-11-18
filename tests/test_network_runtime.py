@@ -36,23 +36,45 @@ class NetworkTest(unittest.TestCase):
         self.patch.stop()
         self.temp.cleanup()
 
-    def test_dispatch_validates_required_parameters_and_matrix_indices_before_network(self):
+    def test_trusted_submission_validates_required_parameters_and_matrix_indices_before_network(self):
         args = dict(self.args)
         del args['bootstraps']
-        self.assertEqual(st.dispatch_tool('submit_network', args)['status'], 'invalid')
+        with self.assertRaises(TypeError):
+            st.submit_network(**args)
         Path(self.args['significant_pairs']).write_text('1 3 .01\n')
         with patch.object(net, 'preflight') as preflight:
-            self.assertEqual(st.dispatch_tool('submit_network', self.args)['status'], 'invalid')
+            with self.assertRaisesRegex(ValueError, 'Pair indices'):
+                st.submit_network(**self.args)
             preflight.assert_not_called()
         self.assertFalse((self.root / '.active').exists())
         self.assertFalse((self.root / 'network.json').exists())
+
+    def test_model_dispatch_cannot_execute_or_query_the_legacy_network_runtime(self):
+        saved = net.save(self.root, {'status': 'unknown', 'executed': 'unknown',
+                                    'remote_directory': '/tmp/signet-agent-network/network_test'})
+        config = (self.root / 'work/config.ini').read_bytes()
+        with patch.object(net, 'submit') as submit, patch.object(net, 'status') as status, \
+                patch.object(vm, 'remote') as remote:
+            for name, arguments in [('submit_network', self.args), ('cancel_network', {'run_id': 'network_test'})]:
+                result = st.dispatch_tool(name, arguments)
+                self.assertEqual(result['status'], 'needs_review')
+                self.assertFalse(result['executed'])
+            result = st.dispatch_tool('get_network_status', {'run_id': 'network_test'})
+            self.assertEqual(result['status'], 'invalid')
+            self.assertFalse(result['executed'])
+            submit.assert_not_called()
+            status.assert_not_called()
+            remote.assert_not_called()
+        self.assertEqual((self.root / 'work/config.ini').read_bytes(), config)
+        self.assertEqual(json.loads((self.root / 'network.json').read_text()), saved)
+        self.assertFalse((self.root / '.active').exists())
 
     def test_async_submission_bundle_is_scoped_and_replay_blocked(self):
         (self.project / '.env').write_text('PRIVATE')
         (self.root / 'work/script/.extra-secret').write_text('PRIVATE')
         ok = subprocess.CompletedProcess([], 0, stdout=b'')
         with patch.object(net, 'preflight', return_value=True), patch.object(vm, 'remote', return_value=ok) as remote:
-            result = st.dispatch_tool('submit_network', self.args)
+            result = st.submit_network(**self.args)
         self.assertEqual(result['status'], 'submitted')
         self.assertEqual(result['executed'], 'unknown')
         payload = remote.call_args_list[0].kwargs['input']
@@ -68,22 +90,23 @@ class NetworkTest(unittest.TestCase):
             self.assertIn(b'queue = local', config)
             self.assertNotIn(str(self.project).encode(), config)
         st._verify_source(self.root / 'work')
-        self.assertEqual(st.dispatch_tool('submit_network', self.args)['status'], 'invalid')
+        with self.assertRaisesRegex(ValueError, 'Network was already attempted'):
+            st.submit_network(**self.args)
 
     def test_uncertain_launch_never_replays_and_queries_do_not_launch(self):
         ok = subprocess.CompletedProcess([], 0, stdout=b'')
         with patch.object(net, 'preflight', return_value=True), patch.object(vm, 'remote', side_effect=[ok, subprocess.TimeoutExpired('ssh', 15)]):
-            self.assertEqual(st.dispatch_tool('submit_network', self.args)['status'], 'unknown')
+            self.assertEqual(st.submit_network(**self.args)['status'], 'unknown')
         active = subprocess.CompletedProcess([], 0, stdout=json.dumps({'status':'running','executed':True,'jobs':{}}).encode())
         with patch.object(vm, 'remote', return_value=active) as remote:
-            self.assertEqual(st.dispatch_tool('get_network_status', {'run_id':'network_test'})['status'], 'running')
+            self.assertEqual(st.get_network_status('network_test')['status'], 'running')
         self.assertEqual(remote.call_count, 1)
         self.assertTrue(remote.call_args.args[0].startswith('cat '))
 
     def test_exit_zero_requires_independent_output_verification_and_preserves_logs(self):
         ok = subprocess.CompletedProcess([], 0, stdout=b'')
         with patch.object(net, 'preflight', return_value=True), patch.object(vm, 'remote', return_value=ok):
-            st.dispatch_tool('submit_network', self.args)
+            st.submit_network(**self.args)
         buffer = io.BytesIO()
         with tarfile.open(fileobj=buffer, mode='w:gz') as archive:
             data = b'partial\n'
@@ -92,7 +115,7 @@ class NetworkTest(unittest.TestCase):
         state = {'status':'process_completed','executed':True,'returncode':0,'jobs':{}}
         with patch.object(vm, 'remote', side_effect=[subprocess.CompletedProcess([],0,stdout=json.dumps(state).encode()),
                 subprocess.CompletedProcess([],0,stdout=buffer.getvalue())]), patch.object(net,'verify',side_effect=ValueError('missing output')):
-            result = st.dispatch_tool('get_network_status', {'run_id':'network_test'})
+            result = st.get_network_status('network_test')
         self.assertEqual(result['status'], 'verification_failed')
         self.assertTrue(result['collected'])
         with patch.object(vm, 'remote') as remote:

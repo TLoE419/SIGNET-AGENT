@@ -84,10 +84,24 @@ class RuntimeTest(unittest.TestCase):
     def test_real_tool_routes_mac_stage_four_only(self):
         f = next(iter(self.values.values()))
         with patch.object(st.sys, 'platform', 'darwin'), patch.object(rt, 'execute_cis', return_value={'status': 'fixture'}) as execute:
-            result = st.dispatch_tool('cis_eqtl', dict(run_id='fixture', expression=f, expression_with_pc=f,
-                genotype=f, snp_map=f, snp_maf=f, gene_positions=f))
+            result = st.cis_eqtl(run_id='fixture', expression=f, expression_with_pc=f,
+                genotype=f, snp_map=f, snp_maf=f, gene_positions=f)
             self.assertEqual(result['status'], 'fixture')
             self.assertEqual(execute.call_args.args[1]['alpha.cis'], '0.05')
+        self.assertFalse((self.root / '.active').exists())
+
+    def test_model_dispatch_cannot_execute_the_legacy_cis_runtime(self):
+        f = next(iter(self.values.values()))
+        config = (self.root / 'work/config.ini').read_bytes()
+        with patch.object(rt, 'execute_cis') as execute, patch.object(rt, 'remote') as remote:
+            result = st.dispatch_tool('cis_eqtl', dict(run_id='fixture', expression=f, expression_with_pc=f,
+                genotype=f, snp_map=f, snp_maf=f, gene_positions=f))
+            self.assertEqual(result['status'], 'needs_review')
+            self.assertFalse(result['executed'])
+            execute.assert_not_called()
+            remote.assert_not_called()
+        self.assertEqual((self.root / 'work/config.ini').read_bytes(), config)
+        self.assertFalse((self.root / 'cis_eqtl.json').exists())
         self.assertFalse((self.root / '.active').exists())
 
     def test_execution_retrieves_evidence_and_does_not_trust_exit_zero(self):
