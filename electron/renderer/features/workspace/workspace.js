@@ -704,24 +704,117 @@
     </li>`;
   }).join("");
   const timelineSummaries = new Map();
+  const timelineRevision = (run, stage) => {
+    const job = run.jobs?.[historySteps[stage - 1]];
+    return JSON.stringify([run.revision, job?.record_revision, job?.attempt, job?.job_id,
+      job?.state ?? job?.status, job?.settings, job?.options]);
+  };
+  function rememberTimelineResult(run, stage, result, state = "ready") {
+    timelineSummaries.set(historyKey(run) + ":" + stage, {revision: timelineRevision(run, stage), result, state});
+    renderRunTimeline();
+  }
+  function timelineRun() {
+    if (app.dataset.nav === "history") {
+      const matching = matchingHistoryRuns();
+      return selectedHistoryResult() ?? matching.find(run => historyKey(run) === selectedRuns.get(historySelectionKey())) ?? matching[0];
+    }
+    return runsForDataset().find(run => historyKey(run) === analysisRunByDataset.get(activeDataset.id));
+  }
+  function timelineOutput(stage, result, language) {
+    const local = (zh, en) => [zh, en][language];
+    const metric = (zh, en, value) => Number.isFinite(value) ? `${local(zh, en)} ${countLabel.format(value)}` : null;
+    if (stage === 3) {
+      const counts = result.matching ?? {};
+      return [metric("基因型樣本", "Genotype samples", counts.genotype),
+        metric("表現量樣本", "Expression samples", counts.expression),
+        metric("配對樣本", "Matched samples", counts.matched), metric("保留樣本", "Retained samples", counts.retained),
+        metric("排除樣本", "Excluded samples", counts.excluded), metric("主成分數", "Principal components", result.npc)]
+        .filter(Boolean).join(" · ");
+    }
+    if (stage === 6) {
+      return [metric("基因數", "Genes", result.graph?.counts?.genes),
+        metric("連線數", "Edges", result.graph?.counts?.connections)].filter(Boolean).join(" · ");
+    }
+    return viewArchivedStep(stage, result.summary, language).metrics
+      .map(([label, value]) => `${label} ${countLabel.format(value)}`).join(" · ");
+  }
+  function renderTimelineThumbnail(svg, stage, result) {
+    svg.replaceChildren();
+    if (!result) return false;
+    const mark = (tag, attributes) => {
+      const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
+      for (const [key, value] of Object.entries(attributes)) node.setAttribute(key, value);
+      svg.append(node);
+    };
+    if (stage === 3) {
+      const source = result.pca?.points ?? [];
+      const stride = Math.max(1, Math.ceil(source.length / 48));
+      const points = source.filter((point, index) => index % stride === 0 && point.length >= 2 && point.every(Number.isFinite));
+      const x = points.map(point => point[0]), y = points.map(point => point[1]);
+      const left = Math.min(...x), bottom = Math.min(...y);
+      const width = Math.max(...x) - left || 1, height = Math.max(...y) - bottom || 1;
+      for (const point of points) mark("circle", {cx: 5 + (point[0] - left) / width * 122,
+        cy: 31 - (point[1] - bottom) / height * 26, r: 1.4, fill: "#5389b2"});
+    } else if (stage === 6) {
+      const nodes = (result.graph?.nodes ?? []).slice(0, 24);
+      const positions = layoutStage6(nodes);
+      for (const edge of (result.graph?.edges ?? []).filter(edge => positions[edge.source] && positions[edge.target]).slice(0, 48)) {
+        const [x1, y1] = positions[edge.source], [x2, y2] = positions[edge.target];
+        mark("line", {x1: x1 * 1.22 + 5, y1: y1 * .26 + 5, x2: x2 * 1.22 + 5, y2: y2 * .26 + 5,
+          stroke: "#9eb8cb", "stroke-width": .7});
+      }
+      for (const [x, y] of Object.values(positions)) mark("circle", {cx: x * 1.22 + 5, cy: y * .26 + 5, r: 1.6, fill: "#5389b2"});
+    } else {
+      const bars = viewArchivedStep(stage, result.summary, 0).bars.slice(0, 24);
+      const maximum = Math.max(...bars.map(([, value]) => value), 1);
+      const width = 124 / bars.length;
+      bars.forEach(([, value], index) => mark("rect", {x: 4 + index * width, y: 32 - value / maximum * 28,
+        width: Math.max(width - 2, 1), height: value / maximum * 28, fill: "#80a9c8"}));
+    }
+    return svg.childElementCount > 0;
+  }
   function renderRunTimeline() {
-    const run = selectedHistoryResult() ?? findHistoryRun(requestedStage6Run);
-    const english = root.lang === "en";
+    const run = timelineRun();
+    const language = root.lang === "en" ? 1 : 0;
+    const local = (zh, en) => [zh, en][language];
+    timeline.dataset.historyId = run ? historyKey(run) : "";
     for (const button of timeline.querySelectorAll("[data-stage]")) {
       const stage = Number(button.dataset.stage);
       const entry = button.closest(".ml-stage-entry");
       const job = run?.jobs?.[historySteps[stage - 1]];
-      const summary = run && timelineSummaries.get(historyKey(run) + ":" + stage);
+      const saved = run && timelineSummaries.get(historyKey(run) + ":" + stage);
+      const readable = run && (canReadStage(run, stage) || stage === 6 && canReadGraph(run));
+      const evidence = readable && saved?.revision === timelineRevision(run, stage) ? saved : null;
+      const result = evidence?.state === "ready" ? evidence.result : null;
       entry.querySelector(".ml-stage-note").textContent = run
-        ? historyStateLabel(job?.state ?? job?.status, run.source === "recorded")
-        : (english ? "Select a run to view saved results." : "選擇執行以查看保存結果。");
+        ? (run.source === "recorded" ? local("最後保存的狀態：", "Last recorded state: ") : "") +
+          genotypeHistoryState(job?.state ?? job?.status)[language]
+        : local("選擇執行以查看保存結果。", "Select a run to view saved results.");
       const values = entry.querySelectorAll(".ml-stage-detail dd");
-      values[0].textContent = job?.settings ? JSON.stringify(job.settings)
-        : (english ? "No saved settings" : "未保存設定");
-      values[1].textContent = summary ? JSON.stringify(summary)
-        : (english ? "No result summary loaded" : "尚無已載入的結果摘要");
-      // Never present the demonstration drawing as evidence for a selected run.
-      entry.querySelector(".ml-stage-preview").hidden = true;
+      const savedJob = result?.job ?? job;
+      const settings = {...savedJob?.settings, ...savedJob?.options};
+      if (stage === 3 && result && settings.npc == null) settings.npc = result.npc;
+      if (stage === 6 && result) {
+        if (settings.freq == null) settings.freq = result.frequency;
+        if (settings.ntop == null) settings.ntop = result.top_networks;
+      }
+      const descriptions = Object.entries(settings).map(([key, value]) =>
+        `${savedSettingLabels[key]?.[language] ?? key}: ${["string", "number", "boolean"].includes(typeof value)
+          ? value : local("未提供可讀取的設定值", "No readable saved value")}`);
+      for (const [key, label] of [["cpus", stage === 5 ? local("監控工作核心數", "Controller job cores") : local("排程工作核心數", "Scheduled job cores")],
+        ["mem_gb", local("排程記憶體（GB）", "Scheduled memory (GB)")], ["time", local("排程時間上限", "Scheduled time limit")],
+        ["hours", local("排程時數上限", "Scheduled hour limit")]]) {
+        if (savedJob?.resources?.[key] != null) descriptions.push(`${label}: ${savedJob.resources[key]}`);
+      }
+      values[0].textContent = descriptions.join(" · ") || local("未保存設定", "No saved settings");
+      values[1].textContent = result ? timelineOutput(stage, result, language)
+        : evidence?.state === "error" ? local("無法載入保存結果，請開啟階段後重試。", "Could not load saved results; open the stage to retry.")
+        : evidence?.state === "empty" || !readable ? local("尚無可讀取的保存結果。", "No readable saved result is available.")
+        : local("開啟這個階段以讀取保存摘要。", "Open this stage to load its saved summary.");
+      // Thumbnails use only the selected saved result; never the demonstration drawing.
+      const preview = entry.querySelector(".ml-stage-preview");
+      preview.hidden = !renderTimelineThumbnail(preview.querySelector(".ml-stage-thumbnail"), stage, result);
+      preview.title = local("保存結果的縮圖（最多 48 個樣本或 24 個基因）", "Saved result preview (up to 48 samples or 24 genes)");
     }
   }
   const stageButtons = timeline.querySelectorAll(".ml-stage-button");
@@ -1339,7 +1432,6 @@
     const language = root.lang === "en" ? 1 : 0;
     const state = analysisNetwork.dataset.runState;
     const run = stage6RunsForView().find(run => historyKey(run) === stage6RunSelect.value);
-    const [counts, frequency, topNetworks] = [stage6Result?.graph.counts, stage6Result?.frequency, stage6Result?.top_networks];
     const empty = stage6Result?.graph.edges.length === 0;
     stage6Source.textContent = run ? historySourceName(run)[language] : ["執行", "Run"][language];
     stage6RunSelect.options[0].textContent = ["選擇執行", "Select a run"][language];
@@ -1350,10 +1442,7 @@
     stage6Status.textContent = (stage6Labels[empty ? "no-edges" : state] ?? ["", ""])[language];
     stage6Summary.hidden = !stage6Status.hidden;
     stage6Retry.hidden = !["empty", "list-error", "load-error"].includes(state);
-    byId("stage6-settings").textContent = Number.isFinite(frequency) && Number.isInteger(topNetworks)
-      ? [`頻率門檻 ${frequency} · 顯示前 ${topNetworks} 個子網路`, `Frequency threshold ${frequency} · Top ${topNetworks} subnetworks`][language]
-      : "—";
-    byId("stage6-output").textContent = counts ? networkOutput([counts.genes, counts.connections])[language] : "—";
+    renderRunTimeline();
   }
 
   function setStage6RunState(state) {
@@ -1432,11 +1521,13 @@
         [source, target, frequency, coefficient]), selectedStage6Genes.get(historyId));
       stage6Result = {...result, history_id: historyId, graph: {...result.graph, nodes, edges,
         counts: {...result.graph.counts, genes: nodes.length, connections: edges.length}}};
+      rememberTimelineResult(run, 6, result);
       analysisNetwork.dataset.runId = runId;
       analysisNetwork.dataset.historyId = historyId;
       setStage6RunState("ready");
     } catch {
       if (!request.signal.aborted) {
+        rememberTimelineResult(run, 6, null, "error");
         setLiveNetwork({}, []);
         setStage6RunState("load-error");
       }
@@ -1622,6 +1713,9 @@
     ncores: ["每個計算工作核心數", "Compute job cores"],
     memory: ["每個計算工作記憶體（GB）", "Compute job memory (GB)"],
     walltime: ["每個計算工作時間上限", "Compute job time limit"],
+    npc: ["主成分數", "Principal components"],
+    freq: ["頻率門檻", "Frequency threshold"],
+    ntop: ["顯示的子網路數上限", "Maximum displayed subnetworks"],
   };
   const savedStepStates = {
     loading: ["讀取階段封存結果…", "Loading the archived stage result…"],
@@ -1774,14 +1868,14 @@
       if (request.signal.aborted) return;
       if (result.run_id !== runId || result.stage !== stage) throw new Error("Result does not match the selected run and stage");
       archivedStepResult = result;
-      timelineSummaries.set(historyId + ":" + stage, result.summary);
-      renderRunTimeline();
+      rememberTimelineResult(run, stage, result);
       archivedStepPanel.dataset.runId = runId;
       archivedStepPanel.dataset.historyId = historyId;
       archivedStepPanel.dataset.runState = "ready";
     } catch (error) {
       if (request.signal.aborted) return;
       archivedStepPanel.dataset.runState = error.status === 404 ? "empty" : "error";
+      rememberTimelineResult(run, stage, null, archivedStepPanel.dataset.runState);
     }
     renderArchivedStep();
   }
@@ -1811,12 +1905,14 @@
       if (request.signal.aborted) return;
       if (result.run_id !== runId) throw new Error("Stage 3 result belongs to a different run");
       stage3Result = result;
+      rememberTimelineResult(run, 3, result);
       stage3HistoryPanel.dataset.runId = runId;
       stage3HistoryPanel.dataset.historyId = historyId;
       stage3HistoryPanel.dataset.runState = "ready";
     } catch (error) {
       if (request.signal.aborted) return;
       stage3HistoryPanel.dataset.runState = error.status === 404 ? "empty" : "error";
+      rememberTimelineResult(run, 3, null, stage3HistoryPanel.dataset.runState);
     }
     renderStage3History();
   }
