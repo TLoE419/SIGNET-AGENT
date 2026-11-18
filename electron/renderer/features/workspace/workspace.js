@@ -703,6 +703,27 @@
       </dl>
     </li>`;
   }).join("");
+  const timelineSummaries = new Map();
+  function renderRunTimeline() {
+    const run = selectedHistoryResult() ?? findHistoryRun(requestedStage6Run);
+    const english = root.lang === "en";
+    for (const button of timeline.querySelectorAll("[data-stage]")) {
+      const stage = Number(button.dataset.stage);
+      const entry = button.closest(".ml-stage-entry");
+      const job = run?.jobs?.[historySteps[stage - 1]];
+      const summary = run && timelineSummaries.get(historyKey(run) + ":" + stage);
+      entry.querySelector(".ml-stage-note").textContent = run
+        ? historyStateLabel(job?.state ?? job?.status, run.source === "recorded")
+        : (english ? "Select a run to view saved results." : "選擇執行以查看保存結果。");
+      const values = entry.querySelectorAll(".ml-stage-detail dd");
+      values[0].textContent = job?.settings ? JSON.stringify(job.settings)
+        : (english ? "No saved settings" : "未保存設定");
+      values[1].textContent = summary ? JSON.stringify(summary)
+        : (english ? "No result summary loaded" : "尚無已載入的結果摘要");
+      // Never present the demonstration drawing as evidence for a selected run.
+      entry.querySelector(".ml-stage-preview").hidden = true;
+    }
+  }
   const stageButtons = timeline.querySelectorAll(".ml-stage-button");
   const stageResults = root.querySelectorAll(".ml-workspace");
   function syncGenotypeContext() {
@@ -1250,6 +1271,7 @@
         : root.lang === "en" ? "Choose an existing dataset" : "選擇現有資料組";
     }
     syncHistoryLogs();
+    renderRunTimeline();
   }
   function syncHistoryLogs() {
     for (const {view, context} of historyLogViews) view.setContext({...context, language: root.lang, visible: app.dataset.nav === "history"});
@@ -1376,6 +1398,7 @@
   async function loadStage6Run(historyId) {
     stage6Request?.abort();
     requestedStage6Run = historyId;
+    renderRunTimeline();
     stage6Result = null;
     delete analysisNetwork.dataset.runId;
     delete analysisNetwork.dataset.historyId;
@@ -1751,6 +1774,8 @@
       if (request.signal.aborted) return;
       if (result.run_id !== runId || result.stage !== stage) throw new Error("Result does not match the selected run and stage");
       archivedStepResult = result;
+      timelineSummaries.set(historyId + ":" + stage, result.summary);
+      renderRunTimeline();
       archivedStepPanel.dataset.runId = runId;
       archivedStepPanel.dataset.historyId = historyId;
       archivedStepPanel.dataset.runState = "ready";
@@ -2148,6 +2173,7 @@
     renderHistoryStatus();
     syncGenotypeContext();
     syncHistoryLogs();
+    renderRunTimeline();
   }
 
   function updateAnalysisView() {
