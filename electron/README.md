@@ -55,8 +55,16 @@ typed paths, and file sizes. Genotype files can be selected across folders;
 expression and clinical inputs each select one file. Applying checks canonical
 paths, readability, regular-file type, and nonempty size before saving. Cancel
 does not save, and **Use default** restores the dataset's saved defaults.
-This metadata selection does not validate scientific formats or change the
-inputs of the chromosome 1 execution controls.
+**Validate input files** checks the saved dataset on demand: the PED/MAP pair,
+the genes-by-samples expression matrix, required clinical columns, and
+preliminary matching by TCGA patient identifier. It reports file-specific
+errors and counts without returning sample identifiers or data values.
+Expression scale and the meaning of its final five rows require researcher
+confirmation; the pinned SIGNET code transforms the matrix and discards those
+rows. Warnings and incomplete scans are displayed explicitly. Changing files,
+datasets, remote accounts, or environments invalidates the previous report.
+These checks do not change the inputs of the chromosome 1 execution controls
+or start an analysis.
 
 ### Submit the chromosome 1 example
 

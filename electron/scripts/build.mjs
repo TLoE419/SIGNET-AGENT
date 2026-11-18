@@ -10,7 +10,7 @@ for(const [source,output] of [['index.html','index.html'],['features/chat/markdo
  await copyFile(new URL('renderer/'+source,root),new URL('build/renderer/'+output,root));
 }
 await mkdir(new URL('build/renderer/workspace/',root), {recursive:true});
-for (const file of ['index.html', 'workspace.css', 'workspace.js', 'genotype-run.js', 'icons.js', 'interaction.js', 'LUCIDE-LICENSE.txt']) {
+for (const file of ['index.html', 'workspace.css', 'workspace.js', 'genotype-run.js', 'input-validation.js', 'icons.js', 'interaction.js', 'LUCIDE-LICENSE.txt']) {
   await copyFile(new URL('renderer/features/workspace/'+file,root),new URL('build/renderer/workspace/'+file,root));
 }
 // Existing chat/graph controllers share a lexical scope until their React migration.

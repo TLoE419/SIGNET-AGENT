@@ -137,6 +137,7 @@
     });
   }
 
+  let inputValidation;
   const syncInputFiles = (() => {
     const template = byId("current-files-template");
     const inputs = [];
@@ -166,6 +167,7 @@
 
     function renderFiles() {
       for (const input of inputs) renderInput(input);
+      inputValidation?.sync();
     }
 
     async function restoreDefaults(input) {
@@ -231,6 +233,11 @@
     });
     return renderFiles;
   })();
+
+  inputValidation = window.SignetInputValidation.create({root, getDataset: () => ({
+    id: activeDataset.id, name: activeDataset.name, inputs: activeDataset.inputs,
+    persisted: activeDataset.persisted, ready: datasetCatalogReady,
+  })});
 
   function matrixPreview(rows) {
     const colors = ["#edf3f8", "#d7e6f2", "#b7d1e6", "#91b8d7", "#5f92bf", "#306b9f"];

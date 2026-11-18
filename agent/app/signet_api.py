@@ -32,6 +32,7 @@ from urllib.parse import parse_qs
 from agent.runtime import signet_jobs as jobs
 from agent.runtime import workspace_genotype
 from agent.runtime import workspace_datasets
+from agent.runtime import workspace_validation
 import agent.tools.signet as signet
 
 MAX_BODY = 32768
@@ -117,6 +118,11 @@ def create_dataset(handler, url):
 def update_dataset(handler, url, dataset_id):
     _query(url, ())
     return 200, workspace_datasets.update_dataset(dataset_id, **_body(handler, ('inputs',), required=('inputs',)))
+
+
+def validate_dataset(handler, url, dataset_id):
+    _query(url, ())
+    return 200, workspace_validation.validate(dataset_id, **_body(handler, ('inputs',), required=('inputs',)))
 
 
 def review_genotype_example(handler, url):
@@ -349,6 +355,7 @@ ROUTES = [
     (re.compile(r'/signet/catalog'), {'GET': get_catalog}),
     (re.compile(r'/signet/datasets'), {'GET': list_datasets, 'POST': create_dataset}),
     (re.compile(rf'/signet/datasets/(?P<dataset_id>{_RUN_NAME})'), {'PATCH': update_dataset}),
+    (re.compile(rf'/signet/datasets/(?P<dataset_id>{_RUN_NAME})/validate'), {'POST': validate_dataset}),
     (re.compile(r'/signet/genotype/example'), {'GET': review_genotype_example, 'POST': submit_genotype_example}),
     (re.compile(rf'/signet/runs/{_RUN}/expression/example'),
      {'GET': review_expression_example, 'POST': submit_expression_example}),

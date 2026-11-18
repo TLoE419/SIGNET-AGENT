@@ -9,8 +9,11 @@ restart. Each dataset shows only its own run history, whose original files and
 settings remain preserved when current selections change. **Choose remote files**
 browses HPC3 folders after connecting and saves readable, nonempty file paths
 to that dataset. Genotype selections can include multiple files. This selection
-checks file metadata only; scientific format validation and running another
-dataset are separate integration steps.
+checks file metadata only. **Validate input files** separately reads the saved
+remote files without changing them, checks the TCGA input structure, and
+reports preliminary sample overlap and compatibility warnings. It does not
+establish scientific validity; running another dataset is a separate
+integration step.
 
 ## Replacing the Former Desktop Workbench
 

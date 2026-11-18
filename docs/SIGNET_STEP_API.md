@@ -138,6 +138,7 @@ Inside the API:
 | 10 | `GET /signet/datasets` | no | Saved workspace dataset catalog and file selections |
 | 11 | `POST /signet/datasets` | no | Save a new workspace dataset |
 | 12 | `PATCH /signet/datasets/{dataset_id}` | no | Save current file selections for one dataset |
+| 13 | `POST /signet/datasets/{dataset_id}/validate` | no | Read-only structure and preliminary sample matching checks |
 
 ### Workspace dataset metadata
 
@@ -176,9 +177,36 @@ limit). It returns canonical paths and byte sizes for readable, nonempty
 regular files. It checks shared-path restrictions without reading contents,
 writing remote selection state, converting references, or scheduling jobs.
 The UI then saves those paths through the dataset PATCH route. This is a
-metadata check; scientific format validation and use of custom dataset inputs
-in analysis remain separate integration steps. The legacy reference-specific
+metadata check; the separate dataset validation action below checks structure.
+Use of custom dataset inputs in analysis remains a separate integration step. The legacy reference-specific
 `/hpc/files/select` route keeps its own validation and preparation behavior.
+
+`POST /signet/datasets/{dataset_id}/validate` requires `{"inputs": {...}}`
+containing all three current saved input arrays. The service compares this
+snapshot before and after the remote read, returning 409 if it changed. The
+report contains `dataset_id`, `inputs`, `checked_at`, `status`, per-category
+`checks`, preliminary `pairing` counts, file metadata/digests, `limits`,
+`read_only: true`, and `executed: false`. A check has an ID, category, status,
+message, paths, metrics, and bounded issue codes with optional line numbers.
+No sample identifiers, genotype calls, expression values, or clinical values
+are returned to the browser or conversation.
+
+The TCGA check verifies the PED/MAP structure, expression matrix shape and
+numeric cells, clinical columns, and preliminary patient overlap using the
+official third barcode component. It does not reproduce later QC, PCA,
+duplicate-sample filtering, or reference/annotation compatibility. The pinned
+expression code unconditionally drops five final rows and applies
+`round(2^x - 1)`; a structurally readable matrix therefore retains a warning
+because its intended scale and trailing rows cannot be inferred reliably.
+Clinical execution-compatibility warnings are distinct from column/row errors.
+`passed`, `warning`, `failed`, and `incomplete` describe this read-only check,
+not analysis readiness or biological validity.
+
+Remote reads are bounded to 128 MiB per file, 256 MiB total, 4 MiB per line,
+one million rows, and 30 seconds. A limit or detected file change is reported
+as incomplete, never as a complete pass. The service creates no run, writes
+no file, changes no selection, and submits no job. Files may change later;
+future execution must perform a fresh preflight.
 
 ### Workspace chromosome 1 review and submission
 

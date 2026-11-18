@@ -507,6 +507,22 @@ code:not(pre code) {
 #signet-lens-left-preview .ml-input-button:disabled { opacity: .55; cursor: default; }
 #signet-lens-left-preview .ml-input-status { margin: 0; color: #276554; }
 #signet-lens-left-preview .ml-input-status:has(span:not([hidden])) { margin-top: 8px; }
+#signet-lens-left-preview .ml-input-validation { padding-top: 0; }
+#signet-lens-left-preview .ml-input-validation h2 { margin: 0 0 8px; font-size: 16px; }
+#signet-lens-left-preview .ml-input-validation h3 { margin: 0; font-size: 14px; }
+#signet-lens-left-preview .ml-validation-check { margin-top: 14px; padding: 14px; border: 1px solid var(--ml-rule); border-radius: 7px; }
+#signet-lens-left-preview .ml-validation-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+#signet-lens-left-preview .ml-validation-status { padding: 2px 6px; border-radius: 4px; background: #eef1f3; color: var(--ml-muted); white-space: nowrap; }
+#signet-lens-left-preview .ml-validation-status[data-status="passed"] { background: #e9f5ec; color: #2c6941; }
+#signet-lens-left-preview .ml-validation-status[data-status="warning"] { background: #fff3d8; color: #795616; }
+#signet-lens-left-preview .ml-validation-status[data-status="failed"] { background: #fbeceb; color: var(--ml-red); }
+#signet-lens-left-preview .ml-input-validation :is(p, ul) { margin: 9px 0; overflow-wrap: anywhere; }
+#signet-lens-left-preview .ml-input-validation code { overflow-wrap: anywhere; }
+#signet-lens-left-preview .ml-input-validation [data-validation-issue] { color: var(--ml-red); }
+#signet-lens-left-preview .ml-validation-check[data-status="warning"] [data-validation-issue] { color: #795616; }
+#signet-lens-left-preview .ml-input-validation [data-status="warning"] [data-validation-issue] { color: #795616; }
+#signet-lens-left-preview .ml-validation-files { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 12px; }
+#signet-lens-left-preview .ml-validation-files :is(th, td) { padding: 7px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--ml-rule); overflow-wrap: anywhere; }
 #signet-lens-left-preview .ml-key-values {
   display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
   margin: 0; overflow: hidden; border: 1px solid var(--ml-rule); border-radius: 5px;
