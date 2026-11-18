@@ -73,7 +73,8 @@ def _copy_remote(source, source_token, destination, token, files, *, genotype):
     copies = ''.join(f'copy_output {quote(file)} {"required" if required else "optional"} || exit 4\n'
                      for file, required in files.items())
     if genotype:
-        copies += '''copy_output work/tmp/tmpg/impute/impute_Genotype.sizes required || exit 4
+        copies += '''copy_output work/tmp/tmpg/clean_Genotype.fam required || exit 4
+copy_output work/tmp/tmpg/impute/impute_Genotype.sizes required || exit 4
 for map in "$src"/work/tmp/tmpg/impute/clean_Genotype_chr*.map; do
   [ -e "$map" ] || continue
   copy_output "work/tmp/tmpg/impute/${map##*/}" optional || exit 4

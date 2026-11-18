@@ -360,7 +360,7 @@ class SignetApiTest(unittest.TestCase):
                 self.assertIn('Afreq = ' + str(self.remote_dir / 'work/res/resn/signet_Afreq'), config)
             outputs = record.get('required_outputs') or jobs.STEPS[step].required
             extra = {
-                'genotype': ['tmp/tmpg/impute/impute_Genotype.sizes'],
+                'genotype': ['tmp/tmpg/impute/impute_Genotype.sizes', 'tmp/tmpg/clean_Genotype.fam'],
                 'visualize': ['res/resv/signet_top1_freq0.75.html', 'res/resv/signet_circular_top1_freq0.75.png',
                               'res/resv/signet_top1_freq0.75_files/widget.js'],
             }.get(step, [])
@@ -470,12 +470,13 @@ class SignetApiTest(unittest.TestCase):
             endpoint = routes(name) + '/rerun/confirm'
             self.slurm(sbatch_reply=str(5000 + index), sacct='', squeue='')
             if name == 'adjust':
-                remote_input = self.remote_dir / 'work/tmp/tmpg/impute/impute_Genotype.sizes'
-                saved_input = remote_input.read_bytes()
-                remote_input.unlink()
-                self.assertEqual(self.call('POST', endpoint, request)[0], 502)
-                self.assertEqual(sum('sbatch --parsable' in command for command in self.calls), 6 + index)
-                remote_input.write_bytes(saved_input)
+                for required in ('impute/impute_Genotype.sizes', 'clean_Genotype.fam'):
+                    remote_input = self.remote_dir / 'work/tmp/tmpg' / required
+                    saved_input = remote_input.read_bytes()
+                    remote_input.unlink()
+                    self.assertEqual(self.call('POST', endpoint, request)[0], 502)
+                    self.assertEqual(sum('sbatch --parsable' in command for command in self.calls), 6 + index)
+                    remote_input.write_bytes(saved_input)
             with ThreadPoolExecutor(max_workers=2) as pool:
                 responses = list(pool.map(lambda _: self.call('POST', endpoint, request), range(2)))
             self.assertEqual(sorted(code for code, _ in responses), [202, 409], responses)
@@ -493,6 +494,10 @@ class SignetApiTest(unittest.TestCase):
                     self.assertEqual((Path(rerun['remote_dir']) / file).read_bytes(), (self.remote_dir / file).read_bytes())
             if 'genotype' in draft['reused_steps']:
                 self.assertTrue((Path(rerun['remote_dir']) / 'work/tmp/tmpg/impute/impute_Genotype.sizes').is_file())
+                family = 'work/tmp/tmpg/clean_Genotype.fam'
+                self.assertEqual((Path(rerun['remote_dir']) / family).read_bytes(),
+                                 (self.remote_dir / family).read_bytes())
+                self.assertFalse((child / family).exists(), 'Person-level files must stay on HPC3.')
             self.assertEqual((Path(rerun['remote_dir']) / 'steps' / f'{name}.job').read_text().strip(), str(5000 + index))
             if name == 'visualize':
                 self.assertEqual(rerun['settings']['freq'], '0.5')

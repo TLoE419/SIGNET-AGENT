@@ -165,10 +165,10 @@ STEPS = {
         requires=('expression', 'genotype'),
         # script/adj_portal.sh reads the -t and -g results through rest.tcga / resg.tcga
         # (res/rest/signet, res/resg/signet); script/adj/adj_filter.sh also reads -g's
-        # temporary files in tmp/tmpg/impute, a folder no setting can move.
+        # temporary files in tmp/tmpg/impute; adj/pca_prepare.R reads clean_Genotype.fam.
         needs=('res/rest/signet_gexp', 'res/rest/signet_gexpID',
                'res/resg/signet_Geno', 'res/resg/signet_Genotype.sampleID',
-               'tmp/tmpg/impute/impute_Genotype.sizes'),
+               'tmp/tmpg/impute/impute_Genotype.sizes', 'tmp/tmpg/clean_Genotype.fam'),
         # script/adj/adj.sh asks "Enter the number of PCs for population structures";
         # adj_adjust.R uses that many of the 10 genotype PCs as covariates (0 = none).
         prompts={'npc': ('pcs', 3)},

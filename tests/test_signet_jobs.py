@@ -899,6 +899,14 @@ class StepsTest(unittest.TestCase):
         self.assertFalse((self.fake / 'sbatch_args').exists())
         self.assertFalse((self.root / 'steps/adjust.json').exists())   # nothing queued: may retry
 
+    def test_adjust_refused_when_genotype_family_file_is_missing_on_hpc3(self):
+        inputs = self.adjust_ready(needs=[p for p in steps.STEPS['adjust'].needs
+                                         if p != 'tmp/tmpg/clean_Genotype.fam'])
+        with self.assertRaises(steps.StepError) as caught:
+            steps.submit('step_test', 'adjust', inputs)
+        self.assertIn('tmp/tmpg/clean_Genotype.fam', str(caught.exception))
+        self.assertFalse((self.fake / 'sbatch_args').exists())
+
     def test_adjust_completed_downloads_resa(self):
         steps.submit('step_test', 'adjust', self.adjust_ready())
         for relative in steps.STEPS['adjust'].required:
