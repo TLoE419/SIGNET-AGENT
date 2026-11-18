@@ -2521,10 +2521,56 @@
     input.focus();
   });
 
+  // A user's new selection invalidates outstanding navigation, including delayed graph loads.
+  let navigationRevision = 0;
+  let navigationAction = 0;
+  root.addEventListener("click", event => {
+    if (event.isTrusted && event.target.closest("[data-nav-target], [data-nav-right], [data-run-stage], .ml-stage-button, [data-gene], #ml-run-list, #ml-stage6-run")) navigationRevision++;
+  }, true);
+  root.addEventListener("change", event => {
+    if (event.isTrusted) navigationRevision++;
+  }, true);
+  async function applyWorkspaceAction(action, record, revision) {
+    if (!action || action.version !== 1 || !["view_stage", "select_gene"].includes(action.action) ||
+      !Number.isInteger(action.stage) || action.stage < 1 || action.stage > 6 ||
+      typeof action.history_id !== "string" ||
+      !/^(workspace|archive|recorded)--[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(action.history_id) ||
+      Object.keys(action).some(key => !["version", "action", "history_id", "stage", "gene"].includes(key)) ||
+      (action.action === "select_gene" ? action.stage !== 6 || typeof action.gene !== "string" ||
+        !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(action.gene) : action.gene !== undefined)) return false;
+    const actionNumber = ++navigationAction;
+    const current = () => activeChat === record && navigationRevision === revision && navigationAction === actionNumber;
+    const run = findHistoryRun(action.history_id);
+    const savedJob = run?.jobs?.[historySteps[action.stage - 1]];
+    const readable = canReadStage(run, action.stage) || action.stage === 6 && canReadGraph(run);
+    const reviewable = canContinue(run) && (Boolean(savedJob) && savedJob.state !== "not_submitted" &&
+      (action.stage > 1 || savedJob.state !== "completed") || action.stage > 1 && canStartStage(run, action.stage));
+    if (!current() || !run || !(action.action === "select_gene" ? action.stage === 6 && canReadGraph(run) : readable || reviewable)) return false;
+    const dataset = datasets.find(candidate => candidate.id === run.dataset_id);
+    if (run.dataset_id && !dataset) return false;
+    if (dataset) selectDataset(dataset);
+    historyScope = "all";
+    byId("history-scope").value = historyScope;
+    selectedRuns.set(historySelectionKey(), action.history_id);
+    clearHistoryResult();
+    historyResult = {runId: run.run_id, historyId: action.history_id, stage: action.stage};
+    openNavigation("history");
+    if (action.stage === 3) void loadStage3Run();
+    else if (archiveSteps.has(action.stage)) void loadArchivedStep();
+    if (action.action === "select_gene") {
+      await loadStage6Run(action.history_id);
+      if (!current() || historyResult?.historyId !== action.history_id || historyResult.stage !== 6 ||
+        stage6Result?.history_id !== action.history_id || !stage6Result.graph.nodes.includes(action.gene)) return false;
+      analysisNetwork.dispatchEvent(new CustomEvent("lens:select-gene", {detail: {gene: action.gene}}));
+    }
+    return true;
+  }
+
   async function sendMessage() {
     const text = input.value.trim();
     if (chatBusy || !text) return;
     const record = activeChat;
+    const navigationAtSend = navigationRevision;
     const status = byId("chat-status");
     const needsReview = ["需要確認", "Needs review"];
     const ended = ["已結束", "Ended"];
@@ -2547,6 +2593,13 @@
       const event = JSON.parse(line);
       if (["progress", "error", "done"].includes(event.type)) {
         turn.log.textContent += (turn.log.textContent ? "\n" : "") + event.text;
+      }
+      if (event.type === "workspace_action") {
+        void applyWorkspaceAction(event.workspace_action ?? event.text, record, navigationAtSend).then(applied => {
+          if (!applied) turn.log.textContent += "\n" + (root.lang === "en" ? "Navigation ignored: stale selection, unavailable result or invalid target." : "未套用導覽：選取已改變、結果不可用或目標無效。");
+        }).catch(() => {
+          turn.log.textContent += "\n" + (root.lang === "en" ? "Navigation unavailable; no analysis was executed." : "導覽目前不可用；未執行分析。");
+        });
       }
       if (event.type === "answer") {
         renderAgentAnswer(reply, event.text);

@@ -237,7 +237,7 @@ class ChatHandler(BaseHTTPRequestHandler):
                 with self.server.client_factory(timing) as client:
                     context_token = CHAT_CONTEXT.set((self.server.stage6, session))
                     # Panel requests from show_panel go straight to this page as they happen.
-                    ui_token = UI_CHANNEL.set(lambda request: emit('ui', request))
+                    ui_token = UI_CHANNEL.set(lambda request: emit('workspace_action', request['workspace_action']) if 'workspace_action' in request else emit('ui', request))
                     try:
                         answer = run_conversation(client, text.strip(), history,
                                               progress=lambda message: emit('progress', message), http_timing=timing,

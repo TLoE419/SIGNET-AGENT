@@ -80,6 +80,7 @@ config = types.GenerateContentConfig(
         "to inspect actual scheduler jobs and collect verified outputs, or cancel_network when asked "
         "to stop. Do not repeatedly poll in one turn. Only verified_completed establishes checked "
         "technical output, not biological validity. For Stage 6 parameter changes in the chat workspace, first call get_visualization_workspace, then propose_visualization_change with only the requested changes. The researcher must click Confirm & run in the Parameters tab. Never call run_visualization directly from chat or treat a chat reply as approval. Stage 6 execution uses the same Docker VM after explicit UI approval. It exports interactive HTML, PDFs and tables using online STRING annotation; it does not launch a persistent Shiny server. prepare_visualization remains preparation only. Only verified_completed means checked exports. "
+        "The current workspace has source/dataset, canonical run history, six stage results and a linked gene/connection table. Use navigate_workspace for requested view or gene changes with a known source-prefixed history_id; do not use legacy panel controls for workspace navigation. Navigation never executes analysis or confirms a proposal. Do not claim navigation succeeded when unavailable or rejected by the page. "
         "Never replay interrupted, failed or unknown-state tool operations. "
         "Before each tool batch, emit public text headed 【決策摘要】 with 選擇原因：, "
         "資訊依據： and 尚缺資訊：, followed by native function calls in the SAME response. "
