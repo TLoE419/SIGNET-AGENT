@@ -99,6 +99,27 @@
   const stage6RunsForDataset = () => runsForDataset().filter(canReadGraph);
   const stage6RunsForView = () => app.dataset.nav === "history" ? matchingHistoryRuns().filter(canReadGraph) : stage6RunsForDataset();
 
+  // Read current state synchronously at send time; never cache it on a chat/session.
+  window.addEventListener("workspace-context-request", event => {
+    if (!datasetCatalogReady || !["analysis", "history"].includes(app.dataset.nav)) return;
+    const inHistory = app.dataset.nav === "history";
+    const stage = inHistory ? historyResult?.stage : Number(timeline.querySelector('[aria-current="step"]')?.dataset.stage);
+    if (!Number.isInteger(stage) || stage < 1 || stage > 6) return;
+    let run = inHistory ? selectedHistoryResult() : null;
+    if (!inHistory && stage === 6) run = findHistoryRun(stage6RunSelect.value);
+    if (!inHistory && stage < 6) {
+      const panel = root.querySelector(`#lens-stage${stage}`);
+      const key = ["genotype", "expression", "adjust", "cis", "network"][stage - 1] + "RunId";
+      const runId = panel?.dataset[key];
+      run = runsForDataset().find(row => row.source === "live" && row.run_id === runId);
+    }
+    if (run && !inHistory && run.dataset_id !== activeDataset.id) return;
+    const gene = stage === 6 && analysisNetwork.dataset.historyId === (run && historyKey(run)) &&
+      analysisNetwork.dataset.runState === "ready" ? analysisNetwork.dataset.selectedGene : null;
+    event.detail.context = {version: 1, dataset_id: run ? run.dataset_id : activeDataset.id,
+      history_id: run ? historyKey(run) : null, stage, selected_genes: gene ? [gene] : []};
+  });
+
   async function requestDataset(path, body, method = "GET") {
     const response = await fetch(path, {method, body: JSON.stringify(body),
       headers: {"Content-Type": "application/json", "X-Chat-Token": chatToken}});

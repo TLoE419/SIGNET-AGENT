@@ -35,6 +35,21 @@ class ChatTest(unittest.TestCase):
         self.assertEqual(main.config.system_instruction, original)
         self.assertEqual(generate.call_args.kwargs['contents'][0].parts[0].text, '中文問題')
 
+    def test_workspace_context_is_per_request_and_not_saved_as_history(self):
+        client, _ = client_for(response('First'), response('Second'))
+        history = []
+        selection = {'version': 1, 'dataset_id': 'a', 'history_id': 'archive--same',
+                     'source': 'archive', 'run_id': 'same', 'stage': 6, 'selected_genes': ['MEGF6']}
+        with patch.object(client.models, 'generate_content', side_effect=[response('First'), response('Second')]) as generate:
+            main.run_conversation(client, 'first', history, workspace_context=selection)
+            first = generate.call_args.kwargs['config'].system_instruction
+            main.run_conversation(client, 'second', history, workspace_context=None)
+            second = generate.call_args.kwargs['config'].system_instruction
+        self.assertIn('archive--same', first)
+        self.assertNotIn('archive--same', second)
+        self.assertTrue(second.endswith('null'))
+        self.assertNotIn('archive--same', str(history))
+
     def test_natural_language_and_cross_turn_context_without_tools(self):
         first = response('你的資料群組是哪一種？')
         second = response('了解，你使用癌症資料。')

@@ -45,6 +45,24 @@ class ChatUITest(unittest.TestCase):
         return self.request('/chat', {'text': text, 'session': session or self.session}, headers or {
             'Origin': self.origin, 'X-Chat-Token': self.server.token})
 
+    def test_workspace_context_validated_before_agent(self):
+        catalog = {'datasets': [{'id': 'cohort-a'}], 'runs': [
+            {'history_id': 'archive--same', 'source': 'archive', 'run_id': 'same', 'dataset_id': 'cohort-a'}]}
+        context = dict(version=1, dataset_id='cohort-a', history_id='archive--same', stage=6, selected_genes=['MEGF6'])
+        payload = {'text': 'Which run?', 'session': self.session, 'workspace_context': context}
+        headers = {'Origin': self.origin, 'X-Chat-Token': self.server.token}
+        with patch.object(self.server.stage6, 'history', return_value=catalog), patch.object(chat_ui, 'run_conversation', return_value='Selected archive') as run:
+            status, body = self.request('/chat', payload, headers)
+            self.assertEqual(status, 200)
+            self.assertEqual(run.call_args.kwargs['workspace_context'], dict(context, source='archive', run_id='same'))
+            context['history_id'] = 'workspace--same'
+            run.reset_mock()
+            self.assertEqual(self.request('/chat', payload, headers)[0], 400)
+            run.assert_not_called()
+            payload.pop('workspace_context')
+            self.assertEqual(self.request('/chat', payload, headers)[0], 200)
+            self.assertIsNone(run.call_args.kwargs['workspace_context'])
+
     def test_assets_and_no_arbitrary_file_access(self):
         status, html = self.request()
         self.assertEqual(status, 200)
@@ -254,7 +272,7 @@ class ChatUITest(unittest.TestCase):
         release = threading.Event()
         finished = threading.Event()
 
-        def run(client, text, history, progress, http_timing, language):
+        def run(client, text, history, progress, http_timing, language, workspace_context=None):
             self.assertEqual(language, 'en')
             progress('工具正在執行')
             release.wait(3)

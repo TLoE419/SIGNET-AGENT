@@ -208,7 +208,7 @@ def _answer_without_summary(text):
     return '\n'.join(lines).strip()
 
 
-def run_conversation(client, text: str, history=None, progress=None, http_timing=None, language=None):
+def run_conversation(client, text: str, history=None, progress=None, http_timing=None, language=None, workspace_context=None):
     model_name = getattr(client, 'model', MODEL)
     contents = history if history is not None else []
     recovery = ("對話與已完成的工具結果仍保留；稍後可輸入「繼續」。" if history is not None
@@ -227,6 +227,15 @@ def run_conversation(client, text: str, history=None, progress=None, http_timing
                         if language == 'en' else
                         ' UI language for this turn is Traditional Chinese. Answer in Traditional Chinese.')
         conversation_config = config.model_copy(update={'system_instruction': instruction})
+    # Per-request system metadata is never appended to saved conversation history.
+    import json
+    conversation_config = conversation_config.model_copy(update={'system_instruction':
+        conversation_config.system_instruction +
+        '\nCurrent workspace selection (validated identifiers, not evidence of execution or biological validity). '
+        'This replaces all earlier workspace selections, including other chats. Null means no current selection. '
+        'Genes are syntactically validated labels, not verified scientific findings. '
+        'Do not infer missing run/source or execute analysis from selection alone: ' +
+        json.dumps(workspace_context, ensure_ascii=True)})
     def report(message):
         if progress is not None:
             progress(message)

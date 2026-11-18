@@ -191,3 +191,32 @@ test('a saved unsubmitted linked run can resume explicit confirmation after relo
  h.click('[data-rerun-run-id="pending-fork"]');await until(()=>h.calls.some(call=>call.url.endsWith('/rerun/submit')));
  assert.deepEqual(h.calls.find(call=>call.url.endsWith('/rerun/submit')).body,{confirmed:true});
 });
+
+
+test('chat context reads current canonical selection without retaining another run or dataset',async t=>{
+ const h=harness(t,[workspace(),archive()]);await h.ready();
+ const snapshot=()=>{const detail={context:null};h.window.dispatchEvent(new h.window.CustomEvent('workspace-context-request',{detail}));return clone(detail.context)};
+ h.click('[data-nav-target="history"]');
+ h.click('[data-run-target="workspace--shared"]');h.click('#ml-run-workspace--shared [data-run-stage="6"]');
+ await until(()=>h.q('#lens-stage6').dataset.runState==='ready');h.click('#lens-stage6 [data-gene="A"]');
+ assert.deepEqual(snapshot(),{version:1,dataset_id:'example-chr1',history_id:'workspace--shared',stage:6,selected_genes:['A']});
+ const old=snapshot();old.selected_genes.push('FOREIGN-CHAT');assert.deepEqual(snapshot().selected_genes,['A']);
+ h.click('#ml-stage6-back');assert.equal(snapshot(),null);
+ h.click('[data-run-target="archive--shared"]');h.click('#ml-run-archive--shared [data-run-stage="6"]');
+ assert.deepEqual(snapshot().selected_genes,[]);
+ await until(()=>h.q('#lens-stage6').dataset.historyId==='archive--shared');h.click('#lens-stage6 [data-gene="X"]');
+ assert.equal(snapshot().history_id,'archive--shared');assert.deepEqual(snapshot().selected_genes,['X']);
+ h.click('[data-nav-target="settings"]');assert.equal(snapshot(),null);
+});
+
+
+test('analysis chat context uses only the currently selected stage run from the current dataset',async t=>{
+ const h=harness(t,[workspace()]);await h.ready();h.click('[data-nav-target="analysis"]');
+ h.click('.ml-stage-button[data-stage="1"]');
+ const snapshot=()=>{const detail={context:null};h.window.dispatchEvent(new h.window.CustomEvent('workspace-context-request',{detail}));return clone(detail.context)};
+ h.q('#lens-stage1').dataset.genotypeRunId='shared';
+ assert.equal(snapshot().history_id,'workspace--shared');assert.equal(snapshot().stage,1);
+ h.choose('#ml-dataset-select','dataset-b');
+ assert.equal(snapshot().dataset_id,'dataset-b');assert.equal(snapshot().history_id,null);
+ assert.deepEqual(snapshot().selected_genes,[]);
+});

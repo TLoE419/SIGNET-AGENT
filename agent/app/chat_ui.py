@@ -19,7 +19,7 @@ from agent.core.conversation import MODEL, run_conversation
 from agent.core.model_timing import ModelRequestTiming
 from agent.paths import PROJECT_ROOT
 from agent.providers import PROVIDERS, create_provider_adapter
-from agent.runtime import signet_jobs, workspace_genotype
+from agent.runtime import signet_jobs, workspace_genotype, workspace_context
 from agent.stage6.workspace import ARCHIVED_STEP_JOBS, CHAT_CONTEXT, Workspace
 from agent.tools.ui import UI_CHANNEL
 
@@ -201,6 +201,11 @@ class ChatHandler(BaseHTTPRequestHandler):
                 raise ValueError()
         except (ValueError, OSError):
             return self._error(400, '訊息格式不正確，請輸入 1 至 8000 字。')
+        try:
+            validated_context = workspace_context.validate(payload.get('workspace_context'), self.server.stage6.history)
+        except (ValueError, KeyError, TypeError, OSError):
+            return self._error(400, 'Workspace selection changed or is invalid; reselect the dataset/run and send again.'
+                               if language == 'en' else '工作區選取已變更或無效；請重新選取資料組與執行後再傳送。')
         if not self.server.turn_lock.acquire(blocking=False):
             return self._error(409, '另一個回合仍在執行，請等候結束；關閉頁面不會取消工具。')
         try:
@@ -236,7 +241,7 @@ class ChatHandler(BaseHTTPRequestHandler):
                     try:
                         answer = run_conversation(client, text.strip(), history,
                                               progress=lambda message: emit('progress', message), http_timing=timing,
-                                                  language=language)
+                                                  language=language, workspace_context=validated_context)
                     finally:
                         UI_CHANNEL.reset(ui_token)
                         CHAT_CONTEXT.reset(context_token)
