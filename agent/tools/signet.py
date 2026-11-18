@@ -128,7 +128,10 @@ def signet_catalog() -> dict:
             'prepare_only': ['prepare_network', 'prepare_visualization'],
             'network_execution': ['submit_network', 'get_network_status', 'cancel_network'],
             'visualization_execution': ['run_visualization'],
-            'note': 'Preparation is not execution. No scientific success is inferred from exit code alone.'}
+            'workspace_execution': {'status_tool': 'get_workspace_stage', 'proposal_tool': 'propose_workspace_stage',
+                                    'new_dataset_tool': 'propose_workspace_dataset',
+                                    'confirmation': 'Execution requires the existing manual stage review form.'},
+            'note': 'Legacy Python entry points remain available to application code, but scientific execution tools are not model-callable. Proposals never execute. No scientific success is inferred from exit code alone.'}
 
 
 def configure_signet(run_id: str, cohort: str = 'TCGA', nchr: int = 22, ncores: int = 2) -> dict:
@@ -597,15 +600,20 @@ SIGNET_TOOLS = [signet_catalog,configure_signet,get_signet_settings,genotype_tcg
 def dispatch_tool(name, arguments):
     """Validate the model's tool name, keyword arguments and primitive types before dispatch."""
     from agent.tools.registry import ALL_TOOLS
+    from agent.runtime.signet_jobs import StepError
     functions = {fn.__name__:fn for fn in ALL_TOOLS}
     try:
+        from agent.tools.workspace import LEGACY_EXECUTION
+        if name == 'get_network_status':
+            from agent.tools.workspace import get_workspace_stage
+            if not isinstance(arguments, dict) or set(arguments) != {'run_id'}:
+                raise ValueError('Provide an explicit run_id.')
+            return get_workspace_stage(arguments['run_id'], 5)
+        if name in LEGACY_EXECUTION:
+            return {'status': 'needs_review', 'executed': False,
+                    'reason': 'Use propose_workspace_stage with an explicit live run and stage. Scientific execution requires the manual review form and confirmation.'}
         if name not in functions or not isinstance(arguments, dict):
             raise ValueError('Unsupported tool or argument object.')
-        if name == 'run_visualization':
-            from agent.stage6.workspace import CHAT_CONTEXT
-            if CHAT_CONTEXT.get() is not None:
-                return {'status': 'awaiting_confirmation', 'executed': False,
-                        'reason': 'Use propose_visualization_change. Only the UI confirmation endpoint can execute Stage 6.'}
         fn = functions[name]
         signature = inspect.signature(fn)
         signature.bind(**arguments)
@@ -624,5 +632,5 @@ def dispatch_tool(name, arguments):
                 raise ValueError('The folder must be this project directory.')
             return {'files':fn(**arguments)}
         return fn(**arguments)
-    except (ValueError,TypeError,OSError) as exc:
+    except (ValueError,TypeError,OSError,StepError) as exc:
         return {'status':'invalid','executed':False,'error':str(exc)}
