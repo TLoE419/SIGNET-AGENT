@@ -266,3 +266,41 @@ test('large saved plots keep real totals while bounding thumbnail marks', async 
   assert.equal(h.entry(6).querySelectorAll('.ml-stage-thumbnail circle').length, 24);
   assert.ok(h.entry(6).querySelectorAll('.ml-stage-thumbnail line').length <= 48);
 });
+
+
+test('remote Stage3 shows a raster PCA and timeline preview without individual coordinates', async t => {
+  const row = run('live');
+  const picture = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jJ0kAAAAASUVORK5CYII=';
+  const result = saved(3);
+  result.pca = {png_base64: picture, width: 640, height: 420, point_count: 6, variance_explained: [60, 30], source: 'signet_smartpca'};
+  const h = harness(t, [row], url => url.startsWith('/stage3/results?') ? reply(result) : undefined);
+  await h.ready();h.open(row.history_id, 3);
+  await until(() => h.q('.s3-remote-plot')?.hidden === false);
+  assert.equal(h.q('.s3-remote-plot').getAttribute('src'), 'data:image/png;base64,' + picture);
+  assert.equal(h.q('#lens-history-stage3 .s3-chart').hasAttribute('hidden'), true);
+  assert.match(h.entry(3).textContent, /保留樣本 6/);
+  const thumbnail = h.entry(3).querySelector('.ml-stage-thumbnail');
+  assert.equal(thumbnail.querySelectorAll('circle').length, 0);
+  assert.equal(thumbnail.querySelector('image').getAttribute('href'), 'data:image/png;base64,' + picture);
+  h.click('#ml-language');
+  assert.match(h.q('.s3-remote-plot').alt, /individual scores stay remote/);
+});
+
+
+test('history labels original and latest rerun and displays escaped bilingual parameter differences', async t => {
+  const original = run('live'), child = run('live');
+  original.rerun_family = {number:0,latest:false,changes:[],changes_available:true};
+  child.run_id='rerun-one';child.history_id='workspace--rerun-one';
+  child.rerun_family = {number:1,latest:true,source_run:'shared',from_step:'network',changes_available:true,
+    changes:[{group:'settings',key:'nboots',before:100,after:500},{group:'clinical_choices',key:'<private-category>',before:'<img src=x>',after:'exclude'}]};
+  const h = harness(t,[original,child]);await h.ready();
+  assert.match(h.q('[data-run-target="workspace--shared"]').textContent,/原始執行/);
+  assert.match(h.q('[data-run-target="workspace--rerun-one"]').textContent,/第 1 次重跑.*最新/);
+  h.click('[data-run-target="workspace--rerun-one"]');
+  const comparison = h.q('#ml-run-workspace--rerun-one [data-history-rerun-changes]');
+  assert.match(comparison.textContent,/重抽樣次數.*100.*500/s);
+  assert.equal(comparison.querySelector('img'),null);assert.match(comparison.textContent,/<private-category>/);
+  h.click('#ml-language');
+  assert.match(h.q('[data-run-target="workspace--rerun-one"]').textContent,/Rerun 1.*Latest/);
+  assert.match(h.q('#ml-run-workspace--rerun-one [data-history-rerun-changes]').textContent,/Bootstrap runs/);
+});
