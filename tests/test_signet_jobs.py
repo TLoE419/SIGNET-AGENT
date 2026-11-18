@@ -1982,6 +1982,8 @@ class StepsTest(unittest.TestCase):
         (self.remote_dir / 'steps/expression.out').write_text(''.join(f'line {i}\n' for i in range(300)))
         log = steps.read_log('step_test', 'expression', 'out', 3)
         self.assertEqual(log, {'lines': ['line 297', 'line 298', 'line 299'], 'truncated': True})
+        self.assertEqual(self.code_of(steps.read_log, 'step_test', 'expression', 'err', 5), 'not_found')
+        (self.remote_dir / 'steps/expression.err').touch()
         self.assertEqual(steps.read_log('step_test', 'expression', 'err', 5), {'lines': [], 'truncated': False})
         for stream, lines in (('both', 5), ('out', 0), ('out', 201), ('out', True)):
             self.assertEqual(self.code_of(steps.read_log, 'step_test', 'expression', stream, lines), 'invalid_request')

@@ -1158,18 +1158,5 @@ def cancel(run_id, name, *, expected_job_id=None, expected_attempt=None):
 
 def read_log(run_id, name, stream='out', lines=50):
     """Last lines (at most 200) of the job's stdout ("out") or stderr ("err")."""
-    _step(name)
-    root = _root(run_id)
-    record = _load(root, name)
-    if stream not in ('out', 'err'):
-        raise StepError('invalid_request', 'stream must be out or err.')
-    if isinstance(lines, bool) or not isinstance(lines, int) or not 1 <= lines <= MAX_LOG_LINES:
-        raise StepError('invalid_request', f'lines must be between 1 and {MAX_LOG_LINES}.')
-    _environment()
-    path = shlex.quote(f'{record["remote_dir"]}/steps/{name}.{stream}')
-    try:
-        result = ssh_transport.remote(f'tail -n {lines + 1} {path} 2>/dev/null', capture_output=True, timeout=30)
-    except OSError as error:
-        raise StepError('remote_failed', 'Could not reach HPC3.') from error
-    text = result.stdout.decode('utf-8', 'replace').splitlines()
-    return {'lines': text[-lines:], 'truncated': len(text) > lines}
+    from agent.runtime.workspace_logs import read_legacy
+    return read_legacy(run_id, name, stream, lines)

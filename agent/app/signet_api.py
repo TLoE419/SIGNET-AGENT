@@ -34,6 +34,7 @@ from agent.runtime import workspace_genotype
 from agent.runtime import workspace_datasets
 from agent.runtime import workspace_validation
 from agent.runtime import workspace_history
+from agent.runtime import workspace_logs
 import agent.tools.signet as signet
 
 MAX_BODY = 32768
@@ -369,9 +370,34 @@ def get_log(handler, url, run_id, step):
     """
     query = _query(url, ('stream', 'lines'))
     lines = query.get('lines', '50')
-    if not lines.isdigit():
+    if not re.fullmatch(r'[0-9]{1,3}', lines):
         raise ApiError(400, 'invalid_request', 'lines must be a whole number from 1 to 200.')
     return 200, jobs.read_log(run_id, step, query.get('stream', 'out'), int(lines))
+
+
+def _log_query(url, required):
+    query = _query(url, (*required, 'stream', 'lines'))
+    if not set(required).issubset(query):
+        raise ApiError(400, 'invalid_request', 'Provide the displayed log target identity.')
+    lines = query.get('lines', '50')
+    if not re.fullmatch(r'[0-9]{1,3}', lines) or not 1 <= int(lines) <= 200:
+        raise ApiError(400, 'invalid_request', 'lines must be an integer from 1 to 200.')
+    return query, int(lines)
+
+
+def get_history_log(handler, url, history_id, step):
+    query, lines = _log_query(url, ('attempt', 'job_id', 'identity'))
+    attempt = query['attempt']
+    if attempt != 'unknown' and (not re.fullmatch(r'[0-9]{1,4}', attempt) or not 1 <= int(attempt) <= workspace_history.MAX_ATTEMPTS):
+        raise ApiError(400, 'invalid_request', 'attempt must be unknown or an integer from 1 to 1000.')
+    return 200, workspace_logs.read_step(history_id, step, None if attempt == 'unknown' else int(attempt),
+        query['job_id'], query['identity'], query.get('stream', 'out'), lines, history_loader=handler.server.stage6.history)
+
+
+def get_operation_log(handler, url, history_id, operation):
+    query, lines = _log_query(url, ('identity', 'record_revision'))
+    return 200, workspace_logs.read_operation(history_id, operation, query['identity'], query['record_revision'],
+        query.get('stream', 'out'), lines, history_loader=handler.server.stage6.history)
 
 
 # Each path pattern maps HTTP methods to the function above that serves it.
@@ -379,6 +405,10 @@ ROUTES = [
     (re.compile(r'/signet/catalog'), {'GET': get_catalog}),
     (re.compile(rf'/signet/history/(?P<history_id>{workspace_history.HISTORY_ID})/dataset'),
      {'PATCH': assign_history_dataset}),
+    (re.compile(rf'/signet/history/(?P<history_id>{workspace_history.HISTORY_ID})/steps/{_STEP}/log'),
+     {'GET': get_history_log}),
+    (re.compile(rf'/signet/history/(?P<history_id>{workspace_history.HISTORY_ID})/operations/(?P<operation>{_RUN_NAME})/log'),
+     {'GET': get_operation_log}),
     (re.compile(r'/signet/datasets'), {'GET': list_datasets, 'POST': create_dataset}),
     (re.compile(rf'/signet/datasets/(?P<dataset_id>{_RUN_NAME})'), {'PATCH': update_dataset}),
     (re.compile(rf'/signet/datasets/(?P<dataset_id>{_RUN_NAME})/validate'), {'POST': validate_dataset}),

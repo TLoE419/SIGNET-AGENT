@@ -39,6 +39,12 @@ panel. Review the run, stage, job ID and attempt before confirming. Cancellation
 remains pending until HPC3 confirms that the job and its owned child jobs have
 stopped; connection failures do not imply successful cancellation. Existing
 results and earlier attempt records remain preserved.
+Stage progress and saved attempts have a separate execution-log disclosure.
+It shows saved failure reasons, exit status and missing outputs, then lets you
+read output messages, error messages or submission errors on demand. Each log
+is bound to its own source, run, stage and attempt. Missing files, empty files
+and disconnected remote access are distinct states; opening logs never retries
+analysis or adds the log text to the conversation.
 
 ## Replacing the Former Desktop Workbench
 

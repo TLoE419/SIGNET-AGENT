@@ -962,6 +962,7 @@
 
   const runList = byId("run-list");
   const runDetails = byId("run-details");
+  let historyLogViews = [];
   const networkOutput = ([genes, edges]) => [
     `${genes} 個基因 · ${edges} 條連線`,
     `${genes} genes · ${edges} edges`,
@@ -1059,26 +1060,29 @@
           ${(attempt.issues ?? []).length ? `<p class="ml-history-record-note">${attempt.issues.map(escapeHistory).join(" ")}</p>` : ""}
           ${events.length ? `<h4>${historyText("保存的狀態時間線", "Recorded state timeline")}</h4><ol class="ml-history-attempt-events" data-history-attempt-events>${events.map(event => `<li>${historyText(...genotypeHistoryState(event.state))} · <time>${recordedValue(event.at)}</time>${event.reason ? ` · ${recordedValue(event.reason)}` : ""}</li>`).join("")}</ol>` : ""}
           ${unreadableEvents ? `<p data-history-attempt-event-warning>${historyText("部分保存的時間線無法讀取。", "Part of the recorded timeline is unreadable.")}</p>` : ""}
+          ${available ? `<div data-history-job-logs data-log-kind="attempt" data-log-record="${escapeHistory(attempt.record_file)}"></div>` : ""}
         </div></details>`;
     }).join("")}</div>`;
   }
   function savedJobDetails(job, key, operation = false, savedOnly = false, attempts = []) {
-    return `<details class="ml-run-step ml-history-saved-job" ${operation ? `data-history-operation="${escapeHistory(key)}"` : `data-history-job="${escapeHistory(key)}"`}>
+    return `<details class="ml-run-step ml-history-saved-job" ${operation ? `data-history-operation="${escapeHistory(key)}" data-history-operation-record="${escapeHistory(job.record_file)}"` : `data-history-job="${escapeHistory(key)}"`}>
       <summary>${escapeHistory(key)} · <span data-history-job-state>${historyStateLabel(job.state ?? job.status, savedOnly || operation)}</span>
         ${attempts.length ? `<span class="ml-history-attempt-count">${historyText(`嘗試紀錄（${attempts.length}）`, `Attempt records (${attempts.length})`)}</span>` : ""}</summary>
-      ${attempts.length ? savedAttempts(attempts) : `<div class="ml-history-job-content">${savedJobContent(job, operation)}</div>`}</details>`;
+      ${attempts.length ? savedAttempts(attempts) : `<div class="ml-history-job-content">${savedJobContent(job, operation)}<div data-history-job-logs data-log-kind="${operation ? "operation" : "job"}" data-log-record="${escapeHistory(job.record_file)}"></div></div>`}</details>`;
   }
   function canStartStage(run, number) {
     return canContinue(run) && number > 1 && historySteps.slice(0, number - 1).every(step => run.jobs?.[step]?.state === "completed");
   }
   function historyDisclosureKey(details) {
     const job = details.closest("[data-history-job], [data-history-operation]");
-    const scope = job?.dataset.historyJob ?? job?.dataset.historyOperation ?? (details.hasAttribute("data-history-provenance") ? "provenance" : "inputs");
+    const scope = job?.dataset.historyJob ?? (job?.dataset.historyOperation ? `${job.dataset.historyOperation}:${job.dataset.historyOperationRecord}` : details.hasAttribute("data-history-provenance") ? "provenance" : "inputs");
     return `${details.closest("[data-history-id]")?.dataset.historyId}|${scope}|${details.dataset.attemptRecord ?? details.dataset.historyAttempt ?? ""}`;
   }
   function renderHistoryRecords() {
-    const expanded = new Set([...runDetails.querySelectorAll("details[open]")].map(details =>
+    const expanded = new Set([...runDetails.querySelectorAll("details[open]:not([data-job-logs])")].map(details =>
       historyDisclosureKey(details)));
+    for (const {view} of historyLogViews) view.destroy();
+    historyLogViews = [];
     runList.innerHTML = historyRuns.map(run => {
       const key = escapeHistory(historyKey(run)), id = escapeHistory(run.run_id);
       const state = run.status ?? historyJob(run)?.state;
@@ -1141,8 +1145,22 @@
         ${genericJobs}${operations}${!stages && !genericJobs && !operations ? `<p>${historyText("未保存可讀的工作設定。", "No readable job settings were recorded.")}</p>` : ""}
       </article>`;
     }).join("");
-    for (const details of runDetails.querySelectorAll("details")) {
+    for (const details of runDetails.querySelectorAll("details:not([data-job-logs])")) {
       if (expanded.has(historyDisclosureKey(details))) details.open = true;
+    }
+    if (globalThis.SignetJobLogs) for (const host of runDetails.querySelectorAll("[data-history-job-logs]")) {
+      const run = findHistoryRun(host.closest("[data-history-id]").dataset.historyId);
+      const step = host.closest("[data-history-job]")?.dataset.historyJob;
+      const operation = host.closest("[data-history-operation]")?.dataset.historyOperation;
+      const attempt = host.dataset.logKind === "attempt" ? run.attempts?.[step]?.find(attempt => attempt.record_file === host.dataset.logRecord) : null;
+      const record = operation ? run.operations?.find(record => record.operation === operation && record.record_file === host.dataset.logRecord) : attempt?.record ?? run.jobs?.[step];
+      const context = {historyId: historyKey(run), runId: run.run_id, source: run.source, datasetId: run.dataset_id,
+        step, operation, number: attempt ? attempt.number : run.source === "archive" ? null : record?.attempt ?? 1,
+        current: attempt?.current ?? true, recordFile: attempt?.record_file ?? record?.record_file ?? `steps/${step}.json`,
+        recordIdentity: run.record_identity, recordRevision: record?.record_revision, record,
+        prepared: Boolean(operation && (record?.status === "prepared" || record?.record_file?.endsWith(".plan.json")))};
+      const view = globalThis.SignetJobLogs.mount({host, token: () => chatToken});
+      historyLogViews.push({view, context});
     }
     renderHistoryLanguage();
     globalThis.lucide?.createIcons();
@@ -1158,6 +1176,10 @@
       option.textContent = option.value ? historyDatasetName(option.value)[root.lang === "en" ? 1 : 0]
         : root.lang === "en" ? "Choose an existing dataset" : "選擇現有資料組";
     }
+    syncHistoryLogs();
+  }
+  function syncHistoryLogs() {
+    for (const {view, context} of historyLogViews) view.setContext({...context, language: root.lang, visible: app.dataset.nav === "history"});
   }
 
   const analysisNetwork = root.querySelector("#lens-stage6");
@@ -2024,6 +2046,7 @@
     analysisNetwork.hidden = inHistory ? !showNetwork : timeline.querySelector('[aria-current="step"]').dataset.stage !== "6";
     renderHistoryStatus();
     syncGenotypeContext();
+    syncHistoryLogs();
   }
 
   function updateAnalysisView() {

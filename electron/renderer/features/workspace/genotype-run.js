@@ -238,6 +238,7 @@
           <button type="button" class="ml-nav-action" data-genotype-back hidden></button>
           ${cancellationMarkup("genotype")}
         </div>
+        <div data-genotype-logs></div>
       </aside>`;
 
     const part = (name) => panel.querySelector(`[data-genotype-${name}]`);
@@ -265,6 +266,7 @@
     let selectedDataset = "";
     let pollTimer;
     let cancellation;
+    let logs;
     let remote = {connected: false, identity: "", environmentKey: ""};
     const stateKey = (id, runId = context.runId) => runId ? `run:${id}:${runId}` : `dataset:${id}`;
     const current = () => datasets.get(stateKey(selectedDataset));
@@ -379,6 +381,10 @@
         return row;
       }));events.hidden = !events.children.length;
       cancellation?.sync();
+      const run = context.runs?.find(run => run.run_id === item?.runId);
+      logs?.setContext({historyId: run?.history_id, runId: item?.runId, source: run?.source, datasetId: selectedDataset,
+        step: "genotype", number: item?.record?.attempt ?? 1, current: true, recordFile: "steps/genotype.json",
+        recordIdentity: run?.record_identity, record: item?.record, language: context.language, visible: context.visible});
     }
     async function review() {
       const dataset = datasetValue(), item = current(), id = selectedDataset;
@@ -493,6 +499,7 @@
       target: () => ({item: current(), runId: current()?.runId, datasetId: selectedDataset, visible: context.visible,
         run: context.runs?.find(run => run.run_id === current()?.runId)}),
       receive: (value, next) => receiveRecord(value.item, next, value.runId, value.datasetId), schedule: () => schedulePoll()});
+    logs = window.SignetJobLogs?.mount({host: part("logs"), token});
     function setContext(next) {
       const previous = current();
       const id = next.dataset?.id ?? next.datasetId ?? "";
@@ -724,6 +731,7 @@
           ${visualization ? '<button type="button" class="ml-nav-action" data-visualize-results data-visualize-copy="savedResults"></button>' : ''}
           <button type="button" class="ml-nav-action" data-${prefix}-back data-${prefix}-copy="back" hidden></button>
         </div>
+        <div data-${prefix}-logs></div>
       </aside>`;
 
     const part = name => panel.querySelector(`[data-${prefix}-${name}]`);
@@ -737,6 +745,7 @@
     let selectedRun = "";
     let pollTimer;
     let cancellation;
+    let logs;
     const local = key => (copy[key] ?? labels[key])?.[context.language === "en" ? 1 : 0] ?? key;
     const current = () => runStates.get(selectedRun);
     const source = () => context.runs.find(run => run.run_id === selectedRun);
@@ -893,6 +902,10 @@
       }));
       part("events").hidden = !saved?.history?.length;
       cancellation?.sync();
+      const run = source();
+      logs?.setContext({historyId: run?.history_id, runId: selectedRun, source: run?.source, datasetId: context.datasetId,
+        step, number: saved?.attempt ?? 1, current: true, recordFile: `steps/${step}.json`, recordIdentity: run?.record_identity,
+        record: saved, language: context.language, visible: context.visible});
     }
 
     function accept(item, value, id) {
@@ -1066,6 +1079,7 @@
     cancellation = mountCancellation({panel, prefix, stage, local, request, render, schedule,
       target: () => ({item: current(), runId: selectedRun, datasetId: context.datasetId, visible: context.visible, run: source()}),
       receive: (value, next) => accept(value.item, next, value.runId)});
+    logs = window.SignetJobLogs?.mount({host: part("logs"), token});
     part("review").addEventListener("click", () => void review());
     part("submit").addEventListener("click", () => void submit());
     part("refresh").addEventListener("click", () => void refresh(true));

@@ -251,6 +251,44 @@ they are not downloads or links to another attempt's current outputs. A saved
 completed state is technical evidence, not biological validation. This history
 extension does not submit, retry, cancel, or change any execution record.
 
+### Source-scoped execution logs
+
+`GET /signet/history/{history_id}/steps/{step}/log` reads one exact saved
+attempt's log. Required query fields are `identity` (the row's
+`record_identity`), `attempt` (a number, or `unknown` when actually unnumbered),
+and `job_id` (the saved digit string, or `none` when no job ID was recorded).
+`stream` selects `out`, `err`, or the explicit `submission` stream;
+`lines` defaults to 50 and is limited to 1–200. Submission errors read
+`sbatch.err`; they never silently replace a missing stderr log.
+
+The handler resolves the canonical source and attempt under the run lock,
+checks the saved job/attempt identity, and rejects changed targets with 409.
+Current steps use owned `steps/<step>.out`, `.err`, or `.sbatch.err` files;
+earlier attempts use their own `steps/<step>.attempt<N>.*` files. Local saved
+files are preferred. Remote reads require the matching configured, owned run
+folder and existing connection. Archived sources never fall back to live or
+remote logs. Symbolic links, paths outside the owned source and arbitrary
+metadata-supplied file pointers are not accepted.
+
+`GET /signet/history/{history_id}/operations/{operation}/log` supports actual
+old Agent operation records with `identity`, the operation's `record_revision`,
+`stream=out|err`, and optional `lines`. It reads only the fixed owned local
+`logs/<operation>.stdout` or `.stderr` file. Plans do not establish an executed
+operation, and replaced operation metadata rejects the stale request.
+
+Successful replies echo the source/run/step-or-operation/attempt/job identity,
+stream and record identity, plus `origin: local|remote`, `status: ready|empty`,
+`lines`, `truncated`, and `max_bytes: 65536`. A request reads at most a bounded
+tail; a long single line cannot produce an unbounded response. Missing,
+unreadable, disconnected and failed remote reads are explicit errors, rather
+than successful empty logs. Saved failure hints are metadata, never substituted
+for stdout/stderr. These GETs do not alter job state, metadata or original
+files, nor submit, cancel or retry work. The existing current-run log route
+remains available to legacy callers with its `lines`/`truncated` response.
+It now reports missing/unreadable files as errors, instead of a successful empty
+log. Mutable current local logs require a matching saved job marker; an
+unattributable stale copy is skipped in favor of the exact remote source.
+
 The workspace browser reuses `POST /hpc/files/shortcuts` and
 `POST /hpc/files/list`. Before saving a selection, `POST /hpc/files/inspect`
 accepts only `{"paths": ["/absolute/input/path"]}` (1–128 paths; 32 KiB body

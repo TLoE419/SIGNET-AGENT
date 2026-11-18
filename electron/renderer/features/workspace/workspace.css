@@ -860,6 +860,16 @@ code:not(pre code) {
 #signet-lens-left-preview :is(#lens-stage1, .ml-expression-panel) .ml-genotype-actions { display: grid; justify-items: start; }
 #signet-lens-left-preview .ml-job-cancel-confirmation { max-width: 100%; margin: 8px 0; padding: 9px; border: 1px solid var(--ml-rule); border-radius: 5px; overflow-wrap: anywhere; }
 #signet-lens-left-preview .ml-job-cancel-confirmation p { margin: 0 0 8px; }
+#signet-lens-left-preview .ml-job-logs { margin-top: 12px; min-width: 0; border: 1px solid var(--ml-rule); border-radius: 5px; overflow: hidden; }
+#signet-lens-left-preview .ml-job-logs > summary { display: list-item; list-style: revert; list-style-position: inside; padding: 8px; background: #f8fafb; cursor: pointer; }
+#signet-lens-left-preview .ml-job-logs > summary::-webkit-details-marker { display: revert; }
+#signet-lens-left-preview .ml-job-log-content { min-width: 0; padding: 9px; }
+#signet-lens-left-preview .ml-job-log-content h4 { margin: 0 0 7px; font-size: 13px; }
+#signet-lens-left-preview .ml-job-log-content dd { white-space: pre-wrap; overflow-wrap: anywhere; }
+#signet-lens-left-preview .ml-job-log-actions { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 9px; }
+#signet-lens-left-preview .ml-job-log-actions [aria-pressed="true"] { background: #e8f2fb; border-color: #8fb1cf; }
+#signet-lens-left-preview .ml-job-log-content [role="status"], #signet-lens-left-preview .ml-job-log-source { margin: 8px 0; color: var(--ml-muted); overflow-wrap: anywhere; }
+#signet-lens-left-preview [data-job-log-text] { max-height: 240px; margin: 8px 0 0; padding: 9px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; background: #f3f5f7; border-radius: 4px; font: 12px/1.5 var(--workspace-mono); }
 
 #signet-lens-left-preview .ml-expression-run-label { display: grid; gap: 5px; margin-top: 12px; color: var(--ml-muted); }
 #signet-lens-left-preview .ml-expression-run-label select { width: 100%; padding: 6px; border: 1px solid var(--ml-rule); border-radius: 4px; background: #fff; color: var(--ml-ink); font: inherit; }
