@@ -62,16 +62,8 @@
     ["expression", "基因表現量資料", "Gene expression data"],
     ["clinical", "臨床資料", "Clinical data"],
   ];
-  const newDatasetAlternatives = {
-    genotype: ["cohort-b-reviewed.ped", "cohort-b-reviewed.map"],
-    expression: ["cohort-b-expression-review.tsv"],
-    clinical: ["cohort-b-clinical-review.tsv"],
-  };
-  function makeDataset({id, name, folder = "", inputs = {}, default_inputs = inputs,
-    alternative_inputs = {}, selections = {}, persisted = true}) {
-    const files = Object.fromEntries(inputTypes.map(([key]) =>
-      [key, [default_inputs[key] ?? [], alternative_inputs[key] ?? []]]));
-    return {id, name, folder, inputs, files, selections, persisted};
+  function makeDataset({id, name, folder = "", inputs = {}, default_inputs = inputs, persisted = true}) {
+    return {id, name, folder, inputs, defaultInputs: default_inputs, persisted};
   }
   const exampleDataset = {
     id: "example-chr1", name: ["第 1 號染色體範例", "Chromosome 1 example"],
@@ -146,29 +138,14 @@
   }
 
   const syncInputFiles = (() => {
-    const picker = byId("file-picker");
     const template = byId("current-files-template");
-    const radios = [...picker.querySelectorAll("input")];
-    const optionPaths = [...picker.querySelectorAll("[data-picker-file]")];
-    const applyButton = picker.querySelector("[data-input-apply]");
-    const directory = picker.querySelector(".ml-input-picker-directory code");
     const inputs = [];
     const statuses = new Map();
-    let activeInput = null;
     let saving = false;
 
-    function closePicker(restoreFocus = true) {
-      if (!activeInput) return;
-      const { replaceButton } = activeInput;
-      picker.hidden = true;
-      replaceButton.setAttribute("aria-expanded", "false");
-      activeInput = null;
-      if (restoreFocus) replaceButton.focus({ preventScroll: true });
-    }
-
     function renderInput(input) {
-      const selection = activeDataset.selections[input.type];
       const files = activeDataset.inputs[input.type] ?? [];
+      const defaults = activeDataset.defaultInputs[input.type] ?? [];
       input.paths.replaceChildren(...files.map((file) => {
         const path = document.createElement("code");
         path.textContent = file;
@@ -177,8 +154,8 @@
       const none = root.lang === "en" ? "No files selected" : "尚未選擇檔案";
       if (!files.length) input.paths.textContent = none;
       input.caption.textContent = files.length ? files.map((file) => file.split("/").at(-1)).join(" · ") : none;
-      input.replaceButton.disabled = !datasetCatalogReady || !activeDataset.persisted || saving || !activeDataset.files[input.type].some((option) => option.length);
-      input.resetButton.disabled = !datasetCatalogReady || !activeDataset.persisted || saving || selection === 0 || selection === undefined;
+      input.replaceButton.disabled = !datasetCatalogReady || !activeDataset.persisted || saving;
+      input.resetButton.disabled = !datasetCatalogReady || !activeDataset.persisted || saving || JSON.stringify(files) === JSON.stringify(defaults);
       const status = statuses.get(`${activeDataset.id}:${input.type}`);
       input.current.dataset.saveState = status?.state ?? "idle";
       for (const message of input.messages) {
@@ -189,14 +166,12 @@
 
     function renderFiles() {
       for (const input of inputs) renderInput(input);
-      picker.querySelector("fieldset").disabled = !datasetCatalogReady || saving;
-      applyButton.disabled = !datasetCatalogReady || saving || !radios.some(radio => radio.checked && !radio.disabled);
     }
 
-    async function selectFiles(input, selection, status) {
-      if (saving || !datasetCatalogReady || !activeDataset.persisted) return false;
+    async function restoreDefaults(input) {
+      if (saving || !datasetCatalogReady || !activeDataset.persisted) return;
       const datasetId = activeDataset.id;
-      const files = [...activeDataset.files[input.type][selection]];
+      const files = [...(activeDataset.defaultInputs[input.type] ?? [])];
       const key = `${datasetId}:${input.type}`;
       saving = true;
       statuses.set(key, {state: "saving"});
@@ -207,13 +182,10 @@
         if (record.id !== datasetId) throw new Error(root.lang === "en"
           ? "The saved dataset does not match this selection." : "儲存結果與這組資料不一致。");
         acceptSavedDataset(record);
-        statuses.set(key, {state: status});
-        if (activeDataset.id === datasetId && activeInput === input) closePicker();
+        statuses.set(key, {state: "default"});
         renderDatasetLabels();
-        return true;
       } catch (error) {
         statuses.set(key, {state: "error", error: error.message});
-        return false;
       } finally {
         saving = false;
         renderFiles();
@@ -235,58 +207,29 @@
       };
       inputs.push(input);
       renderInput(input);
-      input.replaceButton.setAttribute("aria-controls", picker.id);
-      input.replaceButton.setAttribute("aria-expanded", "false");
       input.replaceButton.addEventListener("click", () => {
-        if (activeInput === input) {
-          closePicker();
-          return;
-        }
-        closePicker(false);
-        activeInput = input;
-        const selection = activeDataset.selections[input.type];
-        for (const [index, radio] of radios.entries()) {
-          const files = activeDataset.files[input.type][index];
-          radio.checked = index === selection;
-          radio.disabled = !files.length;
-          radio.closest("label").hidden = !files.length;
-          optionPaths[index].textContent = files.join(" · ");
-        }
-        directory.textContent = activeDataset.folder;
-        applyButton.disabled = !datasetCatalogReady || saving || !radios.some(radio => radio.checked && !radio.disabled);
-        input.current.after(picker);
-        picker.hidden = false;
-        input.replaceButton.setAttribute("aria-expanded", "true");
-        (radios[selection] ?? radios.find((radio) => !radio.disabled))?.focus({ preventScroll: true });
+        if (input.replaceButton.disabled) return;
+        const labels = inputTypes.find(([key]) => key === input.type);
+        const paths = activeDataset.inputs[input.type] ?? [];
+        window.dispatchEvent(new CustomEvent("open-remote-files", {detail: {
+          key: input.type, inputKind: input.type, label: labels[root.lang === "en" ? 2 : 1],
+          current: paths[0] ?? "", currentPaths: [...paths], datasetId: activeDataset.id,
+          multiple: input.type === "genotype", language: root.lang,
+        }}));
       });
-      input.resetButton.addEventListener("click", async () => {
-        const datasetId = activeDataset.id;
-        if (activeInput === input) closePicker();
-        await selectFiles(input, 0, "default");
-        if (activeDataset.id === datasetId) input.replaceButton.focus({ preventScroll: true });
-      });
-      row.addEventListener("click", () => closePicker(false));
+      input.resetButton.addEventListener("click", () => void restoreDefaults(input));
     }
 
-    picker.addEventListener("change", () => { applyButton.disabled = !datasetCatalogReady || saving || !radios.some(radio => radio.checked && !radio.disabled); });
-    applyButton.addEventListener("click", () => {
-      const selection = radios.findIndex((radio) => radio.checked);
-      if (!activeInput || selection === -1) return;
-      void selectFiles(activeInput, selection, "applied");
-    });
-    picker.querySelector("[data-input-cancel]").addEventListener("click", () => closePicker());
-    picker.addEventListener("keydown", (event) => {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      closePicker();
-    });
-    for (const button of root.querySelectorAll("[data-nav-target]")) {
-      button.addEventListener("click", () => closePicker(false));
-    }
-    return (datasetChanged = false) => {
-      if (datasetChanged) closePicker(false);
+    window.addEventListener("dataset-files-selected", (event) => {
+      const {datasetId, inputKind, record} = event.detail ?? {};
+      if (record?.id !== datasetId || !datasets.some(dataset => dataset.id === datasetId) ||
+          !inputTypes.some(([kind]) => kind === inputKind)) return;
+      acceptSavedDataset(record);
+      statuses.set(`${datasetId}:${inputKind}`, {state: "applied"});
+      renderDatasetLabels();
       renderFiles();
-    };
+    });
+    return renderFiles;
   })();
 
   function matrixPreview(rows) {
@@ -2108,7 +2051,8 @@
   function selectDataset(dataset) {
     if (!dataset) return;
     closeDatasetForm();
-    if (dataset !== activeDataset) {
+    if (dataset.id !== activeDataset.id) {
+      window.dispatchEvent(new Event("close-dataset-remote-files"));
       activeDataset = dataset;
       clearHistoryResult();
     }
@@ -2153,8 +2097,7 @@
     datasetForm.querySelectorAll("input, button").forEach(control => { control.disabled = true; });
     datasetAdd.disabled = true;
     try {
-      const record = await requestDataset("/signet/datasets", {name: [name, name],
-        folder: "/demo/signet/cohort-b", alternative_inputs: newDatasetAlternatives}, "POST");
+      const record = await requestDataset("/signet/datasets", {name: [name, name]}, "POST");
       const dataset = acceptSavedDataset(record);
       creatingDataset = false;
       if (activeDataset.id === previousDatasetId) {
@@ -2186,6 +2129,7 @@
 
   const navigation = root.querySelectorAll("[data-nav-target]");
   function openNavigation(view) {
+    if (view !== "data") window.dispatchEvent(new Event("close-dataset-remote-files"));
     app.dataset.nav = view;
     const analysis = view === "analysis";
     root.querySelector(".ml-segment").hidden = !analysis;
@@ -2210,6 +2154,7 @@
   const inputChoices = root.querySelectorAll("[data-input-target]");
   for (const button of inputChoices) {
     button.addEventListener("click", () => {
+      window.dispatchEvent(new Event("close-dataset-remote-files"));
       for (const choice of inputChoices) {
         const selected = choice === button;
         choice.setAttribute("aria-pressed", String(selected));

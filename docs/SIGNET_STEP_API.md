@@ -148,8 +148,9 @@ contact HPC3, change a run's configuration, or submit work.
 `GET /signet/datasets` returns `{"datasets": [...]}`. Each record has a stable
 `id`, a two-label Chinese/English `name`, a `folder`, and `inputs` grouped into
 `genotype`, `expression`, and `clinical` filename arrays. `default_inputs`,
-`alternative_inputs`, and `selections` preserve the current prototype's default
-and alternative file choices across application restarts.
+`alternative_inputs`, and `selections` retain the stored defaults and legacy
+alternative choices across application restarts. The workspace remote browser
+updates `inputs` directly; new datasets start with empty inputs.
 
 `POST /signet/datasets` accepts `name` and optional `folder`, `inputs`, and
 `alternative_inputs`. The server creates a unique dataset ID and returns the
@@ -165,8 +166,19 @@ is never silently replaced. The trusted process environment variable
 
 `/stage6/history` includes the saved datasets while keeping each run's input,
 settings, and dataset ID from its original snapshots. Changing current dataset
-files cannot alter an existing run. The simulated file picker and the
-chromosome 1-only execution controls retain their existing scope.
+files cannot alter an existing run. The chromosome 1-only execution controls
+retain their existing scope.
+
+The workspace browser reuses `POST /hpc/files/shortcuts` and
+`POST /hpc/files/list`. Before saving a selection, `POST /hpc/files/inspect`
+accepts only `{"paths": ["/absolute/input/path"]}` (1–128 paths; 32 KiB body
+limit). It returns canonical paths and byte sizes for readable, nonempty
+regular files. It checks shared-path restrictions without reading contents,
+writing remote selection state, converting references, or scheduling jobs.
+The UI then saves those paths through the dataset PATCH route. This is a
+metadata check; scientific format validation and use of custom dataset inputs
+in analysis remain separate integration steps. The legacy reference-specific
+`/hpc/files/select` route keeps its own validation and preparation behavior.
 
 ### Workspace chromosome 1 review and submission
 

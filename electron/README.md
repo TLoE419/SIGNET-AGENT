@@ -49,9 +49,14 @@ manually for the chromosome 1 example.
 **Add dataset** saves the dataset immediately. Applying a file selection or
 restoring its defaults also saves that dataset's current file configuration;
 reopening the application reads it back. Save failures remain visible and do
-not replace the last saved configuration. The file choices are still the
-existing simulated choices; this does not browse HPC3 or change the inputs of
-the chromosome 1 execution controls.
+not replace the last saved configuration. **Choose remote files** opens the
+existing HPC3 browser after connecting, with locations, folder navigation,
+typed paths, and file sizes. Genotype files can be selected across folders;
+expression and clinical inputs each select one file. Applying checks canonical
+paths, readability, regular-file type, and nonempty size before saving. Cancel
+does not save, and **Use default** restores the dataset's saved defaults.
+This metadata selection does not validate scientific formats or change the
+inputs of the chromosome 1 execution controls.
 
 ### Submit the chromosome 1 example
 

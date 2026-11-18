@@ -299,7 +299,8 @@ class ChatHandler(BaseHTTPRequestHandler):
             size = int(self.headers.get('Content-Length', '0') or 0)
         except ValueError:
             size = -1
-        if not 0 <= size <= 4096:
+        inspection = self.path == '/hpc/files/inspect'
+        if not 0 <= size <= (hpc_files.MAX_INSPECT_BODY if inspection else 4096):
             return self._error(400, 'Invalid request length.')
         self.connection.settimeout(10)
         try:
@@ -308,6 +309,11 @@ class ChatHandler(BaseHTTPRequestHandler):
             body = None
         if not isinstance(body, dict):
             return self._error(400, 'Invalid request.')
+        if inspection:
+            if (set(body) != {'paths'} or not isinstance(body['paths'], list)
+                    or not 1 <= len(body['paths']) <= hpc_files.MAX_INSPECT_PATHS):
+                return self._error(400, 'Provide only a paths list containing between 1 and 128 files.')
+            return self.json_response(hpc_files.inspect(body['paths']))
         actions = {'/hpc/files/shortcuts': hpc_files.shortcuts, '/hpc/files/selected': hpc_files.selected,
                    '/hpc/files/list': lambda: hpc_files.list_folder(body.get('path')),
                    '/hpc/files/select': lambda: hpc_files.select(body.get('key'), body.get('path')),

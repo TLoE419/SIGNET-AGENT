@@ -162,16 +162,22 @@ main > #ssh-root { align-self:flex-end; margin:0 0 16px; flex-shrink:0; }
 .remote-files-modal{width:min(760px,92vw)}
 .remote-files{display:grid;grid-template-columns:170px minmax(0,1fr);gap:12px;min-height:320px}
 .remote-files-places{display:flex;flex-direction:column;gap:2px;overflow:auto;max-height:50vh}
-#ssh-root .ssh-modal.remote-files-modal .remote-files-places button,#ssh-root .ssh-modal.remote-files-modal .remote-files-row{display:flex;justify-content:space-between;gap:10px;width:100%;padding:6px 8px;border:0;border-radius:6px;background:transparent;color:inherit;font:inherit;font-size:12px;text-align:left;cursor:pointer;box-shadow:none}
-#ssh-root .ssh-modal.remote-files-modal .remote-files-places button:hover,#ssh-root .ssh-modal.remote-files-modal .remote-files-row:not(:disabled):hover{background:#eef1ec}
-#ssh-root .ssh-modal.remote-files-modal .remote-files-row[aria-selected=true]{background:#dcebe2;font-weight:600}
-#ssh-root .ssh-modal.remote-files-modal .remote-files-row:disabled{opacity:.5;cursor:not-allowed}
+.ssh-modal.remote-files-modal .remote-files-places button,.ssh-modal.remote-files-modal .remote-files-row{display:flex;justify-content:space-between;gap:10px;width:100%;padding:6px 8px;border:0;border-radius:6px;background:transparent;color:inherit;font:inherit;font-size:12px;text-align:left;cursor:pointer;box-shadow:none}
+.ssh-modal.remote-files-modal .remote-files-places button:hover,.ssh-modal.remote-files-modal .remote-files-row:not(:disabled):hover{background:#eef1ec}
+.ssh-modal.remote-files-modal .remote-files-row[aria-selected=true]{background:#dcebe2;font-weight:600}
+.ssh-modal.remote-files-modal .remote-files-row:disabled{opacity:.5;cursor:not-allowed}
 .remote-files-name{min-width:0;overflow-wrap:anywhere}
 .remote-files-size{flex:none;opacity:.7}
 .remote-files-list{list-style:none;margin:0;padding:0;overflow:auto;max-height:50vh;border:1px solid var(--line,#d9ded6);border-radius:8px;min-height:240px}
 .remote-files-path{display:flex;gap:6px;margin-bottom:8px}
 .remote-files-path input{flex:1;min-width:0;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
 .remote-files-note{font-size:12px;opacity:.75;padding:8px}
+.remote-files-modal .remote-files-selected{margin-top:12px;font-size:12px}
+.remote-files-modal .remote-files-selected h3{margin:0 0 6px;font-size:12px}
+.remote-files-modal .remote-files-selected ul{list-style:none;margin:0;padding:0;max-height:140px;overflow:auto}
+.remote-files-modal .remote-files-selected li{display:flex;align-items:start;justify-content:space-between;gap:10px;margin-top:4px}
+.remote-files-modal .remote-files-selected code{min-width:0;overflow-wrap:anywhere}
+.remote-files-modal .remote-files-selected p{margin:8px 0;font-size:12px}
 @media(prefers-reduced-motion:reduce){.ssh-environment-dot{animation:none!important}}
 
 /* Disclosure hides details while preserving the switch and state indicator. */

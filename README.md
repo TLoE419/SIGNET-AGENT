@@ -6,9 +6,11 @@ The desktop opens to the bilingual workspace. The chat uses the existing SIGNET 
 
 Datasets created in **Data** and their current file selections survive an app
 restart. Each dataset shows only its own run history, whose original files and
-settings remain preserved when current selections change. File choices still
-use the existing simulated picker; running another dataset is a separate
-integration step.
+settings remain preserved when current selections change. **Choose remote files**
+browses HPC3 folders after connecting and saves readable, nonempty file paths
+to that dataset. Genotype selections can include multiple files. This selection
+checks file metadata only; scientific format validation and running another
+dataset are separate integration steps.
 
 ## Replacing the Former Desktop Workbench
 
