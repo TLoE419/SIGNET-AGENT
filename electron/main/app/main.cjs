@@ -181,7 +181,7 @@ async function launch({provider, visible = true, userData, stateFile, startupMs,
   window = new BrowserWindow({width: 1650, height: 894, minWidth: 760, minHeight: 460, useContentSize: true, show: false,
     title: 'SIGNET Research Assistant', webPreferences: {session: isolated, nodeIntegration: false,
       contextIsolation: true, sandbox: true, webSecurity: true, webviewTag: false,
-      additionalArguments: ['--signet-dev-terminal'],
+      additionalArguments: ['--signet-dev-terminal', ...(devMode ? ['--signet-dev-mode'] : [])],
       preload: path.join(__dirname, '../../preload/index.cjs')}});
   window.on('close', event => { if (!finished) { event.preventDefault(); void quit(); } });
   window.webContents.setWindowOpenHandler(({url}) => {

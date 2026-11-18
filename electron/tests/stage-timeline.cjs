@@ -96,6 +96,30 @@ async function verify() {
   await click('#ml-language');
   assert.match(await text(3), /Principal components: 2.*Matched samples 6.*Retained samples 6/s);
   assert.match(await text(6), /Frequency threshold: 0\.45.*Genes 3 · Edges 3/s);
+  await click('[data-nav-target="data"]');
+  await choose('#ml-dataset-select', fixture.datasets[1].id);
+  await click('[data-nav-target="analysis"]');
+  await click('#ml-stage-tab');
+  await choose('#ml-stage6-run', id);
+  await until(() => js(`document.querySelector('#lens-stage6').dataset.historyId === '${id}'`), 'Analysis archive did not load');
+  await click('#lens-stage6 [data-gene="MEGF6"]');
+  for (const stage of [3, 1, 2, 4, 5]) {
+    await click(entry(stage));
+    const panel = stage === 3 ? '#lens-history-stage3' : '#lens-history-stage';
+    await until(() => js(`!document.querySelector('${panel}').hidden && document.querySelector('${panel}').dataset.runState === 'ready'`),
+      'Analysis timeline opened an execution form instead of saved Stage ' + stage);
+    assert.equal(await js(`document.querySelector('${panel}').dataset.historyId`), id);
+    assert.equal(await js(`document.querySelector('#lens-stage${stage}').hidden`), true);
+    const context = await js(`(()=>{const detail={};window.dispatchEvent(new CustomEvent('workspace-context-request',{detail}));return detail.context})()`);
+    assert.equal(context.history_id, id); assert.equal(context.stage, stage);
+    assert.equal(await js(`document.querySelector('.ml-app').dataset.nav`), 'analysis');
+    assert.deepEqual(await geometry(), [1650, 894, 53, 542]);
+  }
+  await click(entry(6));
+  await until(() => js(`!document.querySelector('#lens-stage6').hidden && document.querySelector('#lens-stage6').dataset.historyId === '${id}'`),
+    'Analysis timeline did not restore its archived graph');
+  assert.equal(await js(`document.querySelector('#lens-stage6').dataset.selectedGene`), 'MEGF6');
+  assert.equal(await js(`document.querySelectorAll('#lens-stage6 tbody tr').length`), 2);
   assert.deepEqual(await geometry(), [1650, 894, 53, 542]);
   assert.deepEqual(fingerprint(fixture.project), original, 'History browsing changed saved inputs, settings or results');
   assert.equal(existsSync(path.join(temporary, 'forbidden-remote.ndjson')), false);

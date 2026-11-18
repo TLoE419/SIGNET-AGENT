@@ -75,7 +75,7 @@ function harness(t, rows, handler) {
   const entry = stage => q(`[data-stage="${stage}"]`).closest('.ml-stage-entry');
   const open = (id, stage) => {click(`[data-run-target="${id}"]`); click(`#ml-run-${id} [data-run-stage="${stage}"]`);};
   const back = stage => click(stage === 3 ? '#ml-stage3-back' : stage === 6 ? '#ml-stage6-back' : '#ml-archive-stage-back');
-  return {q, click, choose, calls, entry, open, back, ready: async () => {
+  return {window, q, click, choose, calls, entry, open, back, ready: async () => {
     await until(() => q('[data-run-target]'));
     click('[data-nav-target="history"]');
   }};
@@ -114,6 +114,73 @@ test('all six summaries and previews come only from lazily opened saved results,
   assert.equal(h.calls.length, calls, 'Language changes must not parse or fetch another result');
   assert.equal(JSON.stringify(row), original);
   assert.ok(h.calls.every(call => !call.options.method || call.options.method === 'GET'));
+});
+
+test('analysis sidebar stages keep the selected archive instead of opening a same-named live run', async t => {
+  const h = harness(t, [run('live'), run()]); await h.ready();
+  h.click('[data-nav-target="analysis"]');
+  h.choose('#ml-stage6-run', 'archive--shared');
+  await until(() => h.q('#lens-stage6').dataset.historyId === 'archive--shared');
+  h.click('#lens-stage6 [data-gene="X"]');
+  h.click('#ml-timeline [data-stage="3"]');
+  await until(() => h.q('#lens-history-stage3').hidden === false);
+  assert.equal(h.q('.ml-app').dataset.nav, 'analysis');
+  assert.equal(h.q('#lens-stage3').hidden, true, 'A different live execution form must stay hidden');
+  await until(() => h.q('#lens-history-stage3').dataset.historyId === 'archive--shared');
+  const context = {};
+  h.window.dispatchEvent(new h.window.CustomEvent('workspace-context-request', {detail: context}));
+  assert.equal(context.context.history_id, 'archive--shared');
+  assert.equal(context.context.stage, 3);
+  assert.ok(h.calls.some(call => call.url === '/stage3/results?run=shared&source=archive'));
+  for (const stage of [1, 2, 4, 5]) {
+    h.click(`#ml-timeline [data-stage="${stage}"]`);
+    await until(() => h.q('#lens-history-stage').hidden === false &&
+      h.q('#lens-history-stage').dataset.historyId === 'archive--shared' &&
+      h.q('#lens-history-stage').dataset.stage === String(stage));
+    assert.equal(h.q(`#lens-stage${stage}`).hidden, true);
+  }
+  h.click('#ml-timeline [data-stage="6"]');
+  await until(() => h.q('#lens-stage6').hidden === false && h.q('#lens-stage6').dataset.historyId === 'archive--shared');
+  assert.equal(h.q('#lens-stage6').dataset.selectedGene, 'X');
+  assert.equal(h.q('#lens-stage6 tbody').rows.length, 1);
+  assert.equal(h.q('#ml-timeline').dataset.historyId, 'archive--shared');
+  h.click('[data-nav-target="history"]');
+  assert.equal(h.q('[data-run-target="archive--shared"]').getAttribute('aria-pressed'), 'true');
+  assert.equal(h.q('#lens-stage6').dataset.historyId, 'archive--shared');
+  h.click('[data-nav-target="analysis"]');
+  h.click('#ml-timeline [data-stage="3"]');
+  await until(() => h.q('#lens-history-stage3').dataset.historyId === 'archive--shared');
+  h.click('[data-nav-target="settings"]');
+  assert.equal(h.q('#lens-history-stage3').hidden, false, 'Settings keeps the selected saved result');
+  assert.equal(h.q('#lens-stage3').hidden, true);
+  h.click('[data-nav-target="history"]');
+  assert.equal(h.q('[data-run-target="archive--shared"]').getAttribute('aria-pressed'), 'true');
+  h.open('workspace--shared', 3);
+  await until(() => h.q('#lens-history-stage3').dataset.historyId === 'workspace--shared');
+  h.click('[data-nav-target="analysis"]');
+  await until(() => h.q('#lens-history-stage3').dataset.historyId === 'archive--shared');
+  assert.equal(h.q('#lens-history-stage3').hidden, false, 'Analysis restores its own canonical saved selection');
+  assert.ok(h.calls.every(call => !call.options.method || call.options.method === 'GET'));
+});
+
+test('an unavailable archived sidebar stage stays empty instead of falling back to a live form', async t => {
+  const archived = run();
+  archived.capabilities.stage_results = ['6'];
+  archived.jobs.adjust.state = 'not_submitted';
+  const h = harness(t, [run('live'), archived]); await h.ready();
+  h.click('[data-nav-target="analysis"]');
+  h.choose('#ml-stage6-run', archived.history_id);
+  await until(() => h.q('#lens-stage6').dataset.historyId === archived.history_id);
+  h.click('#ml-timeline [data-stage="3"]');
+  assert.equal(h.q('#lens-history-stage3').hidden, false);
+  assert.equal(h.q('#lens-history-stage3').dataset.runState, 'empty');
+  assert.equal(h.q('#lens-stage3').hidden, true);
+  assert.equal(h.calls.some(call => call.url.startsWith('/stage3/results?')), false);
+  h.click('#ml-timeline [data-stage="2"]');
+  assert.equal(h.q('#lens-history-stage').hidden, false);
+  assert.equal(h.q('#lens-history-stage').dataset.runState, 'empty');
+  assert.equal(h.q('#lens-stage2').hidden, true);
+  assert.equal(h.calls.some(call => call.url.startsWith('/stage/results?')), false);
 });
 
 test('same run ID keeps source-specific results, restores gene selection, and hides absent or unfinished results', async t => {

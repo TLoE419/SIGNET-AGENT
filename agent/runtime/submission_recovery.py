@@ -99,6 +99,10 @@ def reconcile(run_id, name, *, expected_attempt, expected_job_id, action, confir
     if action not in ('review', 'adopt', 'unsubmitted') or (action != 'review' and confirmed is not True):
         raise jobs.StepError('invalid_request', 'Review the evidence and explicitly confirm the recovery action.')
     outcome, detail, evidence = _probe(root, record)
+    local_claim = jobs._recovery_active_claim(root, record)
+    evidence['local_operation'] = local_claim
+    if outcome != 'unresolved' and local_claim['status'] not in ('absent', 'dead_submitter'):
+        outcome, detail = 'unresolved', local_claim['detail']
     entry = {'at': jobs._now(), 'action': action, 'outcome': outcome, 'detail': detail,
              'attempt': expected_attempt, 'job_id': expected_job_id, 'run_id': run_id,
              'step': name, 'evidence': evidence}
@@ -112,6 +116,10 @@ def reconcile(run_id, name, *, expected_attempt, expected_job_id, action, confir
         applied = False
         entry['outcome'] = 'unresolved'
         entry['detail'] = 'The original owner, receipt or job marker changed or could not be verified; submission remains blocked.'
+    if applied and jobs._recovery_active_claim(root, record, expected=local_claim, release=True)['status'] not in ('absent', 'released'):
+        applied = False
+        entry['outcome'] = 'unresolved'
+        entry['detail'] = 'The local operation ownership changed or could not be verified; its marker was not removed.'
     entry['applied'] = applied
     if applied:
         if outcome == 'adopt':

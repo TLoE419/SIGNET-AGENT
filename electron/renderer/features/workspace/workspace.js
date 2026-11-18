@@ -96,13 +96,15 @@
   const matchingHistoryRuns = () => historyRuns.filter(run => historyScope === "all" ||
     (historyScope === "unclassified" ? !run.dataset_id : run.dataset_id === activeDataset.id));
   const selectedHistoryResult = () => findHistoryRun(historyResult?.historyId);
+  const savedAnalysisView = () => ["analysis", "settings"].includes(app.dataset.nav) && historyResult?.view === "analysis" &&
+    historyResult.historyId === analysisRunByDataset.get(activeDataset.id);
   const stage6RunsForDataset = () => runsForDataset().filter(canReadGraph);
   const stage6RunsForView = () => app.dataset.nav === "history" ? matchingHistoryRuns().filter(canReadGraph) : stage6RunsForDataset();
 
   // Read current state synchronously at send time; never cache it on a chat/session.
   window.addEventListener("workspace-context-request", event => {
     if (!datasetCatalogReady || !["analysis", "history"].includes(app.dataset.nav)) return;
-    const inHistory = app.dataset.nav === "history";
+    const inHistory = app.dataset.nav === "history" || savedAnalysisView();
     const stage = inHistory ? historyResult?.stage : Number(timeline.querySelector('[aria-current="step"]')?.dataset.stage);
     if (!Number.isInteger(stage) || stage < 1 || stage > 6) return;
     let run = inHistory ? selectedHistoryResult() : null;
@@ -821,11 +823,12 @@
   const stageResults = root.querySelectorAll(".ml-workspace");
   function syncGenotypeContext() {
     const stageContext = ["手動執行", "Manual execution"];
+    const inHistory = app.dataset.nav === "history" || savedAnalysisView();
     const liveRuns = runsForDataset().filter(canContinue);
     const historyRun = selectedHistoryResult();
-    const continuationRuns = app.dataset.nav === "history" ? (canContinue(historyRun) ? [historyRun] : []) : liveRuns;
-    const continuationDataset = app.dataset.nav === "history" ? historyRun?.dataset_id ?? activeDataset.id : activeDataset.id;
-    const genotypeHistory = app.dataset.nav === "history" && historyResult?.stage === 1 &&
+    const continuationRuns = inHistory ? (canContinue(historyRun) ? [historyRun] : []) : liveRuns;
+    const continuationDataset = inHistory ? historyRun?.dataset_id ?? activeDataset.id : activeDataset.id;
+    const genotypeHistory = inHistory && historyResult?.stage === 1 &&
       canContinue(historyRun) && historyRun.jobs.genotype?.state !== "completed";
     const genotypeDataset = genotypeHistory ? {
       id: continuationDataset,
@@ -835,14 +838,15 @@
       ready: datasetCatalogReady,
     } : {id: activeDataset.id, name: activeDataset.name, inputs: activeDataset.inputs,
       persisted: activeDataset.persisted, ready: datasetCatalogReady};
-    byId("stage-header").querySelector("span").textContent = stageContext[root.lang === "en" ? 1 : 0];
+    byId("stage-header").querySelector("span").textContent = savedAnalysisView()
+      ? historyRun.name[root.lang === "en" ? 1 : 0] : stageContext[root.lang === "en" ? 1 : 0];
     genotypeRun?.setContext({
       datasetId: genotypeDataset.id,
       dataset: genotypeDataset,
       runs: genotypeHistory ? continuationRuns : liveRuns,
       runId: genotypeHistory ? historyRun.run_id : null,
       language: root.lang,
-      visible: app.dataset.nav === "analysis" &&
+      visible: app.dataset.nav === "analysis" && !savedAnalysisView() &&
         timeline.querySelector('[aria-current="step"]')?.dataset.stage === "1" || genotypeHistory,
     });
     expressionRun?.setContext({
@@ -850,43 +854,43 @@
       language: root.lang,
       visible: app.dataset.nav === "analysis" &&
         timeline.querySelector('[aria-current="step"]')?.dataset.stage === "2" ||
-        app.dataset.nav === "history" && historyResult?.stage === 2,
+        inHistory && historyResult?.stage === 2,
       runs: continuationRuns,
-      runId: app.dataset.nav === "history" && historyResult?.stage === 2 ? historyResult.runId : null,
+      runId: inHistory && historyResult?.stage === 2 ? historyResult.runId : null,
     });
     adjustmentRun?.setContext({
       datasetId: continuationDataset,
       language: root.lang,
       visible: app.dataset.nav === "analysis" &&
         timeline.querySelector('[aria-current="step"]')?.dataset.stage === "3" ||
-        app.dataset.nav === "history" && historyResult?.stage === 3,
+        inHistory && historyResult?.stage === 3,
       runs: continuationRuns,
-      runId: app.dataset.nav === "history" && historyResult?.stage === 3 ? historyResult.runId : null,
+      runId: inHistory && historyResult?.stage === 3 ? historyResult.runId : null,
     });
     cisRun?.setContext({
       datasetId: continuationDataset,
       language: root.lang,
       visible: app.dataset.nav === "analysis" &&
         timeline.querySelector('[aria-current="step"]')?.dataset.stage === "4" ||
-        app.dataset.nav === "history" && historyResult?.stage === 4,
+        inHistory && historyResult?.stage === 4,
       runs: continuationRuns,
-      runId: app.dataset.nav === "history" && historyResult?.stage === 4 ? historyResult.runId : null,
+      runId: inHistory && historyResult?.stage === 4 ? historyResult.runId : null,
     });
     networkRun?.setContext({
       datasetId: continuationDataset,
       language: root.lang,
       visible: app.dataset.nav === "analysis" &&
         timeline.querySelector('[aria-current="step"]')?.dataset.stage === "5" ||
-        app.dataset.nav === "history" && historyResult?.stage === 5,
+        inHistory && historyResult?.stage === 5,
       runs: continuationRuns,
-      runId: app.dataset.nav === "history" && historyResult?.stage === 5 ? historyResult.runId : null,
+      runId: inHistory && historyResult?.stage === 5 ? historyResult.runId : null,
     });
     visualizationRun?.setContext({
       datasetId: continuationDataset,
       language: root.lang,
       visible: ["analysis", "history"].includes(app.dataset.nav) && visualizationFormVisible(),
       runs: continuationRuns,
-      runId: app.dataset.nav === "history" && historyResult?.stage === 6 ? historyResult.runId : null,
+      runId: inHistory && historyResult?.stage === 6 ? historyResult.runId : null,
       resultsAvailable: stage6RunsForDataset().length > 0,
     });
     if (visualizationRun) syncVisualizationPanels();
@@ -901,7 +905,19 @@
     for (const panel of stageResults) panel.hidden = panel.id !== "lens-stage" + button.dataset.stage;
     timeline.querySelector('[aria-current="step"]').removeAttribute("aria-current");
     button.setAttribute("aria-current", "step");
-    syncGenotypeContext();
+    if (app.dataset.nav === "analysis") {
+      bindAnalysisStage();
+      updateHistoryView();
+      syncStage6Picker();
+    } else syncGenotypeContext();
+  }
+  function bindAnalysisStage() {
+    const run = timelineRun(), stage = Number(timeline.querySelector('[aria-current="step"]').dataset.stage);
+    clearHistoryResult();
+    if (!run) return;
+    historyResult = {runId: run.run_id, historyId: historyKey(run), stage, view: "analysis"};
+    if (stage === 3) void loadStage3Run();
+    else if (archiveSteps.has(stage)) void loadArchivedStep();
   }
   for (const button of stageButtons) {
     button.addEventListener("click", () => {
@@ -950,12 +966,13 @@
       const node = event.target.closest(".s6-gene");
       gesture = {id: event.pointerId, start: point(event), node, pan: [...pan], transform: node?.transform.baseVal.consolidate()?.matrix};
       dragged = false;
-      graph.setPointerCapture(event.pointerId);
     });
     graph.addEventListener("pointermove", event => {
       if (!gesture || gesture.id !== event.pointerId) return;
       const current = point(event), dx = current.x - gesture.start.x, dy = current.y - gesture.start.y;
       if (Math.hypot(dx, dy) < 2 && !dragged) return;
+      // Capturing a simple press retargets its click away from the gene.
+      if (!dragged) graph.setPointerCapture(event.pointerId);
       dragged = true;
       if (gesture.node) {
         const x = gesture.transform.e + dx, y = gesture.transform.f + dy;
@@ -1468,7 +1485,7 @@
   analysisNetwork.dataset.runState = "listing";
 
   function visualizationFormVisible() {
-    if (app.dataset.nav === "history") {
+    if (app.dataset.nav === "history" || savedAnalysisView()) {
       const run = selectedHistoryResult();
       return historyResult?.stage === 6 && canContinue(run) && run.jobs.visualize?.state !== "completed";
     }
@@ -1479,7 +1496,7 @@
   }
 
   function syncVisualizationPanels() {
-    const inHistory = app.dataset.nav === "history";
+    const inHistory = app.dataset.nav === "history" || savedAnalysisView();
     const form = visualizationFormVisible();
     const graph = inHistory ? historyResult?.stage === 6 && !form
       : timeline.querySelector('[aria-current="step"]')?.dataset.stage === "6" && !form;
@@ -1932,12 +1949,18 @@
     archivedStepRequest?.abort();
     const {runId, historyId, stage} = historyResult ?? {};
     const run = findHistoryRun(historyId);
-    if (!archiveSteps.has(stage) || !run || !canReadStage(run, stage)) return;
+    if (!archiveSteps.has(stage) || !run) return;
     const request = new AbortController();
     archivedStepRequest = request;
     archivedStepResult = null;
     delete archivedStepPanel.dataset.runId;
+    delete archivedStepPanel.dataset.historyId;
     archivedStepPanel.dataset.stage = stage;
+    if (!canReadStage(run, stage)) {
+      archivedStepPanel.dataset.runState = "empty";
+      renderArchivedStep();
+      return;
+    }
     archivedStepPanel.dataset.runState = "loading";
     renderArchivedStep();
     try {
@@ -1970,11 +1993,17 @@
     stage3Request?.abort();
     const run = selectedHistoryResult();
     const runId = run?.run_id, historyId = run && historyKey(run);
-    if (historyResult?.stage !== 3 || !run || !canReadStage(run, 3)) return;
+    if (historyResult?.stage !== 3 || !run) return;
     const request = new AbortController();
     stage3Request = request;
     stage3Result = null;
     delete stage3HistoryPanel.dataset.runId;
+    delete stage3HistoryPanel.dataset.historyId;
+    if (!canReadStage(run, 3)) {
+      stage3HistoryPanel.dataset.runState = "empty";
+      renderStage3History();
+      return;
+    }
     stage3HistoryPanel.dataset.runState = "loading";
     renderStage3History();
     try {
@@ -2295,13 +2324,14 @@
 
   function updateHistoryView() {
     const inHistory = app.dataset.nav === "history";
+    const savedAnalysis = savedAnalysisView();
     const matchingRuns = matchingHistoryRuns();
     const previousSelection = selectedRuns.get(historySelectionKey());
     const selected = matchingRuns.find(run => historyKey(run) === previousSelection);
     const selectedId = selected ? historyKey(selected) : matchingRuns[0] && historyKey(matchingRuns[0]);
-    const showResult = inHistory && Boolean(selectedId) && historyResult?.historyId === selectedId;
+    const showResult = savedAnalysis || inHistory && Boolean(selectedId) && historyResult?.historyId === selectedId;
     const showNetwork = showResult && historyResult.stage === 6;
-    const selectedRun = matchingRuns.find(run => historyKey(run) === selectedId);
+    const selectedRun = savedAnalysis ? selectedHistoryResult() : matchingRuns.find(run => historyKey(run) === selectedId);
     const showGenotype = showResult && historyResult.stage === 1 && canContinue(selectedRun) &&
       selectedRun.jobs.genotype?.state !== "completed";
     const showExpression = showResult && historyResult.stage === 2 && canContinue(selectedRun) &&
@@ -2314,26 +2344,27 @@
       selectedRun.jobs.network?.state !== "completed";
     stage3HistoryPanel.hidden = !showResult || historyResult.stage !== 3 || showAdjustment;
     archivedStepPanel.hidden = !showResult || showGenotype || showExpression || showCis || showNetworkRun || !archiveSteps.has(historyResult.stage);
+    stage3Back.hidden = archivedStepBack.hidden = savedAnalysis;
     const genotypePanel = root.querySelector("#lens-stage1");
     genotypePanel.classList.toggle("ml-workspace", !showGenotype);
     genotypePanel.classList.toggle("ml-nav-workspace", showGenotype);
-    genotypePanel.hidden = inHistory ? !showGenotype : timeline.querySelector('[aria-current="step"]').dataset.stage !== "1";
+    genotypePanel.hidden = inHistory || savedAnalysis ? !showGenotype : timeline.querySelector('[aria-current="step"]').dataset.stage !== "1";
     const expressionPanel = root.querySelector("#lens-stage2");
     expressionPanel.classList.toggle("ml-workspace", !showExpression);
     expressionPanel.classList.toggle("ml-nav-workspace", showExpression);
-    expressionPanel.hidden = inHistory ? !showExpression : timeline.querySelector('[aria-current="step"]').dataset.stage !== "2";
+    expressionPanel.hidden = inHistory || savedAnalysis ? !showExpression : timeline.querySelector('[aria-current="step"]').dataset.stage !== "2";
     const adjustmentPanel = root.querySelector("#lens-stage3");
     adjustmentPanel.classList.toggle("ml-workspace", !showAdjustment);
     adjustmentPanel.classList.toggle("ml-nav-workspace", showAdjustment);
-    adjustmentPanel.hidden = inHistory ? !showAdjustment : timeline.querySelector('[aria-current="step"]').dataset.stage !== "3";
+    adjustmentPanel.hidden = inHistory || savedAnalysis ? !showAdjustment : timeline.querySelector('[aria-current="step"]').dataset.stage !== "3";
     const cisPanel = root.querySelector("#lens-stage4");
     cisPanel.classList.toggle("ml-workspace", !showCis);
     cisPanel.classList.toggle("ml-nav-workspace", showCis);
-    cisPanel.hidden = inHistory ? !showCis : timeline.querySelector('[aria-current="step"]').dataset.stage !== "4";
+    cisPanel.hidden = inHistory || savedAnalysis ? !showCis : timeline.querySelector('[aria-current="step"]').dataset.stage !== "4";
     const networkPanel = root.querySelector("#lens-stage5");
     networkPanel.classList.toggle("ml-workspace", !showNetworkRun);
     networkPanel.classList.toggle("ml-nav-workspace", showNetworkRun);
-    networkPanel.hidden = inHistory ? !showNetworkRun : timeline.querySelector('[aria-current="step"]').dataset.stage !== "5";
+    networkPanel.hidden = inHistory || savedAnalysis ? !showNetworkRun : timeline.querySelector('[aria-current="step"]').dataset.stage !== "5";
     runDetails.hidden = !inHistory || !selectedId || showResult;
     byId("empty-history").hidden = !inHistory || Boolean(selectedId);
     byId("empty-run-list").hidden = Boolean(selectedId);
@@ -2347,7 +2378,7 @@
     // One graph and table render the same run in both the analysis and history views.
     analysisNetwork.classList.toggle("ml-workspace", !showNetwork);
     analysisNetwork.classList.toggle("ml-nav-workspace", showNetwork);
-    analysisNetwork.hidden = inHistory ? !showNetwork : timeline.querySelector('[aria-current="step"]').dataset.stage !== "6";
+    analysisNetwork.hidden = inHistory || savedAnalysis ? !showNetwork : timeline.querySelector('[aria-current="step"]').dataset.stage !== "6";
     renderHistoryStatus();
     syncGenotypeContext();
     syncHistoryLogs();
@@ -2558,7 +2589,13 @@
   const navigation = root.querySelectorAll("[data-nav-target]");
   function openNavigation(view) {
     if (view !== "data") window.dispatchEvent(new Event("close-dataset-remote-files"));
+    if (view === "history" && historyResult?.view === "analysis") {
+      if (matchingHistoryRuns().some(run => historyKey(run) === historyResult.historyId)) {
+        selectedRuns.set(historySelectionKey(), historyResult.historyId);
+      } else clearHistoryResult();
+    }
     app.dataset.nav = view;
+    if (view === "analysis") bindAnalysisStage();
     const analysis = view === "analysis";
     root.querySelector(".ml-segment").hidden = !analysis;
     for (const tab of tabs) {
