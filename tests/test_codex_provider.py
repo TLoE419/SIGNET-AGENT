@@ -125,6 +125,14 @@ class CodexProviderTest(unittest.TestCase):
         self.assertEqual(call.id, result.id)
         self.assertTrue(call.id.startswith('codex-'))
         self.assertTrue(any('選擇原因' in event for event in events))
+        import json
+        activity = [json.loads(event[12:]) for event in events if event.startswith('SIGNET_TOOL ')]
+        self.assertEqual([event['status'] for event in activity], ['running', 'completed'])
+        self.assertEqual(activity[0]['operation_id'], activity[1]['operation_id'])
+        self.assertEqual(activity[1]['tool_name'], 'list_files')
+        self.assertGreaterEqual(activity[1]['elapsed_ms'], 0)
+        self.assertNotIn(str(PROJECT), str(activity))
+
 
     def test_invalid_or_failed_cli_responses_never_execute_tools_or_expose_raw_errors(self):
         for mode in ('badargs', 'unknown', 'mixed', 'fail', 'built-in'):

@@ -1841,6 +1841,21 @@
     return {event, status, log};
   }
 
+  function toolActivity(record, line, operations) {
+    if (typeof line !== "string" || !line.startsWith("SIGNET_TOOL ")) return false;
+    let data;
+    try { data = JSON.parse(line.slice(12)); } catch { return false; }
+    if (!/^[a-f0-9]{32}$/.test(data.operation_id) || !/^[\w]{1,100}$/.test(data.tool_name)) return false;
+    const states = {running: ["執行中", "Running"], completed: ["完成", "Completed"], failed: ["失敗", "Failed"], cancelled: ["已取消", "Cancelled"], needs_review: ["需要確認", "Needs review"]};
+    if (!states[data.status]) return false;
+    let row = operations.get(data.operation_id);
+    if (!row) { row = appendChatEvent(record, data.tool_name, "", states[data.status]); operations.set(data.operation_id, row); }
+    chatLabel(row.status, states[data.status]);
+    const elapsed = Number.isFinite(data.elapsed_ms) && data.elapsed_ms >= 0 ? `${(data.elapsed_ms / 1000).toFixed(2)} s` : "…";
+    chatLabel(row.log, [`驗證參數並呼叫工具（不顯示參數值）。\n耗時：${elapsed}\n結果：${String(data.result_summary || "—").slice(0, 300)}`, `Validate parameters and invoke tool (values hidden).\nElapsed: ${elapsed}\nResult: ${String(data.result_summary || "—").slice(0, 300)}`]);
+    return true;
+  }
+
   const chatDrawers = ["chat-list", "chat-activity"];
   function showChatDrawer(key) {
     for (const drawer of chatDrawers) {
@@ -1924,7 +1939,9 @@
       else renderAgentAnswer(createAgentReply(record), text);
     }
     for (const events of saved.events ?? []) {
-      appendChatEvent(record, ["已存執行紀錄", "Saved activity"], events.join("\n"), ["已結束", "Ended"]);
+      const operations = new Map();
+      const logs = events.filter(line => !toolActivity(record, line, operations));
+      appendChatEvent(record, ["已存執行紀錄", "Saved activity"], logs.join("\n"), ["已結束", "Ended"]);
     }
     record.loaded = true;
   }
@@ -2587,10 +2604,12 @@
     globalThis.lucide?.createIcons();
     reply.scrollIntoView({ block: "nearest" });
 
+    const operations = new Map();
     let done = false, failed = false, answered = false;
     function consume(line) {
       if (!line.trim()) return;
       const event = JSON.parse(line);
+      if (event.type === "progress" && toolActivity(record, event.text, operations)) return;
       if (["progress", "error", "done"].includes(event.type)) {
         turn.log.textContent += (turn.log.textContent ? "\n" : "") + event.text;
       }

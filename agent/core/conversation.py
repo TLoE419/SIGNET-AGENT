@@ -1,3 +1,5 @@
+import json
+import uuid
 import argparse
 import os
 import re
@@ -322,6 +324,8 @@ def run_conversation(client, text: str, history=None, progress=None, http_timing
         interrupted = False
         for index, call in enumerate(calls, 1):
             tool_name = call.name if call.name in {fn.__name__ for fn in ALL_TOOLS} else '未知工具'
+            operation_id = uuid.uuid4().hex
+            report("SIGNET_TOOL " + json.dumps(dict(operation_id=operation_id, tool_name=tool_name, status="running", result_summary="", public_summary="Validate parameters and invoke tool; parameter values are hidden.")))
             tool_started = None
             if interrupted:
                 result = {"status": "skipped", "executed": False, "reason": "Earlier tool was interrupted or raised an unexpected error."}
@@ -338,6 +342,8 @@ def run_conversation(client, text: str, history=None, progress=None, http_timing
                               "executed": "unknown", "error_type": type(exc).__name__,
                               "reason": "Inspect actual run state before retrying; do not assume this operation was not executed."}
             status = result.get('status', 'ok' if 'files' in result else 'unknown')
+            activity_status = "completed" if status in ("ok", "success", "completed") else "cancelled" if status == "interrupted" else "failed" if status in ("error", "failed") else "needs_review"
+            report("SIGNET_TOOL " + json.dumps(dict(operation_id=operation_id, tool_name=tool_name, status=activity_status, elapsed_ms=round((time.monotonic()-tool_started)*1000) if tool_started is not None else 0, public_summary="Validate parameters and invoke tool; parameter values are hidden.", result_summary=f"status={status}")))
             executed = result.get('executed', '未標示；依狀態判讀')
             report(f"工具結果：{tool_name}；status={status}；executed={executed}。")
             if tool_started is not None:
