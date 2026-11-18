@@ -939,8 +939,57 @@
     };
 
     let nodes, edges, nodeElements, edgeElements;
+    let pan = [0, 0], gesture = null, dragged = false;
+    graph.style.touchAction = "none";
+    const point = event => new DOMPoint(event.clientX, event.clientY).matrixTransform(graph.getScreenCTM().inverse());
+    const applyPan = () => {
+      for (const layer of [edgeLayer, nodeLayer]) layer.setAttribute("transform", `translate(${pan[0]} ${pan[1]})`);
+    };
+    graph.addEventListener("pointerdown", event => {
+      if (event.button !== 0 || event.target.closest(".s6-edge")) return;
+      const node = event.target.closest(".s6-gene");
+      gesture = {id: event.pointerId, start: point(event), node, pan: [...pan], transform: node?.transform.baseVal.consolidate()?.matrix};
+      dragged = false;
+      graph.setPointerCapture(event.pointerId);
+    });
+    graph.addEventListener("pointermove", event => {
+      if (!gesture || gesture.id !== event.pointerId) return;
+      const current = point(event), dx = current.x - gesture.start.x, dy = current.y - gesture.start.y;
+      if (Math.hypot(dx, dy) < 2 && !dragged) return;
+      dragged = true;
+      if (gesture.node) {
+        const x = gesture.transform.e + dx, y = gesture.transform.f + dy;
+        gesture.node.setAttribute("transform", `translate(${x} ${y})`);
+        nodes[gesture.node.dataset.gene] = [(x - 16) / 5.9, (y - 18) / 2.91];
+        redrawEdges();
+      } else { pan = [gesture.pan[0] + dx, gesture.pan[1] + dy]; applyPan(); }
+    });
+    for (const type of ["pointerup", "pointercancel", "lostpointercapture"]) graph.addEventListener(type, () => { gesture = null; });
+    graph.addEventListener("click", event => {
+      if (dragged) { event.stopImmediatePropagation(); event.preventDefault(); dragged = false; }
+    }, true);
+    frame.addEventListener("wheel", event => {
+      event.preventDefault();
+      zoom.value = String(Math.max(Number(zoom.min), Math.min(Number(zoom.max), Number(zoom.value) + (event.deltaY < 0 ? 10 : -10))));
+      updateZoom();
+    }, {passive: false});
+    function redrawEdges() {
+      edgeElements.forEach((edge, index) => {
+        const [source, target] = edges[index];
+        const [sx, sy] = nodes[source], [tx, ty] = nodes[target];
+        const x1 = 16 + 5.9 * sx, y1 = 18 + 2.91 * sy, x2 = 16 + 5.9 * tx, y2 = 18 + 2.91 * ty;
+        const angle = Math.atan2(y2 - y1, x2 - x1);
+        const bend = edges.some(([a, b]) => a === target && b === source) ? 18 : 0;
+        const cx = (x1 + x2) / 2 - Math.sin(angle) * bend, cy = (y1 + y2) / 2 + Math.cos(angle) * bend;
+        const end = Math.atan2(y2 - cy, x2 - cx);
+        edge.setAttribute("d", source === target
+          ? `M${x1 + 5} ${y1 - 4} C${x1 + 29} ${y1 - 23} ${x1 - 29} ${y1 - 23} ${x1 - 6} ${y1 - 6}`
+          : `M${x1} ${y1} Q${cx} ${cy} ${x2 - 10 * Math.cos(end)} ${y2 - 10 * Math.sin(end)}`);
+      });
+    }
     function setNetwork(nextNodes, nextEdges, selectedGene = null) {
-      nodes = nextNodes;
+      nodes = Object.fromEntries(Object.entries(nextNodes).map(([gene, position]) => [gene, [...position]]));
+      pan = [0, 0]; gesture = null; dragged = false; zoom.value = "100"; updateZoom(); applyPan();
       edges = nextEdges;
       const positions = Object.fromEntries(Object.entries(nodes).map(([name, [x, y]]) =>
         [name, [16 + 5.9 * x, 18 + 2.91 * y]]));
@@ -965,6 +1014,21 @@
           "data-source": source,
           "data-target": target
         });
+      });
+      edgeElements.forEach((edge, index) => {
+        const inspect = () => {
+          const [source, target, frequency, coefficient] = edges[index];
+          const english = stage.closest("[lang]").lang === "en";
+          summary.textContent = `${source} → ${target} · ${english ? "Frequency" : "頻率"}: ${frequency} · ${english ? "Coefficient" : "係數"}: ${coefficient}`;
+          table.open = true;
+        };
+        edge.style.pointerEvents = "stroke";
+        edge.style.cursor = "pointer";
+        edge.setAttribute("tabindex", "0");
+        edge.setAttribute("role", "button");
+        edge.setAttribute("aria-label", edges[index].join(" → "));
+        edge.addEventListener("click", inspect);
+        edge.addEventListener("keydown", event => { if (["Enter", " "].includes(event.key)) { event.preventDefault(); inspect(); } });
       });
       const edgeFragment = document.createDocumentFragment();
       for (const edge of edgeElements) edgeFragment.append(edge);
