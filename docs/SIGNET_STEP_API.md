@@ -13,7 +13,7 @@ Steps available now (TCGA cohort only):
 | `network` | `signet -n` | Gene regulatory network by two-stage penalized least squares on bootstrap data; SIGNET submits its own Slurm jobs (section 6.4) |
 | `visualize` | `signet -v` | Export the network graph and tables from this run’s completed network step |
 
-Linked chat analyses use the ordered confirmation flow for all six stages. The older local analysis tools remain separate.
+Linked chat analyses use the ordered confirmation flow for all six stages.
 
 ## Contents
 
@@ -25,7 +25,7 @@ Linked chat analyses use the ordered confirmation flow for all six stages. The o
 6. [Step reference](#6-step-reference)
 7. [Step states](#7-step-states)
 8. [Files on HPC3 and on this computer](#8-files-on-hpc3-and-on-this-computer)
-9. [Worked example: -t, -g, -a in one run](#9-worked-example--t--g--a-in-one-run)
+9. [Worked example: one run with curl](#9-worked-example-one-run-with-curl)
 10. [Known limits](#10-known-limits)
 
 ## 1. How it fits together
@@ -86,7 +86,7 @@ The API is served by the app's local Python backend on `127.0.0.1:<port>`. `agen
 | `X-Chat-Token` equals the page token | all routes except ZIP retrieval, which uses a single-use ticket | 403 |
 | `Origin` is `http://127.0.0.1:<port>` | POST and PATCH | 403 |
 
-- The page obtains the token from `GET /bootstrap`. Developer scripts can do the same; see [Worked example](#9-worked-example--t--g--a-in-one-run).
+- The page obtains the token from `GET /bootstrap`. Developer scripts can do the same; see [Worked example](#9-worked-example-one-run-with-curl).
 - A 403 from these checks is plain text from `chat_ui.py`, not the JSON error below, and never contacts HPC3.
 
 Inside the API:
@@ -343,8 +343,8 @@ aliases for the `genotype` proposal actions.
 
 - `prepare`: send `{"session": "..."}`. An optional `mode` selects `"example"` or `"custom"`.
   The selected mode carries forward from genotype when omitted. Example expression uses the
-  installed expression matrix and collapsed GENCODE annotation. Adjustment requires a compatible
-  clinical table supplied by the researcher. Preparation does not change settings or submit jobs.
+  installed expression matrix and collapsed GENCODE annotation; adjustment uses the clinical table in
+  use (see below). Preparation does not change settings or submit jobs.
 - `decline`: send `session` and `proposal_id`. The same stage can be opened again with a new ID.
 - `confirm`: send `session`, `proposal_id`, `inputs`, `settings`, `resources` and any `options`
   shown in the card. The server checks ordering and rejects stale settings. It consumes the
@@ -395,7 +395,7 @@ and ticket are scoped to the run’s linked conversation.
 | Settings | `restrict.tcga` | `restrict.tcga.geno`, `mind`, `geno`, `hwe`, `int` | none | `alpha.cis`, `nperms`, `upstream`, `downstream` |
 | Options | none | none | `npc` | none |
 | Required outputs (under `work/`) | `res/rest/signet_gexp`, `_gexpID`, `_gene_pos`, `_gene_name` | `res/resg/signet_Geno`, `_Genotype.sampleID` | `res/resa/signet_matched.gexp`, `_new.Geno`, `_new.Geno.map`, `_new.Geno.maf`, `_gexp.data`, `_gexp_rmpc.data`, `_geno.data` | `res/resc/signet_all.sig.pValue_<alpha.cis>`, `_all.eQTL.data`, `_net.gexp.data`, `_net.genepos`, `_net.genename` |
-| Downloaded folder | `work/res/rest` | `work/res/resg` | `work/res/resa` | `work/res/resc` |
+| Result folder (kept on HPC3, not downloaded) | `work/res/rest` | `work/res/resg` | `work/res/resa` | `work/res/resc` |
 | Default resources | 4 CPUs, 16 GB, 2 h | 8 CPUs, 32 GB, 4 h | 4 CPUs, 16 GB, 2 h | 8 CPUs, 32 GB, 4 h |
 | Limits | 1–16 CPUs, 1–64 GB, 0.25–12 h | 1–32 CPUs, 1–128 GB, 0.25–24 h | 1–16 CPUs, 1–64 GB, 0.25–12 h | 1–32 CPUs, 1–128 GB, 0.25–24 h |
 | Extra failure lines | none | `No SNP listed in your chromosome input`, `Some of the jobs are incomplete` | none | none |
@@ -557,7 +557,7 @@ steps/<step>.attempt<N>.results/ earlier attempts' local result folders
 steps/remote.owner           the HPC3 folder and its owner token
 ```
 
-## 9. Worked example: -t, -g, -a in one run
+## 9. Worked example: one run with curl
 
 A developer can call the API with `curl`. The port is that of the app's Python backend (listening on `127.0.0.1`); the token comes from `/bootstrap`.
 
@@ -574,7 +574,7 @@ api POST  /signet/runs '{"run_id":"luad_run1","cohort":"TCGA"}'
 api PATCH /signet/runs/luad_run1/settings '{"values":{"restrict.tcga.geno":1}}'
 
 api POST /signet/runs/luad_run1/steps/expression \
-  "{\"inputs\":{\"gexp.file\":\"$W/refdata/example/example_gexp\",\"pmap.file\":\"$W/refdata/gencode.v22.genes.gtf\"}}"
+  "{\"inputs\":{\"gexp.file\":\"$W/signet/example/gexp/example_gexp\",\"pmap.file\":\"$W/refdata/gencode.v22.genes.gtf\"}}"
 api GET '/signet/runs/luad_run1/steps/expression?refresh=1'     # repeat until "completed"
 
 api POST /signet/runs/luad_run1/steps/genotype \
