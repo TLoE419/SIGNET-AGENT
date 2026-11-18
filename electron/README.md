@@ -119,6 +119,28 @@ first attempt. Output paths describe saved evidence; they are not links to
 today's result folders. These disclosures do not submit, retry, cancel, or poll
 remote work.
 
+### Cancel a workspace job
+
+In an active stage's progress panel, choose **Cancel job**, review the exact
+run/stage/job/attempt, and confirm. **Keep job** dismisses that confirmation
+without sending a request. Cancellation is available only for eligible live
+workspace jobs with a known job ID and an active remote connection. Completed
+jobs, historical attempts, generic old-tool evidence and archived results do
+not offer this action. From **Run history**, open that run's active stage to
+reach the same progress controls, including Stage 1. Returning to Analysis
+preserves its previously selected run and draft.
+
+The UI submits the expected job ID and attempt to the existing cancellation
+service. A changed target is rejected before contacting HPC3. While the request
+or termination is pending, duplicate cancellation, settings and retry controls
+stay blocked. The panel continues checking status and reports **Cancelled** only
+after the backend confirms the parent and its owned child jobs have stopped.
+If the job completed first, the actual final state is retained. Lost connections
+or partially failed cancellation remain unconfirmed, with the reason visible;
+reconnect and check status before deciding what to do next. Switching datasets,
+runs or remote environments clears an unsubmitted confirmation. No original
+input, output, configuration or attempt archive is deleted by cancellation.
+
 ### Submit the chromosome 1 example
 
 Connect to HPC3 from **Settings → Remote compute**. The same panel can check
@@ -484,6 +506,7 @@ npm run test:smoke --prefix electron
 npm run test:startup --prefix electron
 npm run test:history --prefix electron
 npm run test:attempts --prefix electron
+npm run test:cancellation --prefix electron
 .venv/bin/python -m unittest discover -s tests -p 'test_desktop_server.py' -v
 ```
 

@@ -340,18 +340,23 @@ def get_step(handler, url, run_id, step):
 
 
 def cancel_step(handler, url, run_id, step):
-    """POST /signet/runs/{run_id}/steps/{step}/cancel   body {} (or empty)
+    """POST /signet/runs/{run_id}/steps/{step}/cancel
 
     Cancel the step's own Slurm job. The job name is checked on HPC3 first
     (signet-<step>-<run_id>), so no other job can be cancelled. If the job has
     already left the queue, the reply reports how it actually ended instead.
-    Response 200: the step record ("state": "cancelled", or its final state).
-    Errors: 404 never submitted; 409 already finished, or no job ID yet;
+    An optional paired expected_job_id/expected_attempt body guards the displayed
+    target; an empty body keeps legacy callers working.
+    Response 200: the step record ("cancelling" until termination is confirmed,
+    "cancelled", or the actual final state if it ended first).
+    Errors: 400 invalid guard; 404 never submitted; 409 changed/finished target, or no job ID yet;
             412 not connected; 502 scancel failed.
     """
     _query(url, ())
-    _body(handler, ())
-    return 200, jobs.cancel(run_id, step)
+    body = _body(handler, ('expected_job_id', 'expected_attempt'))
+    if body and (set(body) != {'expected_job_id', 'expected_attempt'} or any(value is None for value in body.values())):
+        raise ApiError(400, 'invalid_request', 'Provide the displayed job ID and attempt number together, or an empty legacy body.')
+    return 200, jobs.cancel(run_id, step, **body)
 
 
 def get_log(handler, url, run_id, step):

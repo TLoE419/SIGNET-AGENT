@@ -34,6 +34,11 @@ History reads local records without querying remote jobs or rerunning analysis.
 Each stage can expand its individual submission attempts, showing that attempt's
 saved settings, job ID, times, failure reason and result evidence. Earlier
 attempts remain separate from the latest one; missing records stay explicit.
+Queued or running workspace jobs can be cancelled from their stage's progress
+panel. Review the run, stage, job ID and attempt before confirming. Cancellation
+remains pending until HPC3 confirms that the job and its owned child jobs have
+stopped; connection failures do not imply successful cancellation. Existing
+results and earlier attempt records remain preserved.
 
 ## Replacing the Former Desktop Workbench
 

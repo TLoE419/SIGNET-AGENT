@@ -765,6 +765,29 @@ Record fields (route 7 and route 4):
 | `attempt`, `previous_job_id` | Present on a retry |
 | `connection` | `"interrupted"` when HPC3 could not be reached (not saved) |
 
+### Guarded workspace cancellation
+
+The workspace uses the existing
+`POST /signet/runs/{run_id}/steps/{step}/cancel` route with
+`{"expected_job_id": "12345", "expected_attempt": 1}`. Both fields are required
+together when either is present; an empty body retains the legacy behavior.
+The expected job ID is a digit string and the attempt is a positive integer,
+with the initial missing stored attempt number interpreted as 1. The service
+compares both against the current saved record under the existing run lock,
+before any remote request. A changed job or attempt returns 409 without
+cancelling another attempt.
+
+The desktop confirmation identifies the selected run, stage, job and attempt.
+Only eligible live workspace jobs can expose this control. Changing the run,
+dataset or remote environment invalidates an unsubmitted confirmation. A POST
+does not itself establish cancellation: `cancelling` remains active, with
+settings and retry blocked, until the scheduler confirms that the parent and
+its owned children have stopped. Job-name and child working-directory checks
+continue to restrict cancellation to the recorded analysis. Scheduler lookup
+failures, partial failures and connection loss must remain unconfirmed, with
+their reason visible. If a job completed first, its actual terminal state is
+retained. Cancellation does not remove inputs, saved outputs or attempt records.
+
 ## 8. Files on HPC3 and on this computer
 
 HPC3, run folder `<workRoot>/<run_id>/`:

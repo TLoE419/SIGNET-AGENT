@@ -69,9 +69,112 @@
     interrupted: ["連線中斷，顯示上次確認的狀態。", "Connection interrupted. Showing the last confirmed status."],
     uncertain: ["送出結果待確認。請查詢這筆執行的狀態。", "Submission outcome is unconfirmed. Check this run’s status."],
     serviceError: ["無法讀取本機服務。", "Could not read the local service."],
+    cancel: ["取消工作", "Cancel job"],
+    cancelConfirm: ["確認取消這個工作", "Confirm cancellation"],
+    cancelDismiss: ["保留工作", "Keep job"],
+    cancelSending: ["正在送出取消要求…", "Requesting cancellation…"],
+    cancelWaiting: ["等待遠端確認本階段與相關子工作都已停止。", "Waiting for the remote scheduler to confirm this stage and its child jobs have stopped."],
+    cancelUnconfirmed: ["取消結果待確認。請重新查詢狀態，不代表工作已停止。", "Cancellation outcome is unconfirmed. Refresh status; the job has not been confirmed stopped."],
+    cancelDisconnected: ["請先連線，才能取消這個工作。", "Connect before cancelling this job."],
+    cancelChanged: ["工作或遠端連線已變更，請重新查詢後再核對取消對象。", "The job or remote connection changed. Refresh status and review the cancellation target again."],
+    cancelAttempt: ["嘗試次數", "Attempt"],
   };
 
-  window.mountGenotypeRun = function mountGenotypeRun({panel, token, onHistoryChanged, onOpenHistory}) {
+  const cancellationBusy = item => Boolean(item?.cancellation?.sending || item?.cancellation?.awaiting || item?.record?.state === "cancelling");
+  const cancellationMarkup = prefix => `<button type="button" class="ml-nav-action" data-${prefix}-cancel hidden></button>
+    <div class="ml-job-cancel-confirmation" data-${prefix}-cancel-confirmation hidden>
+      <p data-${prefix}-cancel-target></p>
+      <button type="button" class="ml-nav-action" data-${prefix}-cancel-confirm></button>
+      <button type="button" class="ml-nav-action" data-${prefix}-cancel-dismiss></button>
+    </div><p class="ml-genotype-notice" data-${prefix}-cancel-notice role="status" hidden></p>`;
+
+  function mountCancellation({panel, prefix, stage, local, target, request, receive, render, schedule}) {
+    const part = name => panel.querySelector(`[data-${prefix}-${name}]`);
+    let remote = {connected: false, identity: "", environmentKey: ""};
+    let previousItem;
+    const scope = () => JSON.stringify(remote);
+    const snapshot = value => ({runId: value.runId, datasetId: value.datasetId, jobId: String(value.item.record.job_id), attempt: value.item.record.attempt ?? 1, scope: scope()});
+    const matches = (value, saved) => value?.runId === saved.runId && value.datasetId === saved.datasetId && String(value.item?.record?.job_id) === saved.jobId &&
+      (value.item?.record?.attempt ?? 1) === saved.attempt;
+    const eligible = value => Boolean(value?.item && value.visible && value.run?.source === "live" && value.run.origin === "workspace" &&
+      value.run.capabilities?.continue_analysis === true && !value.item.submitting && !value.item.uncertain && !value.item.retry &&
+      /^\d+$/.test(String(value.item.record?.job_id ?? "")) && ["submitted", "pending", "running", "validating", "unknown", "cancelling"].includes(value.item.record?.state));
+    function sync() {
+      const value = target(), item = value?.item;
+      if (previousItem && previousItem !== item && previousItem.cancellation) previousItem.cancellation.confirmation = null;
+      previousItem = item;
+      const state = item?.cancellation;
+      if (state?.confirmation && (!eligible(value) || !matches(value, state.confirmation) || state.confirmation.scope !== scope())) state.confirmation = null;
+      part("cancel").textContent = local("cancel");
+      part("cancel").hidden = !eligible(value);
+      part("cancel").disabled = !remote.connected || cancellationBusy(item) || Boolean(state?.confirmation);
+      part("cancel-confirmation").hidden = !state?.confirmation;
+      part("cancel-confirm").textContent = local("cancelConfirm");
+      part("cancel-confirm").disabled = !remote.connected || Boolean(state?.sending);
+      part("cancel-dismiss").textContent = local("cancelDismiss");
+      const confirmed = state?.confirmation;
+      part("cancel-target").textContent = confirmed ? `${local("runID")}: ${confirmed.runId} · ${local("stage") || stage} · ${local("jobID")}: ${confirmed.jobId} · ${local("cancelAttempt")}: ${confirmed.attempt}` : "";
+      const message = state?.sending ? local("cancelSending") : state?.uncertain ? local("cancelUnconfirmed")
+        : item?.record?.state === "cancelling" || state?.awaiting ? local("cancelWaiting") : !remote.connected && eligible(value) ? local("cancelDisconnected") : "";
+      part("cancel-notice").textContent = [message, state?.error].filter(Boolean).join(" ");
+      part("cancel-notice").hidden = !part("cancel-notice").textContent;
+    }
+    part("cancel").addEventListener("click", () => {
+      const value = target();
+      if (!eligible(value) || !remote.connected || cancellationBusy(value.item)) return;
+      value.item.cancellation = {confirmation: snapshot(value), sending: false, awaiting: false, uncertain: false, error: ""};
+      render();part("cancel-dismiss").focus();
+    });
+    part("cancel-dismiss").addEventListener("click", () => {
+      const item = target()?.item;
+      if (item?.cancellation && !item.cancellation.sending) item.cancellation.confirmation = null;
+      render();part("cancel").focus();
+    });
+    part("cancel-confirm").addEventListener("click", async () => {
+      const value = target(), item = value?.item, state = item?.cancellation, confirmed = state?.confirmation;
+      if (!confirmed || state.sending) return;
+      if (!eligible(value) || !remote.connected || confirmed.scope !== scope() || !matches(value, confirmed)) {
+        state.confirmation = null;state.error = local("cancelChanged");render();return;
+      }
+      state.confirmation = null;state.sending = true;state.error = "";
+      item.cancelEpoch = (item.cancelEpoch ?? 0) + 1;
+      render();
+      try {
+        const next = await request(`/signet/runs/${encodeURIComponent(confirmed.runId)}/steps/${prefix}/cancel`,
+          {expected_job_id: confirmed.jobId, expected_attempt: confirmed.attempt});
+        if (!matches(value, confirmed) || item.cancellation !== state || confirmed.scope !== scope()) throw Error(local("cancelChanged"));
+        if (next.run_id !== confirmed.runId || next.step !== prefix || String(next.job_id) !== confirmed.jobId ||
+            (next.attempt ?? 1) !== confirmed.attempt) throw Error(local("serviceError"));
+        receive(value, next);
+        const saved = item.record;
+        state.awaiting = !terminalStates.has(saved.state) && (saved.state === "cancelling" || Boolean(saved.cancel_requested_at) || saved.connection === "interrupted");
+        state.uncertain = saved.connection === "interrupted";
+      } catch (error) {
+        if (item.cancellation === state) {
+          state.error = error.message;
+          state.awaiting = state.uncertain = ![400, 409, 412].includes(error.status);
+        }
+      } finally {
+        state.sending = false;
+        render();schedule();
+      }
+    });
+    window.addEventListener("workspace-remote-context", event => {
+      const next = {connected: event.detail?.connected === true, identity: event.detail?.identity ?? "", environmentKey: event.detail?.environmentKey ?? ""};
+      if (JSON.stringify(next) !== scope() && previousItem?.cancellation) previousItem.cancellation.confirmation = null;
+      remote = next;render();
+    });
+    window.dispatchEvent(new Event("workspace-request-remote-context"));
+    return {sync, observe(item, record) {
+      const state = item.cancellation;
+      if (!state || state.sending || record.connection === "interrupted") return;
+      if (terminalStates.has(record.state) || !record.cancel_requested_at && record.state !== "cancelling") {
+        state.awaiting = state.uncertain = false;state.error = "";
+      }
+    }};
+  }
+
+  window.mountGenotypeRun = function mountGenotypeRun({panel, token, onHistoryChanged, onOpenHistory, onBack}) {
     panel.innerHTML = `
       <div class="ml-result-main ml-genotype-main" data-live-language>
         <header>
@@ -132,6 +235,8 @@
           <button type="button" class="ml-nav-action" data-genotype-refresh data-genotype-copy="refresh" hidden></button>
           <button type="button" class="ml-nav-action" data-genotype-history data-genotype-copy="history" hidden></button>
           <button type="button" class="ml-nav-action" data-genotype-new data-genotype-copy="newRun" hidden></button>
+          <button type="button" class="ml-nav-action" data-genotype-back hidden></button>
+          ${cancellationMarkup("genotype")}
         </div>
       </aside>`;
 
@@ -159,8 +264,10 @@
     const datasets = new Map();
     let selectedDataset = "";
     let pollTimer;
+    let cancellation;
     let remote = {connected: false, identity: "", environmentKey: ""};
-    const current = () => datasets.get(selectedDataset);
+    const stateKey = (id, runId = context.runId) => runId ? `run:${id}:${runId}` : `dataset:${id}`;
+    const current = () => datasets.get(stateKey(selectedDataset));
     const localized = (key) => labels[key]?.[context.language === "en" ? 1 : 0] ?? key;
     const authToken = () => typeof token === "function" ? token() : token;
     const cloneInputs = value => Object.fromEntries(sourceKinds.map(kind => [kind, [...(value?.[kind] ?? [])]]));
@@ -171,10 +278,11 @@
       inputs: cloneInputs(exampleInputs), persisted: false, ready: true};
     const scopeFor = dataset => JSON.stringify([dataset.id, sourceKey(dataset.inputs), remote.connected, remote.identity, remote.environmentKey]);
     function stateFor(id) {
-      if (!datasets.has(id)) datasets.set(id, {review: null, reviewing: false, attempted: false, runId: "", record: null,
+      const key = stateKey(id);
+      if (!datasets.has(key)) datasets.set(key, {review: null, reviewing: false, attempted: false, runId: "", record: null,
         submitting: false, polling: false, error: "", reviewError: "", uncertain: false, acknowledged: false,
         draft: null, preparedNew: false, reviewRequest: null, statusRequest: null, sourceInputs: null, legacy: false, scope: "", inputKey: ""});
-      return datasets.get(id);
+      return datasets.get(key);
     }
     function saveDraft(item = current()) {
       if (!item || item.runId || item.reviewing || !item.review && !item.draft) return;
@@ -231,6 +339,7 @@
       const validReview = Boolean(item?.review) && item.review.ready !== false &&
         (legacy || item.review.ready === true && typeof item.review.review_token === "string" && item.review.review_token.length > 0);
       statusLine.textContent = localized(state);
+      if (item?.cancellation?.sending) statusLine.textContent = localized("cancelSending");
       reviewButton.hidden = !eligible || Boolean(item?.runId);
       reviewButton.disabled = !connected || Boolean(item?.reviewing || item?.submitting);
       readiness.hidden = !eligible || Boolean(item?.runId);
@@ -241,8 +350,11 @@
       for (const field of fields) field.disabled = Boolean(item?.runId || item?.reviewing);
       submitButton.hidden = Boolean(item?.runId);
       submitButton.disabled = !eligible || !connected || !validReview || Boolean(item?.reviewing || item?.submitting || item?.runId) || !legacy && !item?.acknowledged;
-      statusButton.hidden = !item?.runId || terminal;statusButton.disabled = Boolean(item?.submitting || item?.polling);
-      historyButton.hidden = !item?.record;newButton.hidden = !terminal;
+      statusButton.hidden = !item?.runId || terminal;statusButton.disabled = Boolean(item?.submitting || item?.polling || item?.cancellation?.sending);
+      historyButton.hidden = !item?.record;newButton.hidden = !terminal || Boolean(context.runId);
+      newButton.disabled = cancellationBusy(item);
+      part("back").hidden = !context.runId;
+      part("back").textContent = context.language === "en" ? "Back to run timeline" : "回到執行時間線";
       identifiers.hidden = !item?.runId;runLabel.textContent = item?.runId ?? "";jobLabel.textContent = item?.record?.job_id ?? "—";
       notice.textContent = [item?.uncertain ? localized("uncertain") : "", item?.error || item?.reviewError].filter(Boolean).join(" ");notice.hidden = !notice.textContent;
       const sourceInputs = item?.sourceInputs ?? item?.review?.source_inputs;
@@ -266,6 +378,7 @@
         if (at) {const time = document.createElement("time");time.dateTime = at;const date = new Date(at);time.textContent = Number.isNaN(date.valueOf()) ? at : date.toLocaleString(context.language);row.append(time);}
         return row;
       }));events.hidden = !events.children.length;
+      cancellation?.sync();
     }
     async function review() {
       const dataset = datasetValue(), item = current(), id = selectedDataset;
@@ -282,22 +395,24 @@
         if (!legacy && (next.dataset_id !== id || sourceKey(next.source_inputs) !== sourceKey(captured.inputs))) throw Error(localized("stale"));
         item.review = next;item.legacy = legacy;item.sourceInputs = next.source_inputs ?? (legacy ? null : captured.inputs);
         item.reviewError = next.issues?.join(" ") || next.reason || "";
-        if (id === selectedDataset) fillReview(next, item, Boolean(item.draft));
+        if (item === current()) fillReview(next, item, Boolean(item.draft));
       } catch (error) {
         if (!controller.signal.aborted && item.reviewRequest === controller) {item.review = null;item.reviewError = error.message;}
       } finally {
-        if (item.reviewRequest === controller) {item.reviewRequest = null;item.reviewing = false;if (id === selectedDataset) render();}
+        if (item.reviewRequest === controller) {item.reviewRequest = null;item.reviewing = false;if (item === current()) render();}
       }
     }
     function schedulePoll(item = current(), delay = pollInterval) {
       if (item !== current()) return;
       clearTimeout(pollTimer);
-      if (item?.runId && !item.submitting && !terminalStates.has(item.record?.state)) pollTimer = setTimeout(() => void refresh(), delay);
+      if (item?.runId && !item.submitting && !item.cancellation?.sending && (!terminalStates.has(item.record?.state) || item.cancellation?.awaiting)) pollTimer = setTimeout(() => void refresh(), delay);
     }
     const recordTime = record => Date.parse(record?.updated_at ?? record?.finished_at ?? record?.submitted_at);
     function olderRecord(next, previous) {
       if (!previous) return false;
       return recordTime(next) < recordTime(previous) ||
+        (next.attempt ?? 1) < (previous.attempt ?? 1) ||
+        previous.state === "cancelling" && !terminalStates.has(next.state) && next.state !== "cancelling" && next.job_id === previous.job_id ||
         terminalStates.has(previous.state) && !terminalStates.has(next.state) && next.job_id === previous.job_id;
     }
     function receiveRecord(item, next, id, datasetId) {
@@ -305,6 +420,7 @@
       if (olderRecord(next, item.record)) return;
       const changed = !item.record || next.state !== item.record.state || next.job_id !== item.record.job_id;
       item.record = next;item.uncertain = false;
+      cancellation?.observe(item, next);
       item.error = next.connection === "interrupted" ? localized("interrupted") : ["unknown", "validating", "failed"].includes(next.state) ? next.reason || "" : "";
       if (next.source_inputs) item.sourceInputs = next.source_inputs;
       if (item === current() && next.inputs) fillReview(next, item);
@@ -312,13 +428,14 @@
     }
     async function refresh(force = false) {
       const item = current(), datasetId = selectedDataset;
-      if (!item?.runId || item.submitting || item.polling) return;
+      if (!item?.runId || item.submitting || item.polling || item.cancellation?.sending) return;
       const id = item.runId, statusRequest = {};item.statusRequest = statusRequest;
+      const epoch = item.cancelEpoch;
       item.polling = true;clearTimeout(pollTimer);render();
       try {
         const next = await request(`/signet/runs/${encodeURIComponent(id)}/steps/genotype${force ? "?refresh=1" : ""}`);
-        if (item.runId === id) receiveRecord(item, next, id, datasetId);
-      } catch (error) {if (item.runId === id) item.error = error.message;}
+        if (item.runId === id && epoch === item.cancelEpoch) receiveRecord(item, next, id, datasetId);
+      } catch (error) {if (item.runId === id && epoch === item.cancelEpoch) item.error = error.message;}
       finally {
         if (item.statusRequest === statusRequest) {
           item.statusRequest = null;item.polling = false;
@@ -337,10 +454,10 @@
     }
     function reset() {
       const item = current();
-      if (!item || !terminalStates.has(item.record?.state)) return;
+      if (!item || cancellationBusy(item) || !terminalStates.has(item.record?.state)) return;
       clearTimeout(pollTimer);invalidate(item, true);
       Object.assign(item, {runId: "", record: null, error: "", reviewError: "", uncertain: false,
-        preparedNew: true, sourceInputs: null, polling: false, statusRequest: null});
+        preparedNew: true, sourceInputs: null, polling: false, statusRequest: null, cancellation: null});
       render();if (isLegacy(datasetValue())) void review();
     }
     const readNumbers = elements => Object.fromEntries([...elements].map(([key, input]) => [key, input.valueAsNumber]));
@@ -369,12 +486,17 @@
     statusButton.addEventListener("click", () => void refresh(true));
     historyButton.addEventListener("click", () => onOpenHistory?.(current()?.runId));
     newButton.addEventListener("click", reset);
+    part("back").addEventListener("click", () => onBack?.());
     part("acknowledge").addEventListener("change", () => {if (current()) current().acknowledged = part("acknowledge").checked;render();});
     for (const input of [...settingsInputs.values(), ...resourceInputs.values()]) input.addEventListener("input", () => saveDraft());
+    cancellation = mountCancellation({panel, prefix: "genotype", stage: 1, local: localized, request, render,
+      target: () => ({item: current(), runId: current()?.runId, datasetId: selectedDataset, visible: context.visible,
+        run: context.runs?.find(run => run.run_id === current()?.runId)}),
+      receive: (value, next) => receiveRecord(value.item, next, value.runId, value.datasetId), schedule: () => schedulePoll()});
     function setContext(next) {
       const previous = current();
       const id = next.dataset?.id ?? next.datasetId ?? "";
-      if (id !== selectedDataset) {
+      if (id !== selectedDataset || next.runId !== context.runId) {
         saveDraft(previous);clearTimeout(pollTimer);
         if (previous?.reviewing) {previous.reviewRequest?.abort();previous.reviewRequest = null;previous.reviewing = false;}
       }
@@ -385,13 +507,14 @@
       item.scope = scope;item.inputKey = inputKey;
       if (!item.runId && !item.preparedNew) {
         const runs = (context.runs ?? []).filter(run => (!run.dataset_id || run.dataset_id === id) && run.jobs?.genotype?.state !== "not_submitted");
-        const candidate = runs.find(run => run.jobs?.genotype && !terminalStates.has(run.jobs.genotype.state)) ?? runs.find(run => run.jobs?.genotype);
+        const candidate = context.runId ? runs.find(run => run.run_id === context.runId)
+          : runs.find(run => run.jobs?.genotype && !terminalStates.has(run.jobs.genotype.state)) ?? runs.find(run => run.jobs?.genotype);
         if (candidate) restore(candidate.run_id, candidate.jobs.genotype, id, candidate);
       }
       if (item.runId) {
         const saved = (context.runs ?? []).find(run => run.run_id === item.runId)?.jobs?.genotype;
         if (saved && !item.submitting && !item.uncertain && !olderRecord(saved, item.record) &&
-          (!item.record || recordTime(saved) > recordTime(item.record))) item.record = saved;
+          (!item.record || recordTime(saved) > recordTime(item.record))) {item.record = saved;cancellation?.observe(item, saved);}
         if (item.record?.inputs) fillReview(item.record, item);
       } else if (item.review) fillReview(item.review, item, Boolean(item.draft));
       render();
@@ -597,6 +720,7 @@
           <button type="button" class="ml-nav-action" data-${prefix}-refresh data-${prefix}-copy="refresh" hidden></button>
           <button type="button" class="ml-nav-action" data-${prefix}-history data-${prefix}-copy="history" hidden></button>
           <button type="button" class="ml-nav-action" data-${prefix}-retry data-${prefix}-copy="retry" hidden></button>
+          ${cancellationMarkup(prefix)}
           ${visualization ? '<button type="button" class="ml-nav-action" data-visualize-results data-visualize-copy="savedResults"></button>' : ''}
           <button type="button" class="ml-nav-action" data-${prefix}-back data-${prefix}-copy="back" hidden></button>
         </div>
@@ -612,6 +736,7 @@
     let context = {datasetId: "", language: "zh-Hant", visible: false, runs: [], runId: null};
     let selectedRun = "";
     let pollTimer;
+    let cancellation;
     const local = key => (copy[key] ?? labels[key])?.[context.language === "en" ? 1 : 0] ?? key;
     const current = () => runStates.get(selectedRun);
     const source = () => context.runs.find(run => run.run_id === selectedRun);
@@ -692,7 +817,7 @@
       part("review").hidden = !(alwaysVisible ? selectedRun : allowed) || hasAttempt;
       part("review").disabled = Boolean(item?.checking);
       form.hidden = !alwaysVisible && (!allowed || !(hasAttempt ? saved?.inputs : item?.review));
-      for (const field of fields) field.disabled = hasAttempt || !selectedRun || visualization && Boolean(item?.checking);
+      for (const field of fields) field.disabled = hasAttempt || cancellationBusy(item) || !selectedRun || visualization && Boolean(item?.checking);
       if (adjustment) {
         const clinicalInput = panel.querySelector('[data-adjust-input="cli.file"]');
         clinicalInput.disabled = hasAttempt || Boolean(item?.checking) || !selectedRun;
@@ -738,15 +863,16 @@
         progress.hidden = !progress.childElementCount;
       }
       part("submit").hidden = hasAttempt;
-      part("submit").disabled = !allowed || !item?.review || item.review.ready === false || item.checking || item.submitting || hasAttempt;
+      part("submit").disabled = !allowed || !item?.review || item.review.ready === false || item.checking || item.submitting || hasAttempt || cancellationBusy(item);
       part("status").textContent = local(state);
+      if (item?.cancellation?.sending) part("status").textContent = local("cancelSending");
       part("identifiers").hidden = !selectedRun;
       part("run-id").textContent = selectedRun;
       part("job-id").textContent = saved?.job_id ?? "—";
       part("refresh").hidden = !hasAttempt || terminal;
-      part("refresh").disabled = Boolean(item?.polling || item?.submitting);
+      part("refresh").disabled = Boolean(item?.polling || item?.submitting || item?.cancellation?.sending);
       part("history").hidden = !saved;
-      part("retry").hidden = !saved || !["failed", "cancelled"].includes(state) || Boolean(item?.retry || item?.uncertain);
+      part("retry").hidden = !saved || !["failed", "cancelled"].includes(state) || Boolean(item?.retry || item?.uncertain || cancellationBusy(item));
       part("back").hidden = !context.runId;
       if (visualization) part("results").disabled = !context.resultsAvailable;
       const message = [item?.uncertain ? local("uncertain") : "", item?.error].filter(Boolean).join(" ");
@@ -766,12 +892,17 @@
         return row;
       }));
       part("events").hidden = !saved?.history?.length;
+      cancellation?.sync();
     }
 
     function accept(item, value, id) {
       if (value.run_id !== id || value.step !== step || !Object.hasOwn(labels, value.state)) throw Error(local("serviceError"));
+      if (item.record && ((value.attempt ?? 1) < (item.record.attempt ?? 1) ||
+          item.record.job_id === value.job_id && (terminalStates.has(item.record.state) && !terminalStates.has(value.state) ||
+            item.record.state === "cancelling" && !terminalStates.has(value.state) && value.state !== "cancelling"))) return;
       const changed = !item.record || value.state !== item.record.state || value.job_id !== item.record.job_id;
       item.record = value;
+      cancellation?.observe(item, value);
       item.uncertain = false;
       item.retry = false;
       item.error = value.connection === "interrupted" ? local("interrupted") : value.reason ?? "";
@@ -782,7 +913,7 @@
     function schedule() {
       clearTimeout(pollTimer);
       const item = current();
-      if (item && !item.submitting && (item.uncertain || item.record && !terminalStates.has(item.record.state))) {
+      if (item && !item.submitting && !item.cancellation?.sending && (item.uncertain || item.cancellation?.awaiting || item.record && !terminalStates.has(item.record.state))) {
         pollTimer = setTimeout(() => void refresh(), pollInterval);
       }
     }
@@ -790,13 +921,15 @@
     async function refresh(force = false) {
       const id = selectedRun;
       const item = current();
-      if (!id || !item || item.polling || item.submitting) return;
+      if (!id || !item || item.polling || item.submitting || item.cancellation?.sending) return;
+      const epoch = item.cancelEpoch;
       item.polling = true;
       render();
       try {
-        accept(item, await request(`/signet/runs/${encodeURIComponent(id)}/steps/${step}${force ? "?refresh=1" : ""}`), id);
+        const next = await request(`/signet/runs/${encodeURIComponent(id)}/steps/${step}${force ? "?refresh=1" : ""}`);
+        if (epoch === item.cancelEpoch) accept(item, next, id);
       } catch (error) {
-        item.error = error.message;
+        if (epoch === item.cancelEpoch) item.error = error.message;
       } finally {
         item.polling = false;
         render();
@@ -807,7 +940,7 @@
     async function review() {
       const id = selectedRun;
       const item = current();
-      if (!id || !item || !source() || item.checking || item.submitting || item.uncertain || item.record && !item.retry || !alwaysVisible && source()?.jobs.genotype?.state !== "completed") return;
+      if (!id || !item || !source() || item.checking || item.submitting || item.uncertain || cancellationBusy(item) || item.record && !item.retry || !alwaysVisible && source()?.jobs.genotype?.state !== "completed") return;
       item.checking = item.attempted = true;
       item.error = "";
       render();
@@ -847,7 +980,7 @@
       const saved = source()?.jobs[step];
       const received = saved && saved.state !== "not_submitted" && !item.submitting && !item.uncertain &&
         (!item.record || Date.parse(saved.updated_at ?? saved.submitted_at) > Date.parse(item.record.updated_at ?? item.record.submitted_at));
-      if (received) item.record = saved;
+      if (received) {item.record = saved;cancellation?.observe(item, saved);}
       if ((changed || received) && item?.record?.inputs && !item.retry) fillReview(item.record);
       else if (changed && item?.review) fillReview(item.review);
       else if (changed && alwaysVisible) fillReview({[parameterGroup]: Object.fromEntries(parameterDefinitions.map(({key, value}) => [key, value])), resources: initialResources});
@@ -930,6 +1063,9 @@
       });
     }
     picker.addEventListener("change", () => selectRun(picker.value));
+    cancellation = mountCancellation({panel, prefix, stage, local, request, render, schedule,
+      target: () => ({item: current(), runId: selectedRun, datasetId: context.datasetId, visible: context.visible, run: source()}),
+      receive: (value, next) => accept(value.item, next, value.runId)});
     part("review").addEventListener("click", () => void review());
     part("submit").addEventListener("click", () => void submit());
     part("refresh").addEventListener("click", () => void refresh(true));
@@ -938,7 +1074,7 @@
     if (visualization) part("results").addEventListener("click", () => onShowResults?.());
     part("retry").addEventListener("click", () => {
       const item = current();
-      if (!item || item.uncertain || item.submitting || !["failed", "cancelled"].includes(item.record?.state)) return;
+      if (!item || item.uncertain || item.submitting || cancellationBusy(item) || !["failed", "cancelled"].includes(item.record?.state)) return;
       item.retry = true;
       item.review = null;
       void review();

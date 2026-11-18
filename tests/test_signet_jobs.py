@@ -544,6 +544,82 @@ class StepsTest(unittest.TestCase):
         self.assertEqual(steps.cancel('other_job', 'expression')['state'], 'running')
         self.assertFalse((self.fake / 'scancel').exists())
 
+    def test_cancel_guard_rejects_stale_or_invalid_targets_without_remote_or_record_changes(self):
+        record = steps.submit('step_test', 'expression', self.inputs)
+        original = (self.root / 'steps/expression.json').read_bytes()
+        calls = len(self.calls)
+        for expected_job_id, expected_attempt, code in (
+                ('different', 1, 'invalid_request'), ('12345', True, 'invalid_request'),
+                ('12345', 1.0, 'invalid_request'), ('12345', 0, 'invalid_request'),
+                ('12345', None, 'invalid_request'), (None, 1, 'invalid_request'),
+                ('99999', 1, 'conflict'), ('12345', 2, 'conflict')):
+            with self.subTest(job=expected_job_id, attempt=expected_attempt):
+                self.assertEqual(self.code_of(steps.cancel, 'step_test', 'expression',
+                    expected_job_id=expected_job_id, expected_attempt=expected_attempt), code)
+        self.assertEqual(len(self.calls), calls)
+        self.assertEqual((self.root / 'steps/expression.json').read_bytes(), original)
+        self.assertFalse((self.fake / 'scancel').exists())
+        self.slurm(squeue='RUNNING', sacct='RUNNING', name='signet-expression-step_test')
+        result = steps.cancel('step_test', 'expression', expected_job_id=record['job_id'], expected_attempt=1)
+        self.assertEqual(result['state'], 'cancelling')
+
+    def test_cancel_scheduler_identity_failure_sends_no_parent_or_child_cancel(self):
+        self.network_ready()
+        record = steps.submit('step_test', 'network', {})
+        self.signet_children()
+        original = (self.root / 'steps/network.json').read_bytes()
+        (self.fake / 'bin/squeue').write_text('#!/bin/bash\nexit 1\n')
+        with self.assertRaisesRegex(steps.StepError, 'no cancellation command was sent'):
+            steps.cancel('step_test', 'network', expected_job_id=record['job_id'], expected_attempt=1)
+        self.assertFalse((self.fake / 'scancel').exists())
+        self.assertEqual((self.root / 'steps/network.json').read_bytes(), original)
+
+    def test_cancel_connection_loss_keeps_effect_unconfirmed_and_blocks_retry(self):
+        record = steps.submit('step_test', 'expression', self.inputs)
+        self.lose_connection_on = 'parent_name='
+        with self.assertRaisesRegex(steps.StepError, 'effect is unknown'):
+            steps.cancel('step_test', 'expression', expected_job_id=record['job_id'], expected_attempt=1)
+        saved = steps._load(self.root, 'expression')
+        self.assertEqual(saved['state'], 'cancelling')
+        self.assertIn('cancel_requested_at', saved)
+        self.assertNotIn('finished_at', saved)
+        self.assertEqual(self.code_of(steps.submit, 'step_test', 'expression', self.inputs), 'conflict')
+        self.lose_connection_on = None
+        self.slurm(squeue='RUNNING', sacct='RUNNING')
+        self.assertEqual(steps.status('step_test', 'expression', refresh=True)['state'], 'cancelling')
+        self.slurm(squeue='', sacct='CANCELLED')
+        self.assertEqual(steps.status('step_test', 'expression', refresh=True)['state'], 'cancelled')
+
+    def test_parent_cancel_success_and_child_failure_keeps_the_run_locked_until_children_stop(self):
+        self.network_ready()
+        record = steps.submit('step_test', 'network', {})
+        self.signet_children()
+        self.slurm(name='signet-network-step_test', squeue='RUNNING')
+        cancel = self.fake / 'bin/scancel'
+        cancel.write_text('#!/bin/bash\nprintf "%s\\n" "$@" >> "$FAKE/scancel"\n[ "$1" != 777 ]\n')
+        with self.assertRaisesRegex(steps.StepError, 'owned child job could not be confirmed'):
+            steps.cancel('step_test', 'network', expected_job_id=record['job_id'], expected_attempt=1)
+        saved = steps._load(self.root, 'network')
+        self.assertEqual(saved['state'], 'cancelling')
+        self.assertNotIn('finished_at', saved)
+        self.assertEqual(set((self.fake / 'scancel').read_text().split()), {'12345', '777'})
+        self.slurm(squeue='', sacct='CANCELLED')
+        self.assertEqual(steps.status('step_test', 'network', refresh=True)['state'], 'cancelling')
+        self.assertEqual(self.code_of(steps.update_settings, 'step_test', {'nboots': 2}), 'conflict')
+        (self.fake / 'workdir_777').unlink()
+        self.assertEqual(steps.status('step_test', 'network', refresh=True)['state'], 'cancelled')
+        self.assertNotIn('888', (self.fake / 'scancel').read_text().split())
+
+    def test_parent_scheduler_lookup_outage_does_not_treat_children_as_orphans(self):
+        self.network_ready()
+        steps.submit('step_test', 'network', {})
+        self.signet_children()
+        self.slurm(squeue='RUNNING', sacct='RUNNING')
+        queue = self.fake / 'bin/squeue'
+        queue.write_text('#!/bin/bash\ncase "$*" in *"-j 12345 -o %T"*) exit 1;; esac\n' + FAKE_SLURM['squeue'] + '\n')
+        self.assertEqual(steps.status('step_test', 'network', refresh=True)['state'], 'running')
+        self.assertFalse((self.fake / 'scancel').exists())
+
     def test_lost_connection_during_sbatch_becomes_unknown_then_recovers_job(self):
         self.lose_connection_on = 'sbatch --parsable'
         record = steps.submit('step_test', 'expression', self.inputs)

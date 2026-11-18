@@ -858,6 +858,8 @@ code:not(pre code) {
 #signet-lens-left-preview :is(#lens-stage1, .ml-expression-panel) .ml-genotype-events time { display: block; color: var(--ml-muted); }
 #signet-lens-left-preview :is(#lens-stage1, .ml-expression-panel) .ml-genotype-notice { color: #6b4a28; margin: 10px 0 0; overflow-wrap: anywhere; }
 #signet-lens-left-preview :is(#lens-stage1, .ml-expression-panel) .ml-genotype-actions { display: grid; justify-items: start; }
+#signet-lens-left-preview .ml-job-cancel-confirmation { max-width: 100%; margin: 8px 0; padding: 9px; border: 1px solid var(--ml-rule); border-radius: 5px; overflow-wrap: anywhere; }
+#signet-lens-left-preview .ml-job-cancel-confirmation p { margin: 0 0 8px; }
 
 #signet-lens-left-preview .ml-expression-run-label { display: grid; gap: 5px; margin-top: 12px; color: var(--ml-muted); }
 #signet-lens-left-preview .ml-expression-run-label select { width: 100%; padding: 6px; border: 1px solid var(--ml-rule); border-radius: 4px; background: #fff; color: var(--ml-ink); font: inherit; }

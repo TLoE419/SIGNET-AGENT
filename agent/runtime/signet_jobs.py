@@ -952,8 +952,8 @@ def _children_script(step):
     q = shlex.quote
     return ''.join(
         f'for c in $(grep -Eo "[0-9]+$" "$D/work/"{q(log)} 2>/dev/null | sort -u); do\n'
-        '  w="$(squeue -h -j "$c" -o %Z 2>/dev/null)"\n'
-        '  case "$w" in "$D"/*) scancel "$c" && say child_cancelled "$c";; esac\n'
+        '  w="$(squeue -h -j "$c" -o %Z 2>/dev/null)" || { say child_cancel_check_failed "$c"; continue; }\n'
+        '  case "$w" in "$D"/*) scancel "$c" && say child_cancelled "$c" || say child_cancel_failed "$c";; esac\n'
         'done\n' for log in step.children)
 
 
@@ -971,7 +971,8 @@ def _status_script(record, step):
         f'2>/dev/null | wc -l | tr -d " ") $(wc -l < "$D/work/"{q(stage)}/params.txt | tr -d " ")"; fi\n'
         for i, stage in enumerate(step.stages))
     # When the control job is gone, SIGNET's own jobs still queued for this run are orphans.
-    orphans = (f'if [ -n "$j" ] && [ -z "$(squeue -h -j "$j" -o %T 2>/dev/null)" ]; then\n{_children_script(step)}fi\n'
+    orphans = (f'if [ -n "$j" ] && parent_state="$(squeue -h -j "$j" -o %T 2>/dev/null)" '
+               f'&& [ -z "$parent_state" ]; then\n{_children_script(step)}fi\n'
                if step.children else '')
     queue_check = _queue_check(record) if record.get('cancel_requested_at') or step.children else ''
     export_check = ('grep -Fxq SIGNET_STAGE6_EXPORTS_COMPLETED "$D/steps/visualize.out" 2>/dev/null '
@@ -1103,12 +1104,21 @@ def _finish(root, record, step, done, missing, hints):
 
 
 @_one_at_a_time
-def cancel(run_id, name):
+def cancel(run_id, name, *, expected_job_id=None, expected_attempt=None):
     """Cancel the step's own Slurm job (checked by job name), and for signet -n the jobs SIGNET
     submitted inside this run's folder. Finished steps cannot be cancelled."""
     step = _step(name)
     root = _root(run_id)
     record = _load(root, name)
+    if (not isinstance(record, dict) or record.get('run_id') != run_id or record.get('step') != name
+            or type(record.get('attempt', 1)) is not int or record.get('attempt', 1) < 1):
+        raise StepError('conflict', 'The saved step does not identify this run, stage, and attempt.')
+    if expected_job_id is not None or expected_attempt is not None:
+        if (not isinstance(expected_job_id, str) or not re.fullmatch(r'[0-9]+', expected_job_id)
+                or type(expected_attempt) is not int or expected_attempt < 1):
+            raise StepError('invalid_request', 'Provide the displayed job ID and positive integer attempt number together.')
+        if record.get('job_id') != expected_job_id or record.get('attempt', 1) != expected_attempt:
+            raise StepError('conflict', 'The job or attempt changed. Refresh its status before cancelling.')
     if record['state'] in TERMINAL:
         raise StepError('conflict', f'Step {name} already ended as {record["state"]}.')
     if not record.get('job_id'):
@@ -1116,21 +1126,33 @@ def cancel(run_id, name):
     _environment()
     expected = f'signet-{name}-{run_id}'
     script = _say() + (f'D={shlex.quote(record["remote_dir"])}\nj={shlex.quote(record["job_id"])}\n'
-                       f'if [ "$(squeue -h -j "$j" -o %j 2>/dev/null)" = {shlex.quote(expected)} ]; then '
-                       'scancel "$j" && say cancel requested; else say cancel not_queued; fi\n'
+                       'parent_name="$(squeue -h -j "$j" -o %j 2>/dev/null)" || { say cancel_check_failed yes; exit 9; }\n'
+                       f'if [ "$parent_name" = {shlex.quote(expected)} ]; then '
+                       'scancel "$j" && say cancel requested || { say cancel_failed yes; exit 10; }; '
+                       'else say cancel not_queued; fi\n'
                        + _children_script(step))
+    def unconfirmed(reason):
+        record.pop('finished_at', None)
+        _change(record, 'cancelling', cancel_requested_at=record.get('cancel_requested_at') or _now(),
+                checked_at=0, reason=reason)
+        _save(root, record)
     try:
         code, values, _ = _shell(script, timeout=30)
     except OSError as error:
-        raise StepError('remote_failed', 'Could not reach HPC3; the job was not cancelled.') from error
-    if code or 'cancel' not in values:
-        raise StepError('remote_failed', 'scancel did not complete on HPC3.')
+        reason = 'Connection interrupted while requesting cancellation; its effect is unknown. Check status before retrying.'
+        unconfirmed(reason)
+        raise StepError('remote_failed', reason) from error
+    if values.get('cancel_check_failed') == 'yes':
+        raise StepError('remote_failed', 'The scheduler could not confirm the job identity; no cancellation command was sent.')
+    failed_child = values.get('child_cancel_failed') or values.get('child_cancel_check_failed')
+    if code or 'cancel' not in values or failed_child:
+        reason = ('Cancellation of an owned child job could not be confirmed; check status before retrying.' if failed_child
+                  else 'Cancellation did not complete; its effect is unconfirmed. Check status before retrying.')
+        unconfirmed(reason)
+        raise StepError('remote_failed', reason)
     if values['cancel'] == 'requested' or step.children:
         # The control job can already be gone while its cancelled children are still draining.
-        record.pop('finished_at', None)
-        _change(record, 'cancelling', cancel_requested_at=_now(), checked_at=0,
-                reason='Cancellation requested; waiting for HPC3 to confirm termination.')
-        _save(root, record)
+        unconfirmed('Cancellation requested; waiting for HPC3 to confirm termination.')
     return status(run_id, name, refresh=True)   # it already left the queue; report how it ended
 
 
