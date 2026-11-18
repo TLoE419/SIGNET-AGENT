@@ -92,8 +92,8 @@ main > #ssh-root { align-self:flex-end; margin:0 0 16px; flex-shrink:0; }
 @media(prefers-reduced-motion:reduce){#ssh-root .ssh-modal .ssh-mode-tiles>button{transition:none}}
 @media(max-width:420px){.ssh-modal .ssh-mode-tiles{gap:16px}#ssh-root .ssh-modal .ssh-mode-tiles>button{padding:10px 8px;min-height:92px}}
 
-#ssh-root .ssh-modal .ssh-modal-close{position:absolute;top:16px;right:16px;display:grid;place-items:center;width:36px;height:36px;padding:0;border:0;border-radius:8px;background:transparent;color:#64748b}
-#ssh-root .ssh-modal .ssh-modal-close:hover{background:var(--ssh-accent-soft);color:var(--ssh-accent-hover)}
+#ssh-root .ssh-modal .ssh-modal-close,.ssh-modal.remote-files-modal .ssh-modal-close{position:absolute;top:16px;right:16px;display:grid;place-items:center;width:36px;height:36px;padding:0;border:0;border-radius:8px;background:transparent;color:#64748b}
+#ssh-root .ssh-modal .ssh-modal-close:hover,.ssh-modal.remote-files-modal .ssh-modal-close:hover{background:var(--ssh-accent-soft);color:var(--ssh-accent-hover)}
 
 .ssh-modal .ssh-key-block{margin:14px 0;padding:16px;border:1px solid #cbded3;border-radius:10px;background:#f6faf7}.ssh-key-block h3{margin:0 0 12px;font-size:15px}.ssh-key-block code{display:block;font-size:11px;color:#64748b}.ssh-key-block .ssh-key-actions{justify-content:flex-start;gap:8px;margin:20px 0 0;flex-wrap:wrap}.ssh-key-editor,.ssh-key-delete{margin-top:12px;padding-top:12px;border-top:1px solid #cbded3}.ssh-key-editor>button,.ssh-key-delete>button{margin-right:8px}
 
@@ -117,8 +117,8 @@ main > #ssh-root { align-self:flex-end; margin:0 0 16px; flex-shrink:0; }
 .ssh-key-dialog .ssh-key-account-note{margin-top:16px}
 .ssh-key-dialog [role=alert]{margin:16px 0 0}
 
-#ssh-root .ssh-modal .ssh-primary{border-color:var(--ssh-accent-color)}
-#ssh-root .ssh-modal .ssh-primary:not(:disabled):hover{background:var(--ssh-accent-hover);border-color:var(--ssh-accent-hover)}
+#ssh-root .ssh-modal .ssh-primary,.ssh-modal.remote-files-modal .ssh-primary{border-color:var(--ssh-accent-color)}
+#ssh-root .ssh-modal .ssh-primary:not(:disabled):hover,.ssh-modal.remote-files-modal .ssh-primary:not(:disabled):hover{background:var(--ssh-accent-hover);border-color:var(--ssh-accent-hover)}
 .ssh-modal .ssh-advanced summary:hover{color:var(--ssh-accent-color)}
 .ssh-modal input[type=checkbox],.ssh-modal input[type=radio]{accent-color:var(--ssh-accent-color)}
 
@@ -172,7 +172,7 @@ main > #ssh-root { align-self:flex-end; margin:0 0 16px; flex-shrink:0; }
 .remote-files-path{display:flex;gap:6px;margin-bottom:8px}
 .remote-files-path input{flex:1;min-width:0;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
 .remote-files-note{font-size:12px;opacity:.75;padding:8px}
-.remote-files-modal .remote-files-selected{margin-top:12px;font-size:12px}
+.remote-files-modal .remote-files-selected{margin-top:12px;font-size:12px;border:1px solid var(--ssh-input-border);border-radius:8px}
 .remote-files-modal .remote-files-selected h3{margin:0 0 6px;font-size:12px}
 .remote-files-modal .remote-files-selected ul{list-style:none;margin:0;padding:0;max-height:140px;overflow:auto}
 .remote-files-modal .remote-files-selected li{display:flex;align-items:start;justify-content:space-between;gap:10px;margin-top:4px}
