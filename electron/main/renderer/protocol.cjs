@@ -10,6 +10,8 @@ const assets=new Map([
  ['/workspace/job-logs.js',['workspace/job-logs.js','text/javascript']],
  ['/workspace/genotype-run.js',['workspace/genotype-run.js','text/javascript']],
  ['/workspace/input-validation.js',['workspace/input-validation.js','text/javascript']],
+ ['/workspace/result-assets.js',['workspace/result-assets.js','text/javascript']],
+ ['/workspace/result-assets.css',['workspace/result-assets.css','text/css']],
  ['/workspace/icons.js',['workspace/icons.js','text/javascript']],
  ['/workspace/interaction.js',['workspace/interaction.js','text/javascript']],
  ['/renderer.js',['renderer.js','text/javascript']],
@@ -20,7 +22,7 @@ const assets=new Map([
 ]);
 const escapeHtml=value=>String(value).replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
 function headers(type,devMode){return {'Content-Type':type+'; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer',
- 'Content-Security-Policy':`default-src 'self'; script-src 'self'; style-src 'self'${devMode?" 'unsafe-inline'":''}; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`};}
+ 'Content-Security-Policy':`default-src 'self'; script-src 'self'; style-src 'self'${devMode?" 'unsafe-inline'":''}; connect-src 'self'; img-src 'self' data:; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`};}
 /** Serve only the renderer build allowlist. All API requests retain their HTTP origin. */
 function createRendererHandler({origin,fetch,devMode=false,directory=path.join(__dirname,'../../build/renderer')}){
  let pageToken;

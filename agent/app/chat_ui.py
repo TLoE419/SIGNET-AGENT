@@ -112,6 +112,8 @@ class ChatHandler(BaseHTTPRequestHandler):
         if not self._local_request():
             return self._error(403, '僅允許本機介面。')
         url = urlsplit(self.path)
+        if url.path.startswith('/stage6/result-preview/') or url.path == '/stage6/result-download':
+            return signet_api.serve_result_asset(self, url)
         if url.path.startswith('/signet/'):
             # Responses name the user's runs and HPC3 paths, so reads need the page token too.
             if not secrets.compare_digest(self.headers.get('X-Chat-Token', ''), self.server.token):
@@ -349,6 +351,8 @@ class ChatHandler(BaseHTTPRequestHandler):
         try:
             result = (workspace_genotype.completed_result(run_id, stage) if query.get('source') == ['live']
                       else self.server.stage6.archived_stage_result(run_id, stage))
+        except signet_jobs.StepError as error:
+            return self._error(signet_api.STATUS.get(error.code, 502), str(error))
         except (OSError, ValueError, KeyError, TypeError, OverflowError):
             return self._error(404, 'No readable archived result for this stage.')
         return self.json_response(result)
@@ -366,6 +370,8 @@ class ChatHandler(BaseHTTPRequestHandler):
                 result = workspace_adjustment.completed_result(query['run'][0])
             else:
                 result = self.server.stage6.archived_stage3(query['run'][0])
+        except signet_jobs.StepError as error:
+            return self._error(signet_api.STATUS.get(error.code, 502), str(error))
         except (OSError, ValueError, KeyError, TypeError, OverflowError):
             return self._error(404, 'No readable archived Stage 3 result for this run.')
         return self.json_response(result)
