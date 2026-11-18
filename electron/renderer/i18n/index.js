@@ -63,7 +63,7 @@ const uiEnglish = {
   "基因數": "Genes",
   "SIGNET 原版圖表": "Original SIGNET plots",
   "這次分析沒有圖片版本；圓形染色體圖等原版圖表在下載的結果中（PDF）。": "No image copies for this analysis; the original plots, such as the circular plot, are PDFs in the downloaded results.",
-  "STRING 這次沒有找到顯著的富集路徑，所以 SIGNET 沒有產生富集分析圖。": "STRING found no significant enriched pathways this time, so SIGNET made no enrichment plots.",
+  "這次沒有富集分析圖片預覽；請檢查下載結果中的原始輸出。": "No enrichment image previews are available; check the original outputs in the downloaded results.",
   "原始分析": "Original analysis",
   "最新": "Latest",
   "設定與原分析相同": "Same settings as the original",

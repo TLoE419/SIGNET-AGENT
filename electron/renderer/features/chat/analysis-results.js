@@ -62,7 +62,7 @@ function signetPlots(images) {
     section.append(figure);
   }
   if (!images.some(image => image.kind !== 'circular')) {
-    section.append(node('p', 'analysis-result-note', 'STRING 這次沒有找到顯著的富集路徑，所以 SIGNET 沒有產生富集分析圖。'));
+    section.append(node('p', 'analysis-result-note', '這次沒有富集分析圖片預覽；請檢查下載結果中的原始輸出。'));
   }
   return section;
 }

@@ -347,6 +347,11 @@ function setup(initial={}, analysisApi) {
       rerunCalls.push({action, body:JSON.parse(options.body)});
       if(action==='prepare') return json({id:'rerun-adjust',parameters:submitted.adjust,
         affected_steps:['cis','network','visualize'],reused_steps:['genotype','expression']});
+      if(rerunCalls.filter(call=>call.action==='confirm').length===1) return {
+        ok:false,json:async()=>({code:'needs_choice',error:'Choose how to treat New unknown.',
+          details:{status:'ok',matched_patients:4,unrecognized_race:{'New unknown':1},
+            needs_choice:['New unknown'],problems:[]}})
+      };
       return json({run_id:'child-run',state:'submitted'});
     }
     if(path==='/signet/runs/same-run/steps/genotype/rerun/prepare') return json({id:'rerun-genotype',
@@ -432,7 +437,18 @@ function setup(initial={}, analysisApi) {
   assert.equal(resultCard.querySelectorAll('rect').length,4,'a connection bar and a gene bar per cutoff');
   assert.deepEqual(resultCard.querySelectorAll('img').map(image=>image.src),
     ['/signet/result-preview/'+'a'.repeat(32)+'/signet_circular_top1_freq0.5.png'],'only granted local plots are shown');
-  assert.match(resultCard.textContent,/圓形染色體圖（子網路 1）.*沒有找到顯著的富集路徑/);
+  assert.match(resultCard.textContent,/圓形染色體圖（子網路 1）.*沒有富集分析圖片預覽/);
+  assert.doesNotMatch(resultCard.textContent,/沒有找到顯著的富集路徑/,
+    'missing PNG previews cannot establish that enrichment found no pathways');
+  for(const images of [[],[{kind:'circular',subnetwork:1,url:'/circular.png'}],
+    [{kind:'enrichment_hist',subnetwork:1,url:'/enrichment.png'}]]) {
+    const plots=vm.runInContext(`signetPlots(${JSON.stringify(images)})`,sequence.context);
+    assert.doesNotMatch(plots.textContent,/沒有找到顯著/);
+    if(images.some(image=>image.kind==='enrichment_hist')) {
+      assert.match(plots.textContent,/富集分析長條圖/);
+      assert.doesNotMatch(plots.textContent,/沒有富集分析圖片預覽/);
+    }
+  }
   const edgeRows=resultCard.querySelectorAll('tbody')[0].children;
   assert.deepEqual(edgeRows.map(row=>row.textContent),['CA1-0.4','AB0.50.25'],'most stable connection first');
   const [edgeSearch]=resultCard.querySelectorAll('input');
@@ -467,12 +483,29 @@ function setup(initial={}, analysisApi) {
   rerunButton.click();
   await new Promise(setImmediate);
   rerunDialog=previousAdjust.querySelectorAll('dialog')[0];
-  rerunDialog.querySelectorAll('label').find(label=>label.textContent==='主成分數').querySelectorAll('input')[0].value='4';
+  const rerunField=label=>rerunDialog.querySelectorAll('label').find(el=>el.textContent===label).querySelectorAll('input')[0];
+  rerunField('主成分數').value='4';
+  rerunField('臨床資料表').value='/demo/new-clinical.tsv';
+  rerunField('記憶體（GB）').value='24';
+  rerunDialog.querySelectorAll('details')[0].open=true;
   const confirmRerun=rerunDialog.querySelectorAll('button').find(button=>button.textContent==='確認重新送算');
   confirmRerun.click();confirmRerun.click();
   await new Promise(setImmediate);
   assert.deepEqual(rerunCalls.map(call=>call.action),['prepare','prepare','confirm']);
+  assert.ok(rerunDialog.open,'a missing clinical choice keeps the rerun editable');
+  assert.match(rerunDialog.textContent,/New unknown（1）.*請為每個值選擇處理方式/);
+  assert.equal(rerunField('主成分數').value,'4');
+  assert.equal(rerunField('臨床資料表').value,'/demo/new-clinical.tsv');
+  assert.equal(rerunField('記憶體（GB）').value,'24');
+  assert.equal(rerunDialog.querySelectorAll('details')[0].open,true,'clinical errors preserve expanded inputs');
+  rerunDialog.querySelectorAll('input').find(input=>input.value==='not_reported').checked=true;
+  confirmRerun.click();confirmRerun.click();
+  await new Promise(setImmediate);
+  assert.deepEqual(rerunCalls.map(call=>call.action),['prepare','prepare','confirm','confirm']);
+  assert.deepEqual(rerunCalls.at(-1).body.choices,{Unknown:'not_reported','New unknown':'not_reported'});
   assert.equal(rerunCalls.at(-1).body.options.npc,4);
+  assert.equal(rerunCalls.at(-1).body.inputs['cli.file'],'/demo/new-clinical.tsv');
+  assert.equal(rerunCalls.at(-1).body.resources.mem_gb,24);
   assert.equal(rerunCalls.at(-1).body.proposal_id,'rerun-adjust');
   assert.equal(previousAdjust.querySelectorAll('dialog').length,0);
   assert.match(previousAdjust.querySelectorAll('details')[0].textContent,/主成分數2/);

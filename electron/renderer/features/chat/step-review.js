@@ -184,7 +184,7 @@ function createStageCard(name, request, poll, phases) {
     const form = node('form', 'step-review-form');
     const fields = node('fieldset', 'step-review-fields');
     fields.append(node('legend', '', legend));
-    const clinical = name === 'adjust' ? clinicalSection(parameters) : null;
+    let clinical = name === 'adjust' ? clinicalSection(parameters) : null;
     if (clinical) fields.append(clinical.box);
     const values = {};
     for (const [group, schema] of Object.entries(schemas)) {
@@ -217,7 +217,14 @@ function createStageCard(name, request, poll, phases) {
         name, input.type === 'text' ? input.value.trim() : input.value === 'no' ? 'no' : Number(input.value)
       ]))
     ])), ...(clinical ? {choices: clinical.choices()} : {})});
-    return {form, fields, payload};
+    function updateClinical(review) {
+      if (!clinical) return;
+      const updated = clinicalSection({clinical_review:review, choices:clinical.choices()});
+      clinical.box.before(updated.box);
+      clinical.box.remove();
+      clinical = updated;
+    }
+    return {form, fields, payload, updateClinical};
   }
 
   function showSavedSettings(parameters) {
@@ -289,7 +296,7 @@ function createStageCard(name, request, poll, phases) {
       const dialog = node('dialog', 'step-rerun-sheet');
       const heading = node('div', 'step-rerun-heading');
       dialog.setAttribute('aria-label', translateUI('重新執行'));
-      const {form, fields, payload} = reviewForm(proposal.parameters, proposal.resource_limits, stageReviewNames[name], true);
+      const {form, fields, payload, updateClinical} = reviewForm(proposal.parameters, proposal.resource_limits, stageReviewNames[name], true);
       const impact = node('div', 'step-rerun-impact');
       function showImpact() {
         const pair = proposal.chromosome_pair;
@@ -330,6 +337,7 @@ function createStageCard(name, request, poll, phases) {
       async function submitRerun() {
         if (submitting || state.controller.signal.aborted || !form.reportValidity()) return;
         submitting = true;
+        let clinicalUpdated = false;
         fields.disabled = accept.disabled = cancel.disabled = close.disabled = true;
         uiText(error, '正在確認並送算…');
         try {
@@ -340,7 +348,12 @@ function createStageCard(name, request, poll, phases) {
           }
         } catch (failure) {
           if (!state.controller.signal.aborted) {
-            uiText(error, '無法完成重新送算，請查看分析進度。');
+            if (name === 'adjust' && failure.details?.status === 'ok') {
+              updateClinical(failure.details);
+              clinicalUpdated = true;
+            }
+            uiText(error, failure.code === 'needs_choice' ? '請為每個值選擇處理方式。'
+              : '無法完成重新送算，請查看分析進度。');
             if (failure.message) {
               const detail = node('small', 'step-review-error-detail');
               detail.textContent = failure.message;
@@ -350,6 +363,7 @@ function createStageCard(name, request, poll, phases) {
         } finally {
           submitting = false;
           fields.disabled = accept.disabled = cancel.disabled = close.disabled = false;
+          if (clinicalUpdated) form.reportValidity();
           if (!state.controller.signal.aborted) void poll(state);
         }
       }
