@@ -64,7 +64,7 @@ class StepsTest(unittest.TestCase):
         self.gexp = self.hpc / 'ws/signet/example/example_gexp'
         self.gtf = self.hpc / 'ws/refdata/gencode.v22.annotation.gtf'
         self.gexp.write_text('counts')
-        self.gtf.write_text('genes')
+        self.gtf.write_text('chr1\tfixture\tgene\t1\t2\t.\t+\t.\ttranscript_type \"protein_coding\";\n')
         self.config = {'root': str(self.hpc / 'ws'), 'source': str(self.hpc / 'ws/signet'),
                        'image': str(self.hpc / 'signet.sif'), 'executor': 'apptainer',
                        'workRoot': str(self.hpc / 'ws/work'), 'partition': 'standard'}
@@ -156,7 +156,7 @@ class StepsTest(unittest.TestCase):
         self.assertFalse((self.fake / 'sbatch_args').exists())
         self.assertEqual(steps.run_steps('step_test'), {})
         self.gtf.unlink()
-        self.gtf.write_text('genes')
+        self.gtf.write_text('chr1\tfixture\tgene\t1\t2\t.\t+\t.\ttranscript_type \"protein_coding\";\n')
         self.assertEqual(steps.submit('step_test', 'expression', self.inputs)['state'], 'submitted')
 
     def test_one_attempt_per_step_and_wrong_cohort_or_unknown_step(self):
@@ -292,7 +292,7 @@ class StepsTest(unittest.TestCase):
         self.assertEqual((old['result']['status'], current['result']['status']),
                          ('recorded_failed', 'recorded_completed'))
         self.assertTrue(any(item['status'] == 'missing' for item in old['result']['outputs']))
-        self.assertTrue(any(item['status'] == 'downloaded' for item in current['result']['outputs']))
+        self.assertTrue(any(item['status'] == 'remote' for item in current['result']['outputs']))
         self.assertEqual(len(self.calls), remote_calls)
         self.assertEqual({path: path.read_bytes() for path in files}, originals)
 
@@ -320,7 +320,8 @@ class StepsTest(unittest.TestCase):
                          'old-local-attempt\n')
         self.finish_job()
         self.assertEqual(steps.status('step_test', 'expression', refresh=True)['state'], 'completed')
-        self.assertEqual((self.root / 'work' / OUTPUTS[0]).read_text(), 'data\n')
+        self.assertFalse((self.root / 'work' / OUTPUTS[0]).exists())
+        self.assertEqual((self.remote_dir / 'work' / OUTPUTS[0]).read_text(), 'data\n')
 
     def test_sbatch_client_error_consumes_attempt_but_blocks_replay_and_preserves_archives(self):
         self.failed_expression()
@@ -391,7 +392,8 @@ class StepsTest(unittest.TestCase):
         self.finish_job()
         result = steps.status('step_test', 'expression', refresh=True)
         self.assertEqual((result['state'], result['job_id']), ('completed', '12345'))
-        self.assertEqual((self.root / 'work' / OUTPUTS[0]).read_text(), 'data\n')
+        self.assertFalse((self.root / 'work' / OUTPUTS[0]).exists())
+        self.assertEqual((self.remote_dir / 'work' / OUTPUTS[0]).read_text(), 'data\n')
         self.assertEqual(sum('sbatch --parsable' in call for call in self.calls), 1)
 
     def test_missing_output_recovery_does_not_require_accounting_to_have_arrived(self):
@@ -487,14 +489,15 @@ class StepsTest(unittest.TestCase):
         self.assertEqual(len(self.calls), count)
         self.assertEqual(steps.status('step_test', 'expression', refresh=True)['state'], 'running')
 
-    def test_completed_job_with_outputs_is_validated_and_downloaded(self):
+    def test_completed_job_with_outputs_is_validated_and_kept_remote(self):
         steps.submit('step_test', 'expression', self.inputs)
         self.finish_job()
         record = steps.status('step_test', 'expression', refresh=True)
         self.assertEqual(record['state'], 'completed')
         self.assertEqual([h['state'] for h in record['history']], ['submitting', 'submitted', 'validating', 'completed'])
         for relative in OUTPUTS:
-            self.assertEqual((self.root / 'work' / relative).read_text(), 'data\n')
+            self.assertFalse((self.root / 'work' / relative).exists())
+            self.assertEqual((self.remote_dir / 'work' / relative).read_text(), 'data\n')
         count = len(self.calls)
         self.assertEqual(steps.status('step_test', 'expression', refresh=True)['state'], 'completed')
         self.assertEqual(len(self.calls), count)
@@ -536,7 +539,8 @@ class StepsTest(unittest.TestCase):
                 path.write_text('0 2026-11-01T10:00:00\n')
                 record = steps.status(run_id, 'expression', refresh=True)
                 self.assertEqual(record['state'], 'completed')
-                self.assertEqual((self.project / 'runs' / run_id / 'work/res/rest/signet_gexp').read_text(), 'data\n')
+                self.assertFalse((self.project / 'runs' / run_id / 'work/res/rest/signet_gexp').exists())
+                self.assertEqual((self.remote_dir / 'work/res/rest/signet_gexp').read_text(), 'data\n')
 
     def test_refresh_recovers_a_legacy_missing_marker_failure_without_resubmitting(self):
         record = steps.submit('step_test', 'expression', self.inputs)
@@ -555,7 +559,8 @@ class StepsTest(unittest.TestCase):
         marker.write_text('0 2026-11-01T10:00:00\n')
         record = steps.status('step_test', 'expression', refresh=True)
         self.assertEqual((record['state'], record['job_id']), ('completed', '12345'))
-        self.assertEqual((self.root / 'work/res/rest/signet_gexp').read_text(), 'data\n')
+        self.assertFalse((self.root / 'work/res/rest/signet_gexp').exists())
+        self.assertEqual((self.remote_dir / 'work/res/rest/signet_gexp').read_text(), 'data\n')
         self.assertEqual(sum('sbatch --parsable' in call for call in self.calls), 1)
 
     def test_refresh_does_not_reopen_confirmed_failures(self):
@@ -690,7 +695,7 @@ class StepsTest(unittest.TestCase):
         self.assertEqual(record['state'], 'unknown')
         self.assertNotIn('job_id', record)
 
-    def test_simultaneous_status_checks_download_results_once(self):
+    def test_simultaneous_status_checks_verify_remote_results_once(self):
         steps.submit('step_test', 'expression', self.inputs)
         self.finish_job()
         states = []
@@ -701,7 +706,7 @@ class StepsTest(unittest.TestCase):
         for thread in threads:
             thread.join()
         self.assertEqual(states, ['completed'] * 3)
-        self.assertEqual(sum('tar czf' in call for call in self.calls), 1)
+        self.assertEqual(sum('tar czf' in call for call in self.calls), 0)
         self.assertEqual(steps.run_steps('step_test'), {'expression': 'completed'})
 
     def test_unknown_submission_survives_scheduler_outage_and_recovers(self):
@@ -736,7 +741,10 @@ class StepsTest(unittest.TestCase):
             (self.root / 'work' / relative).write_text('data\n')
         record = steps.status('step_test', 'expression', refresh=True)
         self.assertEqual(record['state'], 'completed')
-        self.assertEqual(sorted(record['outputs']), sorted('work/' + path for path in OUTPUTS))
+        self.assertEqual(record['outputs'], [])
+        self.assertEqual(sorted(record['remote_outputs']), sorted('work/' + path for path in OUTPUTS))
+        for relative in OUTPUTS:
+            self.assertEqual((self.root / 'work' / relative).read_text(), 'data\n')
 
     def test_sbatch_reply_with_cluster_name_keeps_only_the_job_id(self):
         (self.fake / 'sbatch_reply').write_text('4242;hpc3\n')
@@ -1027,13 +1035,13 @@ class StepsTest(unittest.TestCase):
         self.assertEqual(steps.status(run_id, 'genotype', refresh=True)['state'], 'completed')
         root = self.project / 'runs' / run_id
         preserved = {path: path.read_bytes() for path in
-                     (root / workspace.SNAPSHOT, root / 'steps/genotype.json', root / 'work/res/resg/signet_Geno',
-                      root / 'work/res/resg/signet_Genotype.sampleID')}
+                     (root / workspace.SNAPSHOT, root / 'steps/genotype.json', self.remote_dir / 'work/res/resg/signet_Geno',
+                      self.remote_dir / 'work/res/resg/signet_Genotype.sampleID')}
         self.gexp = self.hpc / 'ws/signet' / EXAMPLE_EXPRESSION_PATH
         self.gexp.parent.mkdir()
         self.gexp.write_text('counts')
         annotation = self.hpc / 'ws/refdata/gencode.v22.genes.gtf'
-        annotation.write_text('genes')
+        annotation.write_text('chr1\tfixture\tgene\t1\t2\t.\t+\t.\ttranscript_type \"protein_coding\";\n')
         self.assertEqual(request('GET', route.replace(run_id, 'step_test'))[0], 404)
         status, review = request('GET', route)
         self.assertEqual(status, 200, review)
@@ -1095,9 +1103,14 @@ class StepsTest(unittest.TestCase):
         for path, data in preserved.items():
             self.assertEqual(path.read_bytes(), data, f'Stage 2 changed the Stage 1 artifact {path.name}')
 
-        # Invalid collected values must never become a chart with fabricated counts.
+        # Stale private local files cannot replace the owned remote projection.
         (root / 'work/res/rest/signet_gexp').write_text('nan 2\n3 4\n5 6\n7 8\n')
-        self.assertEqual(request('GET', detail)[0], 404)
+        self.assertEqual(request('GET', detail)[0], 200)
+        # Invalid remote evidence must never become a chart with fabricated counts.
+        (self.remote_dir / 'work/res/rest/signet_gexp').write_text('nan 2\n3 4\n5 6\n7 8\n')
+        from agent.runtime import workspace_projection
+        with self.assertRaises((ValueError, steps.StepError)):
+            workspace_projection.completed_result(run_id, '2', refresh=True)
 
     def test_genotype_on_one_chromosome_checks_its_files_and_queues_signet_g(self):
         inputs = self.genotype_inputs()
@@ -1151,7 +1164,7 @@ class StepsTest(unittest.TestCase):
         self.assertEqual(record['state'], 'failed')
         self.assertIn('Some of the jobs are incomplete', record['failure_hints'][0])
 
-    def test_genotype_completed_downloads_resg(self):
+    def test_genotype_completed_keeps_resg_remote(self):
         steps.update_settings('step_test', {'restrict.tcga.geno': 1})
         steps.submit('step_test', 'genotype', self.genotype_inputs())
         for relative in steps.STEPS['genotype'].required:
@@ -1161,7 +1174,8 @@ class StepsTest(unittest.TestCase):
         (self.remote_dir / 'steps/genotype.done').write_text('0 2026-11-08T10:00:00\n')
         self.slurm(squeue='', sacct='COMPLETED')
         self.assertEqual(steps.status('step_test', 'genotype', refresh=True)['state'], 'completed')
-        self.assertEqual((self.root / 'work/res/resg/signet_Geno').read_text(), 'data\n')
+        self.assertFalse((self.root / 'work/res/resg/signet_Geno').exists())
+        self.assertEqual((self.remote_dir / 'work/res/resg/signet_Geno').read_text(), 'data\n')
 
     def test_genotype_settings_rules(self):
         values = {'restrict.tcga.geno': 1, 'mind': 0.05, 'geno': 0, 'hwe': 0.0001, 'int': 3000000}
@@ -1196,7 +1210,7 @@ class StepsTest(unittest.TestCase):
         gexp.parent.mkdir(parents=True, exist_ok=True)
         gexp.write_text('counts')
         annotation = self.hpc / 'ws/refdata/gencode.v22.genes.gtf'
-        annotation.write_text('genes')
+        annotation.write_text('chr1\tfixture\tgene\t1\t2\t.\t+\t.\ttranscript_type \"protein_coding\";\n')
         review = workspace.review_expression(run_id)
         workspace.submit_expression(run_id, review['inputs'], review['settings'], review['resources'])
         self.finish_job()
@@ -1206,10 +1220,11 @@ class StepsTest(unittest.TestCase):
         intermediate = self.remote_dir / 'work/tmp/tmpg/impute/impute_Genotype.sizes'
         intermediate.parent.mkdir(parents=True, exist_ok=True)
         intermediate.write_text('4 3\n')
+        (self.remote_dir / 'work/tmp/tmpg/clean_Genotype.fam').write_text('fixture family metadata\n')
         preserved = {path: path.read_bytes() for path in (
             root / workspace.SNAPSHOT, root / workspace.EXPRESSION_SNAPSHOT,
             root / 'steps/genotype.json', root / 'steps/expression.json',
-            root / 'work/res/resg/signet_Geno', root / 'work/res/rest/signet_gexpID', intermediate)}
+            self.remote_dir / 'work/res/resg/signet_Geno', self.remote_dir / 'work/res/rest/signet_gexpID', intermediate)}
         default_clinical = self.hpc / 'ws/refdata/clinical.tsv'
         default_clinical.write_text('submitter_id\trace\nTCGA-AA-0001\tasian\n')
         clinical = self.hpc / 'ws/refdata/official-demo-chr1-restart-clinical.tsv'
@@ -1273,7 +1288,8 @@ class StepsTest(unittest.TestCase):
         self.assertEqual((root / workspace.ADJUST_SNAPSHOT).read_bytes(), snapshot)
         row = next(row for row in request('GET', '/stage6/history')[1]['runs'] if row['run_id'] == run_id)
         self.assertEqual(set(row['jobs']), {'genotype', 'expression', 'adjust'})
-        self.assertEqual(row['inputs']['clinical'], [str(clinical)])
+        self.assertEqual(row['inputs']['clinical'], [submitted['inputs']['cli.file']])
+        self.assertEqual(submitted['clinical']['source'], str(clinical))
         self.assertEqual(row['jobs']['adjust']['options'], {'npc': 2})
         for scheduler, expected in (('PENDING', 'pending'), ('RUNNING', 'running')):
             self.slurm(squeue=scheduler)
@@ -1364,7 +1380,7 @@ class StepsTest(unittest.TestCase):
         self.assertFalse((self.fake / 'sbatch_args').exists())
         self.assertFalse((self.root / 'steps/adjust.json').exists())   # nothing queued: may retry
 
-    def test_adjust_completed_downloads_resa(self):
+    def test_adjust_completed_keeps_resa_remote(self):
         steps.submit('step_test', 'adjust', self.adjust_ready())
         for relative in steps.STEPS['adjust'].required:
             path = self.remote_dir / 'work' / relative
@@ -1373,7 +1389,8 @@ class StepsTest(unittest.TestCase):
         (self.remote_dir / 'steps/adjust.done').write_text('0 2026-11-08T10:00:00\n')
         self.slurm(squeue='', sacct='COMPLETED')
         self.assertEqual(steps.status('step_test', 'adjust', refresh=True)['state'], 'completed')
-        self.assertEqual((self.root / 'work/res/resa/signet_new.Geno').read_text(), 'data\n')
+        self.assertFalse((self.root / 'work/res/resa/signet_new.Geno').exists())
+        self.assertEqual((self.remote_dir / 'work/res/resa/signet_new.Geno').read_text(), 'data\n')
 
     # ---------- cis (signet -c) ----------
 
@@ -1563,7 +1580,8 @@ class StepsTest(unittest.TestCase):
         self.finish_cis('0.01')
         record = steps.status('step_test', 'cis', refresh=True)
         self.assertEqual(record['state'], 'completed')
-        self.assertEqual((self.root / 'work/res/resc/signet_all.sig.pValue_0.01').read_text(), 'data\n')
+        self.assertFalse((self.root / 'work/res/resc/signet_all.sig.pValue_0.01').exists())
+        self.assertEqual((self.remote_dir / 'work/res/resc/signet_all.sig.pValue_0.01').read_text(), 'data\n')
 
     def test_cis_fails_when_the_result_for_its_alpha_is_missing(self):
         self.cis_ready()
