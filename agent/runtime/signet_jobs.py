@@ -989,7 +989,7 @@ def submit(run_id, name, inputs, resources=None, options=None):
         _retry_environment(root, workspace_retry, previous, config)
     directory = _remote_dir(config, root, run_id)
     dataset_plan = None
-    if name == 'genotype' and not (root / 'rerun.json').exists():
+    if name == 'genotype' and (previous is not None or not (root / 'rerun.json').exists()):
         from agent.runtime.workspace_inputs import staging_plan
         dataset_plan = staging_plan(root, directory, attempt=attempt)
         if dataset_plan and inputs != dataset_plan['inputs']:
