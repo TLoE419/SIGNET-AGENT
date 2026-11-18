@@ -80,6 +80,18 @@ class RunLabelsTest(unittest.TestCase):
             result = enrich_rows([row('root'), row('a', parent='root', created=date), row('b', parent='root')])
             self.assertFalse(any(r['rerun_family']['latest'] for r in result))
 
+    def test_empty_target_job_is_unavailable_and_unsubmitted_target_uses_reviewed_groups(self):
+        parent, child = row('original', rerun=None), row('fork', parent='original', jobs={'adjust': {}})
+        result = enrich_rows([parent, child])[1]['rerun_family']
+        self.assertFalse(result['changes_available'])
+        self.assertEqual(result['changes'], [])
+        child['jobs']['adjust'] = {'state': 'not_submitted', 'settings': {}, 'resources': {}, 'options': {}}
+        child['rerun']['parameters'] = {'settings': {}, 'resources': {'cpus': 4, 'hours': 2},
+                                        'options': {'npc': 5}}
+        result = enrich_rows([parent, child])[1]['rerun_family']
+        self.assertTrue(result['changes_available'])
+        self.assertEqual(result['changes'], [{'group': 'options', 'key': 'npc', 'before': 3, 'after': 5}])
+
     def test_before_submission_can_use_reviewed_parameters_and_missing_evidence_is_explicit(self):
         child = row('fork', parent='original', jobs={})
         result = enrich_rows([row('original'), child])[1]

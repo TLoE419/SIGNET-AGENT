@@ -33,18 +33,29 @@ def _equal(before, after):
 
 
 def _groups(row, step):
-    job = row.get('jobs', {}).get(step)
-    if not isinstance(job, dict):
-        # A reviewed fork can exist before its target has a submitted job record.
-        plan = row.get('rerun', {})
-        job = plan.get('parameters') if plan.get('step') == step else None
-    if not isinstance(job, dict):
-        return None
-    result = {group: job.get(group, {}) for group in ('settings', 'resources', 'options')}
-    clinical = job.get('clinical')
-    if isinstance(clinical, dict) and isinstance(clinical.get('choices'), dict):
-        result['clinical_choices'] = clinical['choices']
-    return {group: values for group, values in result.items() if isinstance(values, dict)}
+    records = row.get('jobs')
+    job = records.get(step) if isinstance(records, dict) else None
+    plan = row.get('rerun')
+    if not isinstance(plan, dict):
+        plan = {}
+    reviewed = plan.get('parameters') if plan.get('step') == step else None
+
+    def known(value):
+        if not isinstance(value, dict):
+            return {}
+        # Empty placeholder groups cannot prove that a research parameter was removed.
+        result = {group: value[group] for group in ('settings', 'resources', 'options')
+                  if isinstance(value.get(group), dict) and value[group]}
+        clinical = value.get('clinical')
+        if isinstance(clinical, dict) and isinstance(clinical.get('choices'), dict):
+            result['clinical_choices'] = clinical['choices']
+        return result
+
+    result = known(job)
+    if not result or isinstance(job, dict) and job.get('state') == 'not_submitted':
+        for group, values in known(reviewed).items():
+            result.setdefault(group, values)
+    return result or None
 
 
 def _changes(parent, child, step):
