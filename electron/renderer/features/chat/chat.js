@@ -145,8 +145,8 @@ async function send(text) {
           answer.parentElement.classList.add('error');
         }
       }
-      if (event.type === 'error') {failed = true; uiText(answer, event.text); answer.parentElement.classList.add('error');}
-      if (event.type === 'done') {done = true; history.replaceState(null, '', location.pathname + '?session=' + session); card(turn,'本回合已結束','end').append(node('div','step-line',event.text));}
+      if (event.type === 'error') {failed = true; uiText(answer, answer.textContent + '\n\n' + event.text); answer.parentElement.classList.add('error');}
+      if (event.type === 'done') {failed = failed || ['failed', 'needs_review', 'cancelled'].includes(event.status); turn.root.dataset.status = event.status || (failed ? 'needs_review' : 'completed'); done = true; history.replaceState(null, '', location.pathname + '?session=' + session); card(turn,failed ? '需要確認' : '本回合已結束',failed ? 'error' : 'end').append(node('div','step-line',event.text));}
     }
     while (true) {
       const part = await reader.read();

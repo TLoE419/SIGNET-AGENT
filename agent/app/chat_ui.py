@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 from google.genai import types
 
 from agent.app import signet_api
+from agent.app.chat_outcome import ChatOutcome
 from agent.core.conversation import MODEL, run_conversation
 from agent.core.model_timing import ModelRequestTiming
 from agent.paths import PROJECT_ROOT
@@ -219,14 +220,16 @@ class ChatHandler(BaseHTTPRequestHandler):
             self.connection.settimeout(None)
             self._headers(200, 'application/x-ndjson; charset=utf-8')
             connected = True
+            outcome = ChatOutcome()
 
             def emit(kind, message):
                 nonlocal connected
+                outcome.observe(kind, message)
                 if kind in ('progress', 'error', 'done'):
                     events.append(message)
                 if connected:
                     try:
-                        self.wfile.write((json.dumps({'type': kind, 'text': message}, ensure_ascii=False) + '\n').encode())
+                        self.wfile.write((json.dumps({'type': kind, 'text': message, **({'status': outcome.status} if kind == 'done' else {})}, ensure_ascii=False) + '\n').encode())
                         self.wfile.flush()
                     except OSError:
                         # Keep recording actual results if the browser disconnects; never replay tools.
@@ -249,7 +252,9 @@ class ChatHandler(BaseHTTPRequestHandler):
                 emit('answer', answer)
             except Exception:
                 emit('error', '回合發生非預期錯誤；操作狀態可能未知，請核對工作狀態後再繼續。')
-            emit('done', '回合結束；分析是否成功請以工具狀態與回答為準。')
+            if not connected:
+                outcome.status = 'needs_review'
+            emit('done', outcome.summary())
         finally:
             try:
                 self.server.save_state()
