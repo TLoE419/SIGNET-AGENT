@@ -251,6 +251,26 @@ def list_runs(handler, url):
     return 200, {'runs': runs}
 
 
+def review_rerun(handler, url, run_id, step):
+    from agent.runtime import workspace_rerun
+    _query(url, ())
+    return 200, workspace_rerun.review(run_id, step)
+
+
+def create_rerun(handler, url, run_id, step):
+    from agent.runtime import workspace_rerun
+    _query(url, ())
+    body = _body(handler, ('new_run_id', 'revision', 'parameters'), required=('new_run_id', 'revision', 'parameters'))
+    return 201, workspace_rerun.create(run_id, step, **body)
+
+
+def submit_rerun(handler, url, run_id):
+    from agent.runtime import workspace_rerun
+    _query(url, ())
+    body = _body(handler, ('confirmed',), required=('confirmed',))
+    return 202, workspace_rerun.submit(run_id, body['confirmed'])
+
+
 def create_run(handler, url):
     """POST /signet/runs   body {"run_id": "luad_t1", "cohort": "TCGA" | "GTEx"}
 
@@ -456,6 +476,8 @@ ROUTES = [
      {'GET': review_network_example, 'POST': submit_network_example}),
     (re.compile(rf'/signet/runs/{_RUN}/visualize/example'),
      {'GET': review_visualize_example, 'POST': submit_visualize_example}),
+    (re.compile(rf'/signet/runs/{_RUN}/rerun/submit'), {'POST': submit_rerun}),
+    (re.compile(rf'/signet/runs/{_RUN}/steps/{_STEP}/rerun'), {'GET': review_rerun, 'POST': create_rerun}),
     (re.compile(r'/signet/runs'), {'GET': list_runs, 'POST': create_run}),
     (re.compile(rf'/signet/runs/{_RUN}'), {'GET': get_run}),
     (re.compile(rf'/signet/runs/{_RUN}/settings'), {'PATCH': update_settings}),

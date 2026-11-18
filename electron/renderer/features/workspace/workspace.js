@@ -1163,7 +1163,9 @@
           : number === 3 ? "lens-history-stage3" : number === 6 ? "lens-stage6" : "lens-history-stage";
         const link = linked ? `<button type="button" class="ml-run-step-link" data-run-stage="${number}" data-run-id="${id}" data-history-id="${key}" aria-controls="${panel}">
           ${title}<i data-lucide="arrow-right" aria-hidden="true"></i></button>` : "";
-        return `<li>${link}${job || attempts.length ? savedJobDetails(job ?? {}, step, false, run.source === "recorded", attempts) : ""}${submissionRecovery(run, step, job)}</li>`;
+        const rerun = run.source === "live" && job?.state === "completed" ? `<details data-rerun-form><summary>${historyText("核對參數並建立新執行", "Review parameters and create linked run")}</summary>
+          <button type="button" data-rerun-review="${step}" data-rerun-source="${id}">${historyText("讀取原始參數與影響", "Load original parameters and impact")}</button><div data-rerun-content></div><p role="status" data-rerun-status></p></details>` : "";
+        return `<li>${link}${rerun}${job || attempts.length ? savedJobDetails(job ?? {}, step, false, run.source === "recorded", attempts) : ""}${submissionRecovery(run, step, job)}</li>`;
       }).join("");
       const genericJobs = [...new Set([...Object.keys(run.jobs ?? {}), ...Object.keys(run.attempts ?? {})])].filter(step => !historySteps.includes(step))
         .map(step => savedJobDetails(run.jobs?.[step] ?? {}, step, false, run.source === "recorded", run.attempts?.[step])).join("");
@@ -1185,6 +1187,8 @@
         <header class="ml-nav-detail-title"><i data-lucide="history" aria-hidden="true"></i><h2>${historyText(...run.name)}</h2></header>
         <p class="ml-run-overview">${id}<br>${escapeHistory(fullTime(run.submitted_at ?? initialJob?.submitted_at))}${finished ? " – " + escapeHistory(finished) : ""}<br>
           <span data-history-source>${historyText(...historySourceName(run))}</span> · <span data-history-state>${historyStateLabel(state, run.source === "recorded")}</span>${summary ? `<br>${summary}` : ""}</p>
+        ${run.rerun && run.source === "live" && (!run.jobs?.[run.rerun.step] || run.jobs[run.rerun.step].state === "not_submitted") ? `<div data-rerun-form><p>${historyText("已建立關聯執行，尚未送出。確認後將檢查遠端上游檔案並排程。", "Linked run created; not submitted. Confirmation checks remote upstream files and submits the stage.")}</p><button type="button" data-rerun-submit data-rerun-run-id="${id}">${historyText("確認送出", "Confirm submission")}: ${id}</button><div data-rerun-content></div><p role="status" data-rerun-status></p></div>` : ""}
+        ${run.rerun ? `<p data-rerun-link>${historyText("關聯來源", "Linked source")}: ${escapeHistory(run.rerun.source_run_id)} · ${escapeHistory(run.rerun.step)}</p>` : ""}
         <p data-history-association>${association} · ${historyText(...historyDatasetName(run.dataset_id))}${associationNote ? `<br>${associationNote}` : ""}</p>
         ${run.provenance ? `<details class="ml-run-inputs" data-history-provenance><summary>${historyText("保存的執行來源", "Recorded run provenance")}</summary><dl class="ml-key-values">${savedDefinitions(run.provenance)}</dl></details>` : ""}
         ${(run.issues ?? []).length ? `<p class="ml-history-record-note">${run.issues.map(escapeHistory).join(" ")}</p>` : ""}
@@ -2379,6 +2383,8 @@
     finally {state.pending = false;renderHistoryRecords();}
   });
   runDetails.addEventListener("submit", async event => {
+    const editor = event.target.closest("[data-rerun-editor]");
+    if (editor) {event.preventDefault();editor.querySelector("[data-rerun-create]")?.click();return;}
     const form = event.target.closest("[data-history-assignment]");
     if (!form) return;
     event.preventDefault();
@@ -2402,6 +2408,46 @@
       }
     } catch (error) {assignmentStates.set(id, {datasetId, error: error.message});}
     renderHistoryRecords();renderDatasetLabels();updateHistoryView();syncStage6Picker(true);
+  });
+  runDetails.addEventListener("click", async event => {
+    const button = event.target.closest("[data-rerun-review], [data-rerun-create], [data-rerun-submit]");
+    if (!button) return;
+    const container = button.closest("[data-rerun-form]");
+    const content = container.querySelector("[data-rerun-content]");
+    const status = container.querySelector("[data-rerun-status]");
+    button.disabled = true;
+    try {
+      if (button.hasAttribute("data-rerun-review")) {
+        const source = button.dataset.rerunSource, step = button.dataset.rerunReview;
+        const review = await requestDataset(`/signet/runs/${encodeURIComponent(source)}/steps/${step}/rerun`);
+        container.rerunReview = review;container.rerunPlan = null;
+        content.innerHTML = `<p>${historyText("沿用上游", "Reuse upstream")}: ${escapeHistory(review.reuse.join(", ") || "—")}<br>${historyText("必須重新執行", "Recompute")}: ${escapeHistory(review.invalidated.join(", "))}</p>
+          <p>${historyText("舊結果保留。建立後仍須另外確認送出；送出時核對遠端檔案。原始輸入固定，可編輯設定、資源及選項。", "Old results are preserved. Submission requires a separate confirmation and remote file checks. Keep original inputs; edit settings, resources and options.")}</p>
+          <form data-rerun-editor aria-label="${historyText("關聯執行參數", "Linked run parameters")}"><label>${historyText("新執行名稱", "New run name")}<input name="run-name" data-rerun-name required maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9_-]*" spellcheck="false" value="${escapeHistory(source.slice(0, 58))}-rerun"></label>
+          <label>${historyText("執行參數", "Run parameters")}<textarea name="parameters" spellcheck="false" data-rerun-parameters rows="12" style="width:100%;box-sizing:border-box">${escapeHistory(JSON.stringify(review.parameters, null, 2))}</textarea></label>
+          <button type="button" data-rerun-create>${historyText("建立關聯執行（尚不送出）", "Create linked run (no submission)")}</button></form>`;
+      } else if (button.hasAttribute("data-rerun-create")) {
+        if (!content.querySelector("[data-rerun-editor]").reportValidity()) return;
+        const review = container.rerunReview;
+        const plan = await requestDataset(`/signet/runs/${encodeURIComponent(review.source_run_id)}/steps/${review.step}/rerun`, {
+          new_run_id: content.querySelector("[data-rerun-name]").value,
+          revision: review.revision, parameters: JSON.parse(content.querySelector("[data-rerun-parameters]").value),
+        }, "POST");
+        container.rerunPlan = plan;
+        content.querySelectorAll("input, textarea, button").forEach(control => {control.disabled = true;});
+        const confirm = document.createElement("button");
+        confirm.type = "button";confirm.dataset.rerunSubmit = "";
+        confirm.textContent = root.lang === "en" ? `Confirm submission: ${plan.new_run_id}` : `確認送出：${plan.new_run_id}`;
+        content.append(confirm);
+        status.textContent = root.lang === "en" ? "Linked run created locally; nothing submitted." : "已建立本機關聯執行，尚未送出。";
+      } else {
+        await requestDataset(`/signet/runs/${encodeURIComponent(button.dataset.rerunRunId ?? container.rerunPlan.new_run_id)}/rerun/submit`, {confirmed: true}, "POST");
+        button.dataset.rerunSubmitted = "true";
+        status.textContent = root.lang === "en" ? "Submission recorded. Reload history to inspect the new run." : "已記錄送出，請重新讀取歷史查看新執行。";
+        return;
+      }
+    } catch (error) { status.textContent = error.message; }
+    finally { if (!button.dataset.rerunSubmitted && (!button.hasAttribute("data-rerun-create") || !container.rerunPlan)) button.disabled = false; }
   });
   runDetails.addEventListener("click", event => {
     const button = event.target.closest("[data-run-stage]");

@@ -917,6 +917,8 @@ def revalidate(run_id, name, *, expected_job_id, expected_attempt):
             or type(expected_attempt) is not int or expected_attempt < 1):
         raise StepError('invalid_request', 'Provide the displayed job ID and positive integer attempt number.')
     root = _root(run_id)
+    if _load(root, name).get('reused_from'):
+        raise StepError('conflict', 'Reused results retain source evidence; revalidate in the source run.')
     try:
         record, _ = _json(root / 'steps' / (name + '.json'))
         record = _attempt_record(record, run_id, name)
@@ -955,6 +957,8 @@ def submit(run_id, name, inputs, resources=None, options=None):
     """
     step = _step(name)
     root = _root(run_id)
+    from agent.runtime.workspace_rerun import guard_submission
+    guard_submission(root, name)
     if signet._settings(root).get('cohort') != step.cohort:
         raise StepError('invalid_request', f'Step {name} needs a {step.cohort} run.')
     request = _resources(step, resources)
@@ -985,7 +989,7 @@ def submit(run_id, name, inputs, resources=None, options=None):
         _retry_environment(root, workspace_retry, previous, config)
     directory = _remote_dir(config, root, run_id)
     dataset_plan = None
-    if name == 'genotype':
+    if name == 'genotype' and not (root / 'rerun.json').exists():
         from agent.runtime.workspace_inputs import staging_plan
         dataset_plan = staging_plan(root, directory, attempt=attempt)
         if dataset_plan and inputs != dataset_plan['inputs']:
@@ -1043,6 +1047,8 @@ def submit(run_id, name, inputs, resources=None, options=None):
         saved_previous = False
         try:
             _upload(root, directory, token)
+            from agent.runtime.workspace_rerun import stage_remote
+            stage_remote(root, directory, token)
             if previous:   # keep the failed attempt's record before the new one replaces it
                 with archived.open('x') as stream:
                     stream.write(json.dumps(previous, indent=2) + '\n')
