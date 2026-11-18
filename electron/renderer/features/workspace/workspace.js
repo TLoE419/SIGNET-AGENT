@@ -2199,6 +2199,9 @@
   }
 
   const languageButton = byId("language");
+  byId("open-model-settings").addEventListener("click", () => {
+    window.dispatchEvent(new CustomEvent("workspace-open-model-settings"));
+  });
   const modelChip = byId("model-chip");
   modelChip.textContent = modelChip.title = chatModel;
   byId("model-select").add(new Option(chatModel));

@@ -220,3 +220,21 @@ test('analysis chat context uses only the currently selected stage run from the 
  assert.equal(snapshot().dataset_id,'dataset-b');assert.equal(snapshot().history_id,null);
  assert.deepEqual(snapshot().selected_genes,[]);
 });
+
+test('model toolbar opens settings without submitting and removes unsupported controls',async t=>{
+ const h=harness(t,[workspace()]);await h.ready();
+ const button=h.q('#ml-open-model-settings');
+ assert.equal(button.tagName,'BUTTON');assert.equal(button.type,'button');
+ assert.equal(button.closest('[aria-hidden="true"]'),null);
+ let opened=0,submitted=0;
+ h.window.addEventListener('workspace-open-model-settings',()=>opened++);
+ h.q('#ml-composer').addEventListener('submit',()=>submitted++);
+ h.q('#ml-input').value='Keep this draft';button.click();
+ assert.equal(opened,1);assert.equal(submitted,0);
+ assert.equal(h.q('#ml-input').value,'Keep this draft');
+ assert.equal(h.q('.ml-mention'),null);
+ assert.equal(h.q('.ml-chip-icon'),null);
+ assert.equal(h.q('.ml-chips').textContent.includes('Code Mode'),false);
+ assert.equal(button.getAttribute('aria-label'),'模型設定');
+ h.click('#ml-language');assert.equal(button.getAttribute('aria-label'),'Model settings');
+});

@@ -696,7 +696,7 @@ code:not(pre code) {
   padding: 0 9px; background: var(--ml-tab);
   white-space: nowrap; color: #263140; font-size: 12px;
 }
-#signet-lens-left-preview .ml-chip:first-child { width: 166px; }
+#signet-lens-left-preview .ml-chip:first-child { width: 182px; cursor: pointer; font-family: inherit; }
 #signet-lens-left-preview .ml-chip:nth-child(2) { width: 182px; }
 #signet-lens-left-preview .ml-chip-chevron { margin-left: auto; }
 #signet-lens-left-preview #ml-model-chip { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
