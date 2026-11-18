@@ -72,9 +72,70 @@ class DatasetValidationTest(unittest.TestCase):
             with self.subTest(case=label):
                 path.write_text(source)
                 result = parser.validate(self.inputs)
-                self.assertEqual(result['status'], 'failed')
+                self.assertEqual(result['status'], 'warning' if label == 'covariate' else 'failed')
+                self.assertEqual(result['stage_readiness']['1']['status'], 'blocked' if label == 'ped' else 'ready')
                 self.assertNotIn('PRIVATE_CELL', json.dumps(result))
                 path.write_text(original[path])
+
+    def test_unknown_five_needs_stage3_review_without_blocking_stage1(self):
+        self.clin.write_text('submitter_id\trace\tgender\n' + ''.join(
+            value + '\t' + ('Unknown' if index < 5 else 'white') + '\t' + ('female' if index % 2 else 'male') + '\n'
+            for index, value in enumerate(self.ids)))
+        original = self.clin.read_bytes()
+        report = parser.validate(self.inputs)
+        self.assertEqual(report['status'], 'warning')
+        self.assertEqual(report['pairing']['status'], 'passed')
+        self.assertEqual(report['pairing']['missing_race'], 5)
+        self.assertEqual(report['stage_readiness']['1']['status'], 'ready')
+        self.assertEqual(report['stage_readiness']['3']['status'], 'needs_review')
+        self.assertEqual(report['stage_readiness']['3']['issues'][0]['code'], 'clinical_choices')
+        self.assertEqual(self.clin.read_bytes(), original)
+        self.assertNotIn(self.ids[0], json.dumps(report))
+        self.assertNotIn('Unknown', json.dumps(report))
+
+    def test_clinical_structure_is_deferred_but_freezing_still_requires_readable_sources(self):
+        self.clin.write_text('submitter_id\trace\n' + self.ids[0] + '\twhite\n')
+        report = parser.validate(self.inputs)
+        self.assertEqual(report['checks'][2]['status'], 'failed')
+        self.assertIsNone(report['pairing']['clinical_matched'])
+        self.assertEqual(report['pairing']['matched_patients'], 6)
+        self.assertEqual(report['pairing']['status'], 'passed')
+        self.assertEqual(report['stage_readiness']['1']['status'], 'ready')
+        self.assertEqual(report['stage_readiness']['3']['status'], 'blocked')
+        self.assertTrue(all(meta['complete'] and meta['sha256'] for meta in report['files']))
+        self.clin.unlink()
+        report = parser.validate(self.inputs)
+        self.assertEqual(report['pairing']['matched_patients'], 6)
+        self.assertEqual(report['stage_readiness']['1']['status'], 'blocked')
+        self.assertEqual(report['stage_readiness']['1']['issues'][-1]['code'], 'input_freeze')
+
+    def test_expression_structure_blocks_stage2_only_when_source_can_be_frozen(self):
+        self.expr.write_text(self.expression_source.replace('20 21', 'PRIVATE_CELL 21', 1))
+        report = parser.validate(self.inputs)
+        self.assertEqual(report['checks'][1]['status'], 'failed')
+        self.assertEqual(report['stage_readiness']['1']['status'], 'ready')
+        self.assertEqual(report['stage_readiness']['2']['status'], 'blocked')
+        self.assertEqual(report['pairing']['status'], 'unchecked')
+        self.assertNotIn('PRIVATE_CELL', json.dumps(report))
+
+    def test_preliminary_clinical_rules_match_actual_stage_review_rules(self):
+        from agent.runtime.jobs import review_clinical
+        genotype_ids = self.project / 'genotype-ids.txt'
+        expression_ids = self.project / 'expression-ids.txt'
+        for path in (genotype_ids, expression_ids):
+            path.write_text('\n'.join(self.ids) + '\n')
+        self.clin.write_text(self.clinical_source.replace('asian', 'Unknown', 1))
+        preview = parser.validate(self.inputs)
+        actual = review_clinical.review(str(self.clin), str(genotype_ids), str(expression_ids))
+        self.assertEqual(preview['pairing']['missing_race'], actual['source_missing_race'])
+        self.assertEqual(preview['pairing']['race_groups'], actual['race_groups'])
+        self.assertEqual(preview['pairing']['gender_groups'], actual['gender_groups'])
+        self.assertEqual(actual['needs_choice'], ['Unknown'])
+        self.assertEqual(preview['stage_readiness']['3']['status'], 'needs_review')
+        chosen = review_clinical.review(str(self.clin), str(genotype_ids), str(expression_ids), {'Unknown': 'exclude'})
+        self.assertEqual(chosen['excluded'], 1)
+        self.assertEqual(chosen['retained'], 5)
+        self.assertEqual(chosen['needs_choice'], [])
 
     def test_clinical_duplicates_crlf_and_nonstandard_gender_labels_are_tolerated(self):
         self.clin.write_bytes((self.clinical_source + self.ids[0] + '\tprivate-unused-race\tunused\n').replace('\n', '\r\n').encode())
@@ -104,6 +165,7 @@ class DatasetValidationTest(unittest.TestCase):
             with self.subTest(limit=change), patch.dict(parser.LIMITS, change):
                 result = parser.validate(self.inputs)
                 self.assertEqual(result['status'], 'incomplete')
+                self.assertEqual(result['stage_readiness']['1']['status'], 'incomplete')
                 self.assertTrue(any(not meta['complete'] and meta['sha256'] is None for meta in result['files']))
 
     def test_file_identity_changes_invalidate_hash_and_close_init_failure(self):

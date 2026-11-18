@@ -19,7 +19,8 @@ ADJUST_SNAPSHOT = 'workspace-adjust.json'
 CIS_SNAPSHOT = 'workspace-cis.json'
 NETWORK_SNAPSHOT = 'workspace-network.json'
 VISUALIZE_SNAPSHOT = 'workspace-visualize.json'
-_CLINICAL_REVIEW = (Path(__file__).with_name('jobs') / 'review_clinical.py').read_text()
+_CLINICAL_REVIEW = ((Path(__file__).with_name('jobs') / 'clinical_rules.py').read_text() + '\n'
+                    + (Path(__file__).with_name('jobs') / 'review_clinical.py').read_text())
 _RETRY_SOURCES = (Path(__file__).with_name('jobs') / 'review_retry_sources.py').read_text()
 DEFAULT_SETTINGS = {'restrict.tcga.geno': 1, 'mind': 0.1, 'geno': 0.1, 'hwe': 0.0001, 'int': 5000000}
 
