@@ -1,5 +1,7 @@
 """Conservative turn outcomes; completion refers to chat, never scientific validity."""
+import json
 import re
+from agent.core.tool_status import activity_status
 
 
 class ChatOutcome:
@@ -11,16 +13,24 @@ class ChatOutcome:
         if kind == 'error':
             status = 'needs_review'
         elif kind == 'progress':
-            match = re.search(r'工具結果：.*；status=([^；]+)；', text)
-            if match:
-                value = match[1]
-                if value in {'error', 'failed', 'verification_failed', 'timeout', 'timed_out', 'invalid', 'blocked', 'unavailable'}:
-                    status = 'failed'
-                elif value in {'unknown', 'interrupted', 'cancelled', 'needs_review', 'skipped'}:
-                    status = 'needs_review'
-        elif kind == 'answer' and re.search(r'模型請求失敗|精簡後輸入估算|模型未回傳完整內容|模型未產生有效回答|模型補答時|已達工具呼叫輪數|單輪工具呼叫|工具已中斷|已中斷等待模型', text):
+            if text.startswith('SIGNET_TOOL '):
+                try:
+                    value = json.loads(text[12:]).get('status')
+                except (ValueError, AttributeError):
+                    value = None
+                if isinstance(value, str) and value in {'failed', 'cancelled', 'needs_review'}:
+                    status = 'failed' if value == 'failed' else 'needs_review'
+            else:
+                match = re.match(r'工具結果：.*；status=([^；]+)；', text)
+                if match:
+                    value = activity_status(match[1])
+                    if value != 'completed':
+                        status = 'failed' if value == 'failed' else 'needs_review'
+        elif kind == 'answer' and re.search(r'工具已中斷|已中斷等待模型', text):
+            status = 'needs_review'
+        elif kind == 'answer' and re.search(r'模型請求失敗|精簡後輸入估算|模型未回傳完整內容|模型未產生有效回答|模型補答時|已達工具呼叫輪數|單輪工具呼叫', text):
             status = 'failed'
-        if status and (self.status == 'completed' or status == 'needs_review'):
+        if status and self.status != 'failed':
             self.status = status
 
     def summary(self):

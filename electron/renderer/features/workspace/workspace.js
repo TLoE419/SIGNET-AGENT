@@ -1799,6 +1799,7 @@
 
   const newChatTitle = ["新對話", "New chat"];
   const idleChatStatus = ["SIGNET Agent · 本機服務已啟動", "SIGNET Agent · Local service ready"];
+  const chatOutcomes = {completed: ["已結束", "Ended"], failed: ["失敗", "Failed"], needs_review: ["需要確認", "Needs review"]};
   const chatRecords = [];
   const chatLabels = new Map();
   let activeChat, chatBusy = false;
@@ -1875,7 +1876,7 @@
       chat.transcript.hidden = chat.activity.hidden = !active;
     }
     chatLabel(byId("chat-title"), record.title);
-    chatLabel(byId("chat-status"), idleChatStatus);
+    chatLabel(byId("chat-status"), chatOutcomes[record.outcome] ?? idleChatStatus);
     input.value = record.draft;
     showChatDrawer(null);
     if (record.transcript.lastElementChild) {
@@ -1940,8 +1941,18 @@
     }
     for (const events of saved.events ?? []) {
       const operations = new Map();
-      const logs = events.filter(line => !toolActivity(record, line, operations));
-      appendChatEvent(record, ["已存執行紀錄", "Saved activity"], logs.join("\n"), ["已結束", "Ended"]);
+      let outcome = "completed";
+      const logs = events.filter(line => {
+        if (typeof line === "string" && line.startsWith("SIGNET_TURN ")) {
+          try { const saved = JSON.parse(line.slice(12)); if (chatOutcomes[saved.status]) outcome = saved.status; } catch {}
+          return false;
+        }
+        if (/回合失敗|Turn failed/.test(line)) outcome = "failed";
+        else if (outcome !== "failed" && /回合需要確認|Turn needs review/.test(line)) outcome = "needs_review";
+        return !toolActivity(record, line, operations);
+      });
+      record.outcome = outcome;
+      appendChatEvent(record, ["已存執行紀錄", "Saved activity"], logs.join("\n"), chatOutcomes[outcome]);
     }
     record.loaded = true;
   }
@@ -2587,10 +2598,12 @@
     const text = input.value.trim();
     if (chatBusy || !text) return;
     const record = activeChat;
-    const navigationAtSend = navigationRevision;
+    const navigationAtSend = ++navigationRevision;
+    const selection = {context: null};
+    window.dispatchEvent(new CustomEvent("workspace-context-request", {detail: selection}));
+    const workspace_context = selection.context;
     const status = byId("chat-status");
     const needsReview = ["需要確認", "Needs review"];
-    const ended = ["已結束", "Ended"];
     const turn = appendChatEvent(record, ["對話回合", "Conversation turn"], "", ["執行中", "Running"]);
     turn.event.open = true;
 
@@ -2605,7 +2618,7 @@
     reply.scrollIntoView({ block: "nearest" });
 
     const operations = new Map();
-    let done = false, failed = false, answered = false;
+    let done = false, failed = false, answered = false, outcome = "completed";
     function consume(line) {
       if (!line.trim()) return;
       const event = JSON.parse(line);
@@ -2625,17 +2638,22 @@
         answered = true;
       }
       if (event.type === "error") {
-        chatLabel(reply, event.text);
+        if (answered || failed) reply.after(createMessage("ml-saved-reply", event.text));
+        else chatLabel(reply, event.text);
         failed = true;
       }
-      if (event.type === "done") done = true;
+      if (event.type === "done") {
+        outcome = event.status === "cancelled" ? "needs_review" : chatOutcomes[event.status] ? event.status : failed ? "needs_review" : "completed";
+        if (failed && outcome === "completed") outcome = "needs_review";
+        done = true;
+      }
     }
 
     try {
       const response = await fetch("/chat", {
         method: "POST",
         headers: {"Content-Type": "application/json", "X-Chat-Token": chatToken},
-        body: JSON.stringify({text, session: record.session, language: root.lang}),
+        body: JSON.stringify({text, session: record.session, language: root.lang, workspace_context}),
       });
       if (!response.ok) throw new Error(await readChatError(response));
       const reader = response.body.getReader();
@@ -2659,8 +2677,9 @@
         byId("chat-records").prepend(record.button);
         byId("empty-chats").hidden = true;
       }
-      chatLabel(status, failed ? needsReview : ["回合結束", "Turn ended"]);
-      chatLabel(turn.status, failed ? needsReview : ended);
+      record.outcome = outcome;
+      chatLabel(status, chatOutcomes[outcome]);
+      chatLabel(turn.status, chatOutcomes[outcome]);
     } catch (error) {
       const lostConnection = ["連線中斷。已啟動的工具可能仍在執行，請先核對工作狀態。",
         "Connection interrupted. Check any active jobs before retrying."];
@@ -2670,6 +2689,7 @@
       turn.log.textContent += (turn.log.textContent ? "\n" : "") + (Array.isArray(detail) ? detail[root.lang === "en" ? 1 : 0] : detail);
       chatLabel(status, needsReview);
       chatLabel(turn.status, needsReview);
+      record.outcome = "needs_review";
     } finally {
       setChatBusy(false);
       if (!byId("chat-transcripts").hidden && !byId("agent-view").hidden && !byId("chat-panel").hidden) {

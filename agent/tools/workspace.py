@@ -22,11 +22,13 @@ def get_workspace_stage(run_id: str, stage: int, source: str = 'live') -> dict:
     # Only public execution metadata; no matrices or clinical rows.
     public = {key: record[key] for key in ('state', 'attempt', 'job_id', 'settings', 'options', 'resources',
                                           'submitted_at', 'completed_at') if key in record}
+    if record.get('step') == name or record.get('job_id'):
+        public.setdefault('attempt', 1)
     current = signet._settings(root)
     step = jobs.STEPS[name]
     return {'status': 'ok', 'executed': False, 'source': source, 'run_id': run_id,
             'history_id': 'workspace--' + run_id, 'dataset_id': history['dataset_id'], 'stage': stage,
-            'step': name, 'attempt': record.get('attempt'), 'job': public,
+            'step': name, 'attempt': public.get('attempt'), 'job': public,
             'state': record.get('state', 'not_submitted'),
             'settings': {key: current.get(key) for key in step.settings},
             'options': {key: current.get(key, default) for key, (_, default) in step.prompts.items()},
@@ -34,17 +36,23 @@ def get_workspace_stage(run_id: str, stage: int, source: str = 'live') -> dict:
             'limits': {key: list(value) for key, value in step.limits.items()}}
 
 
+def _proposal(result):
+    from agent.tools.ui import request_workspace_action
+    request_workspace_action(result['workspace_action'])
+    return result
+
+
 def propose_workspace_stage(run_id: str, stage: int, source: str = 'live') -> dict:
     """Review the SAME six-stage services as manual controls and propose opening manual review. Never submit, change settings, retry or cancel. Use explicit live run and stage; Stage 1 initial dataset selection stays in the manual form."""
     before = get_workspace_stage(run_id, stage, source)
     record = before['job']
     if stage == 1:
-        if not record.get('job_id') or not record.get('attempt'):
-            return {**before, 'status': 'needs_review',
+        if not record.get('attempt'):
+            return _proposal({**before, 'status': 'needs_review',
                     'workspace_action': {'version': 1, 'action': 'view_stage',
                                          'history_id': before['history_id'], 'stage': stage},
-                    'reason': 'Select the dataset and review Stage 1 inputs in the manual form.'}
-        review = workspace.review_genotype_retry(run_id, record['job_id'], record['attempt'])
+                    'reason': 'Select the dataset and review Stage 1 inputs in the manual form.'})
+        review = workspace.review_genotype_retry(run_id, record.get('job_id') or 'none', record['attempt'])
     else:
         review = {2: workspace.review_expression, 3: workspace.review_adjust,
                   4: workspace.review_cis, 5: workspace.review_network,
@@ -52,10 +60,10 @@ def propose_workspace_stage(run_id: str, stage: int, source: str = 'live') -> di
     after = get_workspace_stage(run_id, stage, source)
     if before['job'] != after['job']:
         raise ValueError('The stage attempt changed during review. Refresh and review again.')
-    return {**after, 'status': 'needs_review', 'executed': False, 'review': review,
+    return _proposal({**after, 'status': 'needs_review', 'executed': False, 'review': review,
             'reason': 'Review current inputs, settings and prerequisites in the manual form and explicitly confirm there. This proposal is not execution authorization.',
             'workspace_action': {'version': 1, 'action': 'view_stage',
-                                 'history_id': after['history_id'], 'stage': stage}}
+                                 'history_id': after['history_id'], 'stage': stage}})
 
 
 def propose_workspace_dataset(dataset_id: str) -> dict:

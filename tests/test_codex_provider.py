@@ -82,7 +82,7 @@ class CodexProviderTest(unittest.TestCase):
             args[1](None)
             create_client.assert_called_once_with(timing=None)
 
-    def test_answer_keeps_22_tools_and_history_without_groq_budget_or_provider_keys(self):
+    def test_answer_keeps_controlled_tools_and_history_without_groq_budget_or_provider_keys(self):
         text = '不能刪除的研究條件。' * 1000
         events = []
         with patch.dict(os.environ, {key: 'fake-secret-credential' for key in
@@ -92,7 +92,13 @@ class CodexProviderTest(unittest.TestCase):
         self.assertEqual(answer, '已連線。')
         captured = json.loads(self.capture.read_text())
         self.assertEqual(captured['payload']['messages'][-1]['content'], text)
-        self.assertEqual(len(captured['payload']['available_tools']), 33)
+        from agent.tools.registry import ALL_TOOLS
+        from agent.tools.workspace import LEGACY_EXECUTION
+        names = {tool['function']['name'] for tool in captured['payload']['available_tools']}
+        self.assertEqual(names, {tool.__name__ for tool in ALL_TOOLS})
+        self.assertTrue({'get_workspace_stage', 'propose_workspace_stage', 'propose_workspace_dataset', 'navigate_workspace'} <= names)
+        self.assertFalse(names & LEGACY_EXECUTION)
+        self.assertNotIn('get_network_status', names)
         self.assertEqual(captured['keys_present'], [])
         self.assertNotIn('PRIVATE-REASONING', '\n'.join(events))
         for feature in DISABLED_FEATURES:

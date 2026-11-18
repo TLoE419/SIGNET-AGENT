@@ -248,12 +248,16 @@ class ChatHandler(BaseHTTPRequestHandler):
                     finally:
                         UI_CHANNEL.reset(ui_token)
                         CHAT_CONTEXT.reset(context_token)
+                # Failure returns have no final model content; retain their public answer on reload.
+                if not history or history[-1].role != 'model' or any(part.function_call for part in history[-1].parts or []):
+                    history.append(types.Content(role='model', parts=[types.Part.from_text(text=answer)]))
                 emit('workspace', self.server.stage6.view(session))
                 emit('answer', answer)
             except Exception:
                 emit('error', '回合發生非預期錯誤；操作狀態可能未知，請核對工作狀態後再繼續。')
             if not connected:
                 outcome.status = 'needs_review'
+            events.append('SIGNET_TURN ' + json.dumps({'status': outcome.status}))
             emit('done', outcome.summary())
         finally:
             try:

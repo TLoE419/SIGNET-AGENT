@@ -23,13 +23,16 @@ def show_panel(panel: str, visible: bool) -> dict:
             'note': 'The page was asked to update; nothing was run.'}
 
 
-def navigate_workspace(action: str, history_id: str, stage: int, gene: str = "") -> dict:
-    """View a saved workspace stage or select a Stage 6 gene and its connections. Navigation only; never runs analysis. Use canonical history_id from recorded history, never guess an ID."""
+def request_workspace_action(payload):
+    """Validate and forward one navigation request; shared by navigation and reviewed proposals."""
     from agent.stage6.workspace import CHAT_CONTEXT
+    if not isinstance(payload, dict) or set(payload) - {'version', 'action', 'history_id', 'stage', 'gene'} or type(payload.get('version')) is not int or payload['version'] != 1:
+        return {'status': 'invalid', 'executed': False}
+    action, history_id, stage, gene = (payload.get(key) for key in ('action', 'history_id', 'stage', 'gene'))
     if (action not in ('view_stage', 'select_gene') or type(stage) is not int or not 1 <= stage <= 6
-            or not re.fullmatch(r'(workspace|archive|recorded)--[A-Za-z0-9][A-Za-z0-9_-]{0,63}', history_id)
-            or (action == 'select_gene' and (stage != 6 or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}', gene)))
-            or (action == 'view_stage' and gene)):
+            or not isinstance(history_id, str) or not re.fullmatch(r'(workspace|archive|recorded)--[A-Za-z0-9][A-Za-z0-9_-]{0,63}', history_id)
+            or (action == 'select_gene' and (stage != 6 or not isinstance(gene, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}', gene)))
+            or (action == 'view_stage' and 'gene' in payload)):
         return {'status': 'invalid', 'executed': False}
     context, channel = CHAT_CONTEXT.get(), UI_CHANNEL.get()
     if context is None or channel is None:
@@ -37,12 +40,17 @@ def navigate_workspace(action: str, history_id: str, stage: int, gene: str = "")
     run = next((row for row in context[0].history()['runs'] if row.get('history_id') == history_id), None)
     if run is None:
         return {'status': 'invalid', 'executed': False, 'reason': 'Unknown canonical history identity.'}
-    payload = {'version': 1, 'action': action, 'history_id': history_id, 'stage': stage}
-    if gene:
-        payload['gene'] = gene
     channel({'workspace_action': payload})
     return {'status': 'ok', 'executed': False, 'workspace_action': payload,
             'note': 'Navigation requested; the page validates availability and current turn before applying.'}
+
+
+def navigate_workspace(action: str, history_id: str, stage: int, gene: str = "") -> dict:
+    """View a saved workspace stage or select a Stage 6 gene and its connections. Navigation only; never runs analysis. Use canonical history_id from recorded history, never guess an ID."""
+    payload = {'version': 1, 'action': action, 'history_id': history_id, 'stage': stage}
+    if gene:
+        payload['gene'] = gene
+    return request_workspace_action(payload)
 
 
 UI_TOOLS = [show_panel, navigate_workspace]

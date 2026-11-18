@@ -1,5 +1,6 @@
 """Controlled service seams: no SSH, model calls or scientific processes."""
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from agent.tools import workspace as tools
@@ -69,6 +70,28 @@ class WorkspaceAgentTest(unittest.TestCase):
                 patch.object(tools.workspace, 'review_expression', return_value={}):
             with self.assertRaises(ValueError):
                 tools.propose_workspace_stage('fixture', 2)
+
+    def test_first_attempt_retry_and_proposal_navigation_emit_once(self):
+        from agent.stage6.workspace import CHAT_CONTEXT
+        from agent.tools.ui import UI_CHANNEL
+        history = {'dataset_id': 'fixture', 'jobs': {'genotype': {
+            'step': 'genotype', 'run_id': 'fixture', 'job_id': '42', 'state': 'failed'}}}
+        sent = []
+        context = CHAT_CONTEXT.set((SimpleNamespace(history=lambda: {'runs': [{'history_id': 'workspace--fixture'}]}), 'session'))
+        channel = UI_CHANNEL.set(sent.append)
+        try:
+            with patch.object(tools.workspace, '_workspace_run', return_value=('root', history)), \
+                    patch.object(tools.signet, '_settings', return_value={}), \
+                    patch.object(tools.workspace, 'review_genotype_retry', return_value={'ready': True}) as review, \
+                    patch.object(tools.jobs, 'submit') as submit:
+                result = tools.propose_workspace_stage('fixture', 1)
+            review.assert_called_once_with('fixture', '42', 1)
+            submit.assert_not_called()
+            self.assertEqual(result['attempt'], 1)
+            self.assertEqual(sent, [{'workspace_action': result['workspace_action']}])
+        finally:
+            UI_CHANNEL.reset(channel)
+            CHAT_CONTEXT.reset(context)
 
 
 if __name__ == '__main__':
