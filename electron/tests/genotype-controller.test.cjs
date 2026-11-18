@@ -91,6 +91,14 @@ test('restored runs and new-run drafts are scoped to the selected dataset',async
  h.context(b,[run(b,'run-b')]);assert.equal(h.panel.dataset.genotypeRunId,undefined,'history polling must not undo Prepare a new run');h.context(a,[run(a,'run-a')]);assert.equal(h.panel.dataset.genotypeRunId,'run-a');
 });
 
+test('restoring a submitted run clears obsolete input-review warnings',t=>{
+ const d=dataset(),edited=clone(d),h=harness(t);h.remote();h.context(d);
+ edited.inputs.clinical=['/pub/changed-clinical.tsv'];h.context(edited);
+ assert.equal(h.q('[data-genotype-notice]').hidden,false);
+ h.context(edited,[{run_id:'saved-run',dataset_id:d.id,input_mode:'dataset',inputs:d.inputs,jobs:{genotype:job('saved-run','completed')}}]);
+ assert.equal(h.panel.dataset.genotypeState,'completed');assert.equal(h.q('[data-genotype-notice]').hidden,true);
+});
+
 test('a delayed status response cannot replace a newer completed history snapshot',async t=>{
  const d=dataset();let release;const h=harness(t,()=>new Promise(resolve=>release=resolve));
  const run=record=>({run_id:'existing',dataset_id:d.id,input_mode:'dataset',inputs:d.inputs,jobs:{genotype:record}});
