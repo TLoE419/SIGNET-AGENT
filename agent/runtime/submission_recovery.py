@@ -1,4 +1,4 @@
-"""Explicit, read-only remote reconciliation; never submits or cancels work."""
+"""Reviewed remote reconciliation and confirmed marker repair; never submits or cancels work."""
 import re
 import shlex
 from agent.runtime import signet_jobs as jobs
@@ -18,9 +18,10 @@ def _probe(root, record):
     receipt = record['remote_dir'] + '/steps/' + record['step'] + '.submission.' + token
     script = jobs._say() + guard + f'''
 R={q(receipt)}
-[ "$(readlink -f -- "$R")" = "$R" ] && [ -f "$R" ] || exit 93
+[ "$(readlink -f -- "$R")" = "$R" ] && [ -f "$R" ] && [ ! -L "$R" ] || exit 93
 say receipt "$(cat "$R")"
 [ ! -L "$J" ] || exit 94
+if [ -e "$J" ]; then [ "$(readlink -f -- "$J")" = "$J" ] && [ -f "$J" ] || exit 94; fi
 say marker "$(cat "$J" 2>/dev/null)"
 queue=$(squeue -h -u "$(id -un)" -o '%i|%k') || exit 95
 account=$(sacct -n -X -P -u "$(id -un)" -S {q(record['submitted_at'][:10])} -o JobIDRaw,Comment) || exit 96
@@ -52,6 +53,40 @@ say candidates "$(printf '%s' "$candidates" | tr '\\n' ' ')"
     return 'unresolved', 'The receipt, job marker and scheduler do not uniquely agree. Do not resubmit.', evidence
 
 
+def _confirm_job_marker(root, record, job_id, evidence):
+    """Keep the normal output guard usable without overwriting an existing marker."""
+    receipt_value = evidence.get('receipt')
+    if receipt_value not in ('prepared', 'dispatching', 'accepted ' + job_id):
+        return False
+    try:
+        guard = jobs._output_guard(root, record, ownership_only=True)
+    except jobs.StepError:
+        return False
+    q = shlex.quote
+    receipt = record['remote_dir'] + '/steps/' + record['step'] + '.submission.' + record['submission_token']
+    receipt_guard = (f'R={q(receipt)}\n'
+                     '[ "$(readlink -f -- "$R")" = "$R" ] && [ -f "$R" ] && [ ! -L "$R" ] '
+                     f'&& [ "$(cat -- "$R")" = {q(receipt_value)} ] || exit 93\n')
+    # A hard link installs the complete marker atomically and refuses every existing destination.
+    script = jobs._say() + guard + receipt_guard + f'''E={q(job_id)}
+[ ! -L "$J" ] || exit 94
+if [ ! -e "$J" ]; then
+  M=$(mktemp "$D/steps/.{record['step']}.adopt.XXXXXXXX") || exit 94
+  trap 'rm -f -- "$M"' EXIT
+  printf '%s\\n' "$E" > "$M" || exit 94
+  link "$M" "$J" || exit 94
+fi
+''' + guard + receipt_guard + '''[ "$(readlink -f -- "$J")" = "$J" ] && [ -f "$J" ] && [ ! -L "$J" ] \\
+  && [ "$(cat -- "$J")" = "$E" ] || exit 94
+say adopted_marker "$E"
+'''
+    try:
+        code, values, _ = jobs._shell(script)
+    except OSError:
+        return False
+    return code == 0 and values.get('adopted_marker') == job_id
+
+
 @jobs._one_at_a_time
 def reconcile(run_id, name, *, expected_attempt, expected_job_id, action, confirmed=False):
     root = jobs._root(run_id)
@@ -73,6 +108,10 @@ def reconcile(run_id, name, *, expected_attempt, expected_job_id, action, confir
                     and checks[-1].get('evidence') == evidence)
     checks.append(entry)
     applied = action != 'review' and action == outcome and reviewed
+    if applied and outcome == 'adopt' and not _confirm_job_marker(root, record, detail, evidence):
+        applied = False
+        entry['outcome'] = 'unresolved'
+        entry['detail'] = 'The original owner, receipt or job marker changed or could not be verified; submission remains blocked.'
     entry['applied'] = applied
     if applied:
         if outcome == 'adopt':
