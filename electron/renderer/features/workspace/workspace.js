@@ -1026,6 +1026,29 @@
     pending: ["尚未記錄最終結果", "Final result not recorded"],
     not_recorded: ["結果未記錄", "Result not recorded"],
   };
+  function outputCheckSnapshot(snapshot) {
+    if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) return "";
+    return `<dl class="ml-key-values">${[["state", ["狀態", "State"]], ["reason", ["說明", "Reason"]],
+      ["slurm_state", ["排程器狀態", "Scheduler state"]], ["exit_code", ["結束代碼", "Exit code"]],
+      ["missing_outputs", ["當時缺少的檔案", "Missing outputs at the time"]], ["failure_hints", ["失敗提示", "Failure hints"]]]
+      .filter(([field]) => snapshot[field] != null)
+      .map(([field, label]) => `<dt>${historyText(...label)}</dt><dd>${field === "state" ? historyStateLabel(snapshot[field]) : recordedValue(snapshot[field])}</dd>`).join("")}</dl>
+      ${["missing_outputs", "failure_hints"].filter(field => Array.isArray(snapshot[field]) && Number.isSafeInteger(snapshot[field + "_total"]) && snapshot[field + "_total"] > snapshot[field].length)
+        .map(field => `<p data-history-output-check-truncated>${historyText(`這份核對摘要顯示前 ${snapshot[field].length} 項，共 ${snapshot[field + "_total"]} 項。`, `This check summary shows the first ${snapshot[field].length} of ${snapshot[field + "_total"]} items.`)}</p>`).join("")}`;
+  }
+  function savedOutputChecks(record) {
+    const checks = Array.isArray(record.output_checks) ? record.output_checks.filter(check => check && typeof check === "object").slice(-25) : [];
+    if (!checks.length && !record.original_failure) return "";
+    const total = Number.isSafeInteger(record.output_checks_total) && record.output_checks_total >= checks.length ? record.output_checks_total : checks.length;
+    return `<details data-history-output-checks data-output-check-detail="all"><summary>${historyText("輸出重新核對紀錄", "Output recheck history")} · ${total}</summary>
+      <p>${historyText("這些是同一個工作、同一次嘗試的結果核對，沒有重新送算。", "These checks belong to the same job and attempt; no new analysis was submitted.")}</p>
+      ${record.original_failure ? `<h4>${historyText("最初保存的失敗紀錄", "Original recorded failure")}</h4><div data-history-original-failure>${outputCheckSnapshot(record.original_failure)}</div>` : ""}
+      <ol>${checks.map((check, index) => `<li data-history-output-check><time>${recordedValue(check.at)}</time>
+        <details data-output-check-detail="${total - checks.length + index}-before"><summary>${historyText("核對前", "Before the check")}</summary>${outputCheckSnapshot(check.before)}</details>
+        <details data-output-check-detail="${total - checks.length + index}-after"><summary>${historyText("核對後", "After the check")}</summary>${outputCheckSnapshot(check.after)}</details></li>`).join("")}</ol>
+      ${total > checks.length ? `<p>${historyText(`顯示最近 ${checks.length} 次核對，最初失敗紀錄仍保留。`, `Showing the latest ${checks.length} checks; the original failure remains preserved.`)}</p>` : ""}
+    </details>`;
+  }
   function savedAttemptResult(attempt) {
     const result = attempt.result ?? {};
     const record = attempt.record ?? {};
@@ -1056,7 +1079,7 @@
       return `<details class="ml-history-attempt" data-history-attempt="${escapeHistory(number)}" data-attempt-record="${escapeHistory(attempt.record_file)}" data-attempt-current="${attempt.current === true}" data-attempt-available="${available}">
         <summary>${title}${attempt.current ? ` · ${historyText("目前紀錄", "Current record")}` : ""}<span class="ml-history-attempt-state">${state}</span></summary>
         <div class="ml-history-job-content">
-          ${available ? savedJobContent({...attempt.record, record_file: attempt.record_file}) + savedAttemptResult(attempt) : `<p>${historyText("這次嘗試的檔案、設定與結果無法從現有紀錄確認。", "The inputs, settings and results of this attempt cannot be confirmed from the saved records.")}</p><p>${historyText("紀錄來源", "Record source")} · <code>${recordedValue(attempt.record_file)}</code></p>`}
+          ${available ? savedJobContent({...attempt.record, record_file: attempt.record_file}) + savedAttemptResult(attempt) + savedOutputChecks(attempt.record) : `<p>${historyText("這次嘗試的檔案、設定與結果無法從現有紀錄確認。", "The inputs, settings and results of this attempt cannot be confirmed from the saved records.")}</p><p>${historyText("紀錄來源", "Record source")} · <code>${recordedValue(attempt.record_file)}</code></p>`}
           ${(attempt.issues ?? []).length ? `<p class="ml-history-record-note">${attempt.issues.map(escapeHistory).join(" ")}</p>` : ""}
           ${events.length ? `<h4>${historyText("保存的狀態時間線", "Recorded state timeline")}</h4><ol class="ml-history-attempt-events" data-history-attempt-events>${events.map(event => `<li>${historyText(...genotypeHistoryState(event.state))} · <time>${recordedValue(event.at)}</time>${event.reason ? ` · ${recordedValue(event.reason)}` : ""}</li>`).join("")}</ol>` : ""}
           ${unreadableEvents ? `<p data-history-attempt-event-warning>${historyText("部分保存的時間線無法讀取。", "Part of the recorded timeline is unreadable.")}</p>` : ""}
@@ -1076,7 +1099,9 @@
   function historyDisclosureKey(details) {
     const job = details.closest("[data-history-job], [data-history-operation]");
     const scope = job?.dataset.historyJob ?? (job?.dataset.historyOperation ? `${job.dataset.historyOperation}:${job.dataset.historyOperationRecord}` : details.hasAttribute("data-history-provenance") ? "provenance" : "inputs");
-    return `${details.closest("[data-history-id]")?.dataset.historyId}|${scope}|${details.dataset.attemptRecord ?? details.dataset.historyAttempt ?? ""}`;
+    const outputCheck = details.dataset.outputCheckDetail;
+    const record = outputCheck ? details.closest("[data-attempt-record]")?.dataset.attemptRecord : "";
+    return `${details.closest("[data-history-id]")?.dataset.historyId}|${scope}|${details.dataset.attemptRecord ?? details.dataset.historyAttempt ?? record ?? ""}${outputCheck ? `|output-check:${outputCheck}` : ""}`;
   }
   function renderHistoryRecords() {
     const expanded = new Set([...runDetails.querySelectorAll("details[open]:not([data-job-logs])")].map(details =>

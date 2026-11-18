@@ -88,7 +88,8 @@ class StepsTest(unittest.TestCase):
         self.calls.append(command if command != 'bash -s' else input.decode())
         if self.lose_connection_on and self.lose_connection_on in self.calls[-1]:
             raise OSError('Electron SSH transport is unavailable.')
-        env = {'PATH': f'{self.fake}/bin:/usr/bin:/bin', 'FAKE': str(self.fake), 'LANG': 'C'}
+        env = {'PATH': f'{self.fake}/bin:/usr/bin:/bin', 'FAKE': str(self.fake), 'LANG': 'C',
+               'COPYFILE_DISABLE': '1'}  # Model Linux tar without macOS AppleDouble sidecars.
         return subprocess.run(['bash', '-c', command], input=input or b'', capture_output=True,
                               timeout=timeout, env=env)
 

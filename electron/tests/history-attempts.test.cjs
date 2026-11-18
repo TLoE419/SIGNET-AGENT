@@ -50,6 +50,29 @@ function harness(t, rows) {
   return {window, q, click, calls, ready: async () => {await until(() => q('[data-run-target]')); click('[data-nav-target="history"]');}};
 }
 
+test('output checks retain the original failure and per-check evidence without adding attempts or making requests', async t => {
+  const before = {state: 'failed', reason: 'Required outputs are missing.', exit_code: '0', missing_outputs: ['res/late.txt']};
+  const after = {state: 'completed', reason: '<script>never execute</script>', exit_code: '0', missing_outputs: []};
+  const record = {...after, job_id: '12345', attempt: 1, original_failure: before,
+    output_checks: [{at: '2026-11-17T10:10:00Z', before, after, outcome: 'completed'}], output_checks_total: 1};
+  const row = run('recorded--shared', {genotype: record}, {genotype: [attempt(1, true, record)]});
+  const original = JSON.stringify(row);
+  const h = harness(t, [row]); await h.ready();
+  const section = h.q('[data-history-output-checks]');
+  assert.ok(section);
+  assert.match(section.textContent, /同一個工作、同一次嘗試/);
+  assert.match(section.querySelector('[data-history-original-failure]').textContent, /Required outputs are missing.*res\/late\.txt/s);
+  assert.equal(section.querySelectorAll('[data-history-output-check]').length, 1);
+  assert.equal(section.querySelector('script'), null);
+  assert.match(section.textContent, /<script>never execute<\/script>/);
+  assert.equal(h.window.document.querySelectorAll('[data-history-attempt]').length, 1);
+  const calls = [...h.calls];
+  section.open = true; h.click('#ml-language');
+  assert.match(section.textContent, /Output recheck history.*Original recorded failure/s);
+  assert.deepEqual(h.calls, calls);
+  assert.equal(JSON.stringify(row), original);
+});
+
 test('each attempt keeps its own settings, times, failure and saved output evidence in both languages', async t => {
   const old = {state: 'failed', job_id: 'job-101', submitted_at: '2026-11-01T10:00:00Z', finished_at: '2026-11-01T10:05:00Z',
     settings: {mind: '0.1'}, resources: {cpus: 2}, inputs: {'ped.file': '/old/study.ped'}, options: {npc: 2},

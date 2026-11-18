@@ -351,7 +351,15 @@ def get_step(handler, url, run_id, step):
     query = _query(url, ('refresh',))
     if query.get('refresh', '0') not in ('0', '1'):
         raise ApiError(400, 'invalid_request', 'refresh must be 0 or 1.')
-    return 200, jobs.status(run_id, step, refresh=query.get('refresh') == '1')
+    record = jobs.status(run_id, step, refresh=query.get('refresh') == '1')
+    return 200, {**record, 'output_revalidation': jobs.output_revalidation(record)}
+
+
+def revalidate_step(handler, url, run_id, step):
+    _query(url, ())
+    body = _body(handler, ('expected_job_id', 'expected_attempt'), required=('expected_job_id', 'expected_attempt'))
+    record = jobs.revalidate(run_id, step, **body)
+    return 200, {**record, 'output_revalidation': jobs.output_revalidation(record)}
 
 
 def cancel_step(handler, url, run_id, step):
@@ -445,6 +453,7 @@ ROUTES = [
     (re.compile(rf'/signet/runs/{_RUN}/settings'), {'PATCH': update_settings}),
     (re.compile(rf'/signet/runs/{_RUN}/steps/{_STEP}'), {'GET': get_step, 'POST': submit_step}),
     (re.compile(rf'/signet/runs/{_RUN}/steps/{_STEP}/cancel'), {'POST': cancel_step}),
+    (re.compile(rf'/signet/runs/{_RUN}/steps/{_STEP}/revalidate'), {'POST': revalidate_step}),
     (re.compile(rf'/signet/runs/{_RUN}/steps/{_STEP}/log'), {'GET': get_log}),
 ]
 

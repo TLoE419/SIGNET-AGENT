@@ -169,6 +169,18 @@ The viewer does not create log files, download scientific results, refresh job
 state, cancel, submit or retry any analysis. It does not send logs to the chat
 model. Original files and attempt snapshots remain unchanged.
 
+For a current failed stage whose only problem was incomplete output evidence,
+**Recheck outputs** manually checks the same job and attempt again. Connect to
+its recorded remote environment, open that stage, and select the button.
+The check reads the job's markers, required outputs and logs; valid results
+are collected and can be opened normally. It does not submit or cancel jobs,
+change parameters or rerun analysis. Real program/scheduler errors, cancellation
+and unknown submissions are excluded. Merely opening a stage never rechecks it.
+Run history retains the original failure and each recorded output check under
+that same attempt, including after a restart. Earlier attempts and archives
+remain read-only. Changes of run, dataset or remote environment prevent late
+responses from replacing another view.
+
 ### Submit the chromosome 1 example
 
 Connect to HPC3 from **Settings → Remote compute**. The same panel can check

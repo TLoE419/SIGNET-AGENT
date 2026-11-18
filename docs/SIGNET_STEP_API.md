@@ -144,6 +144,7 @@ Inside the API:
 | 16 | `PATCH /signet/history/{history_id}/dataset` | no | Save organizational ownership for an unclassified recorded run |
 | 17 | `GET /signet/runs/{run_id}/genotype/retry` | yes | Review the original inputs and target of a failed or cancelled Stage 1 attempt |
 | 18 | `POST /signet/runs/{run_id}/genotype/retry` | yes | Manually submit the next Stage 1 attempt in that run |
+| 19 | `POST /signet/runs/{run_id}/steps/{step}/revalidate` | yes | Recheck recoverable failed outputs for the same job and attempt without resubmitting |
 
 ### Workspace dataset metadata
 
@@ -679,6 +680,39 @@ Last lines of the job's stdout (`out`, default) or stderr (`err`) on HPC3. `line
 ```
 
 - 400: bad `stream` or `lines`. 404: never submitted. 412: not connected.
+
+### 5.10 `POST /signet/runs/{run_id}/steps/{step}/revalidate`
+
+Body: `{"expected_job_id": "12345", "expected_attempt": 1}`. The current
+record must match both fields and be eligible for output revalidation. The
+reply is the current job record plus `output_revalidation` with `eligible`,
+`reason` and `active`. History rows provide the same projection by step in
+`output_revalidation`, only for current readable live workspace attempts.
+
+Eligible failures are limited to a clean exit with missing required outputs,
+or a legacy completed job whose exit marker had not been confirmed. A known
+job ID is required. Cancellation, nonzero exit codes, scheduler failures,
+known log errors, completed jobs and unknown submissions are refused.
+
+The service checks the matching configured remote workspace, owned run folder,
+current job marker, scheduler state and stopped child jobs. It reads output
+markers and failure lines, then collects the same attempt's results if valid.
+It never submits or cancels jobs, changes settings, prepares inputs, or reruns
+SIGNET. Missing outputs stay failed; incomplete markers or interrupted result
+collection can remain validating and continue through status polling. Unknown
+or active remote state cannot be treated as successful completion.
+
+The first saved failure summary is preserved in `original_failure`. `output_checks`
+retains the latest 25 observations (`at`, `before`, `after`, `outcome`) and
+`output_checks_total` retains their count. Run history exposes this audit under
+the same attempt, without inventing a new attempt or overwriting prior attempt
+archives or original input/settings snapshots. Switching views never starts a
+recheck automatically. Evidence summaries are bounded; when a list is shortened,
+its total count is recorded and Run history explicitly labels the shortened list.
+
+400: invalid target fields. 409: stale/ineligible target, wrong remote
+environment or unmatched ownership/job. 412: disconnected. Connection or
+collection failures do not resubmit work.
 
 ## 6. Step reference
 
