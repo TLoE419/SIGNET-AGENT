@@ -16,6 +16,21 @@
 .s6-cutoff-counts caption { text-align: left; font-weight: 600; padding-bottom: 5px; }
 .s6-cutoff-counts th, .s6-cutoff-counts td { text-align: right; padding: 3px 5px; border-bottom: 1px solid #edf0f4; }
 .s6-cutoff-counts th:first-child, .s6-cutoff-counts td:first-child { text-align: left; }
+.s6-cutoff-chart { min-width: 0; margin: 0; padding-top: 7px; border-top: 1px solid #edf0f4; }
+.s6-cutoff-chart figcaption { font-size: 11px; font-weight: 600; }
+.s6-cutoff-chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+.s6-cutoff-chart text { font: 10px Arial, "PingFang TC", sans-serif; fill: #526178; }
+.s6-cutoff-chart .s6-cutoff-axis-title { font-size: 10px; }
+.s6-cutoff-grid { stroke: #e6ebf1; stroke-width: 1; }
+.s6-cutoff-axis { stroke: #8794a5; stroke-width: 1; fill: none; }
+.s6-cutoff-line { fill: none; stroke-width: 1.7; }
+.s6-cutoff-line[data-series="genes"], .s6-cutoff-legend [data-series="genes"]::before { stroke: #177f82; background: #177f82; }
+.s6-cutoff-line[data-series="connections"], .s6-cutoff-legend [data-series="connections"]::before { stroke: #b7682f; background: #b7682f; }
+.s6-cutoff-point[data-series="genes"] { fill: #177f82; }
+.s6-cutoff-point[data-series="connections"] { fill: #b7682f; }
+.s6-cutoff-legend { display: flex; justify-content: center; flex-wrap: wrap; gap: 13px; font-size: 11px; }
+.s6-cutoff-legend span { display: inline-flex; align-items: center; gap: 4px; }
+.s6-cutoff-legend span::before { content: ""; width: 15px; height: 2px; }
 .s6-original-dialog { width: min(1000px, 88vw); max-width: 88vw; height: min(720px, 84vh); border: 1px solid #dce2ea; border-radius: 12px; padding: 14px; color: #172033; background: #fff; }
 .s6-original-dialog::backdrop { background: rgb(20 30 45 / 45%); }
 .s6-original-dialog[open] { display: flex; flex-direction: column; gap: 10px; }
