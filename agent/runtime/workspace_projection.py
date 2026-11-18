@@ -24,6 +24,70 @@ def _digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()).hexdigest()
 
 
+def resolve_source(run_id, step):
+    """Resolve explicit inherited results to their exact completed source, without remote access.
+
+    Return (source_root, source_record, metadata_checks). Call verify_source before
+    publishing a response or saving a summary; no child ownership marker is implied.
+    """
+    if step not in jobs.STEPS:
+        raise jobs.StepError('invalid_request', 'Choose a recorded SIGNET stage.')
+    checks, seen = [], set()
+
+    def read(path):
+        value, digest = _json(path)
+        checks.append((path, digest))
+        return value
+
+    try:
+        root = signet._run(run_id)
+        record = read(root / 'steps' / (step + '.json'))
+        while True:
+            if root.name in seen:
+                raise ValueError('The inherited result chain contains a cycle.')
+            seen.add(root.name)
+            if (record.get('run_id') != root.name or record.get('step') != step
+                    or record.get('state') != 'completed' or not isinstance(record.get('job_id'), str)
+                    or not re.fullmatch(r'[0-9]{1,128}', record['job_id'])
+                    or type(record.get('attempt', 1)) is not int or not 1 <= record.get('attempt', 1) <= 1000):
+                raise ValueError('The inherited result does not identify an exact completed job.')
+            if 'reused_from' not in record:
+                return root, record, tuple(checks)
+            inherited = record['reused_from']
+            if (not isinstance(inherited, dict) or set(inherited) != {'run_id', 'step', 'job_id', 'attempt'}
+                    or inherited.get('step') != step or inherited.get('job_id') != record['job_id']
+                    or type(inherited.get('attempt')) is not int or inherited['attempt'] != record.get('attempt', 1)):
+                raise ValueError('The inherited source identity is incomplete or differs from this record.')
+            source_id = signet._name(inherited['run_id'])
+            plan = read(root / 'rerun.json')
+            if (plan.get('source_run_id') != source_id or plan.get('new_run_id') != root.name
+                    or not isinstance(plan.get('reuse'), list) or step not in plan['reuse']):
+                raise ValueError('The saved fork does not authorize reuse from this source run.')
+            source_root = signet._run(source_id)
+            child_snapshot = read(root / 'workspace-genotype.json')
+            source_snapshot = read(source_root / 'workspace-genotype.json')
+            if (child_snapshot.get('run_id') != root.name or source_snapshot.get('run_id') != source_id
+                    or signet._name(child_snapshot.get('dataset_id')) != source_snapshot.get('dataset_id')):
+                raise ValueError('The inherited result belongs to a different dataset.')
+            source_record = read(source_root / 'steps' / (step + '.json'))
+            if (source_record.get('job_id') != inherited['job_id']
+                    or source_record.get('attempt', 1) != inherited['attempt']
+                    or any(source_record.get(key) != record.get(key) for key in ('settings', 'options', 'image', 'partition'))):
+                raise ValueError('The source job, attempt or scientific settings changed after this fork.')
+            root, record = source_root, source_record
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise jobs.StepError('conflict', 'The exact inherited result source could not be verified; no other run was substituted.') from error
+
+
+def verify_source(checks):
+    """Refuse a changed fork/source relation after a potentially long remote read."""
+    try:
+        if any(_json(path)[1] != digest for path, digest in checks):
+            raise ValueError('The source metadata changed.')
+    except (OSError, ValueError, TypeError) as error:
+        raise jobs.StepError('conflict', 'The inherited result source changed while being read; refresh its history.') from error
+
+
 def _reader(stage):
     directory = Path(__file__).parent
     if stage in (1, 2):
@@ -143,6 +207,13 @@ def completed_result(run_id, stage='1', *, refresh=False):
             or not isinstance(record.get('job_id'), str) or not re.fullmatch(r'[0-9]{1,128}', record['job_id'])
             or type(record.get('attempt', 1)) is not int or not 1 <= record.get('attempt', 1) <= 1000):
         raise ValueError('Select an exact completed workspace job and attempt.')
+    if 'reused_from' in record:
+        source_root, source_record, checks = resolve_source(run_id, STEPS[stage])
+        result = completed_result(source_root.name, stage, refresh=refresh)
+        verify_source(checks)
+        if _json(record_path)[1] != record_digest or result['job'].get('job_id') != source_record['job_id']:
+            raise jobs.StepError('conflict', 'The inherited job changed while its result was read.')
+        return {**result, 'run_id': run_id, 'job': record}
     owner, owner_digest = _json(root / 'steps/remote.owner')
     reader, entry = _reader(stage)
     helper = _SOURCE.read_text()
