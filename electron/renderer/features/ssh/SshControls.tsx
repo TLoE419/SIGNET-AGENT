@@ -18,7 +18,6 @@ const environmentBridge=(window as unknown as {signetDesktop:{environment:Enviro
 export type SshControlStatus = ComponentProps<typeof SshStatusBlock> & {
  environment:EnvironmentSnapshot;
  onEnvironment:()=>void;
- onInstallEnvironment:()=>ReturnType<EnvironmentBridge['install']>;
  onVerifyEnvironment:()=>ReturnType<EnvironmentBridge['check']>;
 };
 export function SshControls({renderStatus,terminalActive=true,english=true}:{renderStatus?:(props:SshControlStatus)=>ReactNode;terminalActive?:boolean;english?:boolean}){
@@ -44,7 +43,6 @@ export function SshControls({renderStatus,terminalActive=true,english=true}:{ren
   return()=>window.removeEventListener('workspace-request-remote-context',publish);
  },[remoteConnected,remoteIdentity,environmentKey]);
  const statusProps:SshControlStatus={environment,onEnvironment:()=>setEnvironmentOpen(true),
-  onInstallEnvironment:()=>environmentBridge.install(),
   onVerifyEnvironment:()=>environmentBridge.check(environment.config?.root||'',environment.config?.partition||''),
   name:identity.name,host:identity.endpoint,status,phase:connection?.phase,error:ssh.error||connection?.error,busy:ssh.busy,onEdit:()=>setOpen(true),onToggle:()=>void toggle().catch(()=>{})};
  return <>{(renderStatus||desktop.isDevMode===true)&&devTerminal&&terminalActive&&<DevTerminalPanel english={english} advanced={!!renderStatus} onConnect={()=>setOpen(true)} diagnostics={diagnostics} bridge={devTerminal} connected={liveStatus==='connected'} status={liveStatus}/>}{renderStatus ? renderStatus(statusProps) : <SshStatusBlock {...statusProps}/>}
