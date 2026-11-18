@@ -9,7 +9,8 @@ Object.defineProperty(globalThis,'navigator',{value:dom.window.navigator,configu
 dom.window.HTMLDialogElement.prototype.showModal=function(){this.open=true};dom.window.HTMLDialogElement.prototype.close=function(){this.open=false};
 const require=createRequire(import.meta.url);
 const {render,screen,fireEvent,waitFor,cleanup}=require('@testing-library/react') as typeof import('@testing-library/react');
-import {GeminiKeyModal,ModelStatusBlock,type ModelStatus} from '../renderer/features/model/ModelControls';
+import {WorkspaceModelSettings} from '../renderer/features/workspace/WorkspaceModelSettings';
+import {GeminiKeyModal,ModelStatusBlock,ModelControls,type ModelStatus,type ModelBridge} from '../renderer/features/model/ModelControls';
 afterEach(cleanup);
 const codex:ModelStatus={provider:'codex',geminiConfigured:false,encryptionAvailable:true};
 
@@ -40,4 +41,56 @@ test('saved keys can be removed; unavailable encryption blocks saving',async()=>
  fireEvent.click(screen.getByRole('button',{name:'Remove key'}));await waitFor(()=>assert.equal(cleared,1));
  rerender(<GeminiKeyModal open status={{...codex,encryptionAvailable:false}} onClose={()=>{}} onSave={async()=>({restarting:true})} onClear={async()=>({restarting:false})}/>);
  assert.ok(screen.getByText(/keychain encryption is unavailable/));
+});
+
+test('workspace Settings and toolbar event share secure key lifecycle and selected model',async()=>{
+ let configured=false;
+ const saved:string[]=[];
+ const bridge:ModelBridge={
+  getStatus:async()=>({ok:true,value:{...codex,geminiConfigured:configured}}),
+  saveGeminiKey:async key=>{saved.push(key);configured=true;return {ok:true,value:{restarting:false}}},
+  clearGeminiKey:async()=>{configured=false;return {ok:true,value:{restarting:false}}},
+ };
+ const workspace=document.createElement('section');workspace.lang='zh-Hant';
+ const {unmount}=render(<WorkspaceModelSettings workspace={workspace} bridge={bridge} model="gemini-fixture-selected"/>);
+ await waitFor(()=>assert.ok(screen.getByText('尚未儲存 Gemini 金鑰')));
+ assert.ok(screen.getAllByText('gemini-fixture-selected').length);
+ fireEvent.click(screen.getByRole('button',{name:'管理 Gemini 金鑰'}));
+ assert.ok(screen.getByRole('dialog',{name:'聊天模型設定'}));
+ fireEvent.change(screen.getByLabelText('Gemini 金鑰'),{target:{value:' fixture-secret-123456789 '}});
+ fireEvent.click(screen.getByRole('button',{name:'儲存並使用 Gemini'}));
+ await waitFor(()=>assert.ok(screen.getByText('Gemini 金鑰已安全儲存')));
+ assert.deepEqual(saved,['fixture-secret-123456789']);
+ assert.equal((screen.getByLabelText('Gemini 金鑰') as HTMLInputElement).value,'');
+ assert.ok(!document.body.textContent?.includes(saved[0]));
+ fireEvent(window,new Event('workspace-open-model-settings'));
+ await waitFor(()=>assert.ok(screen.getByRole('dialog',{name:'聊天模型設定'})));
+ assert.ok(screen.getByText('更換金鑰'));
+ fireEvent.change(screen.getByLabelText('Gemini 金鑰'),{target:{value:'fixture-replacement-123456789'}});
+ fireEvent.click(screen.getByRole('button',{name:'儲存並使用 Gemini'}));
+ await waitFor(()=>assert.equal(saved.length,2));
+ await waitFor(()=>assert.equal(document.querySelector('dialog')?.open,false));
+ fireEvent(window,new Event('workspace-open-model-settings'));
+ await waitFor(()=>assert.ok(screen.getByRole('button',{name:'移除金鑰'})));
+ fireEvent.click(screen.getByRole('button',{name:'移除金鑰'}));
+ await waitFor(()=>assert.ok(screen.getByText('尚未儲存 Gemini 金鑰')));
+ workspace.lang='en';
+ await waitFor(()=>assert.ok(screen.getByRole('button',{name:'Manage Gemini key'})));
+ fireEvent(window,new Event('workspace-open-model-settings'));
+ await waitFor(()=>assert.ok(screen.getByRole('dialog',{name:'Gemini API'})));
+ fireEvent.change(screen.getByLabelText('Gemini API key'),{target:{value:'discarded-fixture-secret'}});
+ fireEvent.click(screen.getByRole('button',{name:'Cancel'}));
+ await waitFor(()=>assert.equal((screen.getByLabelText('Gemini API key') as HTMLInputElement).value,''));
+ unmount();
+ fireEvent(window,new Event('workspace-open-model-settings'));
+ assert.equal(document.querySelector('dialog'),null);
+});
+
+test('workspace reports IPC failure without claiming saved or leaking error payload',async()=>{
+ const bridge:ModelBridge={getStatus:async()=>({ok:false,error:{code:'UNKNOWN',message:'private fixture'}}),saveGeminiKey:async()=>{throw Error('must not save')},clearGeminiKey:async()=>{throw Error('must not clear')}};
+ render(<ModelControls bridge={bridge} workspace model="actual fixture"/>);
+ await waitFor(()=>assert.ok(screen.getByText('Could not read model settings.')));
+ fireEvent.click(screen.getByRole('button',{name:'Manage Gemini key'}));
+ assert.equal((screen.getByRole('button',{name:'Save and use Gemini'}) as HTMLButtonElement).disabled,true);
+ assert.ok(!document.body.textContent?.includes('private fixture'));
 });
