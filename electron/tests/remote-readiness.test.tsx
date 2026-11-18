@@ -205,3 +205,163 @@ test('leaving Settings aborts a check and entering again performs one fresh chec
   await act(async () => { requests[1].resolve(readyResult()); });
   await waitFor(() => assert.equal(green(), 11));
 });
+
+function setupResult(states: Record<string, string> = {}) {
+  const result = readyResult();
+  result.checks = result.checks.map(check => ({...check, status: states[check.item] ?? 'ok'}));
+  result.not_ready = result.checks.filter(check => check.status !== 'ok').map(check => check.item);
+  result.ready = !result.not_ready.length;
+  return result;
+}
+
+const setupButton = (step: string) => document.querySelector(`[data-setup-action="${step}"]`) as HTMLButtonElement;
+
+test('missing resources never start setup automatically; source install requires one explicit click', async () => {
+  const requests: string[] = [];
+  let installed = false, installCalls = 0, verifyCalls = 0;
+  let finish!: () => void;
+  globalThis.fetch = async url => {
+    requests.push(String(url));
+    assert.equal(String(url), '/hpc/check');
+    return reply(setupResult({signet_source: installed ? 'ok' : 'missing', container: 'missing'}));
+  };
+  render(<RemoteReadiness {...props} environment={{...environment, phase: 'needs-install', missing: ['SIGNET source', 'SIGNET container']}}
+    onInstall={() => { installCalls++; return new Promise(resolve => { finish = () => { installed = true; resolve({ok: true}); }; }); }}
+    onVerify={async () => { verifyCalls++; return {ok: true}; }}/>);
+  await waitFor(() => assert.equal(setupButton('signet')?.disabled, false));
+  assert.equal(installCalls, 0);
+  assert.equal(verifyCalls, 0);
+  fireEvent.click(setupButton('signet'));
+  fireEvent.click(setupButton('signet'));
+  assert.equal(installCalls, 1);
+  assert.equal(setupButton('signet').disabled, true);
+  await act(async () => { finish(); });
+  await waitFor(() => assert.equal(row('signet_source').dataset.status, 'ok'));
+  assert.equal(installCalls, 1);
+  assert.equal(verifyCalls, 0, 'installation must not silently start another setup action');
+  assert.ok(requests.every(url => url === '/hpc/check'));
+});
+
+test('reopening an ongoing source installation shows its original live progress without installing again', async () => {
+  let calls = 0;
+  globalThis.fetch = async () => { calls++; return reply(readyResult()); };
+  const message = 'Downloading and verifying the pinned SIGNET source and example data.';
+  const {rerender} = render(<RemoteReadiness {...props} environment={{...environment, phase: 'installing-source', message}}/>);
+  assert.equal(row('signet_source').dataset.status, 'in_progress');
+  assert.ok(row('signet_source').textContent?.includes(message));
+  assert.equal(row('signet_source').querySelector('[data-setup-status]')?.getAttribute('data-state'), 'in_progress');
+  assert.equal(calls, 0);
+  rerender(<RemoteReadiness {...props} connected={false} environment={{phase: 'disconnected', message: 'Disconnected'}}/>);
+  assert.equal(row('signet_source').dataset.status, 'unknown');
+  assert.ok(!row('signet_source').textContent?.includes(message));
+});
+
+test('source installation failure exposes the original failure cause without repeating installation', async () => {
+  let installs = 0;
+  globalThis.fetch = async () => reply(setupResult({signet_source: 'missing', container: 'missing'}));
+  render(<RemoteReadiness {...props} environment={{...environment, phase: 'needs-install', missing: ['SIGNET source']}}
+    onInstall={async () => { installs++; return {ok: false, error: 'The source download failed: checksum mismatch'}; }}/>);
+  await waitFor(() => assert.equal(setupButton('signet')?.disabled, false));
+  fireEvent.click(setupButton('signet'));
+  await waitFor(() => assert.equal(row('signet_source').textContent?.includes('The source download failed: checksum mismatch'), true));
+  assert.equal(row('signet_source').querySelector('[data-setup-status]')?.getAttribute('data-state'), 'failed');
+  assert.equal(installs, 1);
+});
+
+test('each download and reference preparation sends only its own fixed action once', async () => {
+  for (const [step, id, route] of [
+    ['container', 'container', '/hpc/container'], ['ref', 'reference_ref', '/hpc/reference/ref'],
+    ['gmap', 'reference_gmap', '/hpc/reference/gmap'], ['gtf', 'reference_gtf', '/hpc/reference/gtf'],
+    ['clinical', 'reference_clinical', '/hpc/reference/clinical'], ['prepare', 'imputation_reference', '/hpc/prepare'],
+  ]) {
+    const actions: string[] = [];
+    let started = false;
+    let finish!: () => void;
+    globalThis.fetch = async (url, options) => {
+      if (String(url) === '/hpc/check') return reply(setupResult({[id]: started ? 'in_progress' : 'missing'}));
+      actions.push(String(url));
+      assert.equal(String(url), route);
+      assert.equal(options?.method, 'POST');
+      assert.equal(options?.body, '{}');
+      return new Promise(resolve => { finish = () => { started = true; resolve(reply({status: 'ok', step, outcome: 'started', job_id: '123', executed: true, detail: 'Queued on the scheduler'})); }; });
+    };
+    render(<RemoteReadiness {...props}/>);
+    await waitFor(() => assert.equal(setupButton(step)?.disabled, false));
+    assert.deepEqual(actions, []);
+    fireEvent.click(setupButton(step));
+    fireEvent.click(setupButton(step));
+    assert.deepEqual(actions, [route]);
+    await act(async () => { finish(); });
+    await waitFor(() => assert.equal(row(id).dataset.status, 'in_progress'));
+    assert.equal(setupButton(step)?.disabled ?? true, true);
+    assert.deepEqual(actions, [route], 'progress checks must never resubmit setup');
+    cleanup();
+  }
+});
+
+test('a prerequisite refusal is shown as a failure instead of reporting a started download', async () => {
+  let submissions = 0;
+  globalThis.fetch = async url => {
+    if (String(url) === '/hpc/check') return reply(setupResult({reference_gtf: 'missing'}));
+    assert.equal(String(url), '/hpc/reference/gtf');
+    submissions++;
+    return reply({status: 'ok', outcome: 'needs_container', executed: false, detail: 'Download the SIGNET container first.'});
+  };
+  render(<RemoteReadiness {...props}/>);
+  await waitFor(() => assert.equal(setupButton('gtf')?.disabled, false));
+  fireEvent.click(setupButton('gtf'));
+  await waitFor(() => assert.equal(row('reference_gtf').textContent?.includes('Download the SIGNET container first.'), true));
+  assert.equal(row('reference_gtf').querySelector('[data-setup-status]')?.getAttribute('data-state'), 'failed');
+  assert.equal(submissions, 1);
+});
+
+test('setup log uses the fixed read-only route and renders output as text', async () => {
+  const calls: string[] = [];
+  const detail = '<img src=x onerror=alert(1)> download checksum mismatch';
+  globalThis.fetch = async (url, options) => {
+    calls.push(String(url));
+    if (String(url) === '/hpc/check') return reply(setupResult({container: 'problem'}));
+    assert.equal(String(url), '/hpc/log/container');
+    assert.equal(options?.body, '{}');
+    return reply({status: 'ok', step: 'container', executed: false, lines: [detail]});
+  };
+  render(<RemoteReadiness {...props}/>);
+  await waitFor(() => assert.ok(document.querySelector('[data-setup-log="container"]')));
+  fireEvent.click(document.querySelector('[data-setup-log="container"]')!);
+  await waitFor(() => assert.equal(document.querySelector('[data-setup-log-output="container"]')?.textContent, detail));
+  assert.equal(document.querySelector('[data-setup-log-output="container"] img'), null);
+  assert.ok(calls.every(url => url === '/hpc/check' || url === '/hpc/log/container'));
+});
+
+test('environment verification is a separate manual action and never triggers setup automatically', async () => {
+  const requests: string[] = [];
+  let verified = 0;
+  globalThis.fetch = async url => { requests.push(String(url)); return reply(readyResult()); };
+  render(<RemoteReadiness {...props} environment={{...environment, phase: 'needs-install', missing: ['SIGNET container']}}
+    onVerify={async () => { verified++; return {ok: true}; }}/>);
+  await waitFor(() => assert.equal((document.querySelector('[data-setup-verify]') as HTMLButtonElement)?.disabled, false));
+  assert.equal(verified, 0);
+  fireEvent.click(document.querySelector('[data-setup-verify]')!);
+  await waitFor(() => assert.equal(verified, 1));
+  assert.ok(requests.every(url => url === '/hpc/check'));
+});
+
+test('disconnecting during submission ignores the late result and never repeats the action', async () => {
+  let submissions = 0;
+  let finish!: () => void;
+  globalThis.fetch = async url => {
+    if (String(url) === '/hpc/check') return reply(setupResult({container: 'missing'}));
+    assert.equal(String(url), '/hpc/container');
+    submissions++;
+    return new Promise(resolve => { finish = () => resolve(reply({status: 'ok', outcome: 'started', job_id: '123'})); });
+  };
+  const {rerender} = render(<RemoteReadiness {...props}/>);
+  await waitFor(() => assert.equal(setupButton('container')?.disabled, false));
+  fireEvent.click(setupButton('container'));
+  rerender(<RemoteReadiness {...props} connected={false} environment={{phase: 'disconnected', message: 'Disconnected'}}/>);
+  await act(async () => { finish(); });
+  assert.equal(green(), 0);
+  assert.equal(section().getAttribute('data-ready'), 'false');
+  assert.ok(!row('container').querySelector('[data-setup-status]'));
+  assert.equal(submissions, 1);
+});

@@ -69,6 +69,19 @@ JOB_STEPS = ('container', *REFERENCES, 'prepare')
 STEPS = ('workspace', 'signet', *JOB_STEPS)
 STATE_DIRECTORY = '$HOME/.signet-agent/steps'
 LOG_LINES = 20
+# Exact converter messages contain no paths or input values; other failures stay redacted.
+_SAFE_PREPARATION_ERRORS = frozenset((
+    'The study map file has no markers.',
+    'The study map has repeated positions.',
+    'The study ped and map files do not describe the same markers.',
+    'The reference VCF has no GT (genotype) field.',
+    'The genetic map positions are not increasing.',
+    'The genetic map does not cover the study markers.',
+    'Unsupported reference format. Supported: VCF (.vcf or .vcf.gz) or IMPUTE2 .gen.',
+    'Unsupported genetic map format. Supported: "pos chr cM" (SHAPEIT4/Eagle) or IMPUTE2 "position rate cM".',
+    'The output folder already exists; nothing was replaced.',
+    'No study marker matches the reference by position and alleles; check that both use the same genome build.',
+))
 _SEGMENT = r'(?:[A-Za-z0-9._-]+|\$USER)'
 _MARKER = '@@'
 _IMAGE_SIGNATURE = '''
@@ -655,4 +668,7 @@ def _preparation_log_summary(lines):
     if (isinstance(summary, dict) and summary.get('status') == 'ok' and
             summary.get('scope') == 'Counts only. The original study files were not changed.'):
         return [last_line]
+    if (isinstance(summary, dict) and summary.get('status') == 'failed'
+            and isinstance(summary.get('error'), str) and summary['error'] in _SAFE_PREPARATION_ERRORS):
+        return [summary['error']]
     return ['Reference preparation did not report success. Check the selected inputs and the remote job log.']

@@ -33,8 +33,9 @@ export class EnvironmentService extends EventEmitter {
   this.active(token);const start=Date.now();this.log(step,'Started.');
   const result=await this.ssh.exec('bash -s',Buffer.from(script),timeout).catch(error=>{this.log(step,`Failed after ${Date.now()-start} ms: ${(error as Error).message}`);throw error});this.active(token);
   this.log(step,`Finished in ${Date.now()-start} ms; exit=${result.returncode}.`);
-  if(result.stderr.length)this.log(step,result.stderr.toString('utf8').slice(-4096).replace(/[\x00-\x08\x0b-\x1f\x7f]/g,''));
-  if(result.returncode!==0)throw Error(`${step} failed (exit ${result.returncode}). Review development diagnostics or choose another installation root.`);
+  const detail=result.stderr.toString('utf8').slice(-4096).replace(/[\x00-\x08\x0b-\x1f\x7f]/g,'').trim();
+  if(detail)this.log(step,detail);
+  if(result.returncode!==0)throw Error(`${step} failed (exit ${result.returncode}). ${detail.slice(-2048)||'Review development diagnostics or choose another installation root.'}`);
   return result.stdout.toString('utf8');
  }
  private run(action:(token:number)=>Promise<void>){
@@ -77,7 +78,7 @@ export class EnvironmentService extends EventEmitter {
   if(this.running)return Promise.reject(Error('An environment operation is already running.'));
   if(this.snapshot.phase!=='needs-install'||!this.snapshot.config)return Promise.reject(Error('Check the remote environment before installing.'));
   const source=this.snapshot.missing?.includes('SIGNET source'),example=this.snapshot.missing?.includes('SIGNET example data');
-  if(!source&&!example)return Promise.reject(Error('SIGNET source is already installed. Download the container from the Workflow panel.'));
+  if(!source&&!example)return Promise.reject(Error('SIGNET source is already installed. Download the container from the environment readiness list.'));
   const c=structuredClone(this.snapshot.config);
   return this.run(async token=>{
    if(source){this.set('installing-source','Downloading and verifying the pinned SIGNET source and example data.');await this.command(installSource(c,this.inventory),token,'install-source',600000)}

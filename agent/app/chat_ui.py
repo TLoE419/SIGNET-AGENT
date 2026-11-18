@@ -262,13 +262,16 @@ class ChatHandler(BaseHTTPRequestHandler):
         if self.path.startswith('/hpc/files/'):
             return self.hpc_files_post()
         from agent.tools import hpc as hpc_tools
+        from agent.runtime.hpc import STEPS
+        log_actions = {f'/hpc/log/{step}': (lambda step=step: hpc_tools.read_hpc_setup_log(step))
+                       for step in STEPS}
         actions = {'/hpc/check': hpc_tools.check_hpc_environment,
                    '/hpc/workspace': hpc_tools.create_hpc_workspace,
                    '/hpc/signet': hpc_tools.install_signet_source,
                    '/hpc/container': hpc_tools.download_signet_container,
                    '/hpc/prepare': hpc_tools.prepare_imputation_reference,
                    **{f'/hpc/reference/{key}': (lambda key=key: hpc_tools.download_reference_file(key))
-                      for key in ('ref', 'gmap', 'gtf', 'clinical')}}
+                      for key in ('ref', 'gmap', 'gtf', 'clinical')}, **log_actions}
         action = actions.get(self.path)
         if action is None:
             return self._error(404, '找不到此操作。')
@@ -279,7 +282,14 @@ class ChatHandler(BaseHTTPRequestHandler):
         if not 0 <= size <= 1024:
             return self._error(400, 'Invalid request length.')
         self.connection.settimeout(10)
-        self.rfile.read(size)  # The body carries no parameters; each path is one fixed action.
+        raw = self.rfile.read(size)  # Each path is one fixed action, without user-supplied log paths.
+        if self.path in log_actions:
+            try:
+                body = json.loads(raw or b'{}')
+            except ValueError:
+                return self._error(400, 'The log request must be an empty JSON object.')
+            if body != {}:
+                return self._error(400, 'The log request must be an empty JSON object.')
         return self.json_response(action())
 
     def hpc_files_post(self):

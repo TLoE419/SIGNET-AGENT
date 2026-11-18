@@ -448,6 +448,14 @@ code:not(pre code) {
   white-space: pre-wrap; overflow-wrap: anywhere;
 }
 #signet-lens-left-preview .ml-settings-checks li:is([data-status="missing"], [data-status="problem"]) .ml-settings-check-detail { color: var(--ml-red); }
+#signet-lens-left-preview .ml-settings-checks .ml-settings-check-actions {
+  grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px;
+}
+#signet-lens-left-preview .ml-settings-checks .ml-settings-check-log { grid-column: 1 / -1; min-width: 0; }
+#signet-lens-left-preview .ml-settings-checks .ml-settings-check-log :is(p, pre) {
+  margin: 4px 0 0; font-size: 11px; white-space: pre-wrap; overflow-wrap: anywhere;
+}
+#signet-lens-left-preview .ml-settings-checks .ml-settings-check-log pre { max-height: 180px; overflow: auto; }
 #signet-lens-left-preview .ml-settings-checks li:last-child { border-bottom: 0; }
 #signet-lens-left-preview .ml-remote-readiness > button { margin-top: 8px; }
 #signet-lens-left-preview .ml-nav-pane-title {

@@ -27,7 +27,7 @@ test('install adds only the source; a later check verifies the downloaded contai
  const installed=await service.install();assert.equal(installed.phase,'needs-install');assert.deepEqual(installed.missing,['SIGNET container']);
  assert.ok(phases.includes('installing-source'));assert.ok(logs.some(v=>v.stage==='environment:install-source'&&v.message.includes('Finished')));
  assert.equal(ssh.commands.some(s=>/ pull |library:\/\//.test(s)),false,'the login node must not download the container');
- await assert.rejects(()=>service.install(),/Workflow panel/);
+ await assert.rejects(()=>service.install(),/environment readiness list/);
  ssh.image=true;assert.equal((await service.check()).phase,'ready');assert.ok(phases.includes('verifying'));
  assert.equal(service.getSnapshot().config?.executor,'/usr/bin/apptainer');assert.match(await readFile(file,'utf8'),/standard/);
 });
@@ -73,7 +73,7 @@ test('example data is added to a real installation, verified, and never replaced
  assert.notEqual(run(installExample(c,tampered)).status,0);await assert.rejects(read(path.join(c.source,'example','geno','example.ped')),'unverified data is never published');
 });
 test('missing Slurm blocks environment setup without disconnecting SSH',async t=>{const {ssh,service}=await fixture(t);ssh.slurm=false;assert.equal((await service.check()).phase,'blocked');assert.equal(ssh.connected,true);await assert.rejects(()=>service.install())});
-test('failures stay actionable, never become ready and can be retried',async t=>{const {ssh,service}=await fixture(t);await service.check();ssh.failStep='git -C';await assert.rejects(()=>service.install());assert.equal(service.getSnapshot().phase,'error');assert.equal(ssh.connected,true);ssh.failStep='';assert.equal((await service.check()).phase,'needs-install');assert.equal((await service.install()).phase,'needs-install');ssh.image=true;assert.equal((await service.check()).phase,'ready')});
+test('failures stay actionable, never become ready and can be retried',async t=>{const {ssh,service}=await fixture(t);await service.check();ssh.failStep='git -C';await assert.rejects(()=>service.install(),/Download unavailable/);assert.equal(service.getSnapshot().phase,'error');assert.match(service.getSnapshot().message,/Download unavailable/);assert.equal(ssh.connected,true);ssh.failStep='';assert.equal((await service.check()).phase,'needs-install');assert.equal((await service.install()).phase,'needs-install');ssh.image=true;assert.equal((await service.check()).phase,'ready')});
 test('runtime verification failure never persists a ready configuration',async t=>{
  const {ssh,service,file}=await fixture(t);ssh.source=true;ssh.image=true;ssh.failStep='Rscript -e';
  const phases:string[]=[];service.on('snapshot',value=>phases.push(value.phase));

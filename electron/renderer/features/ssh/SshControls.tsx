@@ -17,6 +17,8 @@ const environmentBridge=(window as unknown as {signetDesktop:{environment:Enviro
 export type SshControlStatus = ComponentProps<typeof SshStatusBlock> & {
  environment:EnvironmentSnapshot;
  onEnvironment:()=>void;
+ onInstallEnvironment:()=>ReturnType<EnvironmentBridge['install']>;
+ onVerifyEnvironment:()=>ReturnType<EnvironmentBridge['check']>;
 };
 export function SshControls({renderStatus}:{renderStatus?:(props:SshControlStatus)=>ReactNode}){
  const [environment,setEnvironment]=useState<EnvironmentSnapshot>({phase:'disconnected',message:'Connect SSH first.'}),[environmentOpen,setEnvironmentOpen]=useState(false);
@@ -31,7 +33,10 @@ export function SshControls({renderStatus}:{renderStatus?:(props:SshControlStatu
  async function connect(input:FormInput){setDraft(null);if(input.auth.method==='duo'){await ssh.save(input);setOpen(false);setAccount(true);return}try{await ssh.connect(input)}catch(e){credentialRequest(e)}}
  async function toggle(){if(connection?.phase==='slow'&&liveStatus==='error'){await ssh.connectSaved();return}if(liveStatus==='connected'||liveStatus==='connecting'){await ssh.disconnect();return}if(!p){setOpen(true);return}if(p.auth.method==='duo'){setAccount(true);return}try{await ssh.connectSaved()}catch(e){credentialRequest(e)}}
  const connection=ssh.snapshot.connection,identity=connectionIdentity(p,keys);
- const statusProps:SshControlStatus={environment,onEnvironment:()=>setEnvironmentOpen(true),name:identity.name,host:identity.endpoint,status,phase:connection?.phase,error:ssh.error||connection?.error,busy:ssh.busy,onEdit:()=>setOpen(true),onToggle:()=>void toggle().catch(()=>{})};
+ const statusProps:SshControlStatus={environment,onEnvironment:()=>setEnvironmentOpen(true),
+  onInstallEnvironment:()=>environmentBridge.install(),
+  onVerifyEnvironment:()=>environmentBridge.check(environment.config?.root||'',environment.config?.partition||''),
+  name:identity.name,host:identity.endpoint,status,phase:connection?.phase,error:ssh.error||connection?.error,busy:ssh.busy,onEdit:()=>setOpen(true),onToggle:()=>void toggle().catch(()=>{})};
  return <>{devTerminal&&!renderStatus&&<DevTerminalPanel onConnect={()=>setOpen(true)} diagnostics={diagnostics} bridge={devTerminal} connected={liveStatus==='connected'} status={liveStatus}/>}{renderStatus ? renderStatus(statusProps) : <SshStatusBlock {...statusProps}/>}
  <RemoteFilesHost/>
  {environmentOpen&&<EnvironmentModal diagnostics={diagnosticView} snapshot={environment} bridge={environmentBridge} onClose={()=>setEnvironmentOpen(false)}/>}
