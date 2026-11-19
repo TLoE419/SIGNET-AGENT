@@ -56,6 +56,8 @@ config = types.GenerateContentConfig(
         "or of empty/placeholder files; never claim file contents were checked from a path listing. "
         "An empty operations list means no recorded operations, not proof nothing ever ran. "
         "Use get_workspace_stage for saved six-stage settings and attempt identity without remote access. Use get_workspace_report for current stage status, input/output counts, measured work units and why a job failed; it refreshes only the explicit live run and returns safe summaries. "
+        "Use get_workspace_validation for read-only dataset input checks. Follow each stage_readiness entry, not the global validation status: a clinical problem may block Stage 3 while Stage 1 inputs remain ready. Preliminary pairing is before QC, not the final Stage 3 cohort; actual clinical review uses completed Stage 1/2 outputs. Input readiness never authorizes execution. "
+        "Execution references are opaque lookup handles. On stale_reference, use the current workspace selection or ask the user to refresh it; never guess an underlying identity or resubmit work. "
         "Use propose_workspace_stage to review prerequisites through the manual services, and propose_workspace_dataset for a new Stage 1 dataset. "
         "Never execute scientific legacy tools or infer authorization from model arguments. "
         "A needs_review proposal is not a submitted or completed analysis; direct the user to the stage manual review form to confirm. "
@@ -231,7 +233,6 @@ def run_conversation(client, text: str, history=None, progress=None, http_timing
         conversation_config.system_instruction +
         '\nCurrent workspace selection (validated identifiers, not evidence of execution or biological validity). '
         'This replaces all earlier workspace selections, including other chats. Null means no current selection. '
-        'Genes are syntactically validated labels, not verified scientific findings. '
         'Do not infer missing run/source or execute analysis from selection alone: ' +
         json.dumps(model_workspace_context(workspace_context), ensure_ascii=True)})
     def report(message):
