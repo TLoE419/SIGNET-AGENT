@@ -914,7 +914,7 @@
             <dd>${adjustment
               ? `<input class="ml-clinical-input" type="text" data-${prefix}-input="${key}" maxlength="2048" required>`
               : `<code data-${prefix}-input="${key}"></code>`}</dd>`).join("")}</dl>
-          ${adjustment ? '<div class="ml-settings-note" data-adjust-clinical-summary></div><div data-adjust-clinical-choices></div>' : ''}
+          ${adjustment ? '<p class="ml-settings-note" data-adjust-clinical-replacement hidden></p><div class="ml-settings-note" data-adjust-clinical-summary></div><div data-adjust-clinical-choices></div>' : ''}
           <fieldset data-${prefix}-fields><legend data-${prefix}-copy="settings"></legend>
             <div class="ml-genotype-controls">${parameterMarkup(network ? parameterDefinitions.slice(0, 2) : parameterDefinitions)}</div>
             ${network ? '<input type="number" data-network-setting="ncis" value="3" readonly hidden><p class="ml-settings-note" data-network-copy="correlationNote"></p>' : ''}
@@ -1055,12 +1055,43 @@
       if (adjustment) {
         const clinicalInput = panel.querySelector('[data-adjust-input="cli.file"]');
         clinicalInput.disabled = hasAttempt || Boolean(item?.checking || revalidationBusy(item)) || !selectedRun;
-        clinicalInput.readOnly = Boolean(item?.review?.frozen || item?.review?.frozen_inputs || source()?.input_mode === "dataset" || source()?.frozen_inputs);
+        const frozenClinical = source()?.frozen_inputs?.clinical?.[0];
+        const frozen = Boolean(item?.review?.frozen || item?.review?.frozen_inputs || source()?.input_mode === "dataset" || source()?.frozen_inputs);
+        const replacementAllowed = item?.review?.clinical_replacement_allowed === true;
+        clinicalInput.readOnly = hasAttempt || frozen && !replacementAllowed;
+        const replacement = part("clinical-replacement");
+        replacement.hidden = !frozen || !replacementAllowed || hasAttempt;
+        replacement.textContent = context.language === "en"
+          ? "You can select a corrected clinical file for Stage 3. The original frozen file is preserved, and completed Stages 1 and 2 are reused. Check the selected file again before submitting."
+          : "可為第 3 階段選用修正後的臨床檔。原本保存的檔案仍保留，第 1、2 階段沿用已完成結果；送出前請重新檢查選定檔案。";
+        if (frozenClinical && !replacement.hidden) {
+          const path = document.createElement("code");path.textContent = frozenClinical;
+          replacement.append(document.createTextNode(context.language === "en" ? " Original frozen file: " : " 原本保存的檔案："), path);
+        }
         const clinical = hasAttempt ? saved?.clinical?.review : item?.review?.clinical;
         const english = context.language === "en";
-        part("clinical-summary").textContent = clinical
-          ? (english ? `${clinical.rows ?? 0} clinical rows · ${clinical.matched ?? 0} matched · ${clinical.retained ?? 0} retained · ${clinical.excluded ?? 0} excluded`
-            : `${clinical.rows ?? 0} 筆臨床資料 · 配對 ${clinical.matched ?? 0} · 保留 ${clinical.retained ?? 0} · 排除 ${clinical.excluded ?? 0}`) : "";
+        const summary = part("clinical-summary");
+        summary.replaceChildren();
+        if (clinical) {
+          const count = key => Number.isSafeInteger(clinical[key]) && clinical[key] >= 0 ? clinical[key] : "—";
+          const totals = document.createElement("p");
+          totals.textContent = english
+            ? `${count("rows")} clinical rows · ${count("matched")} matched · ${count("retained")} retained · ${count("excluded")} excluded`
+            : `${count("rows")} 筆臨床資料 · 配對 ${count("matched")} · 保留 ${count("retained")} · 排除 ${count("excluded")}`;
+          const scope = document.createElement("p");
+          scope.textContent = english
+            ? "This review uses the completed Stage 1 and Stage 2 outputs. These counts can differ from the Data page’s preliminary pairing. Retained and excluded counts reflect the current clinical choices."
+            : "此處使用第 1、2 階段已完成的實際輸出重新核對，可能與資料頁的初步配對不同。保留與排除數依目前的臨床處理選擇計算。";
+          const missing = document.createElement("dl");missing.className = "ml-key-values";
+          for (const [key, zh, en] of [["clinical_matched", "配對個體中具臨床資料者", "Matched patients with clinical data"],
+            ["missing_race", "處理後仍缺族群資料者", "Missing race after current choices"],
+            ["missing_gender", "處理後仍缺性別資料者", "Missing gender after current choices"]]) {
+            const title = document.createElement("dt"), value = document.createElement("dd");
+            title.textContent = english ? en : zh;value.textContent = String(count(key));
+            value.dataset.clinicalReviewCount = key;missing.append(title, value);
+          }
+          summary.append(totals, scope, missing);
+        }
         const choices = part("clinical-choices");
         choices.replaceChildren();
         if (clinical) {
@@ -1208,9 +1239,10 @@
       render();
       try {
         const frozen = adjustment && (item.review?.frozen || item.review?.frozen_inputs || source()?.input_mode === "dataset" || source()?.frozen_inputs);
-        const clinicalPath = adjustment && !frozen ? panel.querySelector('[data-adjust-input="cli.file"]').value.trim() : "";
+        const canReplace = item.review?.clinical_replacement_allowed === true;
+        const clinicalPath = adjustment && (!frozen || canReplace) ? panel.querySelector('[data-adjust-input="cli.file"]').value.trim() : "";
         const params = new URLSearchParams();
-        if (clinicalPath) params.set("clinical", clinicalPath);
+        if (clinicalPath && (!frozen || clinicalPath !== source()?.frozen_inputs?.clinical?.[0])) params.set("clinical", clinicalPath);
         if (adjustment && item.clinicalChoices && Object.keys(item.clinicalChoices).length) params.set("choices", JSON.stringify(item.clinicalChoices));
         if (visualization && item.draft) {
           for (const [key, input] of parameterInputs) params.set(key,
@@ -1229,7 +1261,11 @@
           saveDraft();
         }
       } catch (error) {
-        if (epoch === item.cancelEpoch) {item.review = null;item.error = error.message;}
+        if (epoch === item.cancelEpoch) {
+          item.review = adjustment && item.review?.clinical_replacement_allowed === true ? {...item.review, ready: false, clinical: null} : null;
+          if (item.review) delete item.review.review_token;
+          item.error = error.message;
+        }
       } finally {
         if (epoch === item.cancelEpoch) {item.checking = false;render();}
       }
@@ -1310,11 +1346,13 @@
     if (adjustment) {
       panel.querySelector('[data-adjust-input="cli.file"]').addEventListener("input", () => {
         const item = current();
-        if (!item) return;
-        item.review = null;
+        if (!item || item.record && !item.retry) return;
+        // Keep the explicit replacement permission while clearing stale clinical evidence.
+        item.review = item.review?.clinical_replacement_allowed === true ? {...item.review, ready: false, clinical: null} : null;
+        if (item.review) delete item.review.review_token;
         item.clinicalChoices = {};
         item.attempted = true;
-        item.error = "";
+        item.error = context.language === "en" ? "The clinical file changed. Check it again before submission." : "臨床檔案已變更，送出前請重新檢查。";
         saveDraft();
         render();
       });

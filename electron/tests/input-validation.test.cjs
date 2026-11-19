@@ -14,6 +14,12 @@ const makeReport=(datasetId='dataset-a',files=inputs)=>({
  pairing:{status:'passed',rule:'Third TCGA barcode component',genotype_patients:6,expression_patients:6,matched_patients:6,clinical_matched:6,unmatched_genotype:0,unmatched_expression:0,issues:[]},
  files:[],limits:{max_seconds:30},scope:'Structure and preliminary pairing only.',
 });
+function stagedReport() {
+ const report=makeReport();
+ report.files=Object.values(inputs).flat().map(path=>({path,complete:true,sha256:'a'.repeat(64),size:1,lines:1}));
+ report.stage_readiness=Object.fromEntries(['1','2','3'].map(stage=>[stage,{status:'ready',issues:[]}]));
+ return report;
+}
 function harness(t,reply=async()=>({ok:true,json:async()=>makeReport()})){
  const dom=new JSDOM(readFileSync(path.join(directory,'index.html'),'utf8'),{url:'http://127.0.0.1:43210',runScripts:'outside-only'});
  t.after(()=>dom.window.close());
@@ -98,4 +104,57 @@ test('report content renders as text and switching language never resubmits the 
  await waitFor(()=>h.panel.dataset.validationState==='warning');assert.equal(h.panel.querySelector('img'),null);
  assert.equal(h.panel.textContent.includes('<img src=x'),true);
  h.root.lang='zh-Hant';h.controller.sync();assert.match(h.button.textContent,/檢查/);assert.equal(h.calls.length,1);
+});
+
+test('clinical choices are deferred to Stage 3 while Stage 1 inputs remain usable',async t=>{
+ const report=stagedReport();report.pairing.missing_race=5;
+ report.checks[2].metrics={rows:70,missing_race:67};
+ report.stage_readiness['3']={status:'needs_review',issues:[{code:'clinical_choices',stage:3,severity:'needs_review',message:'Choose how to handle unknown clinical categories.'}]};
+ const h=harness(t,async()=>({ok:true,json:async()=>report}));h.remote();h.button.click();
+ await waitFor(()=>h.panel.dataset.validationState==='warning');
+ assert.match(h.panel.querySelector('[data-validation-summary]').textContent,/Stage 1 input checks passed/);
+ assert.equal(h.panel.querySelector('[data-validation-check="clinical_format"]').dataset.status,'passed');
+ assert.equal(h.panel.querySelector('[data-validation-stage="3"]').dataset.status,'needs_review');
+ assert.equal(h.panel.querySelector('[data-pairing-count="missing_race"]').textContent,'5');
+ assert.match(h.panel.querySelector('[data-validation-check="clinical_format"]').textContent,/Rows with missing, unknown or unreported race67/);
+ assert.match(h.panel.querySelector('[data-validation-pairing]').textContent,/Matched patients with missing or unknown race5/);
+ assert.match(h.panel.textContent,/actual preprocessed outputs/);
+ assert.equal(h.panel.querySelector('input[type="radio"]'),null,'the data page cannot decide clinical choices');
+ assert.equal(h.calls.length,1,'validation must not submit or rerun anything');
+ h.root.lang='zh-Hant';h.controller.sync();
+ assert.match(h.panel.querySelector('[data-validation-summary]').textContent,/第 1 階段的輸入檢查通過/);
+ assert.match(h.panel.querySelector('[data-validation-stage="3"]').textContent,/需要確認/);
+ assert.match(h.panel.querySelector('[data-validation-check="clinical_format"]').textContent,/族群缺值、未知或未回報的資料列數67/);
+});
+
+test('a readable later-stage format failure does not falsely block Stage 1 or hide preliminary pairing',async t=>{
+ const report=stagedReport();report.status='failed';report.checks[2].status='failed';
+ report.stage_readiness['3']={status:'blocked',issues:[{code:'clinical_columns',stage:3,severity:'error',message:'Clinical columns must be corrected.'}]};
+ const h=harness(t,async()=>({ok:true,json:async()=>report}));h.remote();h.button.click();
+ await waitFor(()=>h.panel.dataset.validationState==='failed');
+ assert.match(h.panel.querySelector('[data-validation-summary]').textContent,/Stage 1 input checks passed/);
+ assert.equal(h.panel.querySelector('[data-validation-stage="3"]').dataset.status,'blocked');
+ assert.equal(h.panel.querySelector('[data-pairing-count="matched_patients"]').textContent,'6');
+ assert.match(h.panel.textContent,/Stage 3: Clinical columns/);
+});
+
+test('contradictory stage readiness never approves unread or failed Stage 1 inputs',async t=>{
+ for(const change of [report=>report.checks[0].status='failed',report=>report.files[0].complete=false,report=>delete report.files[0].sha256,
+  report=>report.status='incomplete',
+  report=>report.stage_readiness['1'].issues.push({code:'blocked',stage:1,severity:'error',message:'Blocked.'}),
+  report=>report.stage_readiness['3'].status='invented']){
+  const report=stagedReport();change(report);
+  const h=harness(t,async()=>({ok:true,json:async()=>report}));h.remote();h.button.click();
+  await waitFor(()=>h.panel.dataset.validationState==='unavailable');
+  assert.equal(h.panel.querySelector('[data-validation-stage]'),null);
+ }
+});
+
+test('stage-specific issue text is inert and a global pass cannot hide unresolved stage choices',async t=>{
+ const report=stagedReport();report.stage_readiness['3']={status:'needs_review',issues:[{code:'clinical_choices',stage:3,severity:'needs_review',message:'<script>throw 1</script> inspect privately'}]};
+ const h=harness(t,async()=>({ok:true,json:async()=>report}));h.remote();h.button.click();
+ await waitFor(()=>h.panel.dataset.validationState==='warning');
+ assert.equal(h.panel.querySelector('script'),null);assert.match(h.panel.textContent,/<script>throw 1/);
+ report.status='passed';report.checks[1].status='passed';h.button.click();
+ await waitFor(()=>h.panel.dataset.validationState==='unavailable');
 });
