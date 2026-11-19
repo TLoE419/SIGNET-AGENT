@@ -5,4 +5,4 @@ from agent.tools.signet import SIGNET_TOOLS
 from agent.tools.ui import UI_TOOLS
 from agent.tools.workspace import WORKSPACE_TOOLS, LEGACY_EXECUTION
 
-ALL_TOOLS = [*GENERAL_TOOLS, *HPC_TOOLS, *(fn for fn in SIGNET_TOOLS if fn.__name__ not in LEGACY_EXECUTION and fn.__name__ not in {'get_network_status', 'get_signet_settings'}), *WORKSPACE_TOOLS, *UI_TOOLS]
+ALL_TOOLS = [*GENERAL_TOOLS, *HPC_TOOLS, *(fn for fn in SIGNET_TOOLS if fn.__name__ not in LEGACY_EXECUTION and fn.__name__ not in {'get_network_status', 'get_signet_settings', 'get_visualization_workspace', 'propose_visualization_change'}), *WORKSPACE_TOOLS, *UI_TOOLS]

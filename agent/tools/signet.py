@@ -601,15 +601,20 @@ def dispatch_tool(name, arguments):
     """Validate the model's tool name, keyword arguments and primitive types before dispatch."""
     from agent.tools.registry import ALL_TOOLS
     from agent.runtime.signet_jobs import StepError
+    from agent.core.model_privacy import safe_tool_result, resolve_model_references, StaleModelReference
     functions = {fn.__name__:fn for fn in ALL_TOOLS}
     try:
+        arguments = resolve_model_references(arguments)
         from agent.tools.workspace import LEGACY_EXECUTION
+        if name == 'read_file':
+            return {'status': 'invalid', 'executed': False, 'error_code': 'privacy_blocked',
+                    'error': 'File contents are private; use approved statistical summaries or the manual workspace.'}
         if name == 'get_network_status':
             from agent.tools.workspace import get_workspace_stage
             if not isinstance(arguments, dict) or set(arguments) != {'run_id'}:
                 raise ValueError('Provide an explicit run_id.')
-            return get_workspace_stage(arguments['run_id'], 5)
-        if name in LEGACY_EXECUTION:
+            return safe_tool_result(name, get_workspace_stage(arguments['run_id'], 5))
+        if name in LEGACY_EXECUTION or name in {'get_visualization_workspace', 'propose_visualization_change'}:
             return {'status': 'needs_review', 'executed': False,
                     'reason': 'Use propose_workspace_stage with an explicit live run and stage. Scientific execution requires the manual review form and confirmation.'}
         if name not in functions or not isinstance(arguments, dict):
@@ -630,7 +635,10 @@ def dispatch_tool(name, arguments):
         if name == 'list_files':
             if Path(arguments['folder']).resolve() != PROJECT:
                 raise ValueError('The folder must be this project directory.')
-            return {'files':fn(**arguments)}
-        return fn(**arguments)
+            return safe_tool_result(name, {'files': fn(**arguments)})
+        return safe_tool_result(name, fn(**arguments))
     except (ValueError,TypeError,OSError,StepError) as exc:
-        return {'status':'invalid','executed':False,'error':str(exc)}
+        return safe_tool_result(name, {'status': 'invalid', 'executed': False,
+                'error_code': 'stale_reference' if isinstance(exc, StaleModelReference) else
+                              exc.code if isinstance(exc, StepError) else 'invalid_request',
+                'error': 'The requested operation could not be completed. Inspect the manual workspace for private details.'})

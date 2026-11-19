@@ -221,9 +221,8 @@ class RuntimePrivacyContracts(unittest.TestCase):
                                  'runs/fixture/workspace-genotype.json', 'runs/fixture/steps/genotype.json'):
                     with self.assertRaises(ValueError):
                         general.read_file(relative)
-                self.assertEqual(general.read_file(str(aggregate))['content'], '0.1,0.2\n')
-                aggregate.write_text('TCGA-AA-1234-NT\n')
-                self.assertNotIn('TCGA-AA-1234', general.read_file(str(aggregate))['content'])
+                with self.assertRaises(ValueError):
+                    general.read_file(str(aggregate))
                 self.assertNotIn('subject.tsv', json.dumps(general.list_files(str(project))))
 
     def test_table_summary_never_returns_identifier_values_or_unknown_headers(self):

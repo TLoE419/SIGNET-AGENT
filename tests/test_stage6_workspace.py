@@ -112,7 +112,13 @@ class WorkspaceTest(unittest.TestCase):
                 result=st.dispatch_tool('run_visualization',{})
                 self.assertFalse(result['executed']);run.assert_not_called()
                 proposed=st.dispatch_tool('propose_visualization_change',{'frequency':.8})
-                self.assertEqual(proposed['status'],'awaiting_confirmation')
+                self.assertEqual(proposed['status'], 'needs_review')
+                self.assertFalse(proposed['executed'])
+                self.assertIn('propose_workspace_stage', proposed['reason'])
+                self.assertEqual(self.w.state('s1')['proposals'], [])
+                manual = st.propose_visualization_change(frequency=.8)
+                self.assertEqual(manual['status'], 'awaiting_confirmation')
+                run.assert_not_called()
         finally:CHAT_CONTEXT.reset(token)
 
     def test_restore_does_not_replay_and_preserves_old_result(self):
