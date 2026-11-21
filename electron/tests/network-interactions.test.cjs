@@ -1,0 +1,26 @@
+const {test} = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const {JSDOM} = require('jsdom');
+test('network zoom, edge inspection and gene filtering coexist; replacing run resets view', () => {
+ const dom = new JSDOM(`<section lang="en"><input class="unused"><div class="s6-zoom"><input type="range" min="50" max="200" value="100"></div><button data-zoom="in"></button><button data-zoom="out"></button><div class="s6-graph-frame"><svg class="s6-graph"><marker id="a"></marker><marker id="b"></marker><g class="s6-edges"></g><g class="s6-genes"></g></svg></div><div class="s6-summary"></div><button data-s6-clear></button><details class="ml-result-dock"><div class="ml-result-table"></div><table><tbody></tbody></table><span class="s6-row-count"></span></details><div class="s6-graph-meta"></div></section>`, {runScripts:'outside-only'});
+ const source = fs.readFileSync(require('node:path').join(__dirname,'../renderer/features/workspace/workspace.js'),'utf8');
+ const fn = source.slice(source.indexOf('  function mountNetwork(stage)'), source.indexOf('  const runList ='));
+ dom.window.eval(fn + '\nwindow.mountNetwork = mountNetwork;');
+ const stage = dom.window.document.querySelector('section');
+ const set = dom.window.mountNetwork(stage);
+ const nodes = {A:[0,0],B:[20,20],C:[40,40]};
+ set(nodes, [['A','B',0.8,-0.12],['B','C',0.6,0.4]]);
+ stage.querySelector('[data-gene="A"]').dispatchEvent(new dom.window.MouseEvent('click',{bubbles:true}));
+ assert.equal(stage.querySelectorAll('tbody tr').length,1);
+ stage.querySelector('.s6-edge').dispatchEvent(new dom.window.MouseEvent('click',{bubbles:true}));
+ assert.match(stage.querySelector('.s6-summary').textContent,/Frequency: 0.8.*Coefficient: -0.12/);
+ assert.equal(stage.dataset.selectedGene,'A');
+ stage.querySelector('.s6-graph-frame').dispatchEvent(new dom.window.WheelEvent('wheel',{deltaY:-1,cancelable:true}));
+ assert.equal(stage.querySelector('.s6-zoom input').value,'110');
+ set(nodes,[]);
+ assert.equal(stage.querySelector('.s6-zoom input').value,'100');
+ assert.equal(stage.dataset.selectedGene,'');
+ assert.deepEqual(nodes.A,[0,0]);
+ dom.window.close();
+});

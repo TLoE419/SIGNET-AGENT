@@ -143,10 +143,38 @@ class WorkspaceLogsTest(unittest.TestCase):
         with patch.object(workspace_logs.os, 'open', side_effect=denied):
             self.assertEqual(self.code_of(self.read), 'remote_failed')
 
+    def test_ambiguous_submission_logs_stay_blocked_and_previous_attempt_remains_readable(self):
+        self.failed_expression()
+        (self.fake / 'bin/sbatch').write_text('#!/bin/bash\necho no-compute-resources >&2\nexit 1\n')
+        self.assertEqual(self.code_of(jobs.submit, 'step_test', 'expression', self.inputs), 'remote_failed')
+        record = jobs._load(self.root, 'expression')
+        self.assertEqual(record['state'], 'unknown')
+        self.assertNotIn('job_id', record)
+        self.assertRegex(record['submission_token'], r'^[a-f0-9]{32}$')
+        receipt = self.remote_dir / 'steps' / ('expression.submission.' + record['submission_token'])
+        self.assertEqual(receipt.read_text().strip(), 'dispatching')
+        metadata = self.root / 'steps/expression.json'
+        before = metadata.read_bytes()
+        calls = len(self.calls)
+        # The nonce identifies the submission intent, not these generic log files.
+        for stream in ('submission', 'out', 'err'):
+            self.assertEqual(self.code_of(self.read, 2, stream), 'conflict')
+        self.assertEqual(len(self.calls), calls)
+        previous = self.read(1)
+        self.assertEqual((previous['attempt'], previous['job_id'], previous['lines']),
+                         (1, '12345', ['first attempt log']))
+        self.assertEqual(metadata.read_bytes(), before)
+        self.assertEqual(jobs._load(self.root, 'expression')['state'], 'unknown')
+
     def test_refused_submission_has_its_own_explicit_submission_stream(self):
         self.failed_expression()
         (self.fake / 'bin/sbatch').write_text('#!/bin/bash\necho no-compute-resources >&2\nexit 1\n')
         self.assertEqual(self.code_of(jobs.submit, 'step_test', 'expression', self.inputs), 'remote_failed')
+        # Preserve the log contract of legacy snapshots that recorded a known refusal.
+        record = jobs._load(self.root, 'expression')
+        record.pop('submission_token')
+        record.update(state='failed', reason='Submission failed before a job ID was returned: no-compute-resources')
+        jobs._save(self.root, record)
         value = self.read(2, 'submission')
         self.assertIsNone(value['job_id'])
         self.assertEqual(value['stream'], 'submission')

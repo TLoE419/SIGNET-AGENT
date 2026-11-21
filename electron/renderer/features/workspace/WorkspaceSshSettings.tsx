@@ -33,7 +33,7 @@ export function WorkspaceSshSettings({workspace, readiness, pane, sidebar}: {
     return () => observer.disconnect();
   }, [workspace, pane, sidebar]);
 
-  return <SshControls renderStatus={({host, status, phase, error, busy, environment, onEdit, onToggle, onEnvironment, onInstallEnvironment, onVerifyEnvironment}) => {
+  return <SshControls terminalActive={active} english={english} renderStatus={({host, status, phase, error, busy, environment, onEdit, onToggle, onEnvironment, onInstallEnvironment, onVerifyEnvironment}) => {
     const connected = status === 'connected';
     const connecting = status === 'connecting';
     const slow = phase === 'slow';

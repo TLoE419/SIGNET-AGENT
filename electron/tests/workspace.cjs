@@ -653,17 +653,22 @@ async function verifyWorkspace({groups, runs, remote}) {
   await waitFor(() => stage6.dataset.runId === first.run_id && stage6.dataset.runState === 'ready',
     'Stage 6 picker did not reopen the original run');
   if (stage6.dataset.selectedGene !== 'MEGF6') click('#lens-stage6 [data-gene="MEGF6"]');
-  if (groups[0].id === 'example-chr1') {
-    showStage(3);
-    check(visible('#lens-stage3') && !visible('#lens-stage6'), 'Stage 3 did not show its result');
-    showStage(6);
-    check(visible('#lens-stage6') && stage6.dataset.runId === first.run_id &&
-      stage6.dataset.selectedGene === 'MEGF6' && countRows() === first.incident, 'Stage 6 lost the selected run or gene');
-  } else {
-    showStage(3);
-    check(!visible('#lens-history-stage3') && !visible('#lens-stage6'),
-      'The dataset’s manual stages inherited another run’s displayed results');
-  }
+  const selectedHistoryId = 'archive--' + first.run_id;
+  showStage(3);
+  await waitFor(() => stage3.dataset.runState === 'ready' && stage3.dataset.runId === first.run_id &&
+    stage3.dataset.historyId === selectedHistoryId, 'Sidebar Stage 3 did not load the selected archived run');
+  check(visible('#lens-history-stage3') && !visible('#lens-stage3') && !visible('#lens-stage6'),
+    'Sidebar Stage 3 showed a manual form or another result instead of the selected archive');
+  check(find('#ml-timeline').dataset.historyId === selectedHistoryId &&
+    Number(stage3.querySelector('[data-s3-components]').textContent) === first.stage3.npc &&
+    stage3.querySelectorAll('.s3-points circle').length === first.stage3.matching.retained,
+    'Sidebar Stage 3 borrowed another run’s settings or samples');
+  showStage(6);
+  await waitFor(() => stage6.dataset.runState === 'ready' && stage6.dataset.runId === first.run_id &&
+    stage6.dataset.historyId === selectedHistoryId, 'Sidebar Stage 6 did not restore the selected archive');
+  check(visible('#lens-stage6') && !visible('#lens-history-stage3') &&
+    stage6.dataset.selectedGene === 'MEGF6' && countRows() === first.incident,
+    'Stage 6 lost the selected run, gene or filtered table');
 
   go('data');
   click('#ml-dataset-add');

@@ -143,18 +143,49 @@ def create(run_id, name, new_run_id, revision, parameters):
         for key in set(original['reuse']) | {'genotype', name}:
             path = source / f'workspace-{key}.json'
             if path.is_file():
-                snapshot = remap(json.loads(path.read_text()))
+                original_snapshot = json.loads(path.read_text())
+                snapshot = remap(original_snapshot)
+                if key == 'genotype':
+                    # Raw-source fingerprints belong to their original paths, not copied run inputs.
+                    for field in ('source_files', 'source_inputs', 'reference_sources'):
+                        if field in original_snapshot:
+                            snapshot[field] = original_snapshot[field]
                 snapshot['run_id'] = new_run_id
                 if key == name:
                     snapshot.update(remap(parameters))
                 (destination / path.name).write_text(json.dumps(snapshot, indent=2) + '\n')
         signet._update(destination, checked)
         plan = {**original, 'new_run_id': new_run_id, 'parameters': remap(parameters), 'remote_dir': new_remote, 'frozen_source': frozen_source, 'created_at': jobs._now()}
+        if name == 'genotype' and 'expression' in original['reuse']:
+            plan['inherited_expression'] = {str(path.relative_to(destination)): hashlib.sha256(path.read_bytes()).hexdigest()
+                for path in (destination / 'steps/expression.json', destination / 'workspace-expression.json') if path.is_file()}
         (destination / 'rerun.json').write_text(json.dumps(plan, indent=2) + '\n')
     except Exception:
         shutil.rmtree(destination)
         raise
     return plan
+
+
+def retry_preserved_paths(root):
+    """Only unchanged inherited expression evidence is independent of a genotype fork retry."""
+    path = signet._no_links(root / 'rerun.json')
+    if not path.is_file():
+        return set()
+    plan = json.loads(path.read_text())
+    if plan.get('new_run_id') != root.name or plan.get('step') != 'genotype' or 'expression' not in plan.get('reuse', []):
+        return set()
+    saved = plan.get('inherited_expression', {})
+    if not isinstance(saved, dict) or 'steps/expression.json' not in saved or set(saved) - {'steps/expression.json', 'workspace-expression.json'}:
+        return set()
+    for relative, digest in saved.items():
+        item = signet._no_links(root / relative)
+        if not item.is_file() or hashlib.sha256(item.read_bytes()).hexdigest() != digest:
+            return set()
+    record = jobs._load(root, 'expression')
+    source = record.get('reused_from', {})
+    if record.get('run_id') != root.name or record.get('state') != 'completed' or source.get('run_id') != plan['source_run_id'] or source.get('step') != 'expression':
+        return set()
+    return {root / relative for relative in saved}
 
 
 def stage_remote(root, directory, token):
@@ -163,7 +194,13 @@ def stage_remote(root, directory, token):
     if not path.exists():
         return
     plan = json.loads(path.read_text())
-    source = jobs._root(plan['source_run_id'])
+    return _stage_remote_source(plan['source_run_id'], root, directory, token, plan)
+
+
+@jobs._one_at_a_time
+def _stage_remote_source(source_run_id, root, directory, token, plan):
+    # Keep source revision/attempt checks authoritative until its files are copied.
+    source = jobs._root(source_run_id)
     settings = signet._settings(root)
     for key in plan['reuse']:
         saved = jobs._load(root, key)

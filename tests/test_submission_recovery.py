@@ -38,6 +38,136 @@ class RecoveryTest(fixtures.StepsTest):
         self.uncertain('prepared', marker='')
         self.assertEqual(self.call()['recovery']['outcome'], 'adopt')
 
+    def test_confirmed_adoption_repairs_missing_marker_and_preserves_output_guard(self):
+        record = self.uncertain('prepared', marker='')
+        marker = self.remote_dir / 'steps/expression.job'
+        receipt = self.remote_dir / f'steps/expression.submission.{record["submission_token"]}'
+        original = receipt.read_bytes()
+        before = len(self.calls)
+        self.assertFalse(self.call('adopt', confirmed=True)['applied'])
+        self.assertFalse(marker.exists(), 'Confirmation without review must not repair a marker')
+        self.assertEqual(self.call()['recovery']['outcome'], 'adopt')
+        self.assertFalse(marker.exists(), 'Review must remain read-only')
+        adopted = self.call('adopt', confirmed=True)
+        self.assertTrue(adopted['applied'])
+        self.assertEqual(marker.read_text(), '12345\n')
+        self.assertEqual(receipt.read_bytes(), original)
+        guard = jobs._output_guard(self.root, adopted['record'])
+        code, values, _ = jobs._shell(jobs._say() + guard + 'true\n')
+        self.assertEqual((code, values), (0, {}))
+        self.assertFalse(any('sbatch --parsable' in call or 'scancel ' in call or 'tar ' in call
+                             for call in self.calls[before:]))
+
+    def test_existing_marker_is_verified_without_rewriting_it(self):
+        record = self.uncertain()
+        marker = self.remote_dir / 'steps/expression.job'
+        original = (marker.stat().st_ino, marker.stat().st_mtime_ns, marker.read_bytes())
+        self.call()
+        self.assertTrue(self.call('adopt', confirmed=True)['applied'])
+        self.assertEqual((marker.stat().st_ino, marker.stat().st_mtime_ns, marker.read_bytes()), original)
+
+    def test_missing_marker_supports_dispatching_and_accepted_receipts_only(self):
+        record = self.uncertain('dispatching', marker='')
+        receipt = self.remote_dir / f'steps/expression.submission.{record["submission_token"]}'
+        marker = self.remote_dir / 'steps/expression.job'
+        for value in ('dispatching', 'accepted 12345'):
+            with self.subTest(receipt=value):
+                record['state'] = 'unknown'
+                record.pop('job_id', None)
+                jobs._save(self.root, record)
+                marker.unlink(missing_ok=True)
+                receipt.write_text(value + '\n')
+                self.call()
+                self.assertTrue(self.call('adopt', confirmed=True)['applied'])
+                self.assertEqual(marker.read_text(), '12345\n')
+                self.assertEqual(receipt.read_text(), value + '\n')
+
+    def test_foreign_marker_race_cannot_be_overwritten_or_applied(self):
+        record = self.uncertain('prepared', marker='')
+        marker = self.remote_dir / 'steps/expression.job'
+        receipt = self.remote_dir / f'steps/expression.submission.{record["submission_token"]}'
+        self.call()
+        link = self.fake / 'bin/link'
+        link.write_text('#!/bin/bash\nprintf "99999\\n" > "$2"\n/bin/link "$@"\n')
+        link.chmod(0o755)
+        result = self.call('adopt', confirmed=True)
+        self.assertFalse(result['applied'])
+        self.assertEqual(result['record']['state'], 'unknown')
+        self.assertEqual(result['recovery']['outcome'], 'unresolved')
+        self.assertFalse(result['record']['submission_checks'][-1]['applied'])
+        self.assertEqual(marker.read_text(), '99999\n')
+        self.assertEqual(receipt.read_text(), 'prepared\n')
+        self.assertFalse(list((self.remote_dir / 'steps').glob('.expression.adopt.*')))
+
+    def test_foreign_marker_and_nonregular_paths_are_refused_without_changes(self):
+        self.uncertain('prepared', marker='')
+        marker = self.remote_dir / 'steps/expression.job'
+        foreign = self.remote_dir / 'steps/foreign-job'
+        foreign.write_text('99999\n')
+        for kind in ('foreign', 'symlink', 'directory'):
+            with self.subTest(kind=kind):
+                if kind == 'foreign':
+                    marker.write_text('99999\n')
+                elif kind == 'symlink':
+                    marker.symlink_to(foreign)
+                else:
+                    marker.mkdir()
+                self.assertEqual(self.call()['recovery']['outcome'], 'unresolved')
+                result = self.call('adopt', confirmed=True)
+                self.assertFalse(result['applied'])
+                self.assertEqual(result['record']['state'], 'unknown')
+                self.assertEqual(foreign.read_text(), '99999\n')
+                if kind == 'foreign':
+                    self.assertEqual(marker.read_text(), '99999\n')
+                elif kind == 'symlink':
+                    self.assertTrue(marker.is_symlink())
+                else:
+                    self.assertEqual(list(marker.iterdir()), [])
+                marker.rmdir() if kind == 'directory' else marker.unlink()
+
+    def test_receipt_or_owner_changed_after_confirmation_probe_refuses_marker_repair(self):
+        record = self.uncertain('prepared', marker='')
+        receipt = self.remote_dir / f'steps/expression.submission.{record["submission_token"]}'
+        owner = self.remote_dir / '.owner'
+        marker = self.remote_dir / 'steps/expression.job'
+        for changed in (receipt, owner):
+            with self.subTest(path=changed.name):
+                original = changed.read_bytes()
+                self.call()
+                shell = jobs._shell
+                def change_evidence(script, **kwargs):
+                    if 'say adopted_marker' in script:
+                        changed.write_text('foreign\n')
+                    return shell(script, **kwargs)
+                with patch.object(jobs, '_shell', side_effect=change_evidence):
+                    result = self.call('adopt', confirmed=True)
+                self.assertFalse(result['applied'])
+                self.assertEqual(result['record']['state'], 'unknown')
+                self.assertFalse(result['record']['submission_checks'][-1]['applied'])
+                self.assertEqual(changed.read_text(), 'foreign\n')
+                self.assertFalse(marker.exists())
+                changed.write_bytes(original)
+
+    def test_lost_marker_repair_reply_stays_unknown_until_a_new_review(self):
+        self.uncertain('prepared', marker='')
+        self.call()
+        shell = jobs._shell
+        def lose_reply(script, **kwargs):
+            result = shell(script, **kwargs)
+            if 'say adopted_marker' in script:
+                raise OSError('lost marker confirmation reply')
+            return result
+        with patch.object(jobs, '_shell', side_effect=lose_reply):
+            result = self.call('adopt', confirmed=True)
+        self.assertFalse(result['applied'])
+        self.assertEqual(result['record']['state'], 'unknown')
+        self.assertFalse(result['record']['submission_checks'][-1]['applied'])
+        marker = self.remote_dir / 'steps/expression.job'
+        self.assertEqual(marker.read_text(), '12345\n')
+        self.assertFalse(self.call('adopt', confirmed=True)['applied'])
+        self.call()
+        self.assertTrue(self.call('adopt', confirmed=True)['applied'])
+
     def test_missing_or_multiple_scheduler_evidence_stays_blocked(self):
         self.uncertain(candidates='12345 67890')
         self.assertEqual(self.call()['recovery']['outcome'], 'unresolved')

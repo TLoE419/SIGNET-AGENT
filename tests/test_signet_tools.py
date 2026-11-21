@@ -12,6 +12,8 @@ from google import genai
 from google.genai import types
 import agent.core.conversation as main
 import agent.tools.signet as st
+from agent.tools.registry import ALL_TOOLS
+from agent.tools.workspace import LEGACY_EXECUTION
 
 
 class FakeProcess:
@@ -64,11 +66,8 @@ class ToolsTest(unittest.TestCase):
         self.patch_project.stop()
         self.temp.cleanup()
 
-    def call(self, name, **args):
-        return st.dispatch_tool(name, args)
-
     def configure(self, cohort='TCGA', run_id='test'):
-        result = self.call('configure_signet', run_id=run_id, cohort=cohort)
+        result = st.configure_signet(run_id=run_id, cohort=cohort)
         self.assertEqual(result['status'], 'created', result)
         return self.project / 'runs' / run_id
 
@@ -83,7 +82,7 @@ class ToolsTest(unittest.TestCase):
         self.assertEqual(sum(x['category']=='entry' for x in st.INVENTORY['scripts']),16)
         self.assertEqual(len(st.SIGNET_TOOLS),23)
         st._verify_source()
-        self.assertEqual(self.call('signet_catalog')['internal_scripts'],121)
+        self.assertEqual(st.signet_catalog()['internal_scripts'],121)
 
     def test_all_schemas_without_network(self):
         with genai.Client(api_key='fake-schema-key') as client:
@@ -94,35 +93,59 @@ class ToolsTest(unittest.TestCase):
     def test_settings_and_no_overwrite(self):
         root = self.configure()
         self.assertFalse((st.SOURCE / 'data').exists() and root == st.SOURCE)
-        settings = self.call('get_signet_settings',run_id='test')['settings']
+        settings = st.get_signet_settings(run_id='test')['settings']
         self.assertEqual(settings['forcerm'],'F')
         self.assertEqual(settings['email'],'F')
         original = (root / 'work/config.ini').read_bytes()
-        self.assertEqual(self.call('configure_signet',run_id='test')['status'],'invalid')
+        self.assertEqual(st.configure_signet(run_id='test')['status'],'invalid')
         self.assertEqual((root / 'work/config.ini').read_bytes(),original)
-        self.assertEqual(self.call('configure_signet',run_id='../escape')['status'],'invalid')
+        self.assertEqual(st.configure_signet(run_id='../escape')['status'],'invalid')
 
     def test_dispatch_trust_boundary(self):
         for name,args in [
             ('system',{'cmd':'pwd'}),('get_signet_settings',{'run_id':'x','extra':True}),
-            ('configure_signet',{'run_id':'x','ncores':True}),
-            ('configure_signet',{'run_id':'x','ncores':2.5}),
-            ('configure_signet',{'run_id':'x','cohort':'other'}),
-            ('combine_covariates',{'run_id':'x','expression_covariates':str(self.input),'additional_covariates':'bad'}),
+            ('get_workspace_stage',{'run_id':'x','stage':True}),
+            ('get_workspace_stage',{'run_id':'x','stage':2.5}),
+            ('get_workspace_stage',{'run_id':'x','stage':2,'source':True}),
             ('list_files',{'folder':'/tmp'}),
         ]:
             self.assertEqual(st.dispatch_tool(name,args)['status'],'invalid',(name,args))
         self.assertEqual(st.dispatch_tool('signet_catalog',[])['status'],'invalid')
 
+    def test_legacy_model_dispatch_requires_manual_review_without_effects(self):
+        self.assertFalse({function.__name__ for function in ALL_TOOLS} & LEGACY_EXECUTION)
+        before = {path: path.read_bytes() for path in self.project.rglob('*') if path.is_file()}
+        with patch.object(st, '_execute') as execute, patch.object(st.subprocess, 'Popen') as popen:
+            for name in LEGACY_EXECUTION:
+                with self.subTest(name=name):
+                    result = st.dispatch_tool(name, {'run_id': 'blocked', 'confirmed': True})
+                    self.assertEqual(result['status'], 'needs_review')
+                    self.assertFalse(result['executed'])
+            execute.assert_not_called()
+            popen.assert_not_called()
+        self.assertEqual(before, {path: path.read_bytes() for path in self.project.rglob('*') if path.is_file()})
+        self.assertFalse((self.project / 'runs').exists())
+
+    def test_trusted_legacy_parameter_validation_remains_active(self):
+        for arguments in ({'ncores': True}, {'ncores': 2.5}, {'cohort': 'other'}):
+            with self.subTest(arguments=arguments):
+                self.assertEqual(st.configure_signet('x', **arguments)['status'], 'invalid')
+        with self.assertRaisesRegex(ValueError, 'additional covariate'):
+            st.combine_covariates('x', str(self.input), additional_covariates='bad')
+        self.assertFalse((self.project / 'runs').exists())
+
     def test_paths_and_numbers(self):
         self.configure()
         for value in ['/etc/passwd','.env',str(self.project/'data'/'../.env'),str(self.input)+';id',str(self.input)+' x']:
-            self.assertEqual(self.call('expression_tcga',run_id='test',expression=value,annotation_gtf=str(self.input))['status'],'invalid')
+            with self.subTest(path=value), self.assertRaises(ValueError):
+                st.expression_tcga(run_id='test',expression=value,annotation_gtf=str(self.input))
         link = self.project / 'data' / 'linked'
         link.symlink_to(self.input)
-        self.assertEqual(self.call('expression_tcga',run_id='test',expression=str(link),annotation_gtf=str(self.input))['status'],'invalid')
+        with self.assertRaises(ValueError):
+            st.expression_tcga(run_id='test',expression=str(link),annotation_gtf=str(self.input))
         for value in [float('nan'),float('inf'),-1,True]:
-            self.assertEqual(self.call('prepare_visualization',run_id='test',frequencies=str(self.input),coefficients=str(self.input),gene_positions=str(self.input),frequency=value)['status'],'invalid')
+            with self.subTest(frequency=value), self.assertRaises(ValueError):
+                st.prepare_visualization(run_id='test',frequencies=str(self.input),coefficients=str(self.input),gene_positions=str(self.input),frequency=value)
 
     def test_every_analysis_tool_fixed_argv(self):
         f = str(self.input)
@@ -150,13 +173,13 @@ class ToolsTest(unittest.TestCase):
             for i,(name,cohort,args,inputs) in enumerate(scenarios):
                 root = self.configure(cohort,str(i))
                 self.intermediate(root,*inputs)
-                result = self.call(name,run_id=str(i),**args)
+                result = getattr(st, name)(run_id=str(i),**args)
                 expected = 'prepared' if name.startswith('prepare_') else 'process_completed'
                 self.assertEqual(result['status'],expected,(name,result))
                 self.assertEqual(result['executed'],not name.startswith('prepare_'))
                 if result['executed']:
                     self.assertIn('work/res/controlled-output.txt',result['output_files'])
-                    repeated = self.call(name,run_id=str(i),**args)
+                    repeated = getattr(st, name)(run_id=str(i),**args)
                     self.assertEqual(repeated['status'],'invalid',repeated)
                 self.assertFalse((root / '.active').exists())
         self.assertEqual(len(FakeProcess.calls),13)
@@ -165,19 +188,19 @@ class ToolsTest(unittest.TestCase):
         root = self.configure()
         args = dict(run_id='test',expression=str(self.input),annotation_gtf=str(self.input))
         with patch.object(st.shutil,'which',return_value=None),patch.object(st.subprocess,'Popen') as popen:
-            result = self.call('expression_tcga',**args)
+            result = st.expression_tcga(**args)
             self.assertEqual(result['status'],'unavailable')
             popen.assert_not_called()
         (root/'.active').write_text('locked')
-        self.assertEqual(self.call('expression_tcga',**args)['status'],'invalid')
+        self.assertEqual(st.expression_tcga(**args)['status'],'invalid')
         (root/'.active').unlink()
         with patch.object(st.sys,'platform','linux'),patch.object(st.shutil,'which',return_value='/fake/bin'),patch.object(st.subprocess,'Popen',FakeProcess):
             FakeProcess.returncode=2
-            self.assertEqual(self.call('expression_tcga',**args)['status'],'failed')
+            self.assertEqual(st.expression_tcga(**args)['status'],'failed')
             self.configure(run_id='timeout')
             FakeProcess.timeout=True
             with patch.object(st.os,'killpg') as kill:
-                result=self.call('expression_tcga',**{**args,'run_id':'timeout'})
+                result=st.expression_tcga(**{**args,'run_id':'timeout'})
                 self.assertEqual(result['status'],'timed_out')
                 kill.assert_called_once_with(FakeProcess.pid,signal.SIGKILL)
 
@@ -185,7 +208,7 @@ class ToolsTest(unittest.TestCase):
         root=self.configure()
         f=str(self.input)
         with patch.object(st.subprocess,'Popen') as popen:
-            result=self.call('prepare_network',run_id='test',expression=f,genotype=f,significant_pairs=f,
+            result=st.prepare_network(run_id='test',expression=f,genotype=f,significant_pairs=f,
                              gene_names=f,gene_positions=f,computing='cloud',stage=2)
             self.assertEqual(result['status'],'prepared',result)
             self.assertFalse(result['executed'])
@@ -199,7 +222,7 @@ class ToolsTest(unittest.TestCase):
     def test_real_host_preflight_without_model_or_scientific_execution(self):
         self.configure()
         with patch.object(st.subprocess,'Popen') as popen:
-            result=self.call('expression_tcga',run_id='test',expression=str(self.input),annotation_gtf=str(self.input))
+            result=st.expression_tcga(run_id='test',expression=str(self.input),annotation_gtf=str(self.input))
             self.assertEqual(result['status'],'unavailable',result)
             self.assertTrue(any('Linux' in name for name in result['missing_dependencies']))
             self.assertFalse(result['executed'])
@@ -208,11 +231,11 @@ class ToolsTest(unittest.TestCase):
     def test_scientific_process_interrupt_cleans_up_group_and_records_state(self):
         self.configure()
         with patch.object(st.sys,'platform','linux'),patch.object(st.shutil,'which',return_value='/fake/bin'),patch.object(st.subprocess,'Popen',FakeProcess),patch.object(FakeProcess,'communicate',side_effect=[KeyboardInterrupt(),(None,None)]),patch.object(st.os,'killpg') as kill:
-            result=self.call('expression_tcga',run_id='test',expression=str(self.input),annotation_gtf=str(self.input))
+            result=st.expression_tcga(run_id='test',expression=str(self.input),annotation_gtf=str(self.input))
             self.assertEqual(result['status'],'interrupted')
             self.assertTrue(result['executed'])
             kill.assert_called_once_with(FakeProcess.pid,signal.SIGKILL)
-        settings=self.call('get_signet_settings',run_id='test')
+        settings=st.get_signet_settings(run_id='test')
         self.assertEqual(settings['operations'][0]['status'],'interrupted')
 
     def test_recorded_status_queries_do_not_infer_success(self):
@@ -220,7 +243,7 @@ class ToolsTest(unittest.TestCase):
         (root/'partial.json').write_text(json.dumps({'operation':'partial','status':'starting','executed':False}))
         (root/'failed.json').write_text(json.dumps({'operation':'failed','status':'failed','executed':True,'returncode':2}))
         (root/'network.plan.json').write_text(json.dumps({'operation':'network'}))
-        result=self.call('get_signet_settings',run_id='test')
+        result=st.get_signet_settings(run_id='test')
         operations={x['operation']:x for x in result['operations']}
         self.assertEqual(operations['partial']['executed'],'unknown')
         self.assertEqual(operations['failed']['status'],'failed')
@@ -229,21 +252,22 @@ class ToolsTest(unittest.TestCase):
 
     def test_prerequisite_cohort_and_sample_order(self):
         self.configure()
-        self.assertEqual(self.call('run_pca',run_id='test')['status'],'invalid')
+        self.assertEqual(st.run_pca(run_id='test')['status'],'invalid')
         f=str(self.input)
-        result=self.call('genotype_gtex',run_id='test',vcf_before_phasing=f,vcf=f,reads=f,annotation=f,tissue='Lung')
+        result=st.genotype_gtex(run_id='test',vcf_before_phasing=f,vcf=f,reads=f,annotation=f,tissue='Lung')
         self.assertEqual(result['status'],'invalid')
         self.cov.write_text('ID\ts2\ts1\nC1\t0\t1\n')
-        self.assertEqual(self.call('adjust_expression',run_id='test',expression_bed=str(self.expression),covariates=str(self.cov))['status'],'invalid')
+        with self.assertRaisesRegex(ValueError, 'sample columns must match'):
+            st.adjust_expression(run_id='test',expression_bed=str(self.expression),covariates=str(self.cov))
 
     def test_modified_run_code_and_symlinks_rejected(self):
         root=self.configure()
         (root/'work/script/adj/pca_vis.R').write_text('modified')
-        result=self.call('expression_tcga',run_id='test',expression=str(self.input),annotation_gtf=str(self.input))
+        result=st.expression_tcga(run_id='test',expression=str(self.input),annotation_gtf=str(self.input))
         self.assertEqual(result['status'],'invalid')
         (root/'work/config.ini').unlink()
         (root/'work/config.ini').symlink_to(self.input)
-        self.assertEqual(self.call('get_signet_settings',run_id='test')['status'],'invalid')
+        self.assertEqual(st.get_signet_settings(run_id='test')['status'],'invalid')
 
 
 class ConversationTest(unittest.TestCase):

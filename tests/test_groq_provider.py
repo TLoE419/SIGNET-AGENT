@@ -6,8 +6,11 @@ import httpx
 from google.genai import types
 
 import agent.core.conversation as main
+from agent.core.context_budget import MAX_INPUT_TOKENS, input_tokens
 from agent.providers.groq_client import GROQ_MODEL, GroqClient, RequestPacer, groq_messages, rate_limit_delay, tool_schema
+from agent.tools.registry import ALL_TOOLS
 from agent.tools.signet import SIGNET_TOOLS, signet_catalog
+from agent.tools.workspace import LEGACY_EXECUTION
 from agent.tools.general import PROJECT
 
 
@@ -24,22 +27,27 @@ def call(arguments='{}', identifier='call-1'):
 
 class GroqTest(unittest.TestCase):
     def test_over_budget_declarations_fall_back_to_evidence_only_without_losing_history(self):
-        text = '既有研究條件：全部染色體，尚未同意品質門檻。' * 200
+        text = '既有研究條件：全部染色體，尚未同意品質門檻。' * 250
         contents = [types.Content(role='user', parts=[types.Part(text=text)])]
+        declarations = {'messages': groq_messages(contents, main.config.system_instruction),
+                        'tools': [tool_schema(function) for function in main.config.tools]}
+        self.assertGreater(input_tokens(declarations, GROQ_MODEL), MAX_INPUT_TOKENS)
         with self.client([(200, completion('根據現有證據回答。'))]) as client:
             result = client.generate_content(model=GROQ_MODEL, contents=contents, config=main.config)
         self.assertEqual(result.text, '根據現有證據回答。')
         self.assertNotIn('tools', self.requests[0])
+        self.assertLessEqual(input_tokens(self.requests[0], GROQ_MODEL), MAX_INPUT_TOKENS)
         self.assertEqual(self.requests[0]['messages'][1]['content'], text)
         self.assertIn('No new tools', self.requests[0]['messages'][0]['content'])
         self.assertEqual(contents[0].parts[0].text, text)
 
     def test_evidence_only_fallback_cannot_execute_a_hallucinated_tool(self):
-        text = '既有研究條件：全部染色體，尚未同意品質門檻。' * 200
+        text = '既有研究條件：全部染色體，尚未同意品質門檻。' * 250
         with self.client([(200, completion(calls=[call()]))]) as client:
             with patch.object(main, 'dispatch_tool') as dispatch:
                 answer = main.run_conversation(client, text, [])
         dispatch.assert_not_called()
+        self.assertNotIn('tools', self.requests[0])
         self.assertIn('模型請求失敗', answer)
 
     def test_budget_stops_before_network_and_preserves_long_user_conditions(self):
@@ -215,11 +223,17 @@ class GroqTest(unittest.TestCase):
 
     def test_all_tools_have_required_and_optional_typed_schemas(self):
         schemas = [tool_schema(function) for function in main.config.tools]
-        self.assertEqual(len(schemas), 33)
-        configure = next(x['function'] for x in schemas if x['function']['name'] == 'configure_signet')
-        self.assertEqual(configure['parameters']['required'], ['run_id'])
-        self.assertEqual(configure['parameters']['properties']['nchr'], {'type':'integer', 'default':22})
-        combine = next(x['function'] for x in schemas if x['function']['name'] == 'combine_covariates')
+        names = {schema['function']['name'] for schema in schemas}
+        self.assertEqual(names, {function.__name__ for function in ALL_TOOLS})
+        self.assertTrue({'get_workspace_stage', 'propose_workspace_stage', 'propose_workspace_dataset', 'navigate_workspace'} <= names)
+        self.assertFalse(names & LEGACY_EXECUTION)
+        self.assertNotIn('get_network_status', names)
+        workspace = next(x['function'] for x in schemas if x['function']['name'] == 'get_workspace_stage')
+        self.assertEqual(workspace['parameters']['required'], ['run_id', 'stage'])
+        self.assertEqual(workspace['parameters']['properties']['stage'], {'type':'integer'})
+        self.assertEqual(workspace['parameters']['properties']['source'], {'type':'string', 'default':'live'})
+        # Legacy Python schemas remain supported without exposing execution to the model.
+        combine = tool_schema(next(function for function in SIGNET_TOOLS if function.__name__ == 'combine_covariates'))['function']
         self.assertEqual(combine['parameters']['properties']['additional_covariates'],
                          {'type':'array', 'items':{'type':'string'}, 'default':None})
         files = next(x['function'] for x in schemas if x['function']['name'] == 'list_files')
@@ -240,7 +254,7 @@ class GroqTest(unittest.TestCase):
         self.assertEqual(messages[-1]['role'], 'tool')
         compact = json.loads(messages[-1]['content'])
         self.assertNotIn('scripts', compact)
-        self.assertEqual(compact['all_tools_including_list_files'], 33)
+        self.assertEqual(compact['all_tools_including_list_files'], len(ALL_TOOLS))
         self.assertTrue(compact['scripts_omitted'])
         self.assertIn('scripts', history[2].parts[0].function_response.response)
         self.assertIn(GROQ_MODEL, events[0])

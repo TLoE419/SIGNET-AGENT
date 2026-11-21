@@ -151,7 +151,9 @@ def _retry_context(run_id, expected_job_id, expected_attempt):
     for step in jobs.STEPS:
         if step != 'genotype':
             evidence += list((root / 'steps').glob(step + '*.json'))
-    if any(path.exists() or path.is_symlink() for path in evidence):
+    from agent.runtime.workspace_rerun import retry_preserved_paths
+    preserved = retry_preserved_paths(root)
+    if any((path.exists() or path.is_symlink()) and path not in preserved for path in evidence):
         raise jobs.StepError('conflict', 'A later stage has already been reviewed or attempted. Create a separate analysis instead of replacing its Stage 1 inputs.')
     return root, initial, previous, initial_digest, previous_digest
 

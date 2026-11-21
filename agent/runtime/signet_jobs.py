@@ -49,6 +49,7 @@ submission reads them, and simultaneous status checks must not download twice.
 """
 from dataclasses import dataclass, field
 import functools
+import fcntl
 import hashlib
 import io
 import json
@@ -56,6 +57,8 @@ import os
 from pathlib import Path
 import re
 import secrets
+import socket
+import stat
 import shlex
 import subprocess
 import tarfile
@@ -332,6 +335,88 @@ def _change(record, state, **values):
 
 def _now():
     return time.strftime('%Y-%m-%dT%H:%M:%S%z')
+
+
+def _release_submission_claim(root, descriptor):
+    """A finishing operation must never unlink a replacement owner's marker."""
+    try:
+        path = root / '.active'
+        owned = os.fstat(descriptor)
+        try:
+            current = path.lstat()
+        except FileNotFoundError:
+            return
+        if (current.st_dev, current.st_ino) == (owned.st_dev, owned.st_ino):
+            path.unlink()
+    finally:
+        os.close(descriptor)
+
+
+def _create_submission_claim(root, name, attempt, submission_token):
+    try:
+        descriptor = os.open(root / '.active', os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600)
+    except FileExistsError as error:
+        raise StepError('conflict', 'Another operation on this run is in progress.') from error
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        claim = {'version': 1, 'kind': 'workspace_submission', 'pid': os.getpid(),
+                 'host': socket.gethostname(), 'root': str(root), 'run_id': root.name,
+                 'step': name, 'attempt': attempt, 'submission_token': submission_token}
+        with os.fdopen(os.dup(descriptor), 'w') as stream:
+            json.dump(claim, stream)
+            stream.flush()
+            os.fsync(stream.fileno())
+        return descriptor
+    except BaseException:
+        _release_submission_claim(root, descriptor)
+        raise
+
+
+def _recovery_active_claim(root, record, *, expected=None, release=False):
+    """Recover only the unchanged, unlocked claim of a demonstrably dead local submitter."""
+    descriptor = None
+    blocked = {'status': 'unresolved', 'detail': 'A legacy, live or unverifiable local operation marker remains; it was not removed.'}
+    try:
+        try:
+            descriptor = os.open(root / '.active', os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK)
+        except FileNotFoundError:
+            return {'status': 'absent'} if expected in (None, {'status': 'absent'}) else blocked
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        info = os.fstat(descriptor)
+        current = (root / '.active').lstat()
+        if not stat.S_ISREG(info.st_mode) or info.st_size > 4096 or (info.st_dev, info.st_ino) != (current.st_dev, current.st_ino):
+            return blocked
+        raw = os.read(descriptor, 4097)
+        claim = json.loads(raw)
+        identity = {'version': 1, 'kind': 'workspace_submission', 'host': socket.gethostname(),
+                    'root': str(root), 'run_id': record['run_id'], 'step': record['step'],
+                    'attempt': record.get('attempt', 1), 'submission_token': record.get('submission_token')}
+        if (not isinstance(claim, dict) or set(claim) != set(identity) | {'pid'}
+                or type(claim.get('pid')) is not int or claim['pid'] <= 0
+                or any(type(claim[key]) is not type(value) or claim[key] != value for key, value in identity.items())):
+            return blocked
+        try:
+            os.kill(claim['pid'], 0)
+        except ProcessLookupError:
+            pass
+        else:
+            return blocked
+        evidence = {'status': 'dead_submitter', 'identity': [info.st_dev, info.st_ino],
+                    'digest': hashlib.sha256(raw).hexdigest()}
+        if expected is not None and evidence != expected:
+            return blocked
+        if release:
+            current = (root / '.active').lstat()
+            if (current.st_dev, current.st_ino) != (info.st_dev, info.st_ino):
+                return blocked
+            (root / '.active').unlink()
+            return {'status': 'released'}
+        return evidence
+    except (OSError, ValueError, KeyError, TypeError, OverflowError):
+        return blocked
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
 
 
 _LOCKS = {}
@@ -989,7 +1074,7 @@ def submit(run_id, name, inputs, resources=None, options=None):
         _retry_environment(root, workspace_retry, previous, config)
     directory = _remote_dir(config, root, run_id)
     dataset_plan = None
-    if name == 'genotype' and not (root / 'rerun.json').exists():
+    if name == 'genotype' and (previous is not None or not (root / 'rerun.json').exists()):
         from agent.runtime.workspace_inputs import staging_plan
         dataset_plan = staging_plan(root, directory, attempt=attempt)
         if dataset_plan and inputs != dataset_plan['inputs']:
@@ -1005,11 +1090,8 @@ def submit(run_id, name, inputs, resources=None, options=None):
         local_pairs.append((signet._no_links(root / step.download), signet._no_links(local_results)))
         if archived.exists() or any(destination.exists() for _, destination in local_pairs):
             raise StepError('conflict', 'The previous attempt archive already exists; it will not be overwritten.')
-    try:
-        fd = os.open(root / '.active', os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-    except FileExistsError as error:
-        raise StepError('conflict', 'Another operation on this run is in progress.') from error
-    os.close(fd)
+    submission_token = secrets.token_hex(16)
+    descriptor = _create_submission_claim(root, name, attempt, submission_token)
     try:
         # Inputs, plus the keys this step reads from earlier results of the run (as local work/
         # paths; the upload rewrites them to the run's HPC3 folder).
@@ -1022,7 +1104,7 @@ def submit(run_id, name, inputs, resources=None, options=None):
         token = _owner(root, directory)
         record = {'step': name, 'run_id': run_id, 'flag': step.flag, 'remote_dir': directory,
                   'inputs': {key: path for key, (path, _) in checked.items()}, 'resources': request,
-                  'submission_token': secrets.token_hex(16),
+                  'submission_token': submission_token,
                   'partition': config['partition'], 'image': config['image'], 'submitted_at': _now()}
         if answers:
             record['options'] = answers   # kept for reproducibility: the answers SIGNET was given
@@ -1118,7 +1200,7 @@ def submit(run_id, name, inputs, resources=None, options=None):
             raise StepError('conflict', f'Step {name} was already submitted for this run on HPC3.')
         raise StepError('remote_failed', 'sbatch refused the job: ' + values.get('sbatch_failed', 'no reason given.'))
     finally:
-        (root / '.active').unlink(missing_ok=True)
+        _release_submission_claim(root, descriptor)
 
 
 def _children_script(step):
