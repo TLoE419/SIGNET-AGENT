@@ -215,13 +215,12 @@ class GroqTest(unittest.TestCase):
 
     def test_all_tools_have_required_and_optional_typed_schemas(self):
         schemas = [tool_schema(function) for function in main.config.tools]
-        self.assertEqual(len(schemas), 33)
+        self.assertEqual(len(schemas), 17)
         configure = next(x['function'] for x in schemas if x['function']['name'] == 'configure_signet')
         self.assertEqual(configure['parameters']['required'], ['run_id'])
         self.assertEqual(configure['parameters']['properties']['nchr'], {'type':'integer', 'default':22})
-        combine = next(x['function'] for x in schemas if x['function']['name'] == 'combine_covariates')
-        self.assertEqual(combine['parameters']['properties']['additional_covariates'],
-                         {'type':'array', 'items':{'type':'string'}, 'default':None})
+        report = next(x['function'] for x in schemas if x['function']['name'] == 'get_step_report')
+        self.assertEqual(set(report['parameters']['required']), {'run_id', 'step'})
         files = next(x['function'] for x in schemas if x['function']['name'] == 'list_files')
         self.assertEqual(files['parameters']['properties']['folder'].get('enum'), [str(PROJECT)])
 
@@ -230,7 +229,10 @@ class GroqTest(unittest.TestCase):
         responses = [(200, completion(summary, [call()])), (200, completion('查詢完成。')),
                      (200, completion('接續上一輪。'))]
         history, events = [], []
-        with self.client(responses) as client, patch.object(main, 'dispatch_tool', return_value=signet_catalog()) as dispatch:
+        # A small result keeps this test about call IDs; the full catalog's size is covered below.
+        evidence = {key: value for key, value in signet_catalog().items()
+                    if key not in ('hpc3_setup', 'analysis_stages', 'resources', 'scope')}
+        with self.client(responses) as client, patch.object(main, 'dispatch_tool', return_value=evidence) as dispatch:
             self.assertEqual(main.run_conversation(client, '查詢能力', history, progress=events.append), '查詢完成。')
             self.assertEqual(main.run_conversation(client, '繼續', history), '接續上一輪。')
         dispatch.assert_called_once_with('signet_catalog', {})
@@ -240,7 +242,7 @@ class GroqTest(unittest.TestCase):
         self.assertEqual(messages[-1]['role'], 'tool')
         compact = json.loads(messages[-1]['content'])
         self.assertNotIn('scripts', compact)
-        self.assertEqual(compact['all_tools_including_list_files'], 33)
+        self.assertEqual(compact['all_tools_including_list_files'], 17)
         self.assertTrue(compact['scripts_omitted'])
         self.assertIn('scripts', history[2].parts[0].function_response.response)
         self.assertIn(GROQ_MODEL, events[0])
@@ -249,10 +251,18 @@ class GroqTest(unittest.TestCase):
         self.assertEqual(self.send_times, [0, 0, 0])
         self.assertEqual(self.pauses, [])
 
+    def test_full_catalog_over_the_free_budget_is_answered_without_new_tools(self):
+        responses = [(200, completion('', [call()])), (200, completion('能力說明。'))]
+        with self.client(responses) as client, patch.object(main, 'dispatch_tool', return_value=signet_catalog()):
+            self.assertEqual(main.run_conversation(client, '你可以做什麼', []), '能力說明。')
+        second = self.requests[1]
+        self.assertNotIn('tools', second, 'the over-budget round drops only new-call capability')
+        self.assertIn('analysis_stages', json.dumps(second['messages'], ensure_ascii=False), 'catalog evidence is kept')
+
     def test_non_catalog_evidence_is_not_truncated(self):
         result = {'status':'unavailable', 'executed':False, 'missing_dependencies':['Rscript'], 'value':'x'*2000}
         content = types.Content(role='user', parts=[types.Part(function_response=types.FunctionResponse(
-            id='a', name='expression_tcga', response=result))])
+            id='a', name='cis_eqtl', response=result))])
         sent = groq_messages([content], 'rules')
         self.assertEqual(json.loads(sent[-1]['content']), result)
 
