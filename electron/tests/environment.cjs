@@ -5,7 +5,7 @@ const assert=require('node:assert/strict');
 const {mkdtempSync,writeFileSync,rmSync}=require('node:fs');
 const path=require('node:path'),os=require('node:os');
 const {createHash}=require('node:crypto');
-const {app}=require('electron');
+const {app,Menu}=require('electron');
 const {Server,utils}=require('ssh2');
 const {launch}=require('../main/app/main.cjs');
 const {HostKeyTrustStore}=require('../build/ssh/index.cjs');
@@ -32,6 +32,10 @@ async function until(check){for(let i=0;i<200;i++){if(await check())return;await
      if(script.includes("printf 'home="))out=`home=/home/testuser\nroot=/home/testuser/mock-signet\n${['bash','git','tar','sha256sum','timeout','python3','setsid','sbatch','scontrol','sinfo','squeue'].map(t=>t+'=yes').join('\n')}\nexecutor=/usr/bin/apptainer\npartition=mock\nwritable=yes\nsource=${source?'exists':'missing'}\nexample=${source?'exists':'missing'}\nimage=${image?'exists':'missing'}\n`;
      // The Python service's installer (agent/runtime/hpc.py) starts a background install.
      else if(script.includes('SIGNET_INSTALL')){source=true;out='@@workspace_path\t/home/testuser/mock-signet\n@@signet\tstarted\n'}
+     else if(script.includes('say workspace_path "$W"'))out=Object.entries({
+      workspace_path:'/home/testuser/mock-signet',signet:'yes',signet_integrity:'verified',signet_revision:inventory.revision,
+      signet_example:'verified',file_container:'4096',
+     }).map(([key,value])=>`@@${key}\t${value}\n`).join('');
      else if(script.includes('Rscript -e')&&failVerification){err='MOCK: SIGNET settings verification failed: config.ini unreadable\n';code=1}
      setTimeout(()=>{if(out)stream.write(out);if(err)stream.stderr.write(err);stream.exit(code);stream.end()},80);
     });
@@ -41,14 +45,37 @@ async function until(check){for(let i=0;i<200;i++){if(await check())return;await
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));const port=server.address().port,userData=path.join(directory,'app');
  const trust=new HostKeyTrustStore(path.join(userData,'ssh')),blob=Buffer.from(host.public.split(' ')[1],'base64');await trust.load();await trust.trust({host:'127.0.0.1',port,algorithm:'ssh-ed25519',fingerprint:'SHA256:'+createHash('sha256').update(blob).digest('base64').replace(/=+$/,''),publicKey:blob.toString('base64')});
  running=await launch({devMode:true,visible:false,userData,stateFile:path.join(directory,'state.json')});const window=running.window,js=s=>window.webContents.executeJavaScript(s);
- const classicLoaded = once(window.webContents, 'did-finish-load');
- require('electron').Menu.getApplicationMenu().getMenuItemById('classic-view').click();
- await classicLoaded;
- await until(()=>js('!!document.querySelector(".ssh-identity")'));
- await js(`window.envPhases=[];window.signetDesktop.environment.subscribe(s=>window.envPhases.push(s.phase));true;`);
+ const switchView=async id=>{
+  const loaded=once(window.webContents,'did-finish-load');
+  Menu.getApplicationMenu().getMenuItemById(id).click();
+  await loaded;
+ };
+ const clickSelector=selector=>js(`document.querySelector(${JSON.stringify(selector)}).click()`);
+ const connectionSwitch=()=>js(`document.querySelector('#ml-remote-switch')?.getAttribute('aria-checked')`);
+ const connectionState=async()=> (await js('window.signetDesktop.ssh.getSnapshot()')).value.connection?.status;
+ const observeEnvironment=phases=>js(`window.envPhases=${JSON.stringify(phases)};window.signetDesktop.environment.subscribe(s=>window.envPhases.push(s.phase));true;`);
+ await clickSelector('[data-nav-target="settings"]');
+ await observeEnvironment([]);
  const saved=await js(`window.signetDesktop.ssh.saveProfile(${JSON.stringify({name:'Local mock',host:'127.0.0.1',port,username:'testuser',auth:{method:'private-key',privateKeyPath:keyPath}})})`);assert.ok(saved.ok);
- assert.ok((await js(`window.signetDesktop.ssh.connect(${JSON.stringify(saved.value.id)},'local-test-passphrase')`)).ok);
+ await until(()=>js(`document.querySelector('#ml-remote-switch:not(:disabled)')?.getClientRects().length>0`));
+ assert.equal(await connectionSwitch(),'false');
+ assert.ok(await js(`document.querySelector('#ml-check-environment').disabled`));
+ await clickSelector('#ml-remote-switch');
+ await until(()=>js(`!!document.querySelector('.ssh-unlock[open]')`));
+ assert.equal(connections,0,'opening the credential prompt does not connect');
+ await js(`(()=>{
+  const input=document.querySelector('.ssh-unlock input[type=password]');
+  Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,'local-test-passphrase');
+  input.dispatchEvent(new Event('input',{bubbles:true}));
+ })()`);
+ await js(`document.querySelector('.ssh-unlock form').requestSubmit()`);
+ await until(async()=>await connectionSwitch()==='true');
+ await until(()=>js(`document.querySelector('.ml-remote-readiness')?.dataset.phase==='needs-install'`));
+ assert.equal(await connectionState(),'connected');
+ const startingPhases=await js('window.envPhases');
+ await switchView('classic-view');
  await until(()=>js(`document.querySelector('.ssh-environment-status')?.dataset.phase==='needs-install'`));
+ await observeEnvironment(startingPhases);
  assert.equal(commands.length,1,'automatic probe must not install software');
  assert.ok(await js(`document.querySelector('.ssh-status-subtitle').textContent.includes('testuser@127.0.0.1:')`));
  await js(`document.querySelector('.ssh-environment-status').click()`);
@@ -93,5 +120,21 @@ async function until(check){for(let i=0;i<200;i++){if(await check())return;await
  const python=await pythonEnvironment('environment');
  assert.equal(JSON.parse(python.stdout).image,config.value.config.image);assert.equal(JSON.parse(python.stdout).partition,'mock');
  writeFileSync(path.join(os.tmpdir(),'signet-environment-local.png'),(await window.webContents.capturePage()).toPNG());
- await running.quit();console.log('PASS: localhost SSH mock; setup paths before verification, Python source install, failed verification stays blocked, retry reaches ready');
+ await switchView('workspace-view');
+ await clickSelector('[data-nav-target="settings"]');
+ await until(async()=>await connectionSwitch()==='true');
+ const status=()=>js(`document.querySelector('#ml-remote-status').textContent.trim()`);
+ const currentStatus=await status();
+ await clickSelector('#ml-language');
+ await until(async()=>await status()!==currentStatus);
+ assert.equal(await connectionSwitch(),'true');
+ assert.equal(connections,1,'switching interfaces keeps the original SSH connection');
+ await until(()=>js(`document.querySelector('.ml-remote-readiness')?.dataset.phase==='ready'`));
+ await clickSelector('#ml-check-environment');
+ await until(()=>js(`document.querySelector('#ml-check-summary').textContent.includes('2/7')`));
+ assert.equal(await js(`document.querySelectorAll('#ml-environment-checks [data-ready="true"]').length`),2);
+ await clickSelector('#ml-remote-switch');
+ await until(async()=>await connectionSwitch()==='false'&&await connectionState()==='disconnected');
+ await until(()=>js(`document.querySelector('#ml-check-environment').disabled&&document.querySelectorAll('#ml-environment-checks [data-ready="true"]').length===0`));
+ await running.quit();console.log('PASS: workspace SSH login and disconnect, shared connection across views, and localhost environment setup and verification');
 })().catch(async error=>{console.error(error);await running?.backend.forceStop();app.exit(1)});

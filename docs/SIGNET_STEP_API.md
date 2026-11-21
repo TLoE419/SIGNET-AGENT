@@ -138,6 +138,62 @@ Inside the API:
 | 13 | `GET /signet/runs/{run_id}/results?session=<id>` | no | Read the completed graph |
 | 14 | `POST /signet/runs/{run_id}/results/download` | no | Request a one-time result download |
 
+### Workspace chromosome 1 review and submission
+
+`GET /signet/genotype/example` reviews the prepared chromosome 1 genotype files.
+`POST /signet/genotype/example` accepts `run_id`, `inputs`, `settings` and
+`resources` and creates the workspace run before submitting Stage 1.
+
+`GET /signet/runs/{run_id}/expression/example` reviews Stage 2 for that existing
+workspace run after its genotype step completes. Its response contains
+`run_id`, `inputs`, `settings`, `resources` and `limits`. The inputs are the
+audited source's `example/gexp/example_gexp` and the configured gene
+annotation, defaulting to `refdata/gencode.v22.genes.gtf`. Selected annotations
+still follow the input-root and path checks described in section 3. The
+chromosome setting is fixed to `{"restrict.tcga": 1}`.
+
+`POST /signet/runs/{run_id}/expression/example` accepts the reviewed `inputs`,
+`settings` and `resources`, submits expression through the step service in the
+same run, and returns its ordinary step record with HTTP 202. Poll
+`GET /signet/runs/{run_id}/steps/expression` for the queue, execution and
+validated completion. Duplicate requests for an active or completed step
+receive HTTP 409 before the saved review changes. Rejected uploads can be
+reviewed and submitted manually again. Prior confirmed reviews are retained
+as `workspace-expression.review<N>.json`.
+
+Both steps appear together in `GET /stage6/history` with the submitted files
+and settings. The completed expression result is available through
+`GET /stage/results?run={run_id}&stage=2&source=live`, which summarizes the
+remote outputs on HPC3 and returns approved counts, histograms and gene summaries.
+Individual matrices and sample identifiers are not downloaded. Stage 3 uses
+`GET /stage3/results?run={run_id}&source=live`: its `pca` contains a validated
+PNG (`png_base64`, `width`, `height`, `point_count`) instead of individual
+coordinates. Reads verify the saved run/job/attempt, remote owner and completion
+markers, and reject a changed selection or artifact.
+
+`GET /signet/runs/{run_id}/adjust/example` reviews Stage 3 of the same run.
+It returns `inputs`, `options` (`npc`, default 3), `resources`, `limits`,
+`ready`, `issues`, and a clinical compatibility summary. The form remains
+available when inputs need attention. Optional `?clinical=<absolute_path>`
+checks a different file under the input roots allowed by the step service.
+The saved remote clinical selection takes priority. Otherwise an existing
+`refdata/official-demo-chr1-restart-clinical.tsv` from the archived chromosome 1
+example is selected when available, followed by `refdata/clinical.tsv`.
+
+The review checks completed genotype and expression in the same remote run,
+the earlier intermediate files, and `submitter_id`, `race`, and `gender`
+columns. It reports missing matched patients and covariate values. The pinned
+official adjustment requires three race groups and variation in gender. The
+checker follows its patient-identifier matching and existing race handling
+without modifying the clinical input.
+
+`POST /signet/runs/{run_id}/adjust/example` accepts the reviewed `inputs`,
+`options` (`npc` is an integer from 0 to 10), and `resources`. It checks the
+clinical file again, records the confirmed request and submits only `adjust`.
+Poll `GET /signet/runs/{run_id}/steps/adjust` for progress. The original
+genotype and expression records remain associated with this run. Clinical
+input and principal component choices appear with the Stage 3 history entry.
+
 ### 5.1 `GET /signet/catalog`
 
 What the app may offer. The panel builds its forms from this instead of hard-coding them.

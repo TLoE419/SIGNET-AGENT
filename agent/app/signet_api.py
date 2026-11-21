@@ -39,6 +39,7 @@ from urllib.parse import parse_qs
 
 from agent.runtime import analysis_family, analysis_rerun, step_proposal
 from agent.runtime import signet_jobs as jobs
+from agent.runtime import workspace_genotype
 from agent.runtime.visualization import read_graph, threshold_counts
 import agent.tools.signet as signet
 
@@ -150,6 +151,39 @@ def get_catalog(handler, url):
     """
     _query(url, ())
     return 200, jobs.catalog()
+
+
+def review_genotype_example(handler, url):
+    _query(url, ())
+    return 200, workspace_genotype.review_example()
+
+
+def submit_genotype_example(handler, url):
+    _query(url, ())
+    fields = ('run_id', 'inputs', 'settings', 'resources')
+    return 202, workspace_genotype.submit_example(**_body(handler, fields, required=fields))
+
+
+def review_expression_example(handler, url, run_id):
+    _query(url, ())
+    return 200, workspace_genotype.review_expression(run_id)
+
+
+def submit_expression_example(handler, url, run_id):
+    _query(url, ())
+    fields = ('inputs', 'settings', 'resources')
+    return 202, workspace_genotype.submit_expression(run_id, **_body(handler, fields, required=fields))
+
+
+def review_adjust_example(handler, url, run_id):
+    query = _query(url, ('clinical',))
+    return 200, workspace_genotype.review_adjust(run_id, query.get('clinical'))
+
+
+def submit_adjust_example(handler, url, run_id):
+    _query(url, ())
+    fields = ('inputs', 'options', 'resources')
+    return 202, workspace_genotype.submit_adjust(run_id, **_body(handler, fields, required=fields))
 
 
 # ---------- runs (local; includes signet -s) ----------
@@ -603,6 +637,11 @@ def get_log(handler, url, run_id, step):
 ROUTES = [
     (re.compile(r'/signet/progress'), {'GET': get_progress}),
     (re.compile(r'/signet/catalog'), {'GET': get_catalog}),
+    (re.compile(r'/signet/genotype/example'), {'GET': review_genotype_example, 'POST': submit_genotype_example}),
+    (re.compile(rf'/signet/runs/{_RUN}/expression/example'),
+     {'GET': review_expression_example, 'POST': submit_expression_example}),
+    (re.compile(rf'/signet/runs/{_RUN}/adjust/example'),
+     {'GET': review_adjust_example, 'POST': submit_adjust_example}),
     (re.compile(r'/signet/runs'), {'GET': list_runs, 'POST': create_run}),
     (re.compile(r'/signet/analyses'), {'POST': start_analysis}),
     (re.compile(rf'/signet/runs/{_RUN}'), {'GET': get_run}),

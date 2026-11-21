@@ -4,7 +4,7 @@ Use a local chat interface to explore SIGNET's analysis capabilities, inspect fi
 
 **This version includes no study data, example datasets, reference datasets, or precomputed results.**
 
-The desktop opens to the bilingual workspace. The chat uses the existing SIGNET Agent with your configured model and saved conversations. Data and Run history show saved dataset records and their archived runs. Each run has an input snapshot and a timeline that opens its six saved stage results. Stages 1–5 in Analysis use simulated data. Use **View → Classic Interface** for model setup and remote connection controls.
+The desktop opens to the bilingual workspace. The chat uses the existing SIGNET Agent with your configured model and saved conversations. Data and Run history show saved dataset records and their archived runs. Each run has an input snapshot and a timeline that opens its saved stage results. Analysis can submit Stage 1 for the chromosome 1 example through the existing HPC3 workflow. After Stage 1 completes, open Stage 2 of that run to review and manually submit expression preprocessing. Stage 3 continues that run with a reviewed clinical file and principal component count, live progress, and saved sample matching, PCA and expression adjustment results. Stages 4–5 in Analysis use simulated data. Use **Settings → Remote compute** to connect to HPC3 and check remote resources.
 
 ## Replacing the Former Desktop Workbench
 

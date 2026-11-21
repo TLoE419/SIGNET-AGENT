@@ -19,7 +19,7 @@ from agent.core.conversation import MODEL, run_conversation
 from agent.core.model_timing import ModelRequestTiming
 from agent.paths import PROJECT_ROOT
 from agent.providers import PROVIDERS, create_provider_adapter
-from agent.runtime import analysis_family
+from agent.runtime import analysis_family, workspace_genotype
 from agent.runtime.step_proposal import CHAT_SESSION
 from agent.stage6.workspace import ARCHIVED_STEP_JOBS, Workspace
 from agent.tools.ui import UI_CHANNEL
@@ -267,27 +267,37 @@ class ChatHandler(BaseHTTPRequestHandler):
         if not secrets.compare_digest(self.headers.get('X-Chat-Token', ''), self.server.token):
             return self._error(403, 'Workspace token required.')
         query = parse_qs(url.query, keep_blank_values=True)
-        if (set(query) != {'run', 'stage'} or len(query['run']) != 1 or not query['run'][0]
-                or len(query['stage']) != 1 or query['stage'][0] not in ARCHIVED_STEP_JOBS):
-            return self._error(400, 'Provide a run ID and an archived stage number (1, 2, 4, or 5).')
+        if (set(query) - {'run', 'stage', 'source'} or len(query.get('run', [])) != 1 or not query['run'][0]
+                or len(query.get('stage', [])) != 1 or query['stage'][0] not in ARCHIVED_STEP_JOBS
+                or ('source' in query and (query['source'] != ['live'] or query['stage'][0] not in ('1', '2')))):
+            return self._error(400, 'Provide a run ID and stage number (1, 2, 4, or 5). A live result requires stage 1 or 2.')
+        run_id, stage = query['run'][0], query['stage'][0]
         try:
-            result = self.server.stage6.archived_stage_result(query['run'][0], query['stage'][0])
+            result = (workspace_genotype.completed_result(run_id, stage) if 'source' in query
+                      else self.server.stage6.archived_stage_result(run_id, stage))
         except (OSError, ValueError, KeyError, TypeError, OverflowError):
             return self._error(404, 'No readable archived result for this stage.')
         return self.json_response(result)
+
 
 
     def stage3_results_get(self, url):
         if not secrets.compare_digest(self.headers.get('X-Chat-Token', ''), self.server.token):
             return self._error(403, 'Workspace token required.')
         query = parse_qs(url.query, keep_blank_values=True)
-        if set(query) != {'run'} or len(query['run']) != 1 or not query['run'][0]:
-            return self._error(400, 'Provide a single run ID.')
+        if (set(query) - {'run', 'source'} or len(query.get('run', [])) != 1 or not query['run'][0]
+                or ('source' in query and query['source'] != ['live'])):
+            return self._error(400, 'Provide a single run ID and an optional live source.')
         try:
-            result = self.server.stage6.archived_stage3(query['run'][0])
+            if 'source' in query:
+                from agent.runtime import workspace_adjustment
+                result = workspace_adjustment.completed_result(query['run'][0])
+            else:
+                result = self.server.stage6.archived_stage3(query['run'][0])
         except (OSError, ValueError, KeyError, TypeError, OverflowError):
             return self._error(404, 'No readable archived Stage 3 result for this run.')
         return self.json_response(result)
+
 
 
     def stage6_results_get(self, url):
@@ -311,7 +321,8 @@ class ChatHandler(BaseHTTPRequestHandler):
             return self._error(403, 'Workspace token required.')
         if url.query:
             return self._error(400, 'The Stage 6 history does not accept query parameters.')
-        return self.json_response(self.server.stage6.archived_history())
+        return self.json_response(self.server.stage6.history())
+
 
 
     def json_response(self, value, status=200):

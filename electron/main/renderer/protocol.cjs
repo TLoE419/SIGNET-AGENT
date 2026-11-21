@@ -7,6 +7,7 @@ const assets=new Map([
  ['/chat-markdown.js',['chat-markdown.js','text/javascript']],
  ['/workspace/workspace.css',['workspace/workspace.css','text/css']],
  ['/workspace/workspace.js',['workspace/workspace.js','text/javascript']],
+ ['/workspace/genotype-run.js',['workspace/genotype-run.js','text/javascript']],
  ['/workspace/icons.js',['workspace/icons.js','text/javascript']],
  ['/workspace/interaction.js',['workspace/interaction.js','text/javascript']],
  ['/renderer.js',['renderer.js','text/javascript']],
@@ -16,7 +17,7 @@ const assets=new Map([
 ]);
 const escapeHtml=value=>String(value).replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
 function headers(type,devMode,origin){return {'Content-Type':type+'; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer',
- 'Content-Security-Policy':`default-src 'self'; script-src 'self'; style-src 'self'${devMode?" 'unsafe-inline'":''}; connect-src 'self'; frame-src ${origin}/signet/result-preview/; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`};}
+ 'Content-Security-Policy':`default-src 'self'; img-src 'self' data:; script-src 'self'; style-src 'self'${devMode?" 'unsafe-inline'":''}; connect-src 'self'; frame-src ${origin}/signet/result-preview/; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`};}
 /** Serve only the renderer build allowlist. All API requests retain their HTTP origin. */
 function createRendererHandler({origin,fetch,devMode=false,directory=path.join(__dirname,'../../build/renderer')}){
  let pageToken;

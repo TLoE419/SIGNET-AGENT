@@ -35,16 +35,53 @@ are bundled.
 
 The desktop opens directly to the bilingual workspace. The left chat uses the
 existing SIGNET Agent, model configuration, and saved conversations. Choose a
-dataset in **Data**, then open **Run history** to see that dataset's completed
-runs. A run shows its saved input filenames, and its six timeline stages open
-the results for that run. Stages 1 and 2 show genotype and expression outputs.
+dataset in **Data**, then open **Run history** to see that dataset's saved
+runs. Each run shows its saved input filenames and the timeline stages
+available for that run. Stages 1 and 2 show genotype and expression outputs.
 Stage 3 shows sample matching, the recorded principal component count, and the
 archived expression comparison. Stage 4 shows significant association pairs,
 and Stage 5 shows candidate edges grouped by their recorded bootstrap frequency.
 Stage 6 opens the network and edge table, with a filter for the selected gene.
 Each stage uses the settings preserved with its job. The Stage 6 selector in
-**Analysis** also follows the selected dataset. The first five stage previews
+**Analysis** also follows the selected dataset. The previews for Stages 4–5
 in **Analysis** still use simulated data.
+
+### Submit the chromosome 1 example
+
+Connect to HPC3 from **Settings → Remote compute**. The same panel can check
+the remote resources and open the existing environment settings. Use **View →
+Classic Interface** when installing missing resources from its Workflow panel.
+In **Analysis → Stage → Stage 1**
+of the chromosome 1 example, check the four prepared input files. Review the
+fixed chromosome, thresholds, and resource settings, then select **Submit Stage 1**.
+The application tracks the saved job through the queue, execution, and output
+validation. From **Run history**, open the new run and select its Stage 1 result
+to read remotely computed aggregate statistics and the settings actually submitted.
+
+After Stage 1 completes, open the same run from **Run history** and select
+**Stage 2**. Confirm the example expression file, gene annotation, chromosome
+and resources, then select **Submit Stage 2**. Its queue and execution status
+update automatically. The completed run retains both stages, their input
+files and the settings submitted for each step. Reopening Stage 2 after completion
+shows its remotely computed expression distribution and gene summary.
+
+Once both steps complete, open **Stage 3** of the same run. Its review keeps the
+clinical path, principal component count (0–10, default 3) and resources visible.
+**Check clinical file** checks the required columns and matching patients before
+**Submit Stage 3** starts the original adjustment workflow. The default clinical
+path uses the existing chromosome 1 example from earlier saved runs when present,
+with the current selected clinical file taking precedence. You can enter another
+allowed remote clinical path and check it before submission.
+
+Stage 3 preserves the actual clinical input and PCA outputs inside its remote
+run folder. Counts, expression comparison statistics and a raster PCA plot are
+computed there. Individual matrices, clinical rows, sample identifiers and PCA
+coordinates remain on HPC3; only approved summaries and the plot reach this
+workspace. Historical locally supplied archives remain read-only.
+
+The local installation needs the audited SIGNET source, as described under
+[user guide](../docs/USER_GUIDE.md). The existing desktop SSH environment
+supplies the prepared files and scheduler for the submission.
 
 Archived HPC3 exports remain local. The application reads these records under
 the ignored `data/` directory:
@@ -79,6 +116,7 @@ archive is a read-only result and remains tied to its saved input snapshot.
 Use **View → Classic Interface** for model and SSH setup, current HPC3 confirmation
 cards and results, and the development terminal when started with `--dev`. **View → Workspace** returns to the new
 interface.
+Both interfaces share the same HPC3 connection.
 
 ## Development terminal
 
