@@ -17,6 +17,111 @@ class RerunTest(unittest.TestCase):
     remote = fixtures.StepsTest.remote
     slurm = fixtures.StepsTest.slurm
     finish_job = fixtures.StepsTest.finish_job
+    genotype_inputs = fixtures.StepsTest.genotype_inputs
+
+    def genuine_upstream_branch(self, name='guarded_branch'):
+        """Submit only fake-scheduler jobs, retaining their real recorded control files."""
+        from agent.runtime import workspace_genotype as workspace
+        jobs.update_settings('step_test', {'restrict.tcga.geno': 1, 'restrict.tcga': 1})
+        self.slurm(sbatch_reply='101')
+        genotype = jobs.submit('step_test', 'genotype', self.genotype_inputs())
+        self.remote_dir = Path(genotype['remote_dir'])
+        for relative in genotype.get('required_outputs', jobs.STEPS['genotype'].required):
+            path = self.remote_dir / 'work' / relative
+            path.parent.mkdir(parents=True, exist_ok=True); path.write_text('data\n')
+        (self.remote_dir / 'steps/genotype.done').write_text('0 2026-11-17T10:00:00\n')
+        self.slurm(squeue='', sacct='COMPLETED')
+        genotype = jobs.status('step_test', 'genotype', refresh=True)
+        self.assertEqual(genotype['state'], 'completed')
+        (self.root / workspace.SNAPSHOT).write_text(json.dumps({**genotype, 'mode': 'example', 'dataset_id': workspace.DATASET_ID}))
+        self.slurm(sbatch_reply='202')
+        jobs.submit('step_test', 'expression', self.inputs)
+        self.finish_job()
+        expression = jobs.status('step_test', 'expression', refresh=True)
+        self.assertEqual(expression['state'], 'completed')
+        (self.root / workspace.EXPRESSION_SNAPSHOT).write_text(json.dumps({**expression, 'dataset_id': workspace.DATASET_ID}))
+        sample_ids = 'TCGA-AA-0001-NT\nTCGA-AA-0002-NT\nTCGA-AA-0003-NT\n'
+        (self.remote_dir / 'work/res/resg/signet_Genotype.sampleID').write_text(sample_ids)
+        (self.remote_dir / 'work/res/rest/signet_gexpID').write_text(sample_ids)
+        step = jobs.STEPS['adjust']
+        jobs._save(self.root, {'run_id': 'step_test', 'step': 'adjust', 'state': 'completed',
+            'inputs': {}, 'settings': {}, 'options': {'npc': 3}, 'resources': step.resources})
+        preview = rerun.review('step_test', 'adjust')
+        for relative in preview['required_files']:
+            path = self.remote_dir / 'work' / relative
+            if not path.exists():
+                path.parent.mkdir(parents=True, exist_ok=True); path.write_text('upstream intermediate\n')
+        rerun.create('step_test', 'adjust', name, preview['revision'], preview['parameters'])
+        root = self.project / 'runs' / name
+        directory = str(self.remote_dir.parent / name)
+        token = jobs._owner(root, directory); jobs._upload(root, directory, token)
+        return root, directory, token
+
+    def test_inherited_real_control_evidence_unlocks_guarded_clinical_copy_without_a_new_job(self):
+        from agent.runtime import workspace_genotype as workspace
+        root, directory, token = self.genuine_upstream_branch()
+        expression = jobs._load(root, 'expression')
+        before = {path: path.read_bytes() for path in (self.remote_dir / 'steps').iterdir() if path.is_file()}
+        args = (self.fake / 'sbatch_args').read_bytes()
+        code, _, _ = jobs._shell(jobs._say() + jobs._output_guard(root, expression))
+        self.assertEqual(code, 92, 'The empty child has no attributable expression marker yet')
+        rerun.stage_remote(root, directory, token)
+        for step, expected in (('genotype', '101'), ('expression', '202')):
+            for suffix in ('job', 'done'):
+                self.assertEqual((Path(directory) / 'steps' / f'{step}.{suffix}').read_bytes(), (self.remote_dir / 'steps' / f'{step}.{suffix}').read_bytes())
+            self.assertEqual(jobs._load(root, step)['reused_from']['job_id'], expected)
+        clinical = self.hpc / 'ws/refdata/branch-clinical.tsv'
+        clinical.write_text('submitter_id\trace\tgender\nTCGA-AA-0001\tasian\tfemale\nTCGA-AA-0002\twhite\tmale\nTCGA-AA-0003\tblack or african american\tfemale\n')
+        output = str(Path(directory) / 'steps/reviewed-clinical.tsv')
+        review = workspace._review_adjust(root.name, str(clinical), {}, out=output)
+        self.assertTrue(review['ready'], review['issues'])
+        self.assertTrue(Path(output).is_file())
+        self.assertEqual(before, {path: path.read_bytes() for path in before})
+        self.assertEqual((self.fake / 'sbatch_args').read_bytes(), args, 'Staging control evidence must not submit anything')
+        self.assertFalse((Path(directory) / 'steps/adjust.job').exists())
+
+    def test_nested_fork_copies_only_the_resolved_original_job_markers(self):
+        first, directory, token = self.genuine_upstream_branch('first_branch')
+        rerun.stage_remote(first, directory, token)
+        for step in ('genotype', 'expression'):
+            for suffix in ('job', 'done'):
+                (Path(directory) / 'steps' / f'{step}.{suffix}').unlink()
+        jobs._save(first, {'run_id': first.name, 'step': 'adjust', 'state': 'completed',
+            'inputs': {}, 'settings': {}, 'options': {'npc': 3}, 'resources': jobs.STEPS['adjust'].resources})
+        preview = rerun.review(first.name, 'adjust')
+        rerun.create(first.name, 'adjust', 'nested_branch', preview['revision'], preview['parameters'])
+        root = self.project / 'runs/nested_branch'; nested = str(self.remote_dir.parent / root.name)
+        token = jobs._owner(root, nested); jobs._upload(root, nested, token)
+        rerun.stage_remote(root, nested, token)
+        for step in ('genotype', 'expression'):
+            for suffix in ('job', 'done'):
+                self.assertEqual((Path(nested) / 'steps' / f'{step}.{suffix}').read_bytes(), (self.remote_dir / 'steps' / f'{step}.{suffix}').read_bytes())
+            self.assertEqual(jobs._load(root, step)['reused_from']['run_id'], first.name)
+        self.assertFalse((Path(directory) / 'steps/expression.job').exists(), 'A nested copy never repairs or writes to its source')
+
+    def test_wrong_failed_linked_or_different_existing_markers_are_never_reused(self):
+        root, directory, token = self.genuine_upstream_branch()
+        source = self.remote_dir / 'steps/expression.job'
+        done = self.remote_dir / 'steps/expression.done'
+        job_bytes, done_bytes = source.read_bytes(), done.read_bytes()
+        for kind in ('wrong-job', 'failed-done', 'symlink', 'existing-job', 'existing-done'):
+            with self.subTest(kind=kind):
+                destination = Path(directory) / 'steps/expression.job'
+                if kind == 'wrong-job': source.write_text('999\n')
+                elif kind == 'failed-done': done.write_text('1 2026-11-17T10:00:00\n')
+                elif kind == 'symlink': source.unlink(); source.symlink_to(self.remote_dir / 'steps/genotype.job')
+                else:
+                    destination = Path(directory) / ('steps/expression.job' if kind == 'existing-job' else 'steps/expression.done')
+                    destination.write_text('999\n' if kind == 'existing-job' else '7 prior failed attempt\n')
+                existing = destination.read_bytes() if destination.exists() else None
+                with self.assertRaises(jobs.StepError):
+                    rerun.stage_remote(root, directory, token)
+                self.assertFalse((root / 'steps/reuse-ready').exists())
+                self.assertFalse((Path(directory) / 'steps/genotype.job').exists(), 'All markers are checked before any source is copied')
+                if existing is not None: self.assertEqual(destination.read_bytes(), existing)
+                if source.is_symlink(): source.unlink()
+                source.write_bytes(job_bytes); done.write_bytes(done_bytes)
+                if destination.exists(): destination.unlink()
 
     def completed(self):
         record = jobs.submit('step_test', 'expression', self.inputs)
@@ -111,6 +216,7 @@ class RerunTest(unittest.TestCase):
         self.assertEqual(intermediate.read_text(), 'needed intermediate')
         self.assertEqual((Path(directory) / '.owner').read_text().strip(), token)
         self.assertNotEqual(token, json.loads((self.root / 'steps/remote.owner').read_text())['token'])
+        self.assertFalse((Path(directory) / 'steps/genotype.job').exists(), 'Unattributable legacy records must not gain invented job markers')
         with patch.object(jobs, '_shell', side_effect=AssertionError('must not overwrite reused files again')):
             rerun.stage_remote(root, directory, token)
 
@@ -220,6 +326,8 @@ class DatasetForkRetryTest(unittest.TestCase):
             'settings': {'restrict.tcga': '2'}, 'resources': jobs._resources(jobs.STEPS['expression'], None)}
         signet._update(source, expression['settings'])
         jobs._save(source, expression)
+        (remote / 'steps/expression.job').write_text('333\n')
+        (remote / 'steps/expression.done').write_text('0 2026-11-17T10:01:00-08:00\n')
         (source / workspace.EXPRESSION_SNAPSHOT).write_text(json.dumps({**expression, 'dataset_id': self.c.dataset['id']}))
         for relative in jobs.STEPS['expression'].required:
             path = remote / 'work' / relative

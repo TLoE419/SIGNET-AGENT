@@ -1,0 +1,87 @@
+'use strict';
+const {test}=require('node:test');
+const assert=require('node:assert/strict');
+const {readFileSync}=require('node:fs');
+const {JSDOM}=require('jsdom');
+const source=readFileSync(require('node:path').join(__dirname,'../renderer/features/workspace/genotype-run.js'),'utf8');
+const pause=()=>new Promise(resolve=>setImmediate(resolve));
+async function until(check){for(let i=0;i<50;i++){if(check())return;await pause()}assert.fail('Stage controller did not settle')}
+const resources={cpus:4,mem_gb:16,hours:2};
+const token='a'.repeat(64);
+const json=value=>({ok:true,status:200,json:async()=>JSON.parse(JSON.stringify(value))});
+function fixture(t){
+ const dom=new JSDOM('<!doctype html><section id="stage"></section>',{url:'http://localhost',runScripts:'outside-only'});
+ t.after(()=>dom.window.close());dom.window.eval(source);
+ return {w:dom.window,panel:dom.window.document.querySelector('#stage')};
+}
+
+test('clinical choices need a fresh review and manual submission sends exactly the reviewed choices',async t=>{
+ const {w,panel}=fixture(t),calls=[];
+ w.fetch=async(url,options={})=>{
+  const parsed=new URL(url,'http://localhost'),choices=JSON.parse(parsed.searchParams.get('choices')||'{}');
+  calls.push({url,body:options.body?JSON.parse(options.body):null});
+  if(options.method==='POST')return json({run_id:'clinical-run',step:'adjust',state:'pending',job_id:'900',inputs:{'cli.file':'/run/copy.tsv'},options:{npc:3},resources});
+  return json({ready:choices.other==='exclude',review_token:choices.other==='exclude'?token:null,
+   inputs:{'cli.file':'/pub/clinical.tsv'},options:{npc:3},resources,limits:{},issues:[],
+   clinical:{rows:4,matched:4,retained:choices.other==='exclude'?3:4,excluded:choices.other==='exclude'?1:0,
+    race:{asian:1,white:1,'black or african american':1,other:1},unrecognized_race:{other:1}}});
+ };
+ const controller=w.mountAdjustmentRun({panel,token:'page-token'});
+ const q=selector=>panel.querySelector(selector);
+ controller.setContext({datasetId:'dataset-a',language:'en',visible:true,runs:[{run_id:'clinical-run',jobs:{genotype:{state:'completed'},expression:{state:'completed'}}}]});
+ await until(()=>q('[data-adjust-clinical-choices] input'));
+ assert.equal(q('[data-adjust-submit]').disabled,true);
+ const excluded=q('[data-adjust-clinical-choices] input[value="exclude"]');
+ excluded.checked=true;excluded.dispatchEvent(new w.Event('change',{bubbles:true}));
+ assert.equal(calls.length,1,'a research choice never submits or checks remotely by itself');
+ assert.equal(q('[data-adjust-submit]').disabled,true);
+ q('[data-adjust-review]').click();await until(()=>!q('[data-adjust-submit]').disabled);
+ assert.deepEqual(JSON.parse(new URL(calls[1].url,'http://localhost').searchParams.get('choices')),{other:'exclude'});
+ assert.match(q('[data-adjust-clinical-summary]').textContent,/3 retained.*1 excluded/);
+ q('[data-adjust-submit]').click();q('[data-adjust-submit]').click();
+ await until(()=>panel.dataset.adjustState==='pending');
+ const posts=calls.filter(call=>call.body);assert.equal(posts.length,1);
+ assert.deepEqual(posts[0].body.choices,{other:'exclude'});assert.equal(posts[0].body.review_token,token);
+ assert.equal(posts[0].body.options.npc,3);
+});
+
+test('all six stages show measured counts and reject invalid progress instead of inventing percentages',async t=>{
+ const specs=[['Genotype','genotype','imputation'],['Expression','expression','expression_outputs'],['Adjustment','adjust','variant_filter'],
+  ['Cis','cis','low_frequency'],['Network','network','stage1'],['Visualization','visualize','subnetworks']];
+ for(const [factory,step,unit] of specs){
+  const {w,panel}=fixture(t);
+  const record={run_id:'progress-run',step,state:'running',job_id:'123',attempt:1,inputs:{},settings:{},options:{npc:3},resources,
+   progress:{[unit]:'2 5',rare_variants:'9 3',invalid:'99 100'}};
+  w.fetch=async()=>json(record);
+  const jobs=Object.fromEntries(['genotype','expression','adjust','cis','network'].map(name=>[name,{state:'completed'}]));jobs[step]=record;
+  const controller=w['mount'+factory+'Run']({panel,token:'page-token'});
+  const dataset={id:'dataset-a',name:['資料','Data'],ready:true,persisted:true,inputs:{genotype:[],expression:[],clinical:[]}};
+  controller.setContext({datasetId:'dataset-a',dataset,runId:'progress-run',language:'en',visible:true,runs:[{run_id:'progress-run',dataset_id:'dataset-a',source:'live',jobs}]});
+  await until(()=>panel.querySelector('progress'));
+  const bar=panel.querySelector('progress');assert.equal(bar.value,2);assert.equal(bar.max,5);
+  assert.ok(bar.getAttribute('aria-label'));assert.match(panel.querySelector('[data-'+step+'-work-progress]').textContent,/2 \/ 5/);
+  assert.equal(panel.querySelectorAll('progress').length,1);
+ }
+});
+
+test('an empty continuation selection initializes every form without an exception',t=>{
+ const {w,panel}=fixture(t);
+ for(const name of ['Expression','Adjustment','Cis','Network','Visualization']){
+  const controller=w['mount'+name+'Run']({panel,token:'page-token'});
+  assert.doesNotThrow(()=>controller.setContext({datasetId:'dataset-a',language:'en',visible:true,runs:[]}));
+ }
+});
+
+test('reopening a completed Stage3 shows the saved clinical decision and counts',t=>{
+ const {w,panel}=fixture(t);
+ w.fetch=async()=>{throw Error('Completed clinical review must remain local')};
+ const clinical={source:'/original/clinical.tsv',choices:{other:'exclude'},review:{rows:4,matched:4,retained:3,excluded:1,
+  race:{other:1},unrecognized_race:{other:1}}};
+ const controller=w.mountAdjustmentRun({panel,token:'page-token'});
+ controller.setContext({datasetId:'dataset-a',language:'en',visible:true,runs:[{run_id:'saved-review',jobs:{genotype:{state:'completed'},expression:{state:'completed'},
+  adjust:{run_id:'saved-review',step:'adjust',state:'completed',inputs:{'cli.file':'/run/copy.tsv'},options:{npc:3},resources,clinical}}}]});
+ assert.match(panel.querySelector('[data-adjust-clinical-summary]').textContent,/3 retained.*1 excluded/);
+ const decision=panel.querySelector('[data-adjust-clinical-choices] input[value="exclude"]');
+ assert.equal(decision.checked,true);assert.equal(decision.closest('fieldset').disabled,true);
+ assert.equal(panel.querySelector('[data-adjust-submit]').hidden,true);
+});

@@ -85,7 +85,7 @@ def _genotype_width(directory, retained, matched):
     return width
 
 
-def completed_result(run_id):
+def _local_completed_result(run_id):
     root = signet._run(run_id)
     history = workspace_genotype.run_history(root)
     job = history['jobs']['adjust']
@@ -146,3 +146,11 @@ def completed_result(run_id):
             'pca': {'points': [scores[shortened[index]] for index in retained],
                     'variance_explained': variance, 'source': 'signet_smartpca'},
             'comparison': comparison}
+
+
+def completed_result(run_id):
+    root = signet._run(run_id)
+    if workspace_genotype.run_history(root)['jobs']['adjust'].get('remote_outputs'):
+        from agent.runtime import workspace_projection
+        return workspace_projection.completed_result(run_id, '3')
+    return _local_completed_result(run_id)

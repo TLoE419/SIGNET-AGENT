@@ -3,11 +3,12 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; frame-src 'self'; base-uri 'none'; form-action 'none'">
   <meta name="chat-token" content="__TOKEN__">
   <meta name="model-label" content="__MODEL__">
   <title>SIGNET · Workspace</title>
   <link rel="stylesheet" href="./workspace/workspace.css">
+  <link rel="stylesheet" href="./workspace/result-assets.css">
   <link rel="stylesheet" href="./ssh.css">
   <script type="application/json" id="initial-chat">__INITIAL_CHAT__</script>
   <script defer src="./workspace/icons.js"></script>
@@ -15,6 +16,7 @@
   <script defer src="./workspace/job-logs.js"></script>
   <script defer src="./workspace/genotype-run.js"></script>
   <script defer src="./workspace/input-validation.js"></script>
+  <script defer src="./workspace/result-assets.js"></script>
   <script defer src="./workspace/workspace.js"></script>
   <script defer src="./workspace/interaction.js"></script>
   <script defer src="./renderer.js"></script>

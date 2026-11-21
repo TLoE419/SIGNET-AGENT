@@ -174,8 +174,16 @@
   async function install(item) {
     if (busy || !window.confirm('Install ' + translateUI(item.label) + '? This downloads the pinned source into your configured remote workspace.')) return;
     say('正在安裝 SIGNET…');
-    const result = await bridge.install();
-    if (!result.ok) say(result.error || '目前無法檢查 HPC3。', 'error');
+    busy = true;
+    render();
+    try {
+      const result = await call('/hpc/signet');
+      say(result.detail || result.reason || result.error || '已送出。', result.status === 'ok' ? '' : 'error');
+    } catch (error) {
+      say(error.message, 'error');
+    } finally {
+      busy = false;render();setTimeout(inspect, 3000);
+    }
   }
 
   async function run(item) {

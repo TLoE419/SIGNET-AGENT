@@ -13,7 +13,7 @@ Steps available now (TCGA cohort only):
 | `network` | `signet -n` | Gene regulatory network by two-stage penalized least squares on bootstrap data; SIGNET submits its own Slurm jobs (section 6.4) |
 | `visualize` | `signet -v` | Export the completed network's directed edges, selected subnetworks and original interactive graphs (section 6.5) |
 
-The chat tool `cis_eqtl` still runs `signet -c` through the older `remote.execute_cis()` path on the login node; the `cis` step here is the Slurm replacement.
+Scientific submission, cancellation and retry are manual workspace actions. Model tools can inspect safe reports and prepare reviews; legacy scientific execution functions remain trusted Python interfaces and are not exposed to the model. User-requested environment installation is separate from scientific execution.
 
 ## Contents
 
@@ -41,7 +41,7 @@ Workflow panel / AI tool
 
 - One step is one Slurm job. A submit call returns as soon as Slurm accepts the job; the client then polls the status route. The job keeps running if the app or the SSH connection goes away, and the next status call picks it up.
 - SIGNET itself runs only inside the container in the Slurm job, never on the login node.
-- Run records and downloaded results live on this computer under `runs/<run_id>/`; the job's working files live in the run's HPC3 folder (section 8).
+- Run records, safe display aggregates and Stage 5/6 exports live on this computer under `runs/<run_id>/`. New Stage 1–4 person-level outputs remain in the owned HPC3 run folder (section 8); existing local archives are preserved.
 
 ## 2. Concepts: runs, steps, attempts
 
@@ -132,7 +132,7 @@ Inside the API:
 | 4 | `GET /signet/runs/{run_id}` | no | One run's settings and full step records |
 | 5 | `PATCH /signet/runs/{run_id}/settings` | no | Change settings (`signet -s`) |
 | 6 | `POST /signet/runs/{run_id}/steps/{step}` | yes | Submit (or retry) a step as a Slurm job |
-| 7 | `GET /signet/runs/{run_id}/steps/{step}` | yes | Step state; on completion, validate and download |
+| 7 | `GET /signet/runs/{run_id}/steps/{step}` | yes | Step state; on completion, validate and retain results according to the stage's data policy |
 | 8 | `POST /signet/runs/{run_id}/steps/{step}/cancel` | yes | Cancel the step's own job |
 | 9 | `GET /signet/runs/{run_id}/steps/{step}/log` | yes | Last lines of the job's stdout or stderr |
 | 10 | `GET /signet/datasets` | no | Saved workspace dataset catalog and file selections |
@@ -231,7 +231,7 @@ an unknown current number sorts last. Each entry contains:
 | `record` | The original saved step snapshot, or null for an unavailable record |
 | `issues` | Missing, unreadable, conflicting, or incomplete attempt evidence |
 | `result.status` | `recorded_completed`, `recorded_failed`, `recorded_cancelled`, `pending`, or `not_recorded` |
-| `result.outputs` | Saved paths and their recorded `downloaded`, `missing`, or `not_recorded` evidence |
+| `result.outputs` | Saved paths and their recorded `downloaded`, `remote`, `missing`, or `not_recorded` evidence |
 
 Workspace and generic runs read prior attempts only from
 `steps/<step>.attempt<N>.json`, with the current record in `steps/<step>.json`.
@@ -431,11 +431,11 @@ as `workspace-expression.review<N>.json`.
 Both steps appear together in `GET /stage6/history` with the submitted files
 and settings. The completed expression result is available through
 `GET /stage/results?run={run_id}&stage=2&source=live`, which summarizes the
-downloaded matrix, sample identifiers and gene outputs using local files.
+completed remote files into counts, histograms and gene aggregates without downloading sample identifiers or raw matrices. The exact job/attempt aggregate is cached for later disconnected viewing; existing local archives still use their saved readers.
 
 `GET /signet/runs/{run_id}/adjust/example` reviews Stage 3 of the same run.
 It returns `inputs`, `options` (`npc`, default 3), `resources`, `limits`,
-`ready`, `issues`, and a clinical compatibility summary. The form remains
+`ready`, `issues`, a clinical compatibility summary, and a `review_token` when ready. The form remains
 available when inputs need attention. Optional `?clinical=<absolute_path>`
 checks a different file under the input roots allowed by the step service.
 The saved remote clinical selection takes priority. Otherwise an existing
@@ -447,11 +447,10 @@ the earlier intermediate files, and `submitter_id`, `race`, and `gender`
 columns. It reports missing matched patients and covariate values. The pinned
 official adjustment requires three race groups and variation in gender. The
 checker follows its patient-identifier matching and existing race handling
-without modifying the clinical input.
+without modifying the clinical input. Unrecognized race values require explicit choices (`not_reported` or `exclude`), sent as JSON in the `choices` query parameter when reviewing. The summary reports matched/retained/excluded counts without identifiers. These choices can affect the scientific cohort.
 
 `POST /signet/runs/{run_id}/adjust/example` accepts the reviewed `inputs`,
-`options` (`npc` is an integer from 0 to 10), and `resources`. It checks the
-clinical file again, records the confirmed request and submits only `adjust`.
+`options` (`npc` is an integer from 0 to 10), `resources`, `choices`, and the required current `review_token`. The token binds the clinical bytes, choices, upstream ID files, exact upstream jobs and environment. It checks the clinical file again and writes an immutable per-run copy before submitting only `adjust`. Original files remain unchanged. A changed source returns HTTP 409 `review_required`; recheck and confirm again, never blindly replay. A copy preserved after a conflict does not prevent a newly reviewed source from getting a new copy.
 Poll `GET /signet/runs/{run_id}/steps/adjust` for progress. The original
 genotype and expression records remain associated with this run. Clinical
 input and principal component choices appear with the Stage 3 history entry.
@@ -654,11 +653,11 @@ When preflight checks refuse the submission before remote files move (400, 409 o
 The step's current record (section 7).
 
 - Slurm is asked at most once every 15 seconds per step. `refresh=1` asks now.
-- When Slurm reports the job ended, this call validates it (section 2): exit marker, required outputs, log lines. On success it downloads the step's result folder into the local run, so that one call takes longer.
+- When Slurm reports the job ended, this call validates it (section 2): exit marker, required outputs, log lines. Stage 1–4 results stay on HPC3 and return counted summaries; Stage 5/6 exports are downloaded. Original local archives remain readable.
 - If the exit marker is missing or incomplete, the step stays `validating`. A later call decides.
 - For a step with child jobs, a terminal control job is insufficient: a successful queue check must confirm that its children also stopped. While they drain (or the queue check fails), the run stays locked in `cancelling` for a cancelled parent or `validating` for a completed/failed parent. This also applies to normal status polling without an earlier cancel request.
 - An exit marker cannot bypass that child check when the control job's scheduler state is temporarily absent. Results are not downloaded and settings remain locked until the queue check succeeds and related jobs are gone.
-- A `failed` record caused only by missing outputs after exit 0 can be rechecked with `refresh=1`, and downloads if the outputs become readable. Confirmed nonzero exits, scheduler failures and known log errors remain terminal.
+- Visualization outputs get a 120-second visibility grace after a clean zero exit. A failure caused only by missing outputs can be rechecked without a new job; Stage 1–4 stay remote when recovered. Confirmed nonzero exits, scheduler failures and known log errors remain terminal.
 - `refresh=1` also rechecks an older failure whose only reason was an unconfirmed exit marker ("The job did not finish its last line."). Other failures stay final.
 - If HPC3 cannot be reached, the reply is 200 with the last known record plus `"connection": "interrupted"`. The job keeps running.
 - 400: `refresh` not `0` or `1`. 404: unknown run or step, or never submitted. 412: not connected.
@@ -854,7 +853,7 @@ submitting ──► submitted ──► pending ──► running ──► val
 | `running` | Running | Poll status; read logs |
 | `validating` | Job ended; checking outputs and logs, downloading, or waiting for a complete exit marker | Poll status |
 | `cancelling` | Cancellation accepted, but termination of the job and its children is not confirmed | Poll status; do not resubmit or change settings |
-| `completed` | Outputs present, logs clean, results downloaded | Go on to the next step |
+| `completed` | Outputs present, logs clean, retained remotely or downloaded according to stage | Go on to the next step |
 | `failed` | Slurm failure (OUT_OF_MEMORY, TIMEOUT, …), nonzero exit, missing outputs, or a failure line in the logs | Read `reason`, `missing_outputs`, `failure_hints`; fix; resubmit in the same run |
 | `cancelled` | Cancelled by the user or Slurm | Resubmit in the same run if wanted |
 | `unknown` | No job could be confirmed (lost connection during `sbatch`, or Slurm has no record) | Check status again; inspect the HPC3 folder. **Do not resubmit** |
@@ -870,8 +869,10 @@ Record fields (route 7 and route 4):
 | `submitted_at`, `finished_at`, `checked_at` | Times |
 | `missing_outputs`, `failure_hints`, `reason` | Why it failed, or the validation note on success |
 | `outputs` | Files downloaded into the local run |
+| `remote_outputs` | Verified Stage 1–4 output paths retained on HPC3, without transferring their contents |
+| `summary` | Versioned safe input/output counts and approved preparation provenance |
 | `required_outputs` | Present when output names depend on settings (`cis`): the exact files this attempt must produce |
-| `progress` | `network` only: finished and total ParaFly commands per stage |
+| `progress` | Measured `done total` strings: `imputation`, `expression_outputs`, `variant_filter`, `low_frequency`, `rare_variants`, `stage1`, `stage2`, `subnetworks`; never elapsed-time estimates |
 | `attempt`, `previous_job_id` | Present on a retry |
 | `connection` | `"interrupted"` when HPC3 could not be reached (not saved) |
 
@@ -921,7 +922,8 @@ This computer, `runs/<run_id>/`:
 
 ```
 work/config.ini              settings, including the input paths last submitted
-work/res/...                 downloaded results of completed steps
+work/res/...                 Stage 5/6 downloads and preserved older archives
+workspace-projections/...    source-bound counts and raster display projections
 steps/<step>.json            current record of each step
 steps/<step>.attempt<N>.json records of earlier attempts
 steps/<step>.attempt<N>.results/ earlier attempts' local result folders
@@ -970,13 +972,13 @@ If `adjust` fails (for example because of the clinical file), fix the cause and 
 
 ## 10. Known limits
 
-- **Clinical file and SIGNET's race handling.** `script/adj/adj_adjust.R` (official SIGNET) drops `american indian or alaska native`, turns `not reported` into `white`, and then expects exactly three race levels, named by position as asian, black or african american, white. Any other value (an empty race, `Unknown`) stops `-a` with `number of levels differs`. Worse, three different levels would be renamed silently. The app does not yet check race values before submitting. It also requires a `gender` column, which the clinical file downloaded by the environment panel does not yet include.
+- **Clinical file and SIGNET's race handling.** The pinned official script drops `american indian or alaska native`, groups `not reported` as `white`, and requires asian, black or african american, and white plus gender variation. Workspace review checks these rules and requires explicit treatment of unrecognized values. The download includes the required gender column; older files require an explicit preserved upgrade. Researchers remain responsible for the cohort implications of each choice.
 - **IMPUTE2 seed.** SIGNET runs IMPUTE2 without `-seed`, so two `-g` runs on the same data differ slightly (about 0.01 % of genotype calls in one test).
-- **No job confirmed.** A step that ends `unknown` without a job ID has no way out yet other than inspecting the HPC3 folder: it cannot be retried, and it blocks the run's other steps and settings.
-- **One run per analysis.** Results are never taken from another run. Copying `-t` or `-g` results between runs would also need `-g`'s `tmp/tmpg/impute/` and a check that both runs used the same samples.
+- **No job confirmed.** An `unknown` submission cannot be blindly retried. Use explicit reviewed recovery and attributable scheduler evidence; unresolved outcomes continue to block replay.
+- **Linked analyses.** A reviewed fork has its own run folder and explicit source lineage. Compatible upstream reuse includes required genotype intermediates and verifies dataset/job/attempt identity. Unrelated runs never substitute for a missing result.
 - **`network` holds a control job for hours.** It needs 1–2 CPUs while SIGNET's jobs run; a control job that hits its wall time stops SIGNET, and its remaining jobs are cancelled by the next status call.
 - **Stage 6 online dependencies.** The original visualization reads online enrichment/annotation services. A network or service failure is reported as a failed export, with its logs retained; the app does not substitute a generated graph.
-- **Not yet steps:** all GTEx steps. The chat tool `cis_eqtl` still uses the older login-node path.
+- **Not yet steps:** GTEx execution remains outside the workspace six-stage flow. Legacy execution functions are not model tools.
 
 ### Manual reconciliation of an uncertain submission
 

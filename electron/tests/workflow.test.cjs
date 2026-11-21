@@ -42,13 +42,14 @@ test('an unconfigured environment is not described as a lost connection',async()
  f.snapshot({phase:'needs-install',message:'Installation required',config});await settle();await settle();
  assert.equal(f.text('workflow-summary'),'環境尚未就緒');assert.match(f.text('workflow-message'),/Checking remote paths/);f.dom.window.close();
 });
-test('SIGNET installs through the desktop only after confirmation; the container is a Slurm step',async()=>{
+test('SIGNET installs through the shared backend only after confirmation; the container is a Slurm step',async()=>{
  const f=fixture();f.reply(async url=>url==='/hpc/check'?{status:'ok',checks:[{item:'signet_source',status:'missing',detail:'No source'},{item:'container',status:'missing',detail:'No image'}]}:url==='/hpc/files/selected'?{status:'ok',selected:{}}:{status:'ok',detail:'Started'});
  f.snapshot({phase:'needs-install',message:'',config});await settle();await settle();
  const buttons=()=>[...f.w.document.querySelectorAll('[data-status=missing] button')];
  assert.deepEqual(buttons().map(b=>b.textContent),['安裝','下載']);
  buttons()[0].click();await settle();assert.equal(f.installs.length,0);
- f.allow();buttons()[0].click();await settle();assert.equal(f.installs.length,1);
+ assert.equal(f.calls.includes('/hpc/signet'),false);
+ f.allow();buttons()[0].click();await settle();assert.equal(f.installs.length,0);assert.equal(f.calls.filter(url=>url==='/hpc/signet').length,1);
  buttons()[1].click();await settle();assert.ok(f.calls.includes('/hpc/container'));f.dom.window.close();
 });
 test('a verification failure stays visible beside the per-item results',async()=>{

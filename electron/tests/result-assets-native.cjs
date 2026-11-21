@@ -87,6 +87,10 @@ function startBackend() {
   await js(`const search=document.querySelector('.s6-table-tools input');search.value='megf6';search.dispatchEvent(new Event('input'));document.getElementById('ml-language').click();void 0`);
   assert.equal(await js(`document.getElementById('lens-stage6').dataset.selectedGene`), 'MEGF6');
   assert.equal(await js(`document.querySelector('.s6-table-tools input').placeholder`), 'Search connections');
+  assert.equal(await js(`document.querySelectorAll('.s6-cutoff-chart circle').length`), 10);
+  assert.equal(await js(`document.querySelector('.s6-cutoff-chart svg').getAttribute('role')`), 'img');
+  await js(`document.querySelector('.s6-cutoff-chart').scrollIntoView({block:'nearest'});void 0`);
+  const chartScreenshot = path.join(temporary, 'threshold-chart.png'); writeFileSync(chartScreenshot, (await window.webContents.capturePage()).toPNG());
   await js(`[...document.querySelectorAll('.s6-original-plot button')].find(e=>e.textContent==='Download original PDF').click();void 0`);
   await until(() => downloads.length === 1, 'Individual original PDF download was blocked');
   assert.equal(downloads[0].state, 'completed'); assert.match(readFileSync(downloads[0].file, 'utf8'), /^%PDF/);
@@ -98,6 +102,6 @@ function startBackend() {
   assert.equal(await js(`document.body.dataset.escaped`), undefined);
   const unexpectedErrors = errors.filter(message => !message.includes("connect-src 'none'") && !message.includes('Fetch API cannot load'));
   assert.deepEqual(unexpectedErrors, [], 'Actual renderer startup or original result script failed');
-  console.log(JSON.stringify({passed: true, geometry: before, sandbox, trustedOriginalInteraction: true, preservedGene: 'MEGF6', bilingual: true, downloads, screenshot, blockedExternalRequests: denied.length, expectedCSPRejections: errors.length, unexpectedErrors}, null, 2));
+  console.log(JSON.stringify({passed: true, geometry: before, sandbox, trustedOriginalInteraction: true, preservedGene: 'MEGF6', bilingual: true, cutoffPoints: 10, downloads, screenshot, chartScreenshot, blockedExternalRequests: denied.length, expectedCSPRejections: errors.length, unexpectedErrors}, null, 2));
   window.destroy(); app.quit();
 })().catch(async error => {console.error(error); if (window) {const file=path.join(temporary,'failure.png');writeFileSync(file,(await window.webContents.capturePage()).toPNG());console.error('Native failure screenshot:',file);window.destroy();} app.exit(1);});

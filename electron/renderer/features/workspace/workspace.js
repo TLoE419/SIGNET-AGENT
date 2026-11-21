@@ -749,6 +749,10 @@
       svg.append(node);
     };
     if (stage === 3) {
+      if (result.pca?.png_base64) {
+        mark("image", {href: "data:image/png;base64," + result.pca.png_base64, x: 0, y: 0, width: 134, height: 36});
+        return true;
+      }
       const source = result.pca?.points ?? [];
       const stride = Math.max(1, Math.ceil(source.length / 48));
       const points = source.filter((point, index) => index % stride === 0 && point.length >= 2 && point.every(Number.isFinite));
@@ -1292,7 +1296,7 @@
     const result = attempt.result ?? {};
     const record = attempt.record ?? {};
     const outputs = Array.isArray(result.outputs) ? result.outputs.filter(output => output && typeof output.path === "string") : [];
-    const outputStatus = {downloaded: ["紀錄顯示已下載", "Recorded as downloaded"], missing: ["紀錄顯示缺少", "Recorded as missing"],
+    const outputStatus = {downloaded: ["紀錄顯示已下載", "Recorded as downloaded"], remote: ["結果保留在遠端", "Results retained on HPC3"], missing: ["紀錄顯示缺少", "Recorded as missing"],
       not_recorded: ["檔案狀態未記錄", "File status not recorded"]};
     return `<section class="ml-history-attempt-result" data-history-attempt-result>
       <h4>${historyText("保存的結果", "Saved result")}</h4>
@@ -1337,10 +1341,31 @@
   }
   function historyDisclosureKey(details) {
     const job = details.closest("[data-history-job], [data-history-operation]");
-    const scope = job?.dataset.historyJob ?? (job?.dataset.historyOperation ? `${job.dataset.historyOperation}:${job.dataset.historyOperationRecord}` : details.hasAttribute("data-history-provenance") ? "provenance" : "inputs");
+    const scope = job?.dataset.historyJob ?? (job?.dataset.historyOperation ? `${job.dataset.historyOperation}:${job.dataset.historyOperationRecord}` : details.hasAttribute("data-history-rerun-changes") ? "rerun-changes" : details.hasAttribute("data-history-provenance") ? "provenance" : "inputs");
     const outputCheck = details.dataset.outputCheckDetail;
     const record = outputCheck ? details.closest("[data-attempt-record]")?.dataset.attemptRecord : "";
     return `${details.closest("[data-history-id]")?.dataset.historyId}|${scope}|${details.dataset.attemptRecord ?? details.dataset.historyAttempt ?? record ?? ""}${outputCheck ? `|output-check:${outputCheck}` : ""}`;
+  }
+  function rerunFamilyLabel(run) {
+    const family = run.rerun_family;
+    if (run.source !== "live" || !Number.isSafeInteger(family?.number) || family.number < 0) return "";
+    return (family.number === 0 ? historyText("原始執行", "Original run") : historyText(`第 ${family.number} 次重跑`, `Rerun ${family.number}`)) +
+      (family.latest ? historyText(" · 最新", " · Latest") : "");
+  }
+  function rerunChanges(run) {
+    const family = run.rerun_family;
+    if (!family?.number) return "";
+    const groups = {settings: ["分析參數", "Parameters"], resources: ["運算資源", "Resources"], options: ["階段選項", "Stage options"], clinical_choices: ["臨床處理選擇", "Clinical choices"]};
+    const parameterName = change => historyText(...({cpus: ["核心數", "CPU cores"], mem_gb: ["記憶體", "Memory"], hours: ["時間上限", "Time limit"], npc: ["主成分數", "Principal components"]}[change.key] ?? savedSettingLabels[change.key] ?? [change.key, change.key]));
+    const changes = Array.isArray(family.changes) ? family.changes : [];
+    return `<details data-history-rerun-changes><summary>${historyText("本次設定變更", "Changes in this rerun")}</summary>
+      <p>${historyText("比較來源執行：", "Compared with source run: ")}<code>${recordedValue(family.source_run)}</code></p>
+      ${changes.length ? `<table class="ml-rerun-diff"><caption>${historyText("保存的設定差異", "Recorded setting differences")}</caption><thead><tr>
+        ${[historyText("設定", "Setting"), historyText("來源值", "Source value"), historyText("這次的值", "This run")].map(text => `<th scope="col">${text}</th>`).join("")}</tr></thead>
+        <tbody>${changes.map(change => `<tr><th scope="row">${historyText(...(groups[change.group] ?? [change.group, change.group]))} · ${parameterName(change)}</th>
+          <td>${recordedValue(change.before)}</td><td>${recordedValue(change.after)}</td></tr>`).join("")}</tbody></table>` :
+        `<p>${family.changes_available ? historyText("未記錄到參數差異。", "No parameter differences were recorded.") : historyText("來源或這次的設定未完整保存，無法比較。", "The source or rerun settings were not fully retained for comparison.")}</p>`}
+      </details>`;
   }
   function renderHistoryRecords() {
     const expanded = new Set([...runDetails.querySelectorAll("details[open]:not([data-job-logs])")].map(details =>
@@ -1355,6 +1380,7 @@
       return `<button class="ml-nav-list-item" type="button" data-run-target="${key}" data-history-id="${key}" data-run-id="${id}" aria-controls="ml-run-${key}" aria-pressed="false">
         <i data-lucide="${icon}" aria-hidden="true"></i><span><strong>${historyText(...run.name)}</strong>
         <small>${historyText(...historySourceName(run))} · ${historyStateLabel(state, run.source === "recorded")}</small>
+        ${rerunFamilyLabel(run) ? `<small data-rerun-family-label>${rerunFamilyLabel(run)}</small>` : ""}
         <small>${escapeHistory(started)}</small></span></button>`;
     }).join("");
     runDetails.innerHTML = historyRuns.map(run => {
@@ -1401,6 +1427,7 @@
         <p data-history-assignment-status role="status">${assignment.error ? escapeHistory(assignment.error) : assignment.saved ? historyText("歸類已保存。", "Assignment saved.") : historyText("僅整理執行紀錄，不會更改檔案、設定或確認樣本配對。", "Organizes run history only; files, settings and sample matching are unchanged.")}</p></form>` : "";
       return `<article class="ml-nav-detail" id="ml-run-${key}" data-history-id="${key}" data-run-id="${id}" hidden>
         <header class="ml-nav-detail-title"><i data-lucide="history" aria-hidden="true"></i><h2>${historyText(...run.name)}</h2></header>
+        ${rerunFamilyLabel(run) ? `<p data-rerun-family-label>${rerunFamilyLabel(run)}</p>` : ""}${rerunChanges(run)}
         <p class="ml-run-overview">${id}<br>${escapeHistory(fullTime(run.submitted_at ?? initialJob?.submitted_at))}${finished ? " – " + escapeHistory(finished) : ""}<br>
           <span data-history-source>${historyText(...historySourceName(run))}</span> · <span data-history-state>${historyStateLabel(state, run.source === "recorded")}</span>${summary ? `<br>${summary}` : ""}</p>
         ${run.rerun && run.source === "live" && (!run.jobs?.[run.rerun.step] || run.jobs[run.rerun.step].state === "not_submitted") ? `<div data-rerun-form><p>${historyText("已建立關聯執行，尚未送出。確認後將檢查遠端上游檔案並排程。", "Linked run created; not submitted. Confirmation checks remote upstream files and submits the stage.")}</p><button type="button" data-rerun-submit data-rerun-run-id="${id}">${historyText("確認送出", "Confirm submission")}: ${id}</button><div data-rerun-content></div><p role="status" data-rerun-status></p></div>` : ""}
@@ -1457,6 +1484,7 @@
   const input = byId("input");
   const initialChat = JSON.parse(document.getElementById("initial-chat").textContent);
   const chatToken = document.querySelector('meta[name="chat-token"]').content;
+  const stage6Assets = window.mountStage6Assets?.({stage: analysisNetwork, token: chatToken});
   const chatModel = document.querySelector('meta[name="model-label"]').content;
 
   const stage6RunSelect = byId("stage6-run");
@@ -1566,6 +1594,7 @@
   }
 
   async function loadStage6Run(historyId) {
+    stage6Assets?.clear();
     stage6Request?.abort();
     requestedStage6Run = historyId;
     renderRunTimeline();
@@ -1606,6 +1635,7 @@
       analysisNetwork.dataset.runId = runId;
       analysisNetwork.dataset.historyId = historyId;
       setStage6RunState("ready");
+      stage6Assets?.setContext({historyId, identity: run.record_identity, revision: run.revision, source: run.source, runId: run.run_id});
     } catch {
       if (!request.signal.aborted) {
         rememberTimelineResult(run, 6, null, "error");
@@ -1662,6 +1692,10 @@
   const stage3Back = byId("stage3-back");
   const stage3Retry = byId("stage3-retry");
   const stage3Plot = stage3HistoryPanel.querySelector(".s3-chart");
+  const stage3RemotePlot = document.createElement("img");
+  stage3RemotePlot.className = "s3-remote-plot";
+  stage3RemotePlot.hidden = true;
+  stage3Plot.after(stage3RemotePlot);
   const stage3Legend = stage3HistoryPanel.querySelector("figcaption");
   const stage3Status = stage3HistoryPanel.querySelector("[data-s3-status]");
   const stage3RunLabel = stage3HistoryPanel.querySelector("[data-s3-run]");
@@ -1726,8 +1760,19 @@
     stage3HistoryPanel.querySelector(".s3-figure").hidden = state !== "ready";
     stage3HistoryPanel.querySelector(".ml-result-dock").hidden = state !== "ready";
 
-    stage3Plot.toggleAttribute("hidden", !pca?.points.length);
-    if (pca?.points.length) {
+    const remotePlot = typeof pca?.png_base64 === "string" && pca.png_base64.length <= 2_000_000 &&
+      /^iVBORw0KGgo[A-Za-z0-9+/=]+$/.test(pca.png_base64);
+    stage3RemotePlot.hidden = !remotePlot;
+    if (remotePlot) {
+      stage3RemotePlot.src = "data:image/png;base64," + pca.png_base64;
+      stage3RemotePlot.alt = inEnglish ? "Principal component plot rendered on HPC3; individual scores stay remote." : "在遠端繪製的主成分圖；個體分數保留在遠端。";
+    } else stage3RemotePlot.removeAttribute("src");
+    stage3Plot.toggleAttribute("hidden", Boolean(remotePlot) || !pca?.points?.length);
+    if (remotePlot) {
+      const variance = new Intl.NumberFormat(locale, {maximumFractionDigits: 2});
+      stage3Legend.textContent = (inEnglish ? "Rendered on HPC3 · PC1 / PC2 explained variance: " : "遠端繪圖 · 第 1／2 主成分解釋變異：") +
+        (pca.variance_explained ?? []).map(value => variance.format(value) + "%").join(" / ");
+    } else if (pca?.points?.length) {
       const points = pca.points;
       drawStage3Scatter(stage3HistoryPanel, points, stage3Ticks(points, 0), stage3Ticks(points, 1), inEnglish);
       const variance = new Intl.NumberFormat(locale, {maximumFractionDigits: 2});
@@ -2868,6 +2913,11 @@
     function consume(line) {
       if (!line.trim()) return;
       const event = JSON.parse(line);
+      if (event.type === "ui" && event.text?.panel === "workflow" && event.text.visible === true &&
+          record === activeChat && navigationAtSend === navigationRevision) {
+        openNavigation("settings");
+        window.dispatchEvent(new Event("workspace-setup-refresh"));
+      }
       if (event.type === "progress" && toolActivity(record, event.text, operations)) return;
       if (["progress", "error", "done"].includes(event.type)) {
         turn.log.textContent += (turn.log.textContent ? "\n" : "") + event.text;

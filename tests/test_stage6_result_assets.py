@@ -156,6 +156,16 @@ class Stage6ResultAssetsTest(unittest.TestCase):
             with self.assertRaises(StepError):
                 self.assets.download(self.ticket(issued))
 
+    def test_rectangular_target_by_cis_gene_matrix_retains_original_cutoff_counts(self):
+        matrix = self.root / 'work/res/resn/signet_Afreq'; matrix.parent.mkdir()
+        matrix.write_text('0,0.8\n0.85,1\n0.95,0.9\n')
+        self.assertEqual(self.metadata()['thresholds'], [
+            {'cutoff': .8, 'genes': 3, 'connections': 5}, {'cutoff': .85, 'genes': 3, 'connections': 4},
+            {'cutoff': .9, 'genes': 3, 'connections': 3}, {'cutoff': .95, 'genes': 3, 'connections': 2},
+            {'cutoff': 1, 'genes': 1, 'connections': 1}])
+        matrix.write_text('0,0.8,0.9\n0.85,1,0.95\n')
+        self.assertIsNone(self.metadata()['thresholds'])
+
     def test_http_grants_require_token_and_origin_but_allow_exact_ticket_subresources(self):
         server = ChatServer(('127.0.0.1', 0), Mock())
         self.addCleanup(server.server_close)

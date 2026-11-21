@@ -26,7 +26,20 @@ def get_workspace_stage(run_id: str, stage: int, source: str = 'live') -> dict:
     if record.get('step') == name or record.get('job_id'):
         public.setdefault('attempt', 1)
     if record.get('summary'):
-        public['summary'] = step_report.safe_summary(name, record, record['summary'])
+        summary = record['summary']
+        if 'reused_from' in record:
+            try:
+                from agent.runtime.workspace_projection import resolve_source, verify_source
+                _, _, checks = resolve_source(run_id, name)
+                verify_source(checks)
+                saved = jobs._load(root, name)
+                identity = ('run_id', 'step', 'state', 'job_id', 'attempt', 'settings', 'options',
+                            'image', 'partition', 'reused_from', 'summary')
+                if any(saved.get(key) != record.get(key) for key in identity):
+                    raise ValueError('The saved inherited attempt changed during reporting.')
+            except (OSError, ValueError, jobs.StepError):
+                summary = None
+        public['summary'] = step_report.safe_summary(name, record, summary)
     public['progress'] = step_report.public_progress(record)
     if record.get('state') in ('failed', 'cancelled', 'unknown'):
         public['failure'] = step_report.failure_summary(record)

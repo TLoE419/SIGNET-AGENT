@@ -116,8 +116,8 @@ def threshold_counts(path):
                     counts[index] += 1
                     genes[index].update((rows, column))
         rows += 1
-    if not rows or rows != width:
-        raise ValueError('The saved frequency matrix is not square.')
+    if not rows or width > rows:
+        raise ValueError('The saved frequency matrix has more cis-gene columns than target genes.')
     return [{'cutoff': cutoff, 'genes': len(genes[index]), 'connections': counts[index]}
             for index, cutoff in enumerate(cutoffs)]
 

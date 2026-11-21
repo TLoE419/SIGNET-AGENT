@@ -107,7 +107,7 @@ def _attempt_record(record, run_id, step, number=None, partial=False):
         raise ValueError('The saved attempt state is invalid.')
     if any(key in record and not isinstance(record[key], dict) for key in ('inputs', 'settings', 'resources', 'options')):
         raise ValueError('The saved attempt settings or input fields are invalid.')
-    for key in ('outputs', 'required_outputs', 'missing_outputs', 'failure_hints'):
+    for key in ('outputs', 'remote_outputs', 'required_outputs', 'missing_outputs', 'failure_hints'):
         if key in record and (not isinstance(record[key], list) or
                               any(not isinstance(value, str) for value in record[key])):
             raise ValueError('The saved attempt output or error evidence is invalid.')
@@ -133,17 +133,19 @@ def _attempt_result(record):
     # These are saved observations, never checks of today's mutable work/res.
     required = record.get('required_outputs', [])
     downloaded = record.get('outputs', [])
+    remote = record.get('remote_outputs', [])
     missing = record.get('missing_outputs', [])
     relative = lambda path: path[5:] if path.startswith('work/') else path
     saved_downloaded = {relative(path) for path in downloaded}
     saved_missing = {relative(path) for path in missing}
-    paths = dict.fromkeys([*required, *downloaded, *missing])
+    saved_remote = {relative(path) for path in remote}
+    paths = dict.fromkeys([*required, *downloaded, *remote, *missing])
     seen, outputs = set(), []
     for path in paths:
         key = relative(path)
         if key not in seen:
             outputs.append({'path': path, 'status': 'missing' if key in saved_missing else
-                            'downloaded' if key in saved_downloaded else 'not_recorded'})
+                            'downloaded' if key in saved_downloaded else 'remote' if key in saved_remote else 'not_recorded'})
             seen.add(key)
     return {'status': status, 'outputs': outputs}
 
@@ -252,6 +254,9 @@ def _readable_stages(row, root, records):
                     _archived_step_summary(stage, saved['stages'][stage])
                 stages.append(stage)
             elif row['source'] == 'live':
+                if number <= 4 and job.get('remote_outputs'):
+                    stages.append(stage)
+                    continue
                 required = [jobs._resolve(path, job.get('settings', {})) for path in jobs.STEPS[step].required]
                 if number == 3:
                     required += ['res/resa/' + name for name in ('workspace-genotype-ids.txt',
@@ -533,7 +538,8 @@ def merge(history):
                         'reason': 'Only the current readable live workspace attempt can be rechecked.'}
             row['issues'] = list(dict.fromkeys([*row.get('issues', []), *issues]))
             result.append(row)
-        return {'datasets': list(datasets.values()), 'runs': result}
+        from agent.runtime.workspace_run_labels import enrich_rows
+        return {'datasets': list(datasets.values()), 'runs': enrich_rows(result)}
 
 
 def assign_dataset(history_id, dataset_id, revision, history_loader):

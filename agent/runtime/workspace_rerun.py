@@ -2,6 +2,7 @@
 import hashlib
 import json
 from pathlib import Path
+import re
 import shlex
 import shutil
 
@@ -197,6 +198,74 @@ def stage_remote(root, directory, token):
     return _stage_remote_source(plan['source_run_id'], root, directory, token, plan)
 
 
+def _reused_control_evidence(source, root, plan, config):
+    """Only real completed source jobs can contribute inherited control files.
+
+    Resolve through an already reused parent to the physical job's owned folder.
+    The child's saved reused_from relation remains the attribution; copying these
+    files authorizes later input checks, never a scheduler submission claim.
+    """
+    from agent.runtime.workspace_projection import resolve_source
+    from agent.runtime.workspace_history import _json
+    evidence, checks = [], []
+    for key in plan['reuse']:
+        inherited, digest = _json(root / 'steps' / (key + '.json'))
+        parent = jobs._load(source, key)
+        job_id = parent.get('job_id')
+        if job_id is None:
+            # Old records without an attributable job can retain their files,
+            # but no .job/.done evidence is fabricated on their behalf.
+            continue
+        if (not isinstance(job_id, str) or not re.fullmatch(r'[0-9]{1,128}', job_id)
+                or inherited.get('run_id') != root.name or inherited.get('step') != key
+                or inherited.get('state') != 'completed' or type(inherited.get('attempt', 1)) is not int
+                or inherited.get('job_id') != job_id
+                or inherited.get('attempt', 1) != parent.get('attempt', 1)
+                or any(inherited.get(field) != parent.get(field) for field in ('settings', 'options', 'image', 'partition'))
+                or not isinstance(inherited.get('reused_from'), dict)
+                or type(inherited['reused_from'].get('attempt')) is not int
+                or inherited.get('reused_from') != {'run_id': source.name, 'step': key,
+                    'job_id': job_id, 'attempt': parent.get('attempt', 1)}):
+            raise jobs.StepError('conflict', 'The inherited job identity changed; create a new reviewed fork.')
+        physical_root, record, metadata = resolve_source(source.name, key)
+        origin = jobs._remote_dir(config, physical_root, physical_root.name)
+        owner, owner_digest = _json(physical_root / 'steps/remote.owner')
+        if (record.get('remote_dir') != origin or owner.get('remote_dir') != origin
+                or not isinstance(owner.get('token'), str)
+                or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', owner['token'])):
+            raise jobs.StepError('conflict', 'The original completed job belongs to a different remote environment.')
+        evidence.append((key, origin, owner['token'], job_id))
+        checks.append((root / 'steps' / (key + '.json'), digest))
+        checks.append((physical_root / 'steps/remote.owner', owner_digest))
+        checks.extend(metadata)
+    return evidence, checks
+
+
+def _control_checks(evidence, directory, *, destination=False):
+    """Shell preflight for exact regular markers; existing different files are refused."""
+    q = shlex.quote
+    script = ''
+    for key, origin, token, job_id in evidence:
+        script += (f'[ "$(readlink -f -- {q(origin)})" = {q(origin)} ]\n'
+                   f'[ ! -L {q(origin + "/.owner")} ] && [ -f {q(origin + "/.owner")} ] || exit 7\n'
+                   f'[ "$(cat {q(origin + "/.owner")})" = {q(token)} ]\n')
+        for suffix, limit in (('job', 129), ('done', 4096)):
+            marker, copied = origin + '/steps/' + key + '.' + suffix, directory + '/steps/' + key + '.' + suffix
+            script += (f'P={q(marker)}\nC={q(copied)}\n'
+                       '[ ! -L "$P" ] && [ -f "$P" ] && [ -s "$P" ] && [ "$(readlink -f -- "$P")" = "$P" ] || exit 7\n'
+                       f'[ "$(wc -c < "$P")" -le {limit} ]\n')
+            if suffix == 'job':
+                script += f'[ "$(cat "$P")" = {q(job_id)} ]\n'
+            else:
+                script += 'IFS=" " read -r code finished < "$P"\n[ "$code" = 0 ]\n'
+            if destination:
+                script += '[ -f "$C" ] && [ ! -L "$C" ] && [ "$(readlink -f -- "$C")" = "$C" ] && cmp -s -- "$P" "$C" || exit 7\n'
+            else:
+                script += ('if [ -e "$C" ] || [ -L "$C" ]; then\n'
+                           ' [ -f "$C" ] && [ ! -L "$C" ] && [ "$(readlink -f -- "$C")" = "$C" ] && cmp -s -- "$P" "$C" || exit 7\nfi\n')
+    return script
+
+
 @jobs._one_at_a_time
 def _stage_remote_source(source_run_id, root, directory, token, plan):
     # Keep source revision/attempt checks authoritative until its files are copied.
@@ -218,12 +287,15 @@ def _stage_remote_source(source_run_id, root, directory, token, plan):
     owner = source_owner(source)
     if owner.get('remote_dir') != origin:
         raise jobs.StepError('conflict', 'Source remote ownership does not match.')
+    evidence, metadata_checks = _reused_control_evidence(source, root, plan, config)
     q = shlex.quote
     script = 'set -eu\n' + f'S={q(origin)}\nD={q(directory)}\n'
     for folder, expected in ((origin, owner['token']), (directory, token)):
         script += f'[ "$(readlink -f -- {q(folder)})" = {q(folder)} ]\n[ ! -L {q(folder + "/.owner")} ]\n[ "$(cat {q(folder + "/.owner")})" = {q(expected)} ]\n'
     files = [(p, origin + '/work/' + p, origin) for p in plan['required_files']]
     script += jobs._say() + jobs._input_checks(files)
+    script += f'[ "$(readlink -f -- {q(directory + "/steps")})" = {q(directory + "/steps")} ]\n'
+    script += _control_checks(evidence, directory)
     # Include full genotype temporary tree: adjustment uses additional imputation files.
     folders = [jobs.STEPS[key].download for key in plan['reuse']]
     if 'genotype' in plan['reuse'] and plan['step'] in ('expression', 'adjust'):
@@ -242,9 +314,16 @@ def _stage_remote_source(source_run_id, root, directory, token, plan):
         for relative in REQUIRED:
             script += jobs._input_checks([(relative, origin + '/work/' + relative, origin)])
             script += f'mkdir -p {q(directory + "/work/" + str(Path(relative).parent))}\ncp -- {q(origin + "/work/" + relative)} {q(directory + "/work/" + relative)}\n'
+    for key, physical, _, _ in evidence:
+        for suffix in ('job', 'done'):
+            relative = '/steps/' + key + '.' + suffix
+            script += f'cp -n -- {q(physical + relative)} {q(directory + relative)}\n'
+    script += _control_checks(evidence, directory, destination=True)
     code, _, _ = jobs._shell(script, timeout=300)
     if code:
         raise jobs.StepError('not_ready', 'Compatible upstream files or ownership could not be verified; nothing submitted.')
+    from agent.runtime.workspace_projection import verify_source
+    verify_source(metadata_checks)
     (root / 'steps/reuse-ready').write_text(jobs._now())
 
 
