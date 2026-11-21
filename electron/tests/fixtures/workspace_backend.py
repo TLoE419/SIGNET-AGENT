@@ -1,5 +1,6 @@
 """Run the desktop backend against one persistent, isolated workspace fixture."""
 
+from contextlib import nullcontext
 import json
 import os
 from pathlib import Path
@@ -7,6 +8,7 @@ import runpy
 import shlex
 import subprocess
 import sys
+from types import SimpleNamespace
 
 REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO))
@@ -37,13 +39,20 @@ def install_file_fixture():
         body, end = body.split('\n' + marker, 1)
         arguments = shlex.split(command)[2:]
         paths = arguments
+        validation_kind = None
         if validating:
             trusted = workspace_validation._SOURCE
-            if body.strip() != trusted.strip() or len(arguments) != 1:
+            if body.strip() != trusted.strip() or len(arguments) not in (1, 2):
                 return {'status': 'failed', 'error': 'The fixture accepts only the production validation script.'}
             inputs = json.loads(arguments[0])
-            if not isinstance(inputs, dict) or set(inputs) != {'genotype', 'expression', 'clinical'}:
-                return {'status': 'failed', 'error': 'The fixture requires the complete input snapshot.'}
+            kinds = {'genotype', 'expression', 'clinical'}
+            if len(arguments) == 2:
+                validation_kind = arguments[1]
+                if validation_kind not in kinds:
+                    return {'status': 'failed', 'error': 'The fixture requires a recognized validation kind.'}
+                kinds = {validation_kind}
+            if not isinstance(inputs, dict) or set(inputs) != kinds:
+                return {'status': 'failed', 'error': 'The fixture requires the selected validation paths.'}
             paths = [value for files in inputs.values() for value in files]
         if end.strip() or any(not Path(value).resolve().is_relative_to(root) for value in paths):
             return {'status': 'failed', 'error': 'File metadata requests must stay in the fixture folder.'}
@@ -52,7 +61,10 @@ def install_file_fixture():
             return {'status': 'failed', 'error': 'The fixture permits names and metadata only.'}
         kind = 'validation' if validating else 'inspect' if 'import stat' in body else 'list' if arguments else 'shortcuts'
         with trace.open('a') as stream:
-            stream.write(json.dumps({'kind': kind, 'paths': paths}) + '\n')
+            entry = {'kind': kind, 'paths': paths}
+            if validating:
+                entry['validation_kind'] = validation_kind
+            stream.write(json.dumps(entry) + '\n')
         completed = subprocess.run([sys.executable, '-', *arguments], input=body + '\n', text=True,
                                    capture_output=True, timeout=min(timeout, 10))
         values = hpc._parse(completed.stdout.encode())
@@ -70,11 +82,20 @@ def main():
 
     import agent.tools.signet as signet
     from agent.app import chat_ui
+    from google.genai import types
 
     signet.PROJECT = Path(os.environ['SIGNET_WORKSPACE_TEST_PROJECT'])
     install_file_fixture()
     metadata = Path(os.environ['SIGNET_WORKSPACE_TEST_BACKEND'])
+    capture = Path(os.environ['SIGNET_WORKSPACE_TEST_CAPTURE'])
     original_create_server = chat_ui.create_server
+
+    def reply(*, model, contents, config):
+        messages = [''.join(part.text or '' for part in content.parts) for content in contents]
+        with capture.open('a') as stream:
+            stream.write(json.dumps({'system_instruction': config.system_instruction, 'messages': messages}) + '\n')
+        answer = types.Content(role='model', parts=[types.Part(text='Provider replied to: ' + messages[-1])])
+        return types.GenerateContentResponse(candidates=[types.Candidate(content=answer)])
 
     def create_server(*args, **kwargs):
         previous = json.loads(metadata.read_text()) if metadata.exists() else {'starts': []}
@@ -82,6 +103,8 @@ def main():
         # replacing Python without changing production launcher behavior.
         kwargs['port'] = previous.get('port', 0)
         instance = original_create_server(*args, **kwargs)
+        instance.client_factory = lambda _: nullcontext(SimpleNamespace(
+            model='fixture-model', models=SimpleNamespace(generate_content=reply)))
         metadata.write_text(json.dumps({'port': instance.server_port,
                                         'starts': [*previous['starts'], os.getpid()]}))
         return instance

@@ -31,7 +31,7 @@ class Network {
 const graph={nodes:['A','B'],display_nodes:['A','B'],edges:[{source:'A',target:'B',frequency:1,coefficient:0.5}],counts:{connections:1,genes:2,subnetworks:1}};
 const data={baseline:'base',comparison:'new',runs:[{run_id:'base',frequency:1,top_networks:1}],proposals:[],graphs:{baseline:graph,comparison:graph}};
 const original=JSON.stringify(data);
-const context=vm.createContext({$,session:'test-session',uiLanguage:'en',busy:false,uiText(el,text){el.textContent=text;},vis:{Network},window:{vis:true,addEventListener:(name,fn)=>events[name]=fn},document:{createElement(tag){const e=new Element(tag);elements.push(e);return e;},querySelector:selector=>selector==='.stage6-pane'?pane:selector==='.workspace'?workspace:{content:'token'},querySelectorAll:()=>tabs,addEventListener(){}},history:{replaceState(){}},location:{pathname:'/classic'},sessionStorage:{getItem:k=>storage.get(k),setItem:(k,v)=>storage.set(k,v)},fetch:async()=>({ok:true,json:async()=>structuredClone(data)}),setInterval(){},clearInterval(){},setTimeout(fn){timers.set(++timerId,fn);return timerId;},clearTimeout(id){timers.delete(id);},requestAnimationFrame(fn){timers.set(++timerId,fn);return timerId;},cancelAnimationFrame(id){timers.delete(id);}});
+const context=vm.createContext({$,session:'test-session',busy:false,vis:{Network},window:{vis:true,addEventListener:(name,fn)=>events[name]=fn},document:{createElement(tag){const e=new Element(tag);elements.push(e);return e;},querySelector:selector=>selector==='.stage6-pane'?pane:selector==='.workspace'?workspace:{content:'token'},querySelectorAll:()=>tabs,addEventListener(){}},history:{replaceState(){}},location:{pathname:'/classic'},sessionStorage:{getItem:k=>storage.get(k),setItem:(k,v)=>storage.set(k,v)},fetch:async()=>({ok:true,json:async()=>structuredClone(data)}),setInterval(){},clearInterval(){},setTimeout(fn){timers.set(++timerId,fn);return timerId;},clearTimeout(id){timers.delete(id);},requestAnimationFrame(fn){timers.set(++timerId,fn);return timerId;},cancelAnimationFrame(id){timers.delete(id);}});
 (async()=>{
   vm.runInContext(fs.readFileSync('electron/renderer/features/stage6/stage6.js','utf8'),context);
   await new Promise(setImmediate);
@@ -105,7 +105,7 @@ const context=vm.createContext({$,session:'test-session',uiLanguage:'en',busy:fa
   assert.ok(!classes.has('chat-only'));
   events['stage6-update']({detail:{...structuredClone(data),proposals:[{status:'running'}]}});
   events['stage6-update']({detail:structuredClone(data)});
-  assert.equal($('state').textContent,'回合結束','completed visualization clears the running status');
+  assert.equal($('state').textContent,'Turn finished','completed visualization clears the running status');
   const beforeGraph={nodes:['A','B','D','E'],display_nodes:['A','B','D','E'],edges:[graph.edges[0],{source:'D',target:'E',frequency:1,coefficient:.4}],counts:{connections:2,genes:4,subnetworks:2}};
   const afterGraph={nodes:['A','B','C'],display_nodes:['A','B','C'],edges:[graph.edges[0],{source:'B',target:'C',frequency:.6,coefficient:.2}],counts:{connections:2,genes:3,subnetworks:1}};
   events['stage6-update']({detail:{...structuredClone(data),graphs:{baseline:beforeGraph,comparison:afterGraph}}});

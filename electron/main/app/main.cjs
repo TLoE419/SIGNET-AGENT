@@ -1,5 +1,5 @@
 'use strict';
-const {app, BrowserWindow, dialog, session, Menu, ipcMain, shell, safeStorage} = require('electron');
+const {app, BrowserWindow, clipboard, dialog, session, Menu, ipcMain, shell, safeStorage} = require('electron');
 const path = require('node:path');
 const os = require('node:os');
 const {GeminiKeyStore, ModelController, installModelHandlers} = require('../model/index.cjs');
@@ -126,6 +126,7 @@ async function launch({provider, visible = true, userData, stateFile, startupMs,
     environment.dispose();
     disposeSsh?.();
     disposeModel?.();
+    ipcMain.removeHandler('workspace:copy-path');
     finished = true;
     app.quit();
   }
@@ -152,11 +153,22 @@ async function launch({provider, visible = true, userData, stateFile, startupMs,
     }, () => origin);
     disposeEnvironment=installEnvironmentHandlers(ipcMain,()=>window,environment,()=>origin);
     disposeModel = installModelHandlers(ipcMain, () => window, modelController, () => origin);
+    ipcMain.handle('workspace:copy-path', (event, filePath) => {
+      const frame = event.senderFrame;
+      if (!window || window.isDestroyed() || event.sender !== window.webContents || frame !== window.webContents.mainFrame ||
+          !localURL(frame.url, origin) || new URL(frame.url).pathname !== '/') {
+        throw Error('Unauthorized file path copy.');
+      }
+      if (typeof filePath !== 'string' || !filePath.includes('/') || filePath.length > 4096 || /[\x00-\x1f\x7f]/.test(filePath)) {
+        throw Error('Invalid file path.');
+      }
+      clipboard.writeText(filePath);
+    });
     // A saved Gemini key selects Gemini unless --provider was given explicitly.
     const savedKey = await modelStore.load().catch(() => null);
-    const startProvider = provider || (savedKey ? 'gemini' : 'codex');
+    const startProvider = provider || (savedKey ? 'gemini' : 'none');
     await startBackend(startProvider, startProvider === 'gemini' ? savedKey : null);
-    devTerminal=installDevTerminal(ipcMain,()=>window,sshService,()=>origin);
+    if(devMode)devTerminal=installDevTerminal(ipcMain,()=>window,sshService,()=>origin);
   }
   catch (error) {
     if (!quitting) await dialog.showMessageBox({type: 'error', title: 'SIGNET could not start', message: error.message});
@@ -181,7 +193,7 @@ async function launch({provider, visible = true, userData, stateFile, startupMs,
   window = new BrowserWindow({width: 1650, height: 894, minWidth: 760, minHeight: 460, useContentSize: true, show: false,
     title: 'SIGNET Research Assistant', webPreferences: {session: isolated, nodeIntegration: false,
       contextIsolation: true, sandbox: true, webSecurity: true, webviewTag: false,
-      additionalArguments: ['--signet-dev-terminal', ...(devMode ? ['--signet-dev-mode'] : [])],
+      additionalArguments: devMode ? ['--signet-dev-terminal', '--signet-dev-mode'] : [],
       preload: path.join(__dirname, '../../preload/index.cjs')}});
   window.on('close', event => { if (!finished) { event.preventDefault(); void quit(); } });
   window.webContents.setWindowOpenHandler(({url}) => {
@@ -201,7 +213,7 @@ async function launch({provider, visible = true, userData, stateFile, startupMs,
   window.webContents.on('did-start-navigation',event=>{if(event.isMainFrame)devTerminal?.close()});
   window.webContents.on('render-process-gone', () => { void quit(); });
   try {
-    await window.loadURL(origin + view);
+    await window.loadURL(origin + view + '?new=1');
     if (visible && !quitting) window.show();
   } catch (error) {
     if (!quitting) await dialog.showMessageBox({type: 'error', title: 'SIGNET could not load', message: 'Could not load the local interface.'});
@@ -215,7 +227,7 @@ function providerFromArgs(argv) {
   const index = argv.indexOf('--provider');
   if (index < 0) return undefined;
   const provider = argv[index + 1];
-  if (!['codex', 'gemini', 'groq'].includes(provider)) throw Error('Use --provider codex, gemini or groq.');
+  if (!['none', 'gemini', 'groq', 'codex'].includes(provider)) throw Error('Use --provider none, gemini, groq or codex.');
   return provider;
 }
 module.exports = {launch, providerFromArgs};

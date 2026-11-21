@@ -1,5 +1,5 @@
 (() => {
-  function drawStage3Scatter(panel, points, xTicks, yTicks, inEnglish = false) {
+  function drawStage3Scatter(panel, points, xTicks, yTicks) {
     const svg = (tag, attrs) => {
       const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
       for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, value);
@@ -31,14 +31,12 @@
       axes.append(gridLine(value, { x1: bounds.left, x2: bounds.right, y1: y, y2: y }), tick);
     }
     for (const [x, y] of points) {
-      const zh = `第 1 主成分 ${format(x)} · 第 2 主成分 ${format(y)}`;
-      const en = `PC1: ${format(x)} · PC2: ${format(y)}`;
+      const tooltip = `PC1: ${format(x)} · PC2: ${format(y)}`;
       marks.append(svg("circle", {
         cx: xFor(x).toFixed(2),
         cy: yFor(y).toFixed(2),
         r: 2.6,
-        "data-tooltip": inEnglish ? en : zh,
-        "data-en-data-tooltip": en,
+        "data-tooltip": tooltip,
       }));
     }
     panel.querySelector(".s3-points").replaceChildren(marks);
@@ -51,30 +49,34 @@
   const root = document.getElementById("signet-lens-left-preview");
   const app = root.querySelector(".ml-app");
 
-  function fitApp(width) {
-    if (width > 0) app.style.setProperty("--ml-fit", width / app.offsetWidth);
-  }
-  fitApp(root.getBoundingClientRect().width);
-  new ResizeObserver(([entry]) => fitApp(entry.contentRect.width)).observe(root);
   const byId = (id) => root.querySelector("#ml-" + id);
   const inputTypes = [
-    ["genotype", "基因型資料", "Genotype data"],
-    ["expression", "基因表現量資料", "Gene expression data"],
-    ["clinical", "臨床資料", "Clinical data"],
+    ["genotype", "Genotype data"],
+    ["expression", "Gene expression data"],
+    ["clinical", "Clinical data"],
   ];
-  function makeDataset({id, name, folder = "", inputs = {}, default_inputs = inputs, persisted = true}) {
-    return {id, name, folder, inputs, defaultInputs: default_inputs, persisted};
+  const referenceTypes = [
+    ["ref", "Imputation reference panel", "reference"],
+    ["gmap", "Genetic map", "genetic_map"],
+    ["gtf", "Gene annotation", "annotation"],
+  ];
+  const savedDisplayName = name => Array.isArray(name) ? name[1] ?? name[0] : name;
+  function makeDataset({id, name, folder = "", inputs = {}, default_inputs = inputs, persisted = true, references = {}}) {
+    return {id, name: savedDisplayName(name), folder, inputs, defaultInputs: default_inputs, persisted, references};
   }
   const exampleDataset = {
-    id: "example-chr1", name: ["第 1 號染色體範例", "Chromosome 1 example"],
+    id: "example-chr1", name: "Chromosome 1 example",
     inputs: {genotype: ["study.ped", "study.map"]},
     persisted: false,
   };
-  const datasets = [makeDataset(exampleDataset)];
-  let activeDataset = datasets[0];
+  const emptyDataset = makeDataset({id: "", name: "No datasets yet", persisted: false});
+  const datasets = [];
+  let activeDataset = emptyDataset;
   let datasetRevision = 0;
+  const deletedDatasetIds = new Set();
   let datasetCatalogReady = false;
   let datasetCatalogError = "";
+  let resettingDatasetFile = false;
   let genotypeRun;
   let expressionRun;
   let adjustmentRun;
@@ -86,7 +88,6 @@
   let historyState = "loading";
   let historyResult = null;
   let historyScope = "current";
-  const localDatasetName = (dataset) => dataset.name[root.lang === "en" ? 1 : 0];
   const historyKey = run => run.history_id ?? `${run.source === "live" ? "workspace" : run.source}--${run.run_id}`;
   const findHistoryRun = id => historyRuns.find(run => historyKey(run) === id);
   const canContinue = run => run?.source === "live" && run.origin === "workspace" && run.capabilities?.continue_analysis === true;
@@ -122,16 +123,17 @@
       history_id: run ? historyKey(run) : null, stage, selected_genes: gene ? [gene] : []};
   });
 
-  async function requestDataset(path, body, method = "GET") {
-    const response = await fetch(path, {method, body: JSON.stringify(body),
+  async function requestDataset(path, body, method = "GET", signal) {
+    const response = await fetch(path, {method, body: JSON.stringify(body), signal,
       headers: {"Content-Type": "application/json", "X-Chat-Token": chatToken}});
     const result = await response.json().catch(() => null);
     if (!response.ok || !result) throw new Error(result?.error ||
-      (root.lang === "en" ? "Could not read or save the dataset." : "無法讀取或儲存資料組。"));
+      "Could not read or save the dataset.");
     return result;
   }
 
   function acceptSavedDataset(record) {
+    if (deletedDatasetIds.has(record.id)) throw new Error("This dataset was deleted.");
     const dataset = makeDataset(record);
     const index = datasets.findIndex(({id}) => id === dataset.id);
     if (index === -1) datasets.push(dataset);
@@ -143,6 +145,12 @@
     return dataset;
   }
   const tabs = [byId("agent-tab"), byId("stage-tab")];
+  const agentView = byId("agent-view");
+  const contextChat = byId("context-chat");
+  const showContextChat = byId("context-chat-show");
+  const hideContextChat = byId("context-chat-hide");
+  let contextChatOpen = true;
+
   function selectTab(activeTab) {
     for (const tab of tabs) {
       const active = tab === activeTab;
@@ -150,6 +158,7 @@
       tab.tabIndex = active ? 0 : -1;
       root.querySelector("#" + tab.getAttribute("aria-controls")).hidden = !active;
     }
+    if (genotypeRun) renderRunTimeline();
   }
   for (const tab of tabs) {
     tab.addEventListener("click", () => selectTab(tab));
@@ -168,30 +177,74 @@
     });
   }
 
+  const pathTemplate = byId("selected-file-path-template");
+
+  function renderFilePath(file, {includeFilename = false} = {}) {
+    const location = pathTemplate.content.firstElementChild.cloneNode(true);
+    const nameStart = file.lastIndexOf("/") + 1;
+    const name = file.slice(nameStart) || file;
+    const directory = file.slice(0, nameStart - 1) || "/";
+    const lastFolder = Math.max(0, directory.lastIndexOf("/"));
+    const displayPath = includeFilename ? file : directory;
+    location.querySelector(".ml-file-directory-prefix").textContent = displayPath.slice(0, lastFolder);
+    location.querySelector(".ml-file-directory-tail bdi").textContent = displayPath.slice(lastFolder);
+    const trigger = location.querySelector("[data-show-file-path]");
+    const panel = location.querySelector("[data-file-path-panel]");
+    const status = panel.querySelector("[data-file-path-status]");
+    const label = `Full path for ${name}`;
+    trigger.setAttribute("aria-label", label);
+    panel.setAttribute("aria-label", label);
+    trigger.popoverTargetElement = panel;
+    panel.querySelector("[data-full-file-path]").textContent = file;
+    panel.addEventListener("beforetoggle", () => { status.textContent = ""; });
+    panel.querySelector("[data-copy-file-path]").addEventListener("click", async () => {
+      try {
+        await window.signetDesktop.copyFilePath(file);
+        status.textContent = "Path copied.";
+      } catch {
+        status.textContent = "Could not copy the path. You can select and copy it above.";
+      }
+    });
+    return location;
+  }
+
   let inputValidation;
   const syncInputFiles = (() => {
     const template = byId("current-files-template");
     const inputs = [];
     const statuses = new Map();
-    let saving = false;
 
     function renderInput(input) {
       const files = activeDataset.inputs[input.type] ?? [];
       const defaults = activeDataset.defaultInputs[input.type] ?? [];
+      input.datasetName.textContent = activeDataset.name;
       input.paths.replaceChildren(...files.map((file) => {
-        const path = document.createElement("code");
-        path.textContent = file;
-        return path;
+        const row = document.createElement("li");
+        const name = document.createElement("strong");
+        name.textContent = file.split("/").at(-1) || file;
+        row.append(name);
+        if (name.textContent !== file) row.append(renderFilePath(file));
+        return row;
       }));
-      const none = root.lang === "en" ? "No files selected" : "尚未選擇檔案";
-      if (!files.length) input.paths.textContent = none;
-      input.caption.textContent = files.length ? files.map((file) => file.split("/").at(-1)).join(" · ") : none;
-      input.replaceButton.disabled = !datasetCatalogReady || !activeDataset.persisted || saving;
-      input.resetButton.disabled = !datasetCatalogReady || !activeDataset.persisted || saving || JSON.stringify(files) === JSON.stringify(defaults);
+      input.paths.hidden = !files.length;
+      input.empty.hidden = Boolean(files.length);
+      input.count.hidden = !files.length;
+      input.count.textContent = (files.length === 1 ? "1 file" : `${files.length} files`);
+      input.caption.textContent = files.length ? files.map((file) => file.split("/").at(-1)).join(" · ")
+        : "No files selected";
+      input.replaceButton.disabled = !datasetCatalogReady || !activeDataset.persisted || resettingDatasetFile;
+      input.resetButton.hidden = !files.length && !defaults.length;
+      input.resetButton.disabled = !datasetCatalogReady || !activeDataset.persisted || resettingDatasetFile || JSON.stringify(files) === JSON.stringify(defaults);
+      input.resetButton.textContent = defaults.length ? "Use defaults"
+        : "Clear selection";
       const status = statuses.get(`${activeDataset.id}:${input.type}`);
       input.current.dataset.saveState = status?.state ?? "idle";
       for (const message of input.messages) {
         message.hidden = message.dataset.fileStatus !== status?.state;
+        if (message.dataset.fileStatus === "default") {
+          message.textContent = defaults.length ? "Default file selection saved."
+            : "File selection cleared.";
+        }
         if (message.dataset.fileStatus === "error") message.textContent = status?.error ?? "";
       }
     }
@@ -202,37 +255,45 @@
     }
 
     async function restoreDefaults(input) {
-      if (saving || !datasetCatalogReady || !activeDataset.persisted) return;
+      if (resettingDatasetFile || !datasetCatalogReady || !activeDataset.persisted) return;
       const datasetId = activeDataset.id;
       const files = [...(activeDataset.defaultInputs[input.type] ?? [])];
       const key = `${datasetId}:${input.type}`;
-      saving = true;
+      resettingDatasetFile = true;
       statuses.set(key, {state: "saving"});
       renderFiles();
+      syncDatasetReferences();
       try {
         const record = await requestDataset(`/signet/datasets/${encodeURIComponent(datasetId)}`,
           {inputs: {[input.type]: files}}, "PATCH");
-        if (record.id !== datasetId) throw new Error(root.lang === "en"
-          ? "The saved dataset does not match this selection." : "儲存結果與這組資料不一致。");
+        if (record.id !== datasetId) throw new Error("The saved dataset does not match this selection.");
         acceptSavedDataset(record);
         statuses.set(key, {state: "default"});
         renderDatasetLabels();
       } catch (error) {
         statuses.set(key, {state: "error", error: error.message});
       } finally {
-        saving = false;
+        resettingDatasetFile = false;
         renderFiles();
+        syncDatasetReferences();
+        if (activeDataset.id === datasetId && input.resetButton.hidden &&
+            document.activeElement === document.body && input.replaceButton.getClientRects().length) {
+          input.replaceButton.focus();
+        }
       }
     }
 
     for (const row of root.querySelectorAll("[data-input-target]")) {
       const article = root.querySelector("#" + row.getAttribute("aria-controls"));
       const current = template.content.firstElementChild.cloneNode(true);
-      article.querySelector(".ml-nav-detail-title").after(current);
+      article.querySelector(".ml-dataset-editor-grid").prepend(current);
       const input = {
         current,
         type: row.dataset.inputTarget,
+        datasetName: article.querySelector("[data-file-dataset]"),
         paths: current.querySelector("[data-current-files]"),
+        empty: current.querySelector("[data-current-file-empty]"),
+        count: current.querySelector("[data-current-file-count]"),
         caption: row.querySelector("small"),
         messages: current.querySelectorAll("[data-file-status]"),
         replaceButton: current.querySelector("[data-input-replace]"),
@@ -245,9 +306,9 @@
         const labels = inputTypes.find(([key]) => key === input.type);
         const paths = activeDataset.inputs[input.type] ?? [];
         window.dispatchEvent(new CustomEvent("open-remote-files", {detail: {
-          key: input.type, inputKind: input.type, label: labels[root.lang === "en" ? 2 : 1],
+          key: input.type, inputKind: input.type, label: labels[1],
           current: paths[0] ?? "", currentPaths: [...paths], datasetId: activeDataset.id,
-          multiple: input.type === "genotype", language: root.lang,
+          multiple: input.type === "genotype",
         }}));
       });
       input.resetButton.addEventListener("click", () => void restoreDefaults(input));
@@ -265,7 +326,166 @@
     return renderFiles;
   })();
 
-  inputValidation = window.SignetInputValidation.create({root, getDataset: () => ({
+  const syncDatasetReferences = (() => {
+    const panel = byId("input-references");
+    const rows = [...panel.querySelectorAll("[data-reference-role]")].map(row => ({
+      role: row.dataset.referenceRole,
+      path: row.querySelector("[data-reference-path]"),
+      origin: row.querySelector("[data-reference-origin]"),
+      choose: row.querySelector("[data-reference-choose]"),
+      reset: row.querySelector("[data-reference-reset]"),
+      status: row.querySelector("[data-reference-status]"),
+    }));
+    const caption = root.querySelector("[data-reference-caption]");
+    const datasetName = panel.querySelector("[data-reference-dataset]");
+    const feedback = panel.querySelector("[data-reference-feedback]");
+    const retry = panel.querySelector("[data-reference-retry]");
+    const messages = new Map();
+    let defaults = {};
+    let defaultRequest;
+    let defaultState = "idle";
+    let defaultError = "";
+    let connected = false;
+    let remoteKey;
+    const current = () => activeDataset.references ?? {};
+    const editable = () => datasetCatalogReady && activeDataset.persisted && !resettingDatasetFile;
+    const needsDefaults = () => rows.some(({role}) => !current()[role]);
+    const visible = () => app.dataset.nav === "data" && !panel.hidden && !byId("dataset-files").hidden;
+
+    function render() {
+      datasetName.textContent = activeDataset.name;
+      const custom = rows.filter(({role}) => current()[role]).length;
+      caption.textContent = custom ? `${custom} customized` : "Environment defaults";
+      for (const row of rows) {
+        const override = current()[row.role];
+        const path = override || defaults[row.role];
+        row.path.hidden = !path;
+        row.path.textContent = path ?? "";
+        row.origin.textContent = override ? "Custom" : "Environment default";
+        row.choose.disabled = !editable();
+        row.reset.disabled = !editable();
+        row.reset.hidden = !override;
+        const notice = messages.get(`${activeDataset.id}:${row.role}`);
+        const status = {
+          saving: "Saving…",
+          saved: "Reference file saved.",
+          default: "Environment default restored.",
+          error: notice?.error ?? "",
+        }[notice?.state] ?? "";
+        row.status.hidden = !status;
+        row.status.dataset.status = notice?.state ?? "";
+        if (row.status.textContent !== status) row.status.textContent = status;
+      }
+      const notice = !needsDefaults() ? "" : !connected
+        ? "Connect to see the default reference paths."
+        : defaultState === "loading" ? "Loading environment defaults…"
+        : defaultState === "error" ? defaultError : "";
+      feedback.hidden = !notice;
+      if (feedback.textContent !== notice) feedback.textContent = notice;
+      retry.hidden = !(connected && needsDefaults() && defaultState === "error");
+    }
+
+    async function loadDefaults() {
+      if (!visible() || !connected || !needsDefaults() || defaultRequest) return;
+      const request = new AbortController();
+      defaultRequest = request;
+      defaultState = "loading";
+      render();
+      try {
+        const reply = await requestDataset("/signet/references", undefined, "GET", request.signal);
+        if (defaultRequest !== request) return;
+        if (!rows.every(({role}) => typeof reply.references?.[role] === "string" && reply.references[role].startsWith("/"))) {
+          throw Error("Could not confirm the environment reference paths.");
+        }
+        defaults = reply.references;
+        defaultState = "ready";
+      } catch (error) {
+        if (defaultRequest !== request) return;
+        defaults = {};
+        defaultError = error.message;
+        defaultState = "error";
+      } finally {
+        if (defaultRequest === request) {
+          defaultRequest = null;
+          render();
+        }
+      }
+    }
+
+    function acceptReference(record, role, state) {
+      acceptSavedDataset(record);
+      messages.set(`${record.id}:${role}`, {state});
+      syncInputFiles();
+      syncGenotypeContext();
+    }
+
+    async function restoreDefault(row) {
+      if (!editable() || !current()[row.role]) return;
+      const datasetId = activeDataset.id, key = `${datasetId}:${row.role}`;
+      resettingDatasetFile = true;
+      messages.set(key, {state: "saving"});
+      syncInputFiles();
+      render();
+      try {
+        const record = await requestDataset(`/signet/datasets/${encodeURIComponent(datasetId)}`,
+          {references: {[row.role]: null}}, "PATCH");
+        if (record.id !== datasetId || record.references?.[row.role]) {
+          throw Error("Could not confirm the restored default for this dataset.");
+        }
+        acceptReference(record, row.role, "default");
+      } catch (error) {
+        messages.set(key, {state: "error", error: error.message});
+      } finally {
+        resettingDatasetFile = false;
+        syncInputFiles();
+        render();
+        if (activeDataset.id === datasetId && row.reset.hidden && document.activeElement === document.body &&
+            row.choose.getClientRects().length) row.choose.focus();
+        if (defaultState === "idle") void loadDefaults();
+      }
+    }
+
+    for (const row of rows) {
+      const [, label] = referenceTypes.find(([role]) => role === row.role);
+      row.choose.addEventListener("click", () => {
+        if (!editable()) return;
+        window.dispatchEvent(new CustomEvent("open-remote-files", {detail: {
+          key: row.role, referenceKind: row.role, label,
+          current: current()[row.role] || defaults[row.role] || "",
+          datasetId: activeDataset.id,
+        }}));
+      });
+      row.reset.addEventListener("click", () => void restoreDefault(row));
+    }
+    retry.addEventListener("click", () => void loadDefaults());
+    window.addEventListener("dataset-reference-selected", event => {
+      const {datasetId, referenceKind, record} = event.detail ?? {};
+      if (record?.id !== datasetId || !datasets.some(dataset => dataset.id === datasetId) ||
+          !rows.some(({role}) => role === referenceKind) ||
+          typeof record.references?.[referenceKind] !== "string") return;
+      acceptReference(record, referenceKind, "saved");
+      render();
+    });
+    window.addEventListener("workspace-remote-context", event => {
+      const {connected: online, identity, environmentKey} = event.detail ?? {};
+      const next = JSON.stringify([online === true, identity, environmentKey]);
+      if (next === remoteKey) return;
+      remoteKey = next;
+      connected = online === true;
+      defaultRequest?.abort();
+      defaultRequest = null;
+      defaults = {};
+      defaultState = "idle";
+      render();
+      void loadDefaults();
+    });
+    return (refresh = false) => {
+      render();
+      if (refresh || defaultState === "idle") void loadDefaults();
+    };
+  })();
+
+  inputValidation = window.SignetInputValidation.create({root, renderFilePath, getDataset: () => ({
     id: activeDataset.id, name: activeDataset.name, inputs: activeDataset.inputs,
     persisted: activeDataset.persisted, ready: datasetCatalogReady,
   })});
@@ -288,44 +508,44 @@
 
   const stageData = [
     {
-      name: "基因型準備", note: "核對資料組檔案後，手動送出基因型前處理。",
-      settings: "在右側確認檔案與送算設定。",
-      output: "送出後可查看排隊、執行和輸出檢查進度。",
+      name: "Genotype preparation", note: "Review the dataset files, then manually submit genotype preparation.",
+      settings: "Review files and submission settings on the right.",
+      output: "After submission, follow the queue, job, and output checks.",
       icon: "grid-3x3",
       preview: matrixPreview(["05050000000000", "00050000000000", "00050000000000", "00000000000000"]),
     },
     {
-      name: "基因表現量準備", note: "準備這筆執行所選染色體的基因表現量。",
-      settings: "在右側確認這筆執行的檔案與染色體。",
-      output: "完成後查看這筆執行的樣本與基因結果。",
+      name: "Gene expression preparation", note: "Prepare expression data for this run’s selected chromosome.",
+      settings: "Review this run’s files and chromosome on the right.",
+      output: "View this run’s sample and gene results after completion.",
       icon: "grid-3x3",
       preview: matrixPreview(["22433443320232", "23432432241223", "45224454353243", "12322342231244"]),
     },
     {
-      name: "樣本配對與校正", note: "配對樣本，再用主成分校正基因表現量。",
-      settings: "在右側確認臨床資料與主成分數。",
-      output: "完成後查看這筆執行的配對與校正結果。",
+      name: "Sample matching and adjustment", note: "Match samples, then adjust expression using PCs.",
+      settings: "Review the clinical file and principal component count on the right.",
+      output: "View this run’s matching and adjustment results after completion.",
       icon: "bar-chart-3",
       preview: barPreview([473, 471], ["#b7cfe2", "#4380b2"]),
     },
     {
-      name: "近端表現量關聯分析", note: "找出與鄰近基因表現量相關的變異。",
-      settings: "在右側確認顯著門檻、分析範圍與置換次數。",
-      output: "完成後從歷次執行查看關聯結果。",
+      name: "Cis-eQTL analysis", note: "Test variants for associations with nearby genes.",
+      settings: "Review the threshold, range and permutations on the right.",
+      output: "Open the association results from run history after completion.",
       icon: "bar-chart-3",
       preview: barPreview([3, 2, 1], ["#4380b2", "#85afcf", "#b7cfe2"]),
     },
     {
-      name: "網路推論", note: "重抽樣推論基因間可能的調控方向。",
-      settings: "在右側確認重抽樣次數、相關性門檻與運算資源。",
-      output: "完成後從歷次執行查看候選連線與出現頻率。",
+      name: "Network inference", note: "Use bootstrapping to infer directed gene links.",
+      settings: "Review bootstrap runs, the correlation threshold and resources on the right.",
+      output: "Open candidate edges and frequencies from run history after completion.",
       icon: "bar-chart-3",
       preview: barPreview([394, 337], ["#85afcf", "#4380b2"]),
     },
     {
-      name: "網路視覺化", note: "按連線出現頻率篩選，輸出基因調控網路。",
-      settings: "頻率門檻 0.45，顯示最大的 1 個子網路",
-      output: "完整網路含 95 個基因、731 條連線，右側顯示節錄",
+      name: "Network visualization", note: "Filter edges by frequency to visualize the network.",
+      settings: "Frequency cutoff 0.45 · largest subnetwork",
+      output: "Full network: 95 genes, 731 edges · excerpt shown",
       icon: "network",
       preview: `<path d="M64 18L14 23M64 18L33 5M64 18L43 30M64 18L84 6M64 18L96 29M64 18L117 13"
         fill="none" stroke="#91b8d7" stroke-width="1.2"/>
@@ -340,32 +560,32 @@
   const snapshots = [
     {
       number: 1,
-      chartTitle: "各變異位點的非零基因型編碼比例",
-      axis: "變異位點數",
+      chartTitle: "Share of nonzero genotype codes by variant",
+      axis: "Variant count",
       bars: [["0–1%", 1884], ["1–5%", 495], ["5–10%", 138], ["10–25%", 131], ["25–50%", 174], ["50–100%", 161]],
       step: 500,
-      caption: "以 560 個樣本統計 2,983 個變異位點。區間含下限，最後一組也含 100%。",
+      caption: "2,983 variants across 560 samples. Each bin includes its lower bound. The last also includes 100%.",
       settings: [
-        ["樣本缺失率上限", "10%"], ["位點缺失率上限", "10%"],
-        ["哈溫平衡檢定門檻", "p = 0.0001"], ["插補分塊長度", "5,000,000 個鹼基對"],
+        ["Max. sample missingness", "10%"], ["Max. variant missingness", "10%"],
+        ["HWE p-value cutoff", "p = 0.0001"], ["Imputation block size", "5,000,000 bp"],
       ],
-      tableTitle: "基因型編碼統計",
-      headers: ["輸出編碼", "筆數", "比例"],
+      tableTitle: "Genotype code summary",
+      headers: ["Genotype code", "Count", "Share"],
       rows: [["0", "1,552,102", "92.91%"], ["1", "99,798", "5.97%"], ["2", "18,580", "1.11%"]],
     },
     {
       number: 2,
-      chartTitle: "轉換後的基因表現量分布",
-      axis: "表現量數值筆數",
+      chartTitle: "Distribution of transformed gene expression",
+      axis: "Expression value count",
       bars: [["11–12", 617], ["12–13", 5634], ["13–14", 16258], ["14–15", 18300], ["15–16", 9462], ["16–17", 2116], ["17–18", 230], ["18–19", 13]],
       step: 5000,
-      caption: "涵蓋 554 個樣本、95 個基因，共 52,630 筆數值。各區間含下限。",
+      caption: "52,630 values across 554 samples and 95 genes. Each bin includes its lower bound.",
       settings: [
-        ["樣本總讀數下限", "2,500,000"], ["基因條件", "具註解的蛋白質編碼基因"],
-        ["表現量處理", "變異數穩定轉換"],
+        ["Min. reads per sample", "2,500,000"], ["Genes included", "Annotated protein-coding genes"],
+        ["Expression transform", "Variance-stabilizing transformation"],
       ],
-      tableTitle: "基因表現量摘要節錄",
-      headers: ["基因", "最小值", "中位數", "最大值"],
+      tableTitle: "Gene expression summary excerpt",
+      headers: ["Gene", "Minimum", "Median", "Maximum"],
       rows: [
         ["C1orf159", "11.63", "13.82", "17.53"], ["MEGF6", "11.63", "14.12", "17.55"],
         ["CHD5", "11.63", "14.12", "16.94"], ["ACOT7", "11.62", "13.57", "16.76"], ["THAP3", "11.56", "14.31", "17.25"],
@@ -373,36 +593,36 @@
     },
     {
       number: 4,
-      chartTitle: "各類變異的顯著關聯配對",
-      axis: "顯著配對數",
-      bars: [["常見變異", 156], ["低頻區域", 35], ["罕見區域", 15]],
+      chartTitle: "Significant associations by variant group",
+      axis: "Significant pair count",
+      bars: [["Common variants", 156], ["Low-frequency regions", 35], ["Rare-variant regions", 15]],
       step: 40,
-      caption: "共 206 筆顯著配對，涉及 85 個不同基因。低頻與罕見變異依區域合併分析。",
+      caption: "206 significant pairs across 85 genes. Low-frequency and rare variants are grouped by region.",
       settings: [
-        ["顯著性門檻", "0.05"], ["上游範圍", "1,000 個鹼基對"],
-        ["下游範圍", "1,000 個鹼基對"], ["低頻及罕見區域置換", "100 次"],
+        ["Significance cutoff", "0.05"], ["Upstream window", "1,000 bp"],
+        ["Downstream window", "1,000 bp"], ["Permutations (low/rare)", "100"],
       ],
-      tableTitle: "顯著配對節錄 · 最小的 5 筆 p 值",
-      headers: ["基因", "變異或區域編號", "類別", "p 值"],
+      tableTitle: "Significant pairs · 5 lowest p-values",
+      headers: ["Gene", "Variant or region ID", "Category", "p-value"],
       rows: [
-        ["P3H1", "35", "常見變異", "0.00010067"], ["MYSM1", "50", "常見變異", "0.00010346"],
-        ["FMO5", "100", "常見變異", "0.00010483"], ["DRAXIN", "12", "常見變異", "0.00012454"],
-        ["CAPN9", "191", "低頻區域", "0.00013783"],
+        ["P3H1", "35", "Common variants", "0.00010067"], ["MYSM1", "50", "Common variants", "0.00010346"],
+        ["FMO5", "100", "Common variants", "0.00010483"], ["DRAXIN", "12", "Common variants", "0.00012454"],
+        ["CAPN9", "191", "Low-frequency regions", "0.00013783"],
       ],
     },
     {
       number: 5,
-      chartTitle: "候選連線在重抽樣中的出現次數",
-      axis: "候選連線數",
-      bars: [["1 次（50%）", 394], ["2 次（100%）", 337]],
+      chartTitle: "Candidate edge frequency across bootstrap runs",
+      axis: "Candidate edge count",
+      bars: [["1 of 2 runs (50%)", 394], ["2 of 2 runs (100%)", 337]],
       step: 100,
-      caption: "731 條候選連線至少出現在一次重抽樣中。第 6 階段會依出現頻率篩選。",
+      caption: "731 candidate edges appeared in at least one bootstrap run. Stage 6 filters by frequency.",
       settings: [
-        ["重抽樣次數", "2 次"], ["每個基因的標記數上限", "3 個"], ["標記間絕對相關性上限", "0.3"],
-        ["網路工作核心數", "2"], ["網路工作記憶體", "8 GB"], ["網路工作時間上限", "4 小時"],
+        ["Bootstrap runs", "2"], ["Max. markers per gene", "3"], ["Max. absolute marker correlation", "0.3"],
+        ["Network job cores", "2"], ["Network job memory", "8 GB"], ["Network job time limit", "4 hours"],
       ],
-      tableTitle: "推論連線節錄",
-      headers: ["來源基因", "目標基因", "重抽樣出現頻率"],
+      tableTitle: "Inferred edge excerpt",
+      headers: ["Source gene", "Target gene", "Bootstrap frequency"],
       rows: [
         ["MEGF6", "CYP4Z1", "50%"], ["MEGF6", "LRRC40", "50%"], ["MEGF6", "HSD17B7", "50%"],
         ["MEGF6", "ATP1B1", "100%"], ["MEGF6", "RABGAP1L", "100%"],
@@ -410,215 +630,21 @@
     },
   ];
 
-  const labelPairs = [
-    ["工作區導覽", "Workspace navigation"],
-    ["工作區側欄", "Workspace sidebar"],
-    ["關閉側欄", "Close sidebar"],
-    ["側欄檢視", "Sidebar views"],
-    ["分析", "Analysis"],
-    ["歷次執行", "Run history"],
-    ["示範資料組", "Example dataset"],
-    ["同一組模擬資料", "Same simulated dataset"],
-    ["輸入資料", "Inputs"],
-    ["輸入資料明細", "Input details"],
-    ["基因型資料", "Genotype data"],
-    ["基因表現量資料", "Gene expression data"],
-    ["臨床資料", "Clinical data"],
-    ["原始檔案", "Source files"],
-    ["送算時的檔案", "Submitted files"],
-    ["輸入檔案", "Input file"],
-    ["原始樣本", "Input samples"],
-    ["原始個體紀錄", "Input participant records"],
-    ["資料來源", "Data source"],
-    ["為示範分析整理的公開臨床資料", "Public clinical metadata prepared for the example"],
-    ["第 1 階段保留的樣本", "Samples retained in stage 1"],
-    ["第 1 階段輸出的變異", "Variants in stage 1 output"],
-    ["第 2 階段保留的樣本", "Samples retained in stage 2"],
-    ["第 2 階段輸出的基因", "Genes in stage 2 output"],
-    ["查看第 1 階段", "View stage 1"],
-    ["查看第 2 階段", "View stage 2"],
-    ["查看第 3 階段", "View stage 3"],
-    ["工作區設定", "Workspace settings"],
-    ["原型預覽", "Prototype preview"],
-    ["已保存的執行", "Saved runs"],
-    ["執行明細", "Run details"],
-    ["執行", "Run"],
-    ["回到執行時間線", "Back to run timeline"],
-    ["六階段執行時間線", "Six-stage run timeline"],
-    ["本原型使用的執行", "Run shown in prototype"],
-    ["重跑 · 階段進度驗證", "Rerun · stage progress check"],
-    ["重跑 · 英文展示", "Rerun · English demo"],
-    ["工作編號", "Job ID"],
-    ["送出時間", "Submitted"],
-    ["完成時間", "Finished"],
-    ["分配資源", "Allocated resources"],
-    ["助理", "Agent"],
-    ["對話", "Conversation"],
-    ["新增對話", "New conversation"],
-    ["請用 Lens 帶我看這份筆記。", "use lens to walk me through this notebook"],
-    ["執行紀錄", "Execution history"],
-    ["執行中", "Running"],
-    ["停止", "Stop"],
-    ["已停止", "Stopped"],
-    ["撰寫訊息", "Write a message"],
-    ["輸入訊息", "Type your message"],
-    ["輸入訊息…", "Type your message..."],
-    ["程式碼模式（測試版）", "Code Mode (beta)"],
-    ["停止執行", "Stop execution"],
-    ["送出訊息", "Send message"],
-    ["已完成：", "Done:"],
-    ["第 1 號染色體", "Chromosome 1"],
-    ["模擬分析", "Simulated run"],
-    ["階段", "Stage"],
-    ["從已完成的執行開啟網路圖與連線表。", "Open a completed run to see its network and connections."],
-    ["設定", "Settings"],
-    ["輸出", "Output"],
-    ["資料", "Data"],
-    ["第 1 號染色體 · 模擬結果", "Chromosome 1 · Simulated results"],
-    ["第 1 號染色體 · 模擬結果節錄", "Chromosome 1 · Simulated results excerpt"],
-    ["基因型準備", "Genotype preparation"],
-    ["核對資料組檔案後，手動送出基因型前處理。", "Review the dataset files, then manually submit genotype preparation."],
-    ["在右側確認檔案與送算設定。", "Review files and submission settings on the right."],
-    ["送出後可查看排隊、執行和輸出檢查進度。", "After submission, follow the queue, job, and output checks."],
-    ["基因表現量準備", "Gene expression preparation"],
-    ["準備這筆執行所選染色體的基因表現量。", "Prepare expression data for this run’s selected chromosome."],
-    ["在右側確認這筆執行的檔案與染色體。", "Review this run’s files and chromosome on the right."],
-    ["完成後查看這筆執行的樣本與基因結果。", "View this run’s sample and gene results after completion."],
-    ["在右側確認臨床資料與主成分數。", "Review the clinical file and principal component count on the right."],
-    ["完成後查看這筆執行的配對與校正結果。", "View this run’s matching and adjustment results after completion."],
-    ["只保留第 1 號染色體", "Chromosome 1 only"],
-    ["554 個樣本 × 95 個基因", "554 samples × 95 genes"],
-    ["樣本配對與校正", "Sample matching and adjustment"],
-    ["配對樣本，再用主成分校正基因表現量。", "Match samples, then adjust expression using PCs."],
-    ["使用 3 個主成分", "Use 3 principal components"],
-    ["初步配對 473 位個體，校正後保留 471 位", "473 matched · 471 retained after adjustment"],
-    ["近端表現量關聯分析", "Cis-eQTL analysis"],
-    ["找出與鄰近基因表現量相關的變異。", "Test variants for associations with nearby genes."],
-    ["在右側確認顯著門檻、分析範圍與置換次數。", "Review the threshold, range and permutations on the right."],
-    ["完成後從歷次執行查看關聯結果。", "Open the association results from run history after completion."],
-    ["在右側確認重抽樣次數、相關性門檻與運算資源。", "Review bootstrap runs, the correlation threshold and resources on the right."],
-    ["完成後從歷次執行查看候選連線與出現頻率。", "Open candidate edges and frequencies from run history after completion."],
-    ["顯著門檻 0.05，上下游各 1,000 個鹼基對，置換 100 次", "p < 0.05, ±1 kb, 100 permutations (low-frequency and rare)"],
-    ["常見 156 筆、低頻 35 筆、罕見 15 筆", "156 common, 35 low-frequency, 15 rare pairs"],
-    ["網路推論", "Network inference"],
-    ["重抽樣推論基因間可能的調控方向。", "Use bootstrapping to infer directed gene links."],
-    ["重抽樣 2 次，相關性門檻 0.3", "2 bootstrap runs · marker correlation cutoff 0.3"],
-    ["394 條連線的出現頻率為 50%，337 條為 100%", "394 edges at 50% · 337 at 100%"],
-    ["網路視覺化", "Network visualization"],
-    ["按連線出現頻率篩選，輸出基因調控網路。", "Filter edges by frequency to visualize the network."],
-    ["頻率門檻 0.45，顯示最大的 1 個子網路", "Frequency cutoff 0.45 · largest subnetwork"],
-    ["完整網路含 95 個基因、731 條連線，右側顯示節錄", "Full network: 95 genes, 731 edges · excerpt shown"],
-    ["各變異位點的非零基因型編碼比例", "Share of nonzero genotype codes by variant"],
-    ["變異位點數", "Variant count"],
-    ["以 560 個樣本統計 2,983 個變異位點。區間含下限，最後一組也含 100%。", "2,983 variants across 560 samples. Each bin includes its lower bound. The last also includes 100%."],
-    ["樣本缺失率上限", "Max. sample missingness"],
-    ["位點缺失率上限", "Max. variant missingness"],
-    ["哈溫平衡檢定門檻", "HWE p-value cutoff"],
-    ["插補分塊長度", "Imputation block size"],
-    ["5,000,000 個鹼基對", "5,000,000 bp"],
-    ["基因型編碼統計", "Genotype code summary"],
-    ["輸出編碼", "Genotype code"],
-    ["筆數", "Count"],
-    ["比例", "Share"],
-    ["轉換後的基因表現量分布", "Distribution of transformed gene expression"],
-    ["表現量數值筆數", "Expression value count"],
-    ["涵蓋 554 個樣本、95 個基因，共 52,630 筆數值。各區間含下限。", "52,630 values across 554 samples and 95 genes. Each bin includes its lower bound."],
-    ["樣本總讀數下限", "Min. reads per sample"],
-    ["基因條件", "Genes included"],
-    ["具註解的蛋白質編碼基因", "Annotated protein-coding genes"],
-    ["表現量處理", "Expression transform"],
-    ["變異數穩定轉換", "Variance-stabilizing transformation"],
-    ["基因表現量摘要節錄", "Gene expression summary excerpt"],
-    ["基因", "Gene"],
-    ["最小值", "Minimum"],
-    ["中位數", "Median"],
-    ["最大值", "Maximum"],
-    ["前兩個主成分的樣本分布", "Sample distribution on the first two principal components"],
-    ["471 位個體的散點圖，橫軸為第 1 主成分，縱軸為第 2 主成分", "Scatter plot of 471 individuals. PC1 is on the horizontal axis and PC2 on the vertical axis."],
-    ["第 1 主成分", "PC1"],
-    ["第 2 主成分", "PC2"],
-    ["每個點代表 1 位個體。圖中分數由同次分析保留的基因型資料重算並標準化。", "Each point is one individual. Scores were recomputed from genotypes retained in this run and standardized."],
-    ["樣本配對", "Sample matching"],
-    ["樣本配對與校正結果", "Sample matching and adjustment results"],
-    ["處理步驟", "Processing step"],
-    ["數量", "Count"],
-    ["基因型輸入", "Genotype inputs"],
-    ["560 筆樣本", "560 samples"],
-    ["基因表現量輸入", "Gene expression inputs"],
-    ["554 筆樣本", "554 samples"],
-    ["初步配對", "Initially matched"],
-    ["473 位個體", "473 individuals"],
-    ["校正後保留", "Retained after adjustment"],
-    ["471 位個體", "471 individuals"],
-    ["第 3 階段資訊", "Stage 3 details"],
-    ["主成分數", "Principal components"],
-    ["前", "Top"],
-    ["個", ""],
-    ["保留變異", "Retained variants"],
-    ["1,110 個", "1,110"],
-    ["分析基因", "Genes analyzed"],
-    ["95 個", "95"],
-    ["各類變異的顯著關聯配對", "Significant associations by variant group"],
-    ["顯著配對數", "Significant pair count"],
-    ["常見變異", "Common variants"],
-    ["低頻區域", "Low-frequency regions"],
-    ["罕見區域", "Rare-variant regions"],
-    ["共 206 筆顯著配對，涉及 85 個不同基因。低頻與罕見變異依區域合併分析。", "206 significant pairs across 85 genes. Low-frequency and rare variants are grouped by region."],
-    ["顯著性門檻", "Significance cutoff"],
-    ["上游範圍", "Upstream window"],
-    ["下游範圍", "Downstream window"],
-    ["1,000 個鹼基對", "1,000 bp"],
-    ["低頻及罕見區域置換", "Permutations (low/rare)"],
-    ["100 次", "100"],
-    ["顯著配對節錄 · 最小的 5 筆 p 值", "Significant pairs · 5 lowest p-values"],
-    ["變異或區域編號", "Variant or region ID"],
-    ["類別", "Category"],
-    ["p 值", "p-value"],
-    ["候選連線在重抽樣中的出現次數", "Candidate edge frequency across bootstrap runs"],
-    ["候選連線數", "Candidate edge count"],
-    ["1 次（50%）", "1 of 2 runs (50%)"],
-    ["2 次（100%）", "2 of 2 runs (100%)"],
-    ["731 條候選連線至少出現在一次重抽樣中。第 6 階段會依出現頻率篩選。", "731 candidate edges appeared in at least one bootstrap run. Stage 6 filters by frequency."],
-    ["重抽樣次數", "Bootstrap runs"],
-    ["2 次", "2"],
-    ["每個基因的標記數上限", "Max. markers per gene"],
-    ["3 個", "3"],
-    ["標記間絕對相關性上限", "Max. absolute marker correlation"],
-    ["網路工作核心數", "Network job cores"],
-    ["網路工作記憶體", "Network job memory"],
-    ["網路工作時間上限", "Network job time limit"],
-    ["4 小時", "4 hours"],
-    ["推論連線節錄", "Inferred edge excerpt"],
-    ["來源基因", "Source gene"],
-    ["目標基因", "Target gene"],
-    ["重抽樣出現頻率", "Bootstrap frequency"],
-    ["網路圖縮放", "Network zoom"],
-    ["縮小網路圖", "Zoom out on network"],
-    ["放大網路圖", "Zoom in on network"],
-    ["可選取基因的調控網路", "Regulatory network with selectable genes"],
-    ["連線資料", "Edge data"],
-    ["基因調控連線", "Gene regulatory edges"],
-    ["重抽樣頻率", "Bootstrap frequency"],
-    ["係數", "Coefficient"],
-    ["網路圖資訊", "Network details"],
-    ["基因調控網路", "Gene regulatory network"],
-    ["圖中範圍", "Shown"],
-    ["清除選取", "Clear selection"],
-  ];
-  for (let number = 1; number <= stageData.length; number++) {
-    labelPairs.push([`第 ${number} 階段`, `Stage ${number}`], [`第 ${number} 階段設定`, `Stage ${number} settings`]);
-  }
-  const toEnglish = new Map(labelPairs);
-  const toChinese = new Map(labelPairs.map(([chinese, english]) => [english, chinese]));
-  const englishLabel = (text) => toEnglish.get(text) ?? text;
   const escapeHistory = (value) => String(value ?? "").replace(/[&<>"']/g, (char) =>
     ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"})[char]);
   const countLabel = new Intl.NumberFormat("en-US");
-  function countChart(bars, step, axis, title) {
+  const percentLabel = value => `${Number((value * 100).toFixed(6))}%`;
+  function countChart(bars, step, axis, title, frequencyAxis) {
     const maximum = step * (Math.floor(Math.max(...bars.map(([, value]) => value)) / step) + 1);
     const left = 74, right = 636, top = 50, bottom = 354;
     const columnWidth = (right - left) / bars.length;
-    const barWidth = Math.min(128, columnWidth - Math.min(12, columnWidth / 2));
+    let barWidth = Math.min(128, columnWidth - Math.min(12, columnWidth / 2));
+    const xFor = frequency => left + frequency * (right - left);
+    if (frequencyAxis) {
+      const values = bars.map(([frequency]) => frequency).sort((a, b) => a - b);
+      const gap = values.slice(1).reduce((minimum, value, index) => Math.min(minimum, value - values[index]), 1);
+      barWidth = Math.min(32, (right - left) * gap * .8);
+    }
     const yFor = (value) => bottom - value / maximum * (bottom - top);
     const grid = Array.from({ length: maximum / step + 1 }, (_, index) => {
       const value = index * step;
@@ -626,20 +652,24 @@
       return `<line x1="${left}" x2="${right}" y1="${y}" y2="${y}" class="ml-count-grid"/>
         <text x="${left - 9}" y="${y + 4}" text-anchor="end">${countLabel.format(value)}</text>`;
     }).join("");
+    const displayLabel = label => frequencyAxis ? percentLabel(label) : label;
     const columns = bars.map(([label, value], index) => {
-      const x = left + (index + .5) * columnWidth;
+      const x = frequencyAxis ? xFor(label) : left + (index + .5) * columnWidth;
       const y = yFor(value);
       const formatted = countLabel.format(value);
-      return `<rect class="ml-count-bar" x="${x - barWidth / 2}" y="${y}" width="${barWidth}" height="${bottom - y}" rx="2"/>
+      const rect = `<rect class="ml-count-bar" x="${x - barWidth / 2}" y="${y}" width="${barWidth}" height="${bottom - y}" rx="2"`;
+      if (frequencyAxis) return `${rect}><title>${escapeHistory(`${displayLabel(label)} · ${axis} ${formatted}`)}</title></rect>`;
+      return `${rect}/>
         <text class="ml-count-label" x="${x}" y="${y - 9}" text-anchor="middle">${formatted}</text>
         <text x="${x}" y="${bottom + 28}" text-anchor="middle">${escapeHistory(label)}</text>`;
     }).join("");
-    const description = bars.map(([label, value]) => `${label} ${countLabel.format(value)}`).join("，");
-    const englishDescription = bars.map(([label, value]) => `${englishLabel(label)} ${countLabel.format(value)}`).join(", ");
-    return `<svg class="ml-count-chart" viewBox="0 0 660 410" role="img" aria-label="${escapeHistory(`${title}。${axis}：${description}`)}"
-        data-en-aria-label="${escapeHistory(`${englishLabel(title)}. ${englishLabel(axis)}: ${englishDescription}`)}">
+    const ticks = frequencyAxis ? [0, .2, .4, .6, .8, 1].map(value =>
+      `<text class="ml-count-frequency-tick" x="${xFor(value)}" y="${bottom + 24}" text-anchor="middle">${percentLabel(value)}</text>`).join("") : "";
+    const description = bars.map(([label, value]) => `${displayLabel(label)} ${countLabel.format(value)}`).join(", ");
+    const xLegend = frequencyAxis ? `<text x="${(left + right) / 2}" y="402" text-anchor="middle">${escapeHistory(frequencyAxis)}</text>` : "";
+    return `<svg class="ml-count-chart" viewBox="0 0 660 410" role="img" aria-label="${escapeHistory(`${title}. ${axis}: ${description}`)}">
       <text x="${left}" y="23">${escapeHistory(axis)}</text>
-      ${grid}${columns}
+      ${grid}${columns}${ticks}${xLegend}
     </svg>`;
   }
 
@@ -667,14 +697,14 @@
           </div>
         </details>
       </div>
-      <aside class="ml-result-inspector" aria-label="第 ${number} 階段設定">
+      <aside class="ml-result-inspector" aria-label="Stage ${number} settings">
         <header class="ml-result-inspector-heading">
           <i data-lucide="${icon}" aria-hidden="true"></i>
           <h2 id="lens-stage${number}-title">${name}</h2>
         </header>
         <dl class="ml-result-context">
-          <dt>階段</dt><dd>第 ${number} 階段</dd>
-          <dt>資料</dt><dd>第 1 號染色體 · 模擬結果</dd>
+          <dt>Stage</dt><dd>Stage ${number}</dd>
+          <dt>Data</dt><dd>Chromosome 1 · Simulated results</dd>
           ${settingsMarkup}
         </dl>
       </aside>
@@ -683,15 +713,15 @@
   app.insertAdjacentHTML("beforeend", snapshotMarkup);
 
   const timeline = byId("timeline");
+  const activeStageButton = () => timeline.querySelector('[aria-current="step"]');
   timeline.innerHTML = stageData.map(({ name, note, settings, output, icon, preview }, index) => {
     const number = index + 1;
-    const expanded = number === stageData.length;
     return `<li class="ml-stage-entry">
-      <p class="ml-stage-note"><span class="ml-stage-marker" aria-hidden="true"><i data-lucide="message-square-text"></i></span>${expanded ? "從已完成的執行開啟網路圖與連線表。" : note}</p>
-      <button type="button" class="ml-stage-button" data-stage="${number}" aria-expanded="${expanded}" aria-controls="ml-stage-detail-${number}" ${expanded ? 'aria-current="step"' : ''}>
+      <p class="ml-stage-note"><span class="ml-stage-marker" aria-hidden="true"><i data-lucide="message-square-text"></i></span>${note}</p>
+      <button type="button" class="ml-stage-button" data-stage="${number}" aria-expanded="false" aria-controls="ml-stage-detail-${number}">
         <span class="ml-stage-title">
           <span class="ml-stage-marker" aria-hidden="true"><i data-lucide="list"></i></span>
-          <span class="ml-stage-number">第 ${number} 階段</span>${name}
+          <span class="ml-stage-number">Stage ${number}</span>${name}
           <i data-lucide="chevron-down" class="ml-stage-chevron" aria-hidden="true"></i>
         </span>
         <span class="ml-stage-preview" aria-hidden="true">
@@ -699,55 +729,122 @@
           <svg class="ml-stage-thumbnail" viewBox="0 0 132 36">${preview}</svg>
         </span>
       </button>
-      <dl class="ml-stage-detail" id="ml-stage-detail-${number}" ${expanded ? "" : "hidden"}>
-        <dt>設定</dt>${expanded ? '<dd id="ml-stage6-settings" data-live-language></dd>' : `<dd>${settings}</dd>`}
-        <dt>輸出</dt>${expanded ? '<dd id="ml-stage6-output" data-live-language></dd>' : `<dd>${output}</dd>`}
+      <dl class="ml-stage-detail" id="ml-stage-detail-${number}" hidden>
+        <dt>Settings</dt><dd>${settings}</dd>
+        <dt>Output</dt><dd>${output}</dd>
       </dl>
     </li>`;
   }).join("");
   const timelineSummaries = new Map();
+  let timelinePreviewRequest;
   const timelineRevision = (run, stage) => {
     const job = run.jobs?.[historySteps[stage - 1]];
-    return JSON.stringify([run.revision, job?.record_revision, job?.attempt, job?.job_id,
-      job?.state ?? job?.status, job?.settings, job?.options]);
+    return JSON.stringify([run.source === "live" ? job?.record_revision : run.revision,
+      job?.attempt, job?.job_id, job?.state ?? job?.status, job?.finished_at, job?.reused_from, job?.settings, job?.options]);
   };
   function rememberTimelineResult(run, stage, result, state = "ready") {
     timelineSummaries.set(historyKey(run) + ":" + stage, {revision: timelineRevision(run, stage), result, state});
     renderRunTimeline();
+  }
+  function selectedAnalysisRun() {
+    return runsForDataset().find(run => historyKey(run) === analysisRunByDataset.get(activeDataset.id));
   }
   function timelineRun() {
     if (app.dataset.nav === "history") {
       const matching = matchingHistoryRuns();
       return selectedHistoryResult() ?? matching.find(run => historyKey(run) === selectedRuns.get(historySelectionKey())) ?? matching[0];
     }
-    return runsForDataset().find(run => historyKey(run) === analysisRunByDataset.get(activeDataset.id));
+    const stage = Number(timeline.querySelector('[aria-current="step"]')?.dataset.stage);
+    const saved = selectedAnalysisRun();
+    if (saved && (savedAnalysisView() || stage === 6)) return saved;
+    const controller = [genotypeRun, expressionRun, adjustmentRun, cisRun, networkRun, visualizationRun][stage - 1];
+    const runId = controller?.getRunId?.();
+    if (stage === 6 && runId == null) return;
+    return runsForDataset().find(run => canContinue(run) && (runId == null || run.run_id === runId));
   }
-  function timelineOutput(stage, result, language) {
-    const local = (zh, en) => [zh, en][language];
-    const metric = (zh, en, value) => Number.isFinite(value) ? `${local(zh, en)} ${countLabel.format(value)}` : null;
+
+  function syncTimelinePreview(run) {
+    const canPreview = tabs[1].getAttribute("aria-selected") === "true" &&
+      ["analysis", "history"].includes(app.dataset.nav) && Boolean(run);
+    const id = canPreview ? historyKey(run) : null;
+    const openStage = historyResult && historyResult.historyId === id ? Number(historyResult.stage) : null;
+    const needsPreview = stage => id && stage !== openStage &&
+      run.jobs?.[historySteps[stage - 1]]?.state === "completed" &&
+      (stage === 6 ? canReadGraph(run) : canReadStage(run, stage)) &&
+      timelineSummaries.get(`${id}:${stage}`)?.revision !== timelineRevision(run, stage);
+    if (timelinePreviewRequest) {
+      const {id: pendingId, stage, revision} = timelinePreviewRequest;
+      if (pendingId === id && needsPreview(stage) && timelineRevision(run, stage) === revision) return;
+      timelinePreviewRequest.controller.abort();
+      timelinePreviewRequest = null;
+    }
+    const stage = [1, 2, 3, 4, 5, 6].find(needsPreview);
+    if (!stage) return;
+    const revision = timelineRevision(run, stage);
+    const request = {id, stage, revision, key: `${id}:${stage}`, controller: new AbortController()};
+    timelinePreviewRequest = request;
+    void loadTimelinePreview(run, request);
+  }
+
+  async function loadTimelinePreview(run, request) {
+    const {id, stage, revision, controller} = request;
+    let result = null, state = "ready";
+    try {
+      result = await getSavedStageResult(run, stage, controller.signal);
+    } catch (error) {
+      state = archivedResultErrorState(error);
+    }
+    if (timelinePreviewRequest !== request) return;
+    timelinePreviewRequest = null;
+    const current = findHistoryRun(id);
+    if (current && timelineRevision(current, stage) === revision) {
+      rememberTimelineResult(current, stage, result, state);
+    } else {
+      renderRunTimeline();
+    }
+  }
+
+  function timelineProgress(job) {
+    if (!job || !["running", "validating"].includes(job.state)) return null;
+    const progress = [];
+    for (const value of Object.values(job.progress ?? {})) {
+      const match = typeof value === "string" && value.match(/^(\d+) (\d+)$/);
+      if (!match) continue;
+      const done = Number(match[1]), total = Number(match[2]);
+      if (Number.isSafeInteger(total) && total > 0 && done <= total) progress.push({done, total});
+    }
+    return progress.find(value => value.done < value.total) ?? progress.at(-1) ?? null;
+  }
+  function timelineOutput(stage, result) {
+    const metric = (label, value) => Number.isFinite(value) ? `${label} ${countLabel.format(value)}` : null;
     if (stage === 3) {
       const counts = result.matching ?? {};
-      return [metric("基因型樣本", "Genotype samples", counts.genotype),
-        metric("表現量樣本", "Expression samples", counts.expression),
-        metric("配對樣本", "Matched samples", counts.matched), metric("保留樣本", "Retained samples", counts.retained),
-        metric("排除樣本", "Excluded samples", counts.excluded), metric("主成分數", "Principal components", result.npc)]
+      return [metric("Genotype samples", counts.genotype),
+        metric("Expression samples", counts.expression),
+        metric("Matched samples", counts.matched), metric("Retained samples", counts.retained),
+        metric("Excluded samples", counts.excluded), metric("Principal components", result.npc)]
         .filter(Boolean).join(" · ");
     }
     if (stage === 6) {
-      return [metric("基因數", "Genes", result.graph?.counts?.genes),
-        metric("連線數", "Edges", result.graph?.counts?.connections)].filter(Boolean).join(" · ");
+      return [metric("Genes", result.graph?.counts?.genes),
+        metric("Edges", result.graph?.counts?.connections)].filter(Boolean).join(" · ");
     }
-    return viewArchivedStep(stage, result.summary, language).metrics
+    return viewArchivedStep(stage, result.summary).metrics
       .map(([label, value]) => `${label} ${countLabel.format(value)}`).join(" · ");
   }
-  function renderTimelineThumbnail(svg, stage, result) {
+  function renderTimelineThumbnail(svg, stage, result, progress) {
     svg.replaceChildren();
-    if (!result) return false;
     const mark = (tag, attributes) => {
       const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
       for (const [key, value] of Object.entries(attributes)) node.setAttribute(key, value);
       svg.append(node);
     };
+    if (!result) {
+      if (!progress) return false;
+      mark("rect", {x: 5, y: 14, width: 124, height: 8, rx: 4, fill: "#e2e9ef"});
+      mark("rect", {x: 5, y: 14, width: 124 * progress.done / progress.total, height: 8, rx: 4, fill: "#5389b2"});
+      return true;
+    }
     if (stage === 3) {
       if (result.pca?.png_base64) {
         mark("image", {href: "data:image/png;base64," + result.pca.png_base64, x: 0, y: 0, width: 134, height: 36});
@@ -781,8 +878,7 @@
   }
   function renderRunTimeline() {
     const run = timelineRun();
-    const language = root.lang === "en" ? 1 : 0;
-    const local = (zh, en) => [zh, en][language];
+    syncTimelinePreview(run);
     timeline.dataset.historyId = run ? historyKey(run) : "";
     for (const button of timeline.querySelectorAll("[data-stage]")) {
       const stage = Number(button.dataset.stage);
@@ -792,10 +888,13 @@
       const readable = run && (canReadStage(run, stage) || stage === 6 && canReadGraph(run));
       const evidence = readable && saved?.revision === timelineRevision(run, stage) ? saved : null;
       const result = evidence?.state === "ready" ? evidence.result : null;
+      const progress = timelineProgress(job);
+      const work = progress ? `${countLabel.format(progress.done)} / ${countLabel.format(progress.total)}` : "";
+      entry.dataset.runState = job?.state ?? job?.status ?? "";
       entry.querySelector(".ml-stage-note").textContent = run
-        ? (run.source === "recorded" ? local("最後保存的狀態：", "Last recorded state: ") : "") +
-          genotypeHistoryState(job?.state ?? job?.status)[language]
-        : local("選擇執行以查看保存結果。", "Select a run to view saved results.");
+        ? (run.source === "recorded" ? "Last recorded state: " : "") +
+          genotypeHistoryState(job?.state ?? job?.status) + (work ? ` · ${work}` : "")
+        : "Select a run to view saved results.";
       const values = entry.querySelectorAll(".ml-stage-detail dd");
       const savedJob = result?.job ?? job;
       const settings = {...savedJob?.settings, ...savedJob?.options};
@@ -805,28 +904,31 @@
         if (settings.ntop == null) settings.ntop = result.top_networks;
       }
       const descriptions = Object.entries(settings).map(([key, value]) =>
-        `${savedSettingLabels[key]?.[language] ?? key}: ${["string", "number", "boolean"].includes(typeof value)
-          ? value : local("未提供可讀取的設定值", "No readable saved value")}`);
-      for (const [key, label] of [["cpus", stage === 5 ? local("監控工作核心數", "Controller job cores") : local("排程工作核心數", "Scheduled job cores")],
-        ["mem_gb", local("排程記憶體（GB）", "Scheduled memory (GB)")], ["time", local("排程時間上限", "Scheduled time limit")],
-        ["hours", local("排程時數上限", "Scheduled hour limit")]]) {
+        `${savedSettingLabels[key] ?? key}: ${["string", "number", "boolean"].includes(typeof value)
+          ? value : "No readable saved value"}`);
+      for (const [key, label] of [["cpus", stage === 5 ? "Controller job cores" : "Scheduled job cores"],
+        ["mem_gb", "Scheduled memory (GB)"], ["time", "Scheduled time limit"],
+        ["hours", "Scheduled hour limit"]]) {
         if (savedJob?.resources?.[key] != null) descriptions.push(`${label}: ${savedJob.resources[key]}`);
       }
-      values[0].textContent = descriptions.join(" · ") || local("未保存設定", "No saved settings");
-      values[1].textContent = result ? timelineOutput(stage, result, language)
-        : evidence?.state === "error" ? local("無法載入保存結果，請開啟階段後重試。", "Could not load saved results; open the stage to retry.")
-        : evidence?.state === "empty" || !readable ? local("尚無可讀取的保存結果。", "No readable saved result is available.")
-        : local("開啟這個階段以讀取保存摘要。", "Open this stage to load its saved summary.");
-      // Thumbnails use only the selected saved result; never the demonstration drawing.
+      values[0].textContent = descriptions.join(" · ") || "No saved settings";
+      values[1].textContent = result ? timelineOutput(stage, result)
+        : evidence?.state === "timeout" ? "Result read timed out; open the stage to retry."
+        : evidence?.state === "error" ? "Could not load saved results; open the stage to retry."
+        : run && timelinePreviewRequest?.key === `${historyKey(run)}:${stage}` ? "Loading saved results…"
+        : evidence?.state === "empty" || !readable ? "No readable saved result is available."
+        : "Open this stage to load its saved summary.";
+      // Show measured progress or a saved result for this exact run and stage.
       const preview = entry.querySelector(".ml-stage-preview");
-      preview.hidden = !renderTimelineThumbnail(preview.querySelector(".ml-stage-thumbnail"), stage, result);
-      preview.title = local("保存結果的縮圖（最多 48 個樣本或 24 個基因）", "Saved result preview (up to 48 samples or 24 genes)");
+      preview.hidden = !renderTimelineThumbnail(preview.querySelector(".ml-stage-thumbnail"), stage, result, progress);
+      preview.title = progress ? `Run progress ${work}`
+        : "Saved result preview (up to 48 samples or 24 genes)";
     }
   }
   const stageButtons = timeline.querySelectorAll(".ml-stage-button");
   const stageResults = root.querySelectorAll(".ml-workspace");
   function syncGenotypeContext() {
-    const stageContext = ["手動執行", "Manual execution"];
+    const stageContext = "Manual execution";
     const inHistory = app.dataset.nav === "history" || savedAnalysisView();
     const liveRuns = runsForDataset().filter(canContinue);
     const historyRun = selectedHistoryResult();
@@ -836,26 +938,24 @@
       canContinue(historyRun) && historyRun.jobs.genotype?.state !== "completed";
     const genotypeDataset = genotypeHistory ? {
       id: continuationDataset,
-      name: historyRun.dataset_name ?? datasets.find(dataset => dataset.id === continuationDataset)?.name ?? [continuationDataset, continuationDataset],
+      name: historyRun.dataset_name ?? datasets.find(dataset => dataset.id === continuationDataset)?.name ?? continuationDataset,
       inputs: historyRun.inputs,
       persisted: false,
       ready: datasetCatalogReady,
     } : {id: activeDataset.id, name: activeDataset.name, inputs: activeDataset.inputs,
-      persisted: activeDataset.persisted, ready: datasetCatalogReady};
+      references: activeDataset.references, persisted: activeDataset.persisted, ready: datasetCatalogReady};
     byId("stage-header").querySelector("span").textContent = savedAnalysisView()
-      ? historyRun.name[root.lang === "en" ? 1 : 0] : stageContext[root.lang === "en" ? 1 : 0];
+      ? historyRun.name : stageContext;
     genotypeRun?.setContext({
       datasetId: genotypeDataset.id,
       dataset: genotypeDataset,
       runs: genotypeHistory ? continuationRuns : liveRuns,
       runId: genotypeHistory ? historyRun.run_id : null,
-      language: root.lang,
       visible: app.dataset.nav === "analysis" && !savedAnalysisView() &&
         timeline.querySelector('[aria-current="step"]')?.dataset.stage === "1" || genotypeHistory,
     });
     expressionRun?.setContext({
       datasetId: continuationDataset,
-      language: root.lang,
       visible: app.dataset.nav === "analysis" &&
         timeline.querySelector('[aria-current="step"]')?.dataset.stage === "2" ||
         inHistory && historyResult?.stage === 2,
@@ -864,7 +964,6 @@
     });
     adjustmentRun?.setContext({
       datasetId: continuationDataset,
-      language: root.lang,
       visible: app.dataset.nav === "analysis" &&
         timeline.querySelector('[aria-current="step"]')?.dataset.stage === "3" ||
         inHistory && historyResult?.stage === 3,
@@ -873,7 +972,6 @@
     });
     cisRun?.setContext({
       datasetId: continuationDataset,
-      language: root.lang,
       visible: app.dataset.nav === "analysis" &&
         timeline.querySelector('[aria-current="step"]')?.dataset.stage === "4" ||
         inHistory && historyResult?.stage === 4,
@@ -882,7 +980,6 @@
     });
     networkRun?.setContext({
       datasetId: continuationDataset,
-      language: root.lang,
       visible: app.dataset.nav === "analysis" &&
         timeline.querySelector('[aria-current="step"]')?.dataset.stage === "5" ||
         inHistory && historyResult?.stage === 5,
@@ -891,7 +988,6 @@
     });
     visualizationRun?.setContext({
       datasetId: continuationDataset,
-      language: root.lang,
       visible: ["analysis", "history"].includes(app.dataset.nav) && visualizationFormVisible(),
       runs: continuationRuns,
       runId: inHistory && historyResult?.stage === 6 ? historyResult.runId : null,
@@ -907,7 +1003,7 @@
       root.querySelector("#" + entry.getAttribute("aria-controls")).hidden = !expanded;
     }
     for (const panel of stageResults) panel.hidden = panel.id !== "lens-stage" + button.dataset.stage;
-    timeline.querySelector('[aria-current="step"]').removeAttribute("aria-current");
+    activeStageButton()?.removeAttribute("aria-current");
     button.setAttribute("aria-current", "step");
     if (app.dataset.nav === "analysis") {
       bindAnalysisStage();
@@ -916,9 +1012,9 @@
     } else syncGenotypeContext();
   }
   function bindAnalysisStage() {
-    const run = timelineRun(), stage = Number(timeline.querySelector('[aria-current="step"]').dataset.stage);
+    const run = selectedAnalysisRun(), stage = Number(activeStageButton()?.dataset.stage);
     clearHistoryResult();
-    if (!run) return;
+    if (!run || !stage) return;
     historyResult = {runId: run.run_id, historyId: historyKey(run), stage, view: "analysis"};
     if (stage === 3) void loadStage3Run();
     else if (archiveSteps.has(stage)) void loadArchivedStep();
@@ -951,7 +1047,6 @@
 
 
     const graphMeta = stage.querySelector(".s6-graph-meta");
-    graphMeta.setAttribute("data-live-language", "");
     const svg = (tag, attributes) => {
       const element = document.createElementNS("http://www.w3.org/2000/svg", tag);
       for (const [key, value] of Object.entries(attributes)) element.setAttribute(key, value);
@@ -1039,8 +1134,7 @@
       edgeElements.forEach((edge, index) => {
         const inspect = () => {
           const [source, target, frequency, coefficient] = edges[index];
-          const english = stage.closest("[lang]").lang === "en";
-          summary.textContent = `${source} → ${target} · ${english ? "Frequency" : "頻率"}: ${frequency} · ${english ? "Coefficient" : "係數"}: ${coefficient}`;
+          summary.textContent = `${source} → ${target} · Frequency: ${frequency} · Coefficient: ${coefficient}`;
           table.open = true;
         };
         edge.style.pointerEvents = "stroke";
@@ -1090,28 +1184,21 @@
 
     const edgesFor = (gene) => gene ? edges.filter(([source, target]) => gene === source || gene === target) : edges;
     function updateReadout(gene, matched) {
-      const inEnglish = stage.closest("[lang]").lang === "en";
-      graphMeta.textContent = inEnglish
-        ? `${nodeElements.length} genes · ${edges.length} edges`
-        : `${nodeElements.length} 個基因 · ${edges.length} 條連線`;
+      graphMeta.textContent = `${nodeElements.length} genes · ${edges.length} edges`;
       for (const node of nodeElements) {
         const { gene: label } = node.dataset;
-        node.setAttribute("aria-label", inEnglish ? `View connections for ${label}` : `查看 ${label} 的調控關係`);
+        node.setAttribute("aria-label", `View connections for ${label}`);
       }
       if (gene) {
         const incoming = matched.filter(([, target]) => target === gene).length;
         const outgoing = matched.filter(([source]) => source === gene).length;
         const name = document.createElement("strong");
         name.textContent = gene;
-        summary.replaceChildren(name, inEnglish
-          ? ` · ${incoming} incoming (dashed) · ${outgoing} outgoing`
-          : ` · 指向此基因 ${incoming} 條（虛線） · 從此基因指出 ${outgoing} 條`);
+        summary.replaceChildren(name, ` · ${incoming} incoming (dashed) · ${outgoing} outgoing`);
       } else {
-        summary.textContent = inEnglish ? "Select a gene to see its connections." : "點選基因查看相連的調控關係。";
+        summary.textContent = "Select a gene to see its connections.";
       }
-      rowCount.textContent = inEnglish
-        ? `${matched.length} ${matched.length === 1 ? "edge" : "edges"}`
-        : `${matched.length} 筆`;
+      rowCount.textContent = `${matched.length} ${matched.length === 1 ? "edge" : "edges"}`;
     }
 
     function render(gene) {
@@ -1172,10 +1259,6 @@
     stage.addEventListener("lens:select-gene", (event) => {
       select(event.detail?.gene);
     });
-    stage.addEventListener("lens:language-changed", () => {
-      const gene = stage.dataset.selectedGene || null;
-      updateReadout(gene, edgesFor(gene));
-    });
     setNetwork({}, []);
     return setNetwork;
   }
@@ -1183,41 +1266,44 @@
   const runList = byId("run-list");
   const runDetails = byId("run-details");
   let historyLogViews = [];
-  const networkOutput = ([genes, edges]) => [
-    `${genes} 個基因 · ${edges} 條連線`,
-    `${genes} genes · ${edges} edges`,
-  ];
+  const historyStageSelection = new Map();
+  const historyDetailSelection = new Map();
+  const networkOutput = ([genes, edges]) => `${genes} genes · ${edges} edges`;
   const historySteps = ["genotype", "expression", "adjust", "cis", "network", "visualize"];
-  const historyText = (chinese, english) =>
-    `<span data-history-zh="${escapeHistory(chinese)}" data-history-en="${escapeHistory(english)}"></span>`;
-  const historyLabel = (chinese) => historyText(chinese, englishLabel(chinese));
-  const clockTime = (value) => value?.match(/T(\d{2}:\d{2}:\d{2})/)?.[1] ?? "";
-  const fullTime = (value) => value?.replace("T", " ").replace(/([+-]\d{2})(\d{2})$/, " $1:$2") ?? "";
-  const notRecorded = () => historyText("未記錄", "Not recorded");
+  function historyDate(value) {
+    if (!value) return notRecorded();
+    if (typeof value !== "string") return recordedValue(value);
+    const label = value.replace("T", " ").replace(/\s*(?:[+-]\d{2}:?\d{2}|Z)$/, "");
+    return `<time datetime="${escapeHistory(value)}">${escapeHistory(label)}</time>`;
+  }
+  const notRecorded = () => "Not recorded";
 
   const genotypeHistoryStates = {
-    submitting: ["正在提交", "Submitting"], submitted: ["已送出", "Submitted"],
-    pending: ["排隊中", "Queued"], running: ["執行中", "Running"],
-    validating: ["正在檢查輸出", "Checking outputs"], completed: ["已完成", "Completed"],
-    failed: ["失敗", "Failed"], cancelling: ["正在取消", "Cancelling"], cancelled: ["已取消", "Cancelled"],
-    unknown: ["待確認狀態", "Status unconfirmed"], not_submitted: ["尚未送出", "Not submitted"],
-    prepared: ["已準備，未記錄實際執行", "Prepared; execution not recorded"],
-    process_completed: ["程序已完成，未驗證科學結果", "Process completed; scientific outputs unverified"],
-    configured: ["已保存設定，未記錄執行", "Configured; execution not recorded"],
-    recorded: ["已保存工具紀錄", "Tool activity recorded"],
-    verified_completed: ["技術輸出已驗證", "Technical outputs verified"],
-    starting: ["執行是否開始待確認", "Execution start unconfirmed"],
-    not_recorded: ["未記錄", "Not recorded"],
+    submitting: "Submitting", submitted: "Submitted",
+    pending: "Queued", running: "Running",
+    validating: "Checking outputs", completed: "Completed",
+    failed: "Failed", cancelling: "Cancelling", cancelled: "Cancelled",
+    unknown: "Status unconfirmed", not_submitted: "Not submitted",
+    ready: "Ready to review", result_available: "Saved result",
+    prepared: "Prepared; execution not recorded",
+    process_completed: "Process completed; scientific outputs unverified",
+    configured: "Configured; execution not recorded",
+    recorded: "Tool activity recorded",
+    verified_completed: "Technical outputs verified",
+    starting: "Execution start unconfirmed",
+    not_recorded: "Not recorded",
   };
-  const genotypeHistoryState = state => genotypeHistoryStates[state] ?? (state ? [state, state] : ["未記錄", "Not recorded"]);
+  const genotypeHistoryState = state => genotypeHistoryStates[state] ?? (state ? state : "Not recorded");
   const historyJob = run => Object.values(run.jobs ?? {}).filter(job => job && typeof job === "object")
     .sort((a, b) => (Date.parse(a.finished_at || a.submitted_at) || 0) - (Date.parse(b.finished_at || b.submitted_at) || 0)).at(-1);
   const historyTime = run => Date.parse(run.finished_at || historyJob(run)?.finished_at || run.submitted_at || historyJob(run)?.submitted_at) || 0;
-  const historySourceName = run => ({workspace: ["工作區執行", "Workspace run"], slurm: ["舊工具排程工作", "Legacy scheduler job"],
-    agent: ["Agent 工具紀錄", "Agent tool record"], archive: ["封存結果", "Archived result"]})[run.origin] ?? ["來源未記錄", "Source not recorded"];
-  const associationName = run => run.association?.status === "manual" ? ["手動歸類", "Manually assigned"]
-    : run.dataset_id ? ["已記錄資料組", "Recorded dataset"] : ["未分類", "Unclassified"];
-  const historyStateLabel = (state, savedOnly = false) => (savedOnly ? historyText("最後保存的狀態：", "Last recorded state: ") : "") + historyText(...genotypeHistoryState(state));
+  const historySourceName = run => ({workspace: "Workspace run", slurm: "Legacy scheduler job",
+    agent: "Agent tool record", archive: "Archived result"})[run.origin] ?? "Source not recorded";
+  const associationName = run => run.association?.status === "manual" ? "Manually assigned"
+    : run.dataset_id ? "Recorded dataset" : "Unclassified";
+  const historyStateLabel = (state, savedOnly = false) => (savedOnly ? "Last recorded state: " : "") + escapeHistory(genotypeHistoryState(state));
+  const historyStatusBadge = (state, savedOnly = false, runHeader = false) =>
+    `<span class="ml-history-status" data-state="${escapeHistory(state ?? "not_recorded")}"${runHeader ? " data-history-state" : ""}>${historyStateLabel(state, savedOnly)}</span>`;
   const assignmentStates = new Map();
   const submissionReviews = new Map();
   let recoveryRemote = "";
@@ -1230,118 +1316,215 @@
     if (!canContinue(run) || !["unknown", "submitting"].includes(job?.state)) return "";
     const key = `${historyKey(run)}:${step}:${job.attempt ?? 1}`;
     const review = submissionReviews.get(key);
+    const status = review?.staleEvidence ? "Evidence changed or review is incomplete. Review the evidence again."
+      : escapeHistory(review?.error ?? review?.result?.recovery?.detail ?? "");
     return `<form data-submission-recovery="${escapeHistory(key)}" data-step="${escapeHistory(step)}">
-      <p>${historyText("送出結果不明。核對只讀取本次嘗試的憑證與排程器證據，不會送算或取消工作。", "Submission is unconfirmed. Reconciliation only reads this attempt’s receipt and scheduler evidence; it never submits or cancels jobs.")}</p>
-      <button class="ml-nav-action" type="submit" value="review" ${review?.pending ? "disabled" : ""}>${historyText("人工核對送出狀態", "Review submission evidence")}</button>
-      <p role="status">${escapeHistory(review?.error ?? review?.result?.recovery?.detail ?? "")}</p>
+      <p>Submission is unconfirmed. Reconciliation only reads this attempt’s receipt and scheduler evidence; it never submits or cancels jobs.</p>
+      <button class="ml-nav-action" type="submit" value="review" ${review?.pending ? "disabled" : ""}>Review submission evidence</button>
+      <p role="status">${status}</p>
       ${review?.result ? `<dl class="ml-key-values">${savedDefinitions(review.result.recovery.evidence)}</dl>` : ""}
-      ${review?.result && ["adopt", "unsubmitted"].includes(review.result.recovery.outcome) ? `<p>${historyText("請核對來源、工作與嘗試次數；確認後僅更新紀錄。若確認未送出，仍須另行審閱一般重試表單。", "Review the source, job and attempt. Confirmation updates the record only; an unsubmitted attempt still requires the normal retry review.")}</p><button class="ml-nav-action" type="submit" value="${review.result.recovery.outcome}" ${review.pending ? "disabled" : ""}>${historyText("確認採用以上核對結果", "Confirm this recovery result")}</button>` : ""}
+      ${review?.result && ["adopt", "unsubmitted"].includes(review.result.recovery.outcome) ? `<p>Review the source, job and attempt. Confirmation updates the record only; an unsubmitted attempt still requires the normal retry review.</p><button class="ml-nav-action" type="submit" value="${review.result.recovery.outcome}" ${review.pending ? "disabled" : ""}>Confirm this recovery result</button>` : ""}
       <p>${escapeHistory(run.run_id)} · ${escapeHistory(step)} · ${job.attempt ?? 1} · ${escapeHistory(job.job_id ?? "—")}</p>
     </form>`;
   }
 
-  const historyDatasetName = id => datasets.find(dataset => dataset.id === id)?.name ?? (id ? [id, id] : ["未分類", "Unclassified"]);
+  const historyDatasetName = id => datasets.find(dataset => dataset.id === id)?.name ?? (id ? id : "Unclassified");
   const recordedValue = value => value == null ? notRecorded() : escapeHistory(typeof value === "object" ? JSON.stringify(value) : value);
   const submissionAudit = job => Array.isArray(job.submission_checks) && job.submission_checks.length ?
-    `<details><summary>${historyText("送出狀態核對紀錄", "Submission reconciliation audit")}</summary>${job.submission_checks.slice(-25).map(check => `<p>${recordedValue(check.at)} · ${recordedValue(check.action)} · ${recordedValue(check.outcome)}<br>${recordedValue(check.detail)}<br>${recordedValue(check.evidence)}</p>`).join("")}</details>` : "";
+    `<details><summary>Submission reconciliation audit</summary>${job.submission_checks.slice(-25).map(check => `<p>${historyDate(check.at)} · ${recordedValue(check.action)} · ${recordedValue(check.outcome)}<br>${recordedValue(check.detail)}<br>${recordedValue(check.evidence)}</p>`).join("")}</details>` : "";
   const savedDefinitions = value => Object.entries(value ?? {}).map(([key, item]) =>
-    `<dt>${escapeHistory(key)}</dt><dd>${recordedValue(item)}</dd>`).join("") || `<dt>${historyText("內容", "Contents")}</dt><dd>${notRecorded()}</dd>`;
-  function savedJobContent(job, operation = false) {
-    const evidence = job.settings_evidence ?? (Object.keys(job.settings ?? {}).length || Object.keys(job.options ?? {}).length ? "recorded" : "not_recorded");
-    const evidenceCopy = ({recorded: ["實際保存的設定", "Recorded settings"], prepared_snapshot: ["準備時的設定；不代表已執行", "Prepared settings; execution not implied"],
-      not_recorded: ["設定未記錄", "Settings not recorded"]})[evidence] ?? [evidence, evidence];
-    return `${submissionAudit(job)}<p data-settings-evidence="${escapeHistory(evidence)}">${historyText(...evidenceCopy)}</p>
-        <dl class="ml-key-values"><dt>${historyText("工作編號", "Job ID")}</dt><dd>${recordedValue(job.job_id)}</dd>
-          <dt>${historyText("送出時間", "Submitted at")}</dt><dd>${recordedValue(job.submitted_at)}</dd>
-          <dt>${historyText("開始時間", "Started at")}</dt><dd>${recordedValue(job.started_at)}</dd>
-          <dt>${historyText("結束時間", "Finished at")}</dt><dd>${recordedValue(job.finished_at ?? job.ended_at)}</dd>
-          ${operation ? `<dt>${historyText("實際執行", "Executed")}</dt><dd>${job.executed === true ? historyText("是", "Yes") : job.executed === false ? historyText("否", "No") : notRecorded()}</dd>` : ""}
-          <dt>${historyText("紀錄來源", "Record source")}</dt><dd>${recordedValue(job.record_file)}</dd>
-          ${job.reason ? `<dt>${historyText("說明", "Reason")}</dt><dd>${recordedValue(job.reason)}</dd>` : ""}</dl>
-        ${[["inputs", ["保存的輸入檔案", "Saved inputs"]], ["settings", ["保存的設定", "Saved settings"]], ["options", ["保存的選項", "Saved options"]], ["resources", ["保存的資源", "Saved resources"]]]
-          .filter(([field]) => field !== "options" || Object.keys(job.options ?? {}).length)
-          .map(([field, title]) => `<h4>${historyText(...title)}</h4><dl class="ml-key-values" data-history-saved="${field}">${savedDefinitions(job[field])}</dl>`).join("")}`;
+    `<dt>${escapeHistory(key)}</dt><dd>${recordedValue(item)}</dd>`).join("") || `<dt>Contents</dt><dd>${notRecorded()}</dd>`;
+  function savedJobSummary(job, operation = false) {
+    return `${submissionAudit(job)}
+        <dl class="ml-key-values"><dt>Job ID</dt><dd>${recordedValue(job.job_id)}</dd>
+          <dt>Submitted at</dt><dd>${historyDate(job.submitted_at)}</dd>
+          <dt>Started at</dt><dd>${historyDate(job.started_at)}</dd>
+          <dt>Finished at</dt><dd>${historyDate(job.finished_at ?? job.ended_at)}</dd>
+          ${operation ? `<dt>Executed</dt><dd>${job.executed === true ? "Yes" : job.executed === false ? "No" : notRecorded()}</dd>` : ""}
+          <dt>Record source</dt><dd>${recordedValue(job.record_file)}</dd>
+          ${job.reason ? `<dt>Reason</dt><dd>${recordedValue(job.reason)}</dd>` : ""}</dl>`;
   }
+  function savedJobSettings(job) {
+    const evidence = job.settings_evidence ?? (Object.keys(job.settings ?? {}).length || Object.keys(job.options ?? {}).length ? "recorded" : "not_recorded");
+    const evidenceCopy = ({recorded: "Recorded settings", prepared_snapshot: "Prepared settings; execution not implied",
+      not_recorded: "Settings not recorded"})[evidence] ?? evidence;
+    return `<p data-settings-evidence="${escapeHistory(evidence)}">${escapeHistory(evidenceCopy)}</p>
+        ${[["inputs", "Saved inputs"], ["settings", "Saved settings"], ["options", "Saved options"], ["resources", "Saved resources"]]
+          .filter(([field]) => field !== "options" || Object.keys(job.options ?? {}).length)
+          .map(([field, title]) => `<h4>${escapeHistory(title)}</h4><dl class="ml-key-values" data-history-saved="${field}">${savedDefinitions(job[field])}</dl>`).join("")}`;
+  }
+  const savedJobContent = (job, operation) => savedJobSummary(job, operation) + savedJobSettings(job);
   const attemptResultNames = {
-    recorded_completed: ["紀錄顯示已完成", "Recorded as completed"],
-    recorded_failed: ["紀錄顯示失敗", "Recorded as failed"],
-    recorded_cancelled: ["紀錄顯示已取消", "Recorded as cancelled"],
-    pending: ["尚未記錄最終結果", "Final result not recorded"],
-    not_recorded: ["結果未記錄", "Result not recorded"],
+    recorded_completed: "Recorded as completed",
+    recorded_failed: "Recorded as failed",
+    recorded_cancelled: "Recorded as cancelled",
+    pending: "Final result not recorded",
+    not_recorded: "Result not recorded",
   };
   function outputCheckSnapshot(snapshot) {
     if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) return "";
-    return `<dl class="ml-key-values">${[["state", ["狀態", "State"]], ["reason", ["說明", "Reason"]],
-      ["slurm_state", ["排程器狀態", "Scheduler state"]], ["exit_code", ["結束代碼", "Exit code"]],
-      ["missing_outputs", ["當時缺少的檔案", "Missing outputs at the time"]], ["failure_hints", ["失敗提示", "Failure hints"]]]
+    return `<dl class="ml-key-values">${[["state", "State"], ["reason", "Reason"],
+      ["slurm_state", "Scheduler state"], ["exit_code", "Exit code"],
+      ["missing_outputs", "Missing outputs at the time"], ["failure_hints", "Failure hints"]]
       .filter(([field]) => snapshot[field] != null)
-      .map(([field, label]) => `<dt>${historyText(...label)}</dt><dd>${field === "state" ? historyStateLabel(snapshot[field]) : recordedValue(snapshot[field])}</dd>`).join("")}</dl>
+      .map(([field, label]) => `<dt>${escapeHistory(label)}</dt><dd>${field === "state" ? historyStateLabel(snapshot[field]) : recordedValue(snapshot[field])}</dd>`).join("")}</dl>
       ${["missing_outputs", "failure_hints"].filter(field => Array.isArray(snapshot[field]) && Number.isSafeInteger(snapshot[field + "_total"]) && snapshot[field + "_total"] > snapshot[field].length)
-        .map(field => `<p data-history-output-check-truncated>${historyText(`這份核對摘要顯示前 ${snapshot[field].length} 項，共 ${snapshot[field + "_total"]} 項。`, `This check summary shows the first ${snapshot[field].length} of ${snapshot[field + "_total"]} items.`)}</p>`).join("")}`;
+        .map(field => `<p data-history-output-check-truncated>${escapeHistory(`This check summary shows the first ${snapshot[field].length} of ${snapshot[field + "_total"]} items.`)}</p>`).join("")}`;
   }
   function savedOutputChecks(record) {
     const checks = Array.isArray(record.output_checks) ? record.output_checks.filter(check => check && typeof check === "object").slice(-25) : [];
     if (!checks.length && !record.original_failure) return "";
     const total = Number.isSafeInteger(record.output_checks_total) && record.output_checks_total >= checks.length ? record.output_checks_total : checks.length;
-    return `<details data-history-output-checks data-output-check-detail="all"><summary>${historyText("輸出重新核對紀錄", "Output recheck history")} · ${total}</summary>
-      <p>${historyText("這些是同一個工作、同一次嘗試的結果核對，沒有重新送算。", "These checks belong to the same job and attempt; no new analysis was submitted.")}</p>
-      ${record.original_failure ? `<h4>${historyText("最初保存的失敗紀錄", "Original recorded failure")}</h4><div data-history-original-failure>${outputCheckSnapshot(record.original_failure)}</div>` : ""}
-      <ol>${checks.map((check, index) => `<li data-history-output-check><time>${recordedValue(check.at)}</time>
-        <details data-output-check-detail="${total - checks.length + index}-before"><summary>${historyText("核對前", "Before the check")}</summary>${outputCheckSnapshot(check.before)}</details>
-        <details data-output-check-detail="${total - checks.length + index}-after"><summary>${historyText("核對後", "After the check")}</summary>${outputCheckSnapshot(check.after)}</details></li>`).join("")}</ol>
-      ${total > checks.length ? `<p>${historyText(`顯示最近 ${checks.length} 次核對，最初失敗紀錄仍保留。`, `Showing the latest ${checks.length} checks; the original failure remains preserved.`)}</p>` : ""}
+    return `<details data-history-output-checks data-output-check-detail="all"><summary>Output recheck history · ${total}</summary>
+      <p>These checks belong to the same job and attempt; no new analysis was submitted.</p>
+      ${record.original_failure ? `<h4>Original recorded failure</h4><div data-history-original-failure>${outputCheckSnapshot(record.original_failure)}</div>` : ""}
+      <ol>${checks.map((check, index) => `<li data-history-output-check>${historyDate(check.at)}
+        <details data-output-check-detail="${total - checks.length + index}-before"><summary>Before the check</summary>${outputCheckSnapshot(check.before)}</details>
+        <details data-output-check-detail="${total - checks.length + index}-after"><summary>After the check</summary>${outputCheckSnapshot(check.after)}</details></li>`).join("")}</ol>
+      ${total > checks.length ? `<p>${escapeHistory(`Showing the latest ${checks.length} checks; the original failure remains preserved.`)}</p>` : ""}
     </details>`;
   }
   function savedAttemptResult(attempt) {
     const result = attempt.result ?? {};
     const record = attempt.record ?? {};
     const outputs = Array.isArray(result.outputs) ? result.outputs.filter(output => output && typeof output.path === "string") : [];
-    const outputStatus = {downloaded: ["紀錄顯示已下載", "Recorded as downloaded"], remote: ["結果保留在遠端", "Results retained on HPC3"], missing: ["紀錄顯示缺少", "Recorded as missing"],
-      not_recorded: ["檔案狀態未記錄", "File status not recorded"]};
+    const outputStatus = {downloaded: "Recorded as downloaded", remote: "Results retained on HPC3", missing: "Recorded as missing",
+      not_recorded: "File status not recorded"};
     return `<section class="ml-history-attempt-result" data-history-attempt-result>
-      <h4>${historyText("保存的結果", "Saved result")}</h4>
-      <p>${historyText(...(attemptResultNames[result.status] ?? attemptResultNames.not_recorded))}</p>
-      <dl class="ml-key-values">${[["slurm_state", ["排程器狀態", "Scheduler state"]], ["exit_code", ["結束代碼", "Exit code"]],
-        ["failure_hints", ["保存的失敗提示", "Recorded failure hints"]], ["missing_outputs", ["當時缺少的檔案", "Missing outputs at the time"]]]
+      <h4>Saved result</h4>
+      <p>${escapeHistory(attemptResultNames[result.status] ?? attemptResultNames.not_recorded)}</p>
+      <dl class="ml-key-values">${[["slurm_state", "Scheduler state"], ["exit_code", "Exit code"],
+        ["failure_hints", "Recorded failure hints"], ["missing_outputs", "Missing outputs at the time"]]
         .filter(([field]) => record[field] != null)
-        .map(([field, label]) => `<dt>${historyText(...label)}</dt><dd>${recordedValue(record[field])}</dd>`).join("")}</dl>
-      ${outputs.length ? `<ul class="ml-history-attempt-outputs">${outputs.map(output => `<li><code>${recordedValue(output.path)}</code> · ${historyText(...(outputStatus[output.status] ?? outputStatus.not_recorded))}</li>`).join("")}</ul>` : ""}
+        .map(([field, label]) => `<dt>${escapeHistory(label)}</dt><dd>${recordedValue(record[field])}</dd>`).join("")}</dl>
+      ${outputs.length ? `<ul class="ml-history-attempt-outputs">${outputs.map(output => `<li><code>${recordedValue(output.path)}</code> · ${escapeHistory(outputStatus[output.status] ?? outputStatus.not_recorded)}</li>`).join("")}</ul>` : ""}
     </section>`;
   }
+  const attemptAvailable = attempt => attempt.availability === "recorded" && Boolean(attempt.record);
+  const attemptName = attempt => attempt.number == null ? "Attempt number not recorded"
+    : `Attempt ${attempt.number}`;
+  const attemptState = attempt => attemptAvailable(attempt) ? genotypeHistoryState(attempt.record.state ?? attempt.record.status)
+    : attempt.availability === "invalid" ? "Saved record unreadable" : "Saved record missing";
+  const attemptStatusBadge = attempt => attemptAvailable(attempt)
+    ? historyStatusBadge(attempt.record.state ?? attempt.record.status)
+    : `<span class="ml-history-status" data-state="warning">${escapeHistory(attemptState(attempt))}</span>`;
+  const sortAttempts = attempts => [...attempts].sort((a, b) => Number(b.current) - Number(a.current) || (b.number ?? 0) - (a.number ?? 0));
+  const attemptAttributes = attempt => `data-history-attempt="${escapeHistory(attempt.number ?? "unknown")}" data-attempt-record="${escapeHistory(attempt.record_file)}" data-attempt-current="${attempt.current === true}" data-attempt-available="${attemptAvailable(attempt)}"`;
+  const logHost = (kind, file) => `<div data-history-job-logs data-log-kind="${kind}" data-log-record="${escapeHistory(file)}"></div>`;
+
+  function savedAttemptEvidence(attempt) {
+    const savedEvents = attempt.record?.history;
+    const events = Array.isArray(savedEvents) ? savedEvents.filter(event => event && typeof event.state === "string" && typeof event.at === "string") : [];
+    const unreadableEvents = savedEvents != null && (!Array.isArray(savedEvents) || events.length !== savedEvents.length);
+    return `${(attempt.issues ?? []).length ? `<p class="ml-history-record-note">${attempt.issues.map(escapeHistory).join(" ")}</p>` : ""}
+      ${events.length ? `<h4>Recorded state timeline</h4><ol class="ml-history-attempt-events" data-history-attempt-events>${events.map(event => `<li>${escapeHistory(genotypeHistoryState(event.state))} · ${historyDate(event.at)}${event.reason ? ` · ${recordedValue(event.reason)}` : ""}</li>`).join("")}</ol>` : ""}
+      ${unreadableEvents ? `<p data-history-attempt-event-warning>Part of the recorded timeline is unreadable.</p>` : ""}`;
+  }
+  const unavailableAttempt = attempt => `<p>The inputs, settings and results of this attempt cannot be confirmed from the saved records.</p><p>Record source · <code>${recordedValue(attempt.record_file)}</code></p>`;
   function savedAttempts(attempts) {
-    return `<div class="ml-history-attempts">${[...attempts].sort((a, b) => Number(b.current) - Number(a.current) || (b.number ?? 0) - (a.number ?? 0)).map(attempt => {
-      const number = attempt.number ?? "unknown";
-      const available = attempt.availability === "recorded" && Boolean(attempt.record);
-      const title = attempt.number == null ? historyText("嘗試次數未記錄", "Attempt number not recorded")
-        : historyText(`第 ${attempt.number} 次嘗試`, `Attempt ${attempt.number}`);
-      const state = available ? historyStateLabel(attempt.record.state ?? attempt.record.status, true)
-        : historyText(attempt.availability === "invalid" ? "保存的紀錄無法讀取" : "缺少保存的紀錄", attempt.availability === "invalid" ? "Saved record unreadable" : "Saved record missing");
-      const savedEvents = attempt.record?.history;
-      const events = Array.isArray(savedEvents) ? savedEvents.filter(event => event && typeof event.state === "string" && typeof event.at === "string") : [];
-      const unreadableEvents = savedEvents != null && (!Array.isArray(savedEvents) || events.length !== savedEvents.length);
-      return `<details class="ml-history-attempt" data-history-attempt="${escapeHistory(number)}" data-attempt-record="${escapeHistory(attempt.record_file)}" data-attempt-current="${attempt.current === true}" data-attempt-available="${available}">
-        <summary>${title}${attempt.current ? ` · ${historyText("目前紀錄", "Current record")}` : ""}<span class="ml-history-attempt-state">${state}</span></summary>
-        <div class="ml-history-job-content">
-          ${available ? savedJobContent({...attempt.record, record_file: attempt.record_file}) + savedAttemptResult(attempt) + savedOutputChecks(attempt.record) : `<p>${historyText("這次嘗試的檔案、設定與結果無法從現有紀錄確認。", "The inputs, settings and results of this attempt cannot be confirmed from the saved records.")}</p><p>${historyText("紀錄來源", "Record source")} · <code>${recordedValue(attempt.record_file)}</code></p>`}
-          ${(attempt.issues ?? []).length ? `<p class="ml-history-record-note">${attempt.issues.map(escapeHistory).join(" ")}</p>` : ""}
-          ${events.length ? `<h4>${historyText("保存的狀態時間線", "Recorded state timeline")}</h4><ol class="ml-history-attempt-events" data-history-attempt-events>${events.map(event => `<li>${historyText(...genotypeHistoryState(event.state))} · <time>${recordedValue(event.at)}</time>${event.reason ? ` · ${recordedValue(event.reason)}` : ""}</li>`).join("")}</ol>` : ""}
-          ${unreadableEvents ? `<p data-history-attempt-event-warning>${historyText("部分保存的時間線無法讀取。", "Part of the recorded timeline is unreadable.")}</p>` : ""}
-          ${available ? `<div data-history-job-logs data-log-kind="attempt" data-log-record="${escapeHistory(attempt.record_file)}"></div>` : ""}
-        </div></details>`;
-    }).join("")}</div>`;
+    return `<div class="ml-history-attempts">${sortAttempts(attempts).map(attempt => `<details class="ml-history-attempt" ${attemptAttributes(attempt)}>
+      <summary>${escapeHistory(attemptName(attempt))}${attempt.current ? ` · Current record` : ""}
+        <span class="ml-history-attempt-state">${attemptAvailable(attempt) ? historyStateLabel(attempt.record.state ?? attempt.record.status, true) : escapeHistory(attemptState(attempt))}</span></summary>
+      <div class="ml-history-job-content">
+        ${attemptAvailable(attempt) ? savedJobContent({...attempt.record, record_file: attempt.record_file}) + savedAttemptResult(attempt) + savedOutputChecks(attempt.record) : unavailableAttempt(attempt)}
+        ${savedAttemptEvidence(attempt)}${attemptAvailable(attempt) ? logHost("attempt", attempt.record_file) : ""}
+      </div></details>`).join("")}</div>`;
   }
   function savedJobDetails(job, key, operation = false, savedOnly = false, attempts = []) {
     return `<details class="ml-run-step ml-history-saved-job" ${operation ? `data-history-operation="${escapeHistory(key)}" data-history-operation-record="${escapeHistory(job.record_file)}"` : `data-history-job="${escapeHistory(key)}"`}>
-      <summary>${escapeHistory(key)} · <span data-history-job-state>${historyStateLabel(job.state ?? job.status, savedOnly || operation)}</span>
-        ${attempts.length ? `<span class="ml-history-attempt-count">${historyText(`嘗試紀錄（${attempts.length}）`, `Attempt records (${attempts.length})`)}</span>` : ""}</summary>
-      ${attempts.length ? savedAttempts(attempts) : `<div class="ml-history-job-content">${savedJobContent(job, operation)}<div data-history-job-logs data-log-kind="${operation ? "operation" : "job"}" data-log-record="${escapeHistory(job.record_file)}"></div></div>`}</details>`;
+      <summary>${escapeHistory(key)} <span data-history-job-state>${historyStateLabel(job.state ?? job.status, savedOnly || operation)}</span>
+        ${attempts.length ? `<span class="ml-history-attempt-count">${escapeHistory(`Attempt records (${attempts.length})`)}</span>` : ""}</summary>
+      ${attempts.length ? savedAttempts(attempts) : `<div class="ml-history-job-content">${savedJobContent(job, operation)}${logHost(operation ? "operation" : "job", job.record_file)}</div>`}</details>`;
+  }
+  function stageHistoryAttemptPicker(records) {
+    if (!records.length) return "";
+    const label = "Attempt";
+    const currentLabel = "Current record";
+    if (records.length === 1) {
+      const attempt = records[0];
+      return `<div class="ml-history-attempt-picker" data-history-attempt-single>${label}
+        <strong>${escapeHistory(attemptName(attempt))}</strong>${attemptStatusBadge(attempt)}${attempt.current ? currentLabel : ""}</div>`;
+    }
+    const richOptions = globalThis.CSS?.supports?.("appearance", "base-select") === true;
+    const option = attempt => {
+      const value = escapeHistory(attempt.record_file);
+      const name = attemptName(attempt);
+      if (richOptions) {
+        return `<option value="${value}"><span class="ml-history-attempt-option-name">${escapeHistory(name)}</span> ${attemptStatusBadge(attempt)}</option>`;
+      }
+      const state = attemptState(attempt);
+      const label = `${name} · ${state}${attempt.current ? " · Current record" : ""}`;
+      return `<option value="${value}">${escapeHistory(label)}</option>`;
+    };
+    const group = (label, entries) => entries.length
+      ? `<optgroup><legend>${label}</legend>${entries.map(option).join("")}</optgroup>` : "";
+    const options = richOptions && records.some(attempt => attempt.current)
+      ? group(currentLabel, records.filter(attempt => attempt.current)) +
+        group("Previous attempts", records.filter(attempt => !attempt.current))
+      : records.map(option).join("");
+    return `<label class="ml-history-attempt-picker">${label}<select data-history-attempt-select>${richOptions ? "<button type=\"button\"><selectedcontent></selectedcontent></button>" : ""}${options}</select></label>`;
+  }
+  function stageHistoryDetails({job, step, attempts, rerun, recovery, panelId}) {
+    if (!job && !attempts.length) {
+      return `<div class="ml-history-stage-details"><p>No job details were saved for this stage.</p></div>`;
+    }
+    const records = sortAttempts(attempts);
+    const views = (attempt) => {
+      const available = !attempt || attemptAvailable(attempt);
+      const source = attempt ? {...attempt.record, record_file: attempt.record_file} : job;
+      const current = !attempt || attempt.current;
+      const summary = available ? `<p class="ml-history-attempt-state" data-history-job-state>${historyStateLabel(source.state ?? source.status, true)}</p>` +
+        savedJobSummary(source) + (attempt ? savedAttemptResult(attempt) + savedAttemptEvidence(attempt) : "") +
+        savedOutputChecks(source) + (current ? recovery : "") : unavailableAttempt(attempt) + savedAttemptEvidence(attempt);
+      return `<div class="ml-history-attempt-panel" data-history-attempt-panel ${attempt ? attemptAttributes(attempt) : ""}>
+        <div class="ml-history-job-content" data-history-detail-view="summary">${summary}</div>
+        <div class="ml-history-job-content" data-history-detail-view="settings" hidden>${available ? savedJobSettings(source) + (current ? rerun : "") : unavailableAttempt(attempt)}</div>
+        <div class="ml-history-job-content" data-history-detail-view="logs" hidden>${available ? logHost(attempt ? "attempt" : "job", source.record_file) : unavailableAttempt(attempt)}</div>
+      </div>`;
+    };
+    const tabs = [["summary", "Summary"], ["settings", "Settings"], ["logs", "Logs"]];
+    return `<div class="ml-history-stage-details" data-history-job="${step}">
+      ${stageHistoryAttemptPicker(records)}
+      <div class="ml-history-stage-tabs" role="group" aria-label="Stage details">${tabs.map(([tab, label]) =>
+        `<button type="button" data-history-detail-tab="${tab}" aria-controls="${panelId}-attempts" aria-pressed="${tab === "summary"}">${label}</button>`).join("")}</div>
+      <div id="${panelId}-attempts">${records.length ? records.map(views).join("") : views(null)}</div>
+    </div>`;
+  }
+  function syncHistoryStageDetail(panel) {
+    const selected = historyDetailSelection.get(panel.id) ?? {};
+    const tab = selected.tab ?? "summary";
+    const picker = panel.querySelector("[data-history-attempt-select]");
+    if (picker) {
+      picker.value = selected.record ?? picker.options[0].value;
+      if (picker.selectedIndex === -1) picker.selectedIndex = 0;
+    }
+    for (const button of panel.querySelectorAll("[data-history-detail-tab]")) {
+      button.setAttribute("aria-pressed", String(button.dataset.historyDetailTab === tab));
+    }
+    for (const attempt of panel.querySelectorAll("[data-history-attempt-panel]")) {
+      attempt.hidden = Boolean(picker) && attempt.dataset.attemptRecord !== picker.value;
+      for (const view of attempt.querySelectorAll("[data-history-detail-view]")) view.hidden = view.dataset.historyDetailView !== tab;
+    }
+  }
+  function syncHistoryStageSelection(article) {
+    const choices = [...article.querySelectorAll("[data-history-select-stage]")];
+    if (!choices.length) return;
+    const stage = historyStageSelection.get(article.dataset.historyId) ?? article.dataset.historyDefaultStage;
+    for (const choice of choices) {
+      const selected = choice.dataset.historySelectStage === stage;
+      choice.setAttribute("aria-pressed", String(selected));
+      article.querySelector(`#${CSS.escape(choice.getAttribute("aria-controls"))}`).hidden = !selected;
+    }
   }
   function canStartStage(run, number) {
     return canContinue(run) && number > 1 && historySteps.slice(0, number - 1).every(step => run.jobs?.[step]?.state === "completed");
   }
   function historyDisclosureKey(details) {
     const job = details.closest("[data-history-job], [data-history-operation]");
-    const scope = job?.dataset.historyJob ?? (job?.dataset.historyOperation ? `${job.dataset.historyOperation}:${job.dataset.historyOperationRecord}` : details.hasAttribute("data-history-rerun-changes") ? "rerun-changes" : details.hasAttribute("data-history-provenance") ? "provenance" : "inputs");
+    const stage = details.closest("[data-history-stage-step]")?.dataset.historyStageStep;
+    const scope = details.hasAttribute("data-rerun-form") ? `rerun-form:${stage}` : job?.dataset.historyJob ?? (job?.dataset.historyOperation ? `${job.dataset.historyOperation}:${job.dataset.historyOperationRecord}`
+      : details.hasAttribute("data-history-rerun-changes") ? "rerun-changes"
+        : details.hasAttribute("data-history-provenance") ? "provenance" : "inputs");
     const outputCheck = details.dataset.outputCheckDetail;
     const record = outputCheck ? details.closest("[data-attempt-record]")?.dataset.attemptRecord : "";
     return `${details.closest("[data-history-id]")?.dataset.historyId}|${scope}|${details.dataset.attemptRecord ?? details.dataset.historyAttempt ?? record ?? ""}${outputCheck ? `|output-check:${outputCheck}` : ""}`;
@@ -1349,23 +1532,34 @@
   function rerunFamilyLabel(run) {
     const family = run.rerun_family;
     if (run.source !== "live" || !Number.isSafeInteger(family?.number) || family.number < 0) return "";
-    return (family.number === 0 ? historyText("原始執行", "Original run") : historyText(`第 ${family.number} 次重跑`, `Rerun ${family.number}`)) +
-      (family.latest ? historyText(" · 最新", " · Latest") : "");
+    return (family.number === 0 ? "Original run" : escapeHistory(`Rerun ${family.number}`)) +
+      (family.latest ? " · Latest" : "");
   }
   function rerunChanges(run) {
     const family = run.rerun_family;
     if (!family?.number) return "";
-    const groups = {settings: ["分析參數", "Parameters"], resources: ["運算資源", "Resources"], options: ["階段選項", "Stage options"], clinical_choices: ["臨床處理選擇", "Clinical choices"]};
-    const parameterName = change => historyText(...({cpus: ["核心數", "CPU cores"], mem_gb: ["記憶體", "Memory"], hours: ["時間上限", "Time limit"], npc: ["主成分數", "Principal components"]}[change.key] ?? savedSettingLabels[change.key] ?? [change.key, change.key]));
+    const groups = {settings: "Parameters", resources: "Resources", options: "Stage options", clinical_choices: "Clinical choices"};
+    const parameterName = change => escapeHistory({cpus: "CPU cores", mem_gb: "Memory", hours: "Time limit", npc: "Principal components"}[change.key] ?? savedSettingLabels[change.key] ?? change.key);
     const changes = Array.isArray(family.changes) ? family.changes : [];
-    return `<details data-history-rerun-changes><summary>${historyText("本次設定變更", "Changes in this rerun")}</summary>
-      <p>${historyText("比較來源執行：", "Compared with source run: ")}<code>${recordedValue(family.source_run)}</code></p>
-      ${changes.length ? `<table class="ml-rerun-diff"><caption>${historyText("保存的設定差異", "Recorded setting differences")}</caption><thead><tr>
-        ${[historyText("設定", "Setting"), historyText("來源值", "Source value"), historyText("這次的值", "This run")].map(text => `<th scope="col">${text}</th>`).join("")}</tr></thead>
-        <tbody>${changes.map(change => `<tr><th scope="row">${historyText(...(groups[change.group] ?? [change.group, change.group]))} · ${parameterName(change)}</th>
+    return `<details data-history-rerun-changes><summary>Changes in this rerun</summary>
+      <p>Compared with source run: <code>${recordedValue(family.source_run)}</code></p>
+      ${changes.length ? `<table class="ml-rerun-diff"><caption>Recorded setting differences</caption><thead><tr>
+        ${["Setting", "Source value", "This run"].map(text => `<th scope="col">${text}</th>`).join("")}</tr></thead>
+        <tbody>${changes.map(change => `<tr><th scope="row">${escapeHistory(groups[change.group] ?? change.group)} · ${parameterName(change)}</th>
           <td>${recordedValue(change.before)}</td><td>${recordedValue(change.after)}</td></tr>`).join("")}</tbody></table>` :
-        `<p>${family.changes_available ? historyText("未記錄到參數差異。", "No parameter differences were recorded.") : historyText("來源或這次的設定未完整保存，無法比較。", "The source or rerun settings were not fully retained for comparison.")}</p>`}
+        `<p>${family.changes_available ? "No parameter differences were recorded." : "The source or rerun settings were not fully retained for comparison."}</p>`}
       </details>`;
+  }
+  function historyFileGroup(label, files) {
+    const paths = Array.isArray(files) ? files.filter(file => typeof file === "string" && file) : [];
+    const rows = paths.map(path => {
+      const name = path.replace(/\/+$/, "").split("/").at(-1) || path;
+      const pathMarkup = path.split("/").map(escapeHistory).join("/<wbr>");
+      return `<li>${name === path ? "" : `<strong class="ml-history-file-name">${escapeHistory(name)}</strong>`}
+        <code class="${name === path ? "ml-history-file-name" : "ml-history-file-path"}" data-history-file-path dir="ltr">${pathMarkup}</code></li>`;
+    }).join("");
+    return `<div class="ml-history-file-group" data-history-file-group><dt>${escapeHistory(label)}</dt>
+      <dd>${rows ? `<ul class="ml-history-file-rows">${rows}</ul>` : `<span class="ml-history-file-missing">${notRecorded()}</span>`}</dd></div>`;
   }
   function renderHistoryRecords() {
     const expanded = new Set([...runDetails.querySelectorAll("details[open]:not([data-job-logs])")].map(details =>
@@ -1375,107 +1569,134 @@
     runList.innerHTML = historyRuns.map(run => {
       const key = escapeHistory(historyKey(run)), id = escapeHistory(run.run_id);
       const state = run.status ?? historyJob(run)?.state;
-      const started = fullTime(run.submitted_at ?? run.jobs?.genotype?.submitted_at ?? historyJob(run)?.submitted_at);
+      const started = run.submitted_at ?? run.jobs?.genotype?.submitted_at ?? historyJob(run)?.submitted_at;
       const icon = state === "completed" ? "circle-check" : "history";
-      return `<button class="ml-nav-list-item" type="button" data-run-target="${key}" data-history-id="${key}" data-run-id="${id}" aria-controls="ml-run-${key}" aria-pressed="false">
-        <i data-lucide="${icon}" aria-hidden="true"></i><span><strong>${historyText(...run.name)}</strong>
-        <small>${historyText(...historySourceName(run))} · ${historyStateLabel(state, run.source === "recorded")}</small>
+      return `<button class="ml-nav-list-item ml-history-list-item" type="button" data-run-target="${key}" data-history-id="${key}" data-run-id="${id}" aria-controls="ml-run-${key}" aria-pressed="false">
+        <i data-lucide="${icon}" aria-hidden="true"></i><span class="ml-history-list-copy">
+        <span class="ml-history-list-title"><strong>${escapeHistory(run.name)}</strong>${historyStatusBadge(state, run.source === "recorded")}</span>
+        <span class="ml-history-list-meta">${escapeHistory(historySourceName(run))}${started ? historyDate(started) : ""}</span>
         ${rerunFamilyLabel(run) ? `<small data-rerun-family-label>${rerunFamilyLabel(run)}</small>` : ""}
-        <small>${escapeHistory(started)}</small></span></button>`;
+        </span></button>`;
     }).join("");
     runDetails.innerHTML = historyRuns.map(run => {
       const key = escapeHistory(historyKey(run)), id = escapeHistory(run.run_id);
       const initialJob = run.jobs?.genotype ?? historyJob(run);
-      const finished = fullTime(run.finished_at ?? historyJob(run)?.finished_at);
+      const finished = run.finished_at ?? historyJob(run)?.finished_at;
       const state = run.status ?? historyJob(run)?.state;
-      const summary = canReadGraph(run) && run.graph ? historyText(...networkOutput([run.graph.genes, run.graph.connections])) : "";
-      const stages = historySteps.map((step, offset) => {
+      const summary = canReadGraph(run) && run.graph ? escapeHistory(networkOutput([run.graph.genes, run.graph.connections])) : "";
+      const canResume = canContinue(run);
+      const hasStages = canResume || historySteps.some((step, offset) => run.jobs?.[step] || run.attempts?.[step]?.length ||
+        canReadStage(run, offset + 1)) || canReadGraph(run);
+      const stages = hasStages ? historySteps.map((step, offset) => {
         const job = run.jobs?.[step], number = offset + 1;
         const attempts = run.attempts?.[step] ?? [];
-        const linked = canReadStage(run, number) || number === 6 && canReadGraph(run) ||
-          canContinue(run) && (Boolean(job) && job.state !== "not_submitted" &&
-            (number > 1 || job.state !== "completed") || number > 1 && canStartStage(run, number));
-        if (!job && !linked && !attempts.length) return "";
-        const title = `<i data-lucide="${job?.state === "completed" ? "circle-check" : "history"}" aria-hidden="true"></i>
-          ${historyText(`第 ${number} 階段`, `Stage ${number}`)}<strong>${historyLabel(stageData[offset].name)}</strong>
-          <time datetime="${escapeHistory(job?.finished_at)}">${escapeHistory(clockTime(job?.finished_at))}</time>`;
-        const panel = number === 1 && canContinue(run) && job?.state !== "completed" ? "lens-stage1"
-          : number === 6 && canContinue(run) && job?.state !== "completed" ? "lens-stage6-run"
-          : [2, 3, 4, 5].includes(number) && canContinue(run) && job?.state !== "completed" ? `lens-stage${number}`
+        const readable = canReadStage(run, number) || number === 6 && canReadGraph(run);
+        const ready = canStartStage(run, number);
+        const linked = readable || canResume && (Boolean(job) && job.state !== "not_submitted" &&
+          (number > 1 || job.state !== "completed") || ready);
+        const stageState = ready && (!job || job.state === "not_submitted") ? "ready" : job?.state ??
+          (readable ? "result_available" : canResume ? "not_submitted" : "not_recorded");
+        const panel = number === 1 && canResume && job?.state !== "completed" ? "lens-stage1"
+          : number === 6 && canResume && job?.state !== "completed" ? "lens-stage6-run"
+          : [2, 3, 4, 5].includes(number) && canResume && job?.state !== "completed" ? `lens-stage${number}`
           : number === 3 ? "lens-history-stage3" : number === 6 ? "lens-stage6" : "lens-history-stage";
-        const link = linked ? `<button type="button" class="ml-run-step-link" data-run-stage="${number}" data-run-id="${id}" data-history-id="${key}" aria-controls="${panel}">
-          ${title}<i data-lucide="arrow-right" aria-hidden="true"></i></button>` : "";
-        const rerun = run.source === "live" && job?.state === "completed" ? `<details data-rerun-form><summary>${historyText("核對參數並建立新執行", "Review parameters and create linked run")}</summary>
-          <button type="button" data-rerun-review="${step}" data-rerun-source="${id}">${historyText("讀取原始參數與影響", "Load original parameters and impact")}</button><div data-rerun-content></div><p role="status" data-rerun-status></p></details>` : "";
-        return `<li>${link}${rerun}${job || attempts.length ? savedJobDetails(job ?? {}, step, false, run.source === "recorded", attempts) : ""}${submissionRecovery(run, step, job)}</li>`;
-      }).join("");
+        const action = readable ? "View stage results" : stageState === "ready"
+          ? "Review settings" : "View status";
+        const headingId = `ml-run-${key}-stage-${number}`;
+        const panelId = `${headingId}-details`;
+        const link = linked ? `<button type="button" class="ml-run-step-link" data-run-stage="${number}" data-run-id="${id}" data-history-id="${key}" aria-controls="${panel}" aria-describedby="${headingId}">
+          ${action}<i data-lucide="arrow-right" aria-hidden="true"></i></button>` : "";
+        const rerun = run.source === "live" && !run.dataset_deleted && job?.state === "completed" ? `<details data-rerun-form><summary>Review parameters and create linked run</summary>
+          <button type="button" class="ml-nav-action" data-rerun-review="${step}" data-rerun-source="${id}">Load original parameters and impact</button><div data-rerun-content></div><p role="status" data-rerun-status></p></details>` : "";
+        const name = escapeHistory(stageData[offset].name);
+        return {number, recorded: Boolean(job) && job.state !== "not_submitted" || attempts.length > 0 || readable,
+          choice: `<button class="ml-history-stage-choice" type="button" data-history-select-stage="${number}" aria-controls="${panelId}" aria-pressed="false">
+            <span class="ml-history-stage-index">${number}</span><span class="ml-history-stage-choice-name">${name}</span>
+            ${historyStatusBadge(stageState, Boolean(job) && run.source === "recorded")}</button>`,
+          panel: `<section class="ml-history-stage-panel" id="${panelId}" data-history-stage-panel="${number}" data-history-stage-step="${step}" aria-labelledby="${headingId}" hidden>
+            <header class="ml-history-stage-panel-header"><div><h4 id="${headingId}">${name}</h4></div>${link}</header>
+            ${stageHistoryDetails({job, step, attempts, rerun, recovery: submissionRecovery(run, step, job), panelId})}</section>`};
+      }) : [];
+      const defaultStage = stages.find(stage => stage.recorded)?.number ?? 1;
       const genericJobs = [...new Set([...Object.keys(run.jobs ?? {}), ...Object.keys(run.attempts ?? {})])].filter(step => !historySteps.includes(step))
         .map(step => savedJobDetails(run.jobs?.[step] ?? {}, step, false, run.source === "recorded", run.attempts?.[step])).join("");
       const operations = (run.operations ?? []).map(operation => savedJobDetails(operation, operation.operation ?? "operation", true)).join("");
-      const snapshot = inputTypes.map(([type, zh, en]) => {
-        const files = run.inputs?.[type] ?? [];
-        return `<dt>${historyText(zh, en)}</dt><dd>${files.length ? files.map(file => `<code>${escapeHistory(file)}</code>`).join("<br>") : notRecorded()}</dd>`;
+      const snapshot = inputTypes.map(([type, label]) => historyFileGroup(label, run.inputs?.[type])).join("");
+      const references = referenceTypes.flatMap(([, label, role]) => {
+        const value = run.reference_sources?.[role];
+        return typeof value === "string" && value ? [historyFileGroup(label, [value])] : [];
       }).join("");
       const assignment = assignmentStates.get(historyKey(run)) ?? {};
-      const association = historyText(...associationName(run));
-      const associationNote = run.association?.status === "manual" ? historyText("此歸類僅供整理紀錄，不代表已確認樣本或檔案配對。", "This assignment organizes records; it does not verify sample or file matching.") : "";
+      const association = escapeHistory(associationName(run));
+      const associationNote = run.association?.status === "manual" ? "This assignment organizes records; it does not verify sample or file matching." : "";
+      const rerunLabel = rerunFamilyLabel(run);
+      const linkedSource = run.rerun ? `<p data-rerun-link>Linked source · <code>${escapeHistory(run.rerun.source_run_id)}</code> · ${escapeHistory(run.rerun.step)}</p>` : "";
       const assignForm = run.capabilities?.assign_dataset ? `<form class="ml-history-assignment" data-history-assignment="${key}" data-save-state="${assignment.saving ? "saving" : assignment.error ? "error" : assignment.saved ? "saved" : "idle"}">
-        <label><span>${historyText("歸類到資料組", "Assign to dataset")}</span><select data-history-dataset ${assignment.saving || !datasetCatalogReady ? "disabled" : ""}>
-          <option value="">${root.lang === "en" ? "Choose an existing dataset" : "選擇現有資料組"}</option>
-          ${datasets.filter(dataset => dataset.persisted).map(dataset => `<option value="${escapeHistory(dataset.id)}" ${(assignment.datasetId ?? run.dataset_id) === dataset.id ? "selected" : ""}>${escapeHistory(localDatasetName(dataset))}</option>`).join("")}</select></label>
-        <button type="submit" class="ml-nav-action" data-history-assign ${assignment.saving || !datasetCatalogReady ? "disabled" : ""}>${historyText(assignment.saving ? "正在保存…" : "保存歸類", assignment.saving ? "Saving…" : "Save assignment")}</button>
-        <p data-history-assignment-status role="status">${assignment.error ? escapeHistory(assignment.error) : assignment.saved ? historyText("歸類已保存。", "Assignment saved.") : historyText("僅整理執行紀錄，不會更改檔案、設定或確認樣本配對。", "Organizes run history only; files, settings and sample matching are unchanged.")}</p></form>` : "";
-      return `<article class="ml-nav-detail" id="ml-run-${key}" data-history-id="${key}" data-run-id="${id}" hidden>
-        <header class="ml-nav-detail-title"><i data-lucide="history" aria-hidden="true"></i><h2>${historyText(...run.name)}</h2></header>
-        ${rerunFamilyLabel(run) ? `<p data-rerun-family-label>${rerunFamilyLabel(run)}</p>` : ""}${rerunChanges(run)}
-        <p class="ml-run-overview">${id}<br>${escapeHistory(fullTime(run.submitted_at ?? initialJob?.submitted_at))}${finished ? " – " + escapeHistory(finished) : ""}<br>
-          <span data-history-source>${historyText(...historySourceName(run))}</span> · <span data-history-state>${historyStateLabel(state, run.source === "recorded")}</span>${summary ? `<br>${summary}` : ""}</p>
-        ${run.rerun && run.source === "live" && (!run.jobs?.[run.rerun.step] || run.jobs[run.rerun.step].state === "not_submitted") ? `<div data-rerun-form><p>${historyText("已建立關聯執行，尚未送出。確認後將檢查遠端上游檔案並排程。", "Linked run created; not submitted. Confirmation checks remote upstream files and submits the stage.")}</p><button type="button" data-rerun-submit data-rerun-run-id="${id}">${historyText("確認送出", "Confirm submission")}: ${id}</button><div data-rerun-content></div><p role="status" data-rerun-status></p></div>` : ""}
-        ${run.rerun ? `<p data-rerun-link>${historyText("關聯來源", "Linked source")}: ${escapeHistory(run.rerun.source_run_id)} · ${escapeHistory(run.rerun.step)}</p>` : ""}
-        <p data-history-association>${association} · ${historyText(...historyDatasetName(run.dataset_id))}${associationNote ? `<br>${associationNote}` : ""}</p>
-        ${run.provenance ? `<details class="ml-run-inputs" data-history-provenance><summary>${historyText("保存的執行來源", "Recorded run provenance")}</summary><dl class="ml-key-values">${savedDefinitions(run.provenance)}</dl></details>` : ""}
-        ${(run.issues ?? []).length ? `<p class="ml-history-record-note">${run.issues.map(escapeHistory).join(" ")}</p>` : ""}
-        ${assignForm}<details class="ml-run-inputs" open><summary>${historyText("執行時使用的檔案", "Input files at execution")}</summary><dl class="ml-key-values">${snapshot}</dl></details>
-        <ol class="ml-run-timeline" aria-label="${root.lang === "en" ? "Run timeline" : "執行時間線"}">${stages}</ol>
-        ${genericJobs}${operations}${!stages && !genericJobs && !operations ? `<p>${historyText("未保存可讀的工作設定。", "No readable job settings were recorded.")}</p>` : ""}
+        <label><span>Assign to dataset</span><select data-history-dataset ${assignment.saving || !datasetCatalogReady ? "disabled" : ""}>
+          <option value="">Choose an existing dataset</option>
+          ${datasets.filter(dataset => dataset.persisted).map(dataset => `<option value="${escapeHistory(dataset.id)}" ${(assignment.datasetId ?? run.dataset_id) === dataset.id ? "selected" : ""}>${escapeHistory(dataset.name)}</option>`).join("")}</select></label>
+        <button type="submit" class="ml-nav-action" data-history-assign ${assignment.saving || !datasetCatalogReady ? "disabled" : ""}>${escapeHistory(assignment.saving ? "Saving…" : "Save assignment")}</button>
+        <p data-history-assignment-status role="status">${assignment.error ? escapeHistory(assignment.error) : assignment.saved ? "Assignment saved." : "Organizes run history only; files, settings and sample matching are unchanged."}</p></form>` : "";
+      return `<article class="ml-history-run" id="ml-run-${key}" data-history-id="${key}" data-run-id="${id}" data-history-default-stage="${defaultStage}" hidden>
+        <header class="ml-dataset-intro ml-history-intro">
+          <span class="ml-dataset-intro-icon" aria-hidden="true"><i data-lucide="history"></i></span>
+          <div><h2>${escapeHistory(run.name)}</h2><p><code>${id}</code></p></div>
+          ${historyStatusBadge(state, run.source === "recorded", true)}
+        </header>
+        <dl class="ml-history-overview">
+          <div><dt>Dataset</dt><dd data-history-association>${escapeHistory(historyDatasetName(run.dataset_id))}
+            ${run.dataset_deleted ? "<small>Dataset deleted</small>" : associationNote ? `<small>${association} · ${associationNote}</small>` : ""}</dd></div>
+          <div><dt>Submitted</dt><dd>${historyDate(run.submitted_at ?? initialJob?.submitted_at)}</dd></div>
+          ${finished ? `<div><dt>Latest finish</dt><dd>${historyDate(finished)}</dd></div>` : ""}
+          ${summary ? `<div><dt>Network result</dt><dd>${summary}</dd></div>` : ""}
+        </dl>
+        <section class="ml-history-metadata">
+          <header class="ml-history-files-heading">
+            <h3>Input files at execution</h3>
+            ${rerunLabel ? `<span data-rerun-family-label>${rerunLabel}</span>` : ""}
+          </header>
+          <dl class="ml-run-inputs ml-history-file-list">${snapshot}${references}</dl>
+          ${run.provenance ? `<details class="ml-run-inputs" data-history-provenance><summary>Recorded run provenance</summary><dl class="ml-key-values">${savedDefinitions(run.provenance)}</dl></details>` : ""}
+          ${rerunChanges(run)}
+          ${linkedSource}
+          ${assignForm}
+          ${(run.issues ?? []).length ? `<p class="ml-history-record-note">${run.issues.map(escapeHistory).join(" ")}</p>` : ""}
+          ${run.rerun && run.source === "live" && (!run.jobs?.[run.rerun.step] || run.jobs[run.rerun.step].state === "not_submitted") ? `<div data-rerun-form><p>Linked run created; not submitted. Confirmation checks remote upstream files and submits the stage.</p><button type="button" class="ml-nav-action" data-rerun-submit data-rerun-run-id="${id}">Confirm submission · ${id}</button><div data-rerun-content></div><p role="status" data-rerun-status></p></div>` : ""}
+        </section>
+        ${stages.length ? `<section class="ml-history-section"><h3>Run stages</h3>
+          <div class="ml-history-stage-workspace"><div class="ml-history-stage-list" role="group" aria-label="Run stages">${stages.map(stage => stage.choice).join("")}</div>
+          <div class="ml-history-stage-content">${stages.map(stage => stage.panel).join("")}</div></div></section>` : ""}
+        ${genericJobs || operations ? `<section class="ml-history-section"><h3>Other recorded activity</h3>${genericJobs}${operations}</section>` : ""}
+        ${!stages.length && !genericJobs && !operations ? `<p>No readable job settings were recorded.</p>` : ""}
       </article>`;
     }).join("");
     for (const details of runDetails.querySelectorAll("details:not([data-job-logs])")) {
       if (expanded.has(historyDisclosureKey(details))) details.open = true;
     }
+    for (const article of runDetails.querySelectorAll(".ml-history-run")) syncHistoryStageSelection(article);
+    for (const panel of runDetails.querySelectorAll("[data-history-stage-panel]")) syncHistoryStageDetail(panel);
     if (globalThis.SignetJobLogs) for (const host of runDetails.querySelectorAll("[data-history-job-logs]")) {
       const run = findHistoryRun(host.closest("[data-history-id]").dataset.historyId);
       const step = host.closest("[data-history-job]")?.dataset.historyJob;
       const operation = host.closest("[data-history-operation]")?.dataset.historyOperation;
       const attempt = host.dataset.logKind === "attempt" ? run.attempts?.[step]?.find(attempt => attempt.record_file === host.dataset.logRecord) : null;
-      const record = operation ? run.operations?.find(record => record.operation === operation && record.record_file === host.dataset.logRecord) : attempt?.record ?? run.jobs?.[step];
+      const record = operation ? run.operations?.find(record => record.operation === operation && record.record_file === host.dataset.logRecord)
+        : host.dataset.logKind === "attempt" ? attempt?.record : run.jobs?.[step];
       const context = {historyId: historyKey(run), runId: run.run_id, source: run.source, datasetId: run.dataset_id,
         step, operation, number: attempt ? attempt.number : run.source === "archive" ? null : record?.attempt ?? 1,
         current: attempt?.current ?? true, recordFile: attempt?.record_file ?? record?.record_file ?? `steps/${step}.json`,
         recordIdentity: run.record_identity, recordRevision: record?.record_revision, record,
         prepared: Boolean(operation && (record?.status === "prepared" || record?.record_file?.endsWith(".plan.json")))};
-      const view = globalThis.SignetJobLogs.mount({host, token: () => chatToken});
+      const view = globalThis.SignetJobLogs.mount({host, token: () => chatToken, inline: Boolean(host.closest("[data-history-detail-view]"))});
       historyLogViews.push({view, context});
-    }
-    renderHistoryLanguage();
-    globalThis.lucide?.createIcons();
-  }
-
-  function renderHistoryLanguage() {
-    const key = root.lang === "en" ? "historyEn" : "historyZh";
-    for (const node of root.querySelectorAll("[data-history-zh]")) node.textContent = node.dataset[key];
-    for (const timeline of runDetails.querySelectorAll(".ml-run-timeline")) {
-      timeline.setAttribute("aria-label", root.lang === "en" ? "Run timeline" : "執行時間線");
-    }
-    for (const option of runDetails.querySelectorAll("[data-history-dataset] option")) {
-      option.textContent = option.value ? historyDatasetName(option.value)[root.lang === "en" ? 1 : 0]
-        : root.lang === "en" ? "Choose an existing dataset" : "選擇現有資料組";
     }
     syncHistoryLogs();
     renderRunTimeline();
+    globalThis.lucide?.createIcons();
   }
+
   function syncHistoryLogs() {
-    for (const {view, context} of historyLogViews) view.setContext({...context, language: root.lang, visible: app.dataset.nav === "history"});
+    for (const {view, context} of historyLogViews) view.setContext({...context, visible: app.dataset.nav === "history"});
   }
 
   const analysisNetwork = root.querySelector("#lens-stage6");
@@ -1497,13 +1718,13 @@
   const visualizationPanel = root.querySelector("#lens-stage6-run");
   const stage6HistoryLabel = byId("stage6-history-run");
   const stage6Labels = {
-    listing: ["讀取已完成的執行…", "Finding completed runs…"],
-    empty: ["目前沒有可檢視的第 6 階段結果。", "No Stage 6 results are available."],
-    choose: ["選擇一筆已完成的執行。", "Choose a completed run."],
-    loading: ["讀取網路圖和連線表…", "Loading network and connections…"],
-    "list-error": ["無法讀取已完成的執行。", "Could not load completed runs."],
-    "load-error": ["無法讀取這筆執行的結果。", "Could not load this run’s results."],
-    "no-edges": ["這筆執行沒有匯出的連線。", "This run has no exported edges."],
+    listing: "Finding completed runs…",
+    empty: "No Stage 6 results are available.",
+    choose: "Choose a completed run.",
+    loading: "Loading network and connections…",
+    "list-error": "Could not load completed runs.",
+    "load-error": "Could not load this run’s results.",
+    "no-edges": "This run has no exported edges.",
   };
   const selectedStage6Genes = new Map();
   const analysisRunByDataset = new Map();
@@ -1538,17 +1759,16 @@
   }
 
   function renderStage6Status() {
-    const language = root.lang === "en" ? 1 : 0;
     const state = analysisNetwork.dataset.runState;
     const run = stage6RunsForView().find(run => historyKey(run) === stage6RunSelect.value);
     const empty = stage6Result?.graph.edges.length === 0;
-    stage6Source.textContent = run ? historySourceName(run)[language] : ["執行", "Run"][language];
-    stage6RunSelect.options[0].textContent = ["選擇執行", "Select a run"][language];
+    stage6Source.textContent = run ? historySourceName(run) : "Run";
+    stage6RunSelect.options[0].textContent = "Select a run";
     stage6RunSelect.title = run?.run_id ?? "";
-    stage6HistoryLabel.textContent = run?.name[language] ?? "";
+    stage6HistoryLabel.textContent = run?.name ?? "";
     stage6HistoryLabel.title = run?.run_id ?? "";
     stage6Status.hidden = state === "ready" && !empty;
-    stage6Status.textContent = (stage6Labels[empty ? "no-edges" : state] ?? ["", ""])[language];
+    stage6Status.textContent = stage6Labels[empty ? "no-edges" : state] ?? "";
     stage6Summary.hidden = !stage6Status.hidden;
     stage6Retry.hidden = !["empty", "list-error", "load-error"].includes(state);
     renderRunTimeline();
@@ -1569,6 +1789,24 @@
       throw Object.assign(new Error("Could not load archived result"), {status: response.status});
     }
     return response.json();
+  }
+
+  async function getSavedStageResult(run, stage, signal) {
+    const query = new URLSearchParams({run: run.run_id});
+    if (stage !== 3 && stage !== 6) query.set("stage", stage);
+    query.set("source", run.source);
+    const path = stage === 3 ? "/stage3/results" : stage === 6 ? "/stage6/results" : "/stage/results";
+    const result = await getArchivedResult(`${path}?${query}`, {signal});
+    if (result.run_id !== run.run_id || (stage === 6 ? result.source !== run.source : stage !== 3 && result.stage !== stage)) {
+      throw new Error("Result does not match the selected run and stage");
+    }
+    return result;
+  }
+
+  const resultReadTimeout = "Reading the results timed out. Select Retry loading result to try again.";
+  function archivedResultErrorState(error) {
+    if (error.status === 504) return "timeout";
+    return error.status === 404 ? "empty" : "error";
   }
 
   function layoutStage6(genes) {
@@ -1615,12 +1853,8 @@
     setStage6RunState("loading");
     try {
       const runId = run.run_id;
-      const query = new URLSearchParams({run: runId, source: run.source});
-      const result = await getArchivedResult("/stage6/results?" + query, {signal: request.signal});
+      const result = await getSavedStageResult(run, 6, request.signal);
       if (request.signal.aborted) return;
-      if (result.run_id !== runId || result.source !== run.source) {
-        throw new Error("Stage 6 result belongs to a different run");
-      }
       let {nodes, edges} = result.graph;
       if (run.source === "live" && result.graph.display_nodes) {
         const displayed = new Set(result.graph.display_nodes);
@@ -1654,7 +1888,7 @@
     const runs = stage6RunsForView();
     if (rebuild) {
       stage6RunSelect.replaceChildren(new Option("", ""), ...runs.map(run => {
-        const option = new Option(`${run.run_id} · ${historySourceName(run)[root.lang === "en" ? 1 : 0]}`, historyKey(run));
+        const option = new Option(`${run.run_id} · ${historySourceName(run)}`, historyKey(run));
         option.dataset.runId = run.run_id;option.dataset.source = run.source;return option;
       }));
       stage6RunSelect.disabled = !runs.length;
@@ -1704,14 +1938,15 @@
   const stage3ComparisonRows = stage3HistoryPanel.querySelector("[data-s3-difference] tbody");
   const stage3MetricNote = stage3HistoryPanel.querySelector(".s3-metric-note");
   const stage3Comparison = [
-    ["before", "校正前", "Before adjustment", "before_sd"],
-    ["covariates", "僅校正性別與種族", "Adjusted for sex and race", "covariates_sd"],
-    ["after", "校正後", "After adjustment", "after_sd"],
+    ["before", "Before adjustment", "before_sd"],
+    ["covariates", "Adjusted for sex and race", "covariates_sd"],
+    ["after", "After adjustment", "after_sd"],
   ];
   const stage3States = {
-    loading: ["讀取第 3 階段封存結果…", "Loading the archived Stage 3 result…"],
-    empty: ["這次執行沒有可讀取的第 3 階段封存結果。", "This run has no readable Stage 3 archive."],
-    error: ["無法載入第 3 階段結果。", "Could not load the Stage 3 result."],
+    loading: "Loading the archived Stage 3 result…",
+    empty: "This run has no readable Stage 3 archive.",
+    error: "Could not load the Stage 3 result.",
+    timeout: resultReadTimeout,
   };
   let stage3Result = null;
   let stage3Request;
@@ -1731,22 +1966,21 @@
   }
 
   function renderStage3History() {
-    const inEnglish = root.lang === "en";
-    const locale = inEnglish ? "en" : "zh-Hant";
+    const locale = "en";
     const run = historyResult?.stage === 3
       ? selectedHistoryResult() : null;
     const state = stage3HistoryPanel.dataset.runState;
     const number = new Intl.NumberFormat(locale);
     const formatSD = new Intl.NumberFormat(locale, {maximumFractionDigits: 5, minimumFractionDigits: 5});
     const formatChange = new Intl.NumberFormat(locale, {maximumFractionDigits: 5, minimumFractionDigits: 5, signDisplay: "exceptZero"});
-    const missing = inEnglish ? "Not recorded" : "未記錄";
+    const missing = "Not recorded";
     const comparison = stage3Result?.comparison;
     const pca = stage3Result?.pca;
 
-    stage3RunLabel.textContent = run?.name[inEnglish ? 1 : 0] ?? "";
+    stage3RunLabel.textContent = run?.name ?? "";
     stage3RunLabel.title = run?.run_id ?? "";
     stage3RunLabel.previousElementSibling.textContent = run?.source === "live"
-      ? (inEnglish ? "Run" : "執行") : (inEnglish ? "Archived run" : "封存執行");
+      ? "Run" : "Archived run";
     stage3Components.textContent = stage3Result ? number.format(stage3Result.npc) : "—";
     for (const count of stage3Counts) {
       const value = stage3Result?.matching[count.dataset.s3Count];
@@ -1754,9 +1988,9 @@
     }
     stage3Status.hidden = !stage3States[state];
     stage3Status.textContent = run?.source === "live" && state === "loading"
-      ? (inEnglish ? "Loading the saved Stage 3 result…" : "讀取第 3 階段結果…")
-      : stage3States[state]?.[inEnglish ? 1 : 0] ?? "";
-    stage3Retry.hidden = state !== "error";
+      ? "Loading the saved Stage 3 result…"
+      : stage3States[state] ?? "";
+    stage3Retry.hidden = !["error", "timeout"].includes(state);
     stage3HistoryPanel.querySelector(".s3-figure").hidden = state !== "ready";
     stage3HistoryPanel.querySelector(".ml-result-dock").hidden = state !== "ready";
 
@@ -1765,32 +1999,28 @@
     stage3RemotePlot.hidden = !remotePlot;
     if (remotePlot) {
       stage3RemotePlot.src = "data:image/png;base64," + pca.png_base64;
-      stage3RemotePlot.alt = inEnglish ? "Principal component plot rendered on HPC3; individual scores stay remote." : "在遠端繪製的主成分圖；個體分數保留在遠端。";
+      stage3RemotePlot.alt = "Principal component plot rendered on HPC3; individual scores stay remote.";
     } else stage3RemotePlot.removeAttribute("src");
     stage3Plot.toggleAttribute("hidden", Boolean(remotePlot) || !pca?.points?.length);
     if (remotePlot) {
       const variance = new Intl.NumberFormat(locale, {maximumFractionDigits: 2});
-      stage3Legend.textContent = (inEnglish ? "Rendered on HPC3 · PC1 / PC2 explained variance: " : "遠端繪圖 · 第 1／2 主成分解釋變異：") +
+      stage3Legend.textContent = "Rendered on HPC3 · PC1 / PC2 explained variance: " +
         (pca.variance_explained ?? []).map(value => variance.format(value) + "%").join(" / ");
     } else if (pca?.points?.length) {
       const points = pca.points;
-      drawStage3Scatter(stage3HistoryPanel, points, stage3Ticks(points, 0), stage3Ticks(points, 1), inEnglish);
+      drawStage3Scatter(stage3HistoryPanel, points, stage3Ticks(points, 0), stage3Ticks(points, 1));
       const variance = new Intl.NumberFormat(locale, {maximumFractionDigits: 2});
-      const axisNames = inEnglish ? ["PC1", "PC2"] : ["第 1 主成分", "第 2 主成分"];
+      const axisNames = ["PC1", "PC2"];
       stage3Plot.querySelectorAll(".s3-axis-title").forEach((axis, index) => {
         axis.textContent = `${axisNames[index]} · ${variance.format(pca.variance_explained[index])}%`;
       });
-      stage3Plot.setAttribute("aria-label", inEnglish
-        ? `Scatter plot of ${number.format(points.length)} retained individuals on PC1 and PC2`
-        : `${number.format(points.length)} 位保留個體在第 1 與第 2 主成分上的散點圖`);
+      stage3Plot.setAttribute("aria-label", `Scatter plot of ${number.format(points.length)} retained individuals on PC1 and PC2`);
       stage3Legend.textContent = pca.source === "signet_smartpca"
-        ? (inEnglish ? "Each point is one retained individual. Coordinates and explained variance come from this run’s SIGNET PCA outputs."
-          : "每個點代表一位保留個體。座標與解釋變異比例來自這筆執行的主成分分析輸出。")
-        : (inEnglish ? "Each point is one retained individual. The plot is reconstructed from the archived genotype data."
-          : "每個點代表一位保留個體。散點圖由封存的基因型資料重建。" );
+        ? "Each point is one retained individual. Coordinates and explained variance come from this run’s SIGNET PCA outputs."
+        : ("Each point is one retained individual. The plot is reconstructed from the archived genotype data." );
     } else {
       stage3Plot.querySelector(".s3-points").replaceChildren();
-      stage3Legend.textContent = inEnglish ? "This archive has no data for the PCA plot." : "這份封存結果沒有可繪製主成分圖的資料。";
+      stage3Legend.textContent = "This archive has no data for the PCA plot.";
     }
 
     stage3ComparisonRows.replaceChildren();
@@ -1798,14 +2028,14 @@
     if (!comparison) {
       const cell = stage3ComparisonRows.insertRow().insertCell();
       cell.colSpan = 3;
-      cell.textContent = inEnglish ? "Expression comparison is unavailable in this archive." : "這份封存結果沒有校正前後的比較資料。";
+      cell.textContent = "Expression comparison is unavailable in this archive.";
       return;
     }
-    for (const [key, zh, en, field] of stage3Comparison) {
+    for (const [key, label, field] of stage3Comparison) {
       const row = stage3ComparisonRows.insertRow();
       row.dataset.s3Comparison = key;
       const value = comparison[field];
-      row.insertCell().textContent = inEnglish ? en : zh;
+      row.insertCell().textContent = label;
       row.insertCell().textContent = value === null ? missing : formatSD.format(value);
       row.insertCell().textContent = key === "before" || value === null ? "—" : formatChange.format(value - comparison.before_sd);
     }
@@ -1823,96 +2053,93 @@
   const archivedStepSettings = archivedStepPanel.querySelector("[data-stage-settings]");
   const archivedStepStatus = archivedStepPanel.querySelector("[data-stage-status]");
   const savedSettingLabels = {
-    "restrict.tcga.geno": ["染色體", "Chromosome"],
-    "restrict.tcga": ["染色體", "Chromosome"],
-    mind: ["樣本缺失率上限", "Max. sample missingness"],
-    geno: ["位點缺失率上限", "Max. variant missingness"],
-    hwe: ["哈溫平衡檢定門檻", "HWE p-value cutoff"],
-    int: ["插補分塊長度（鹼基對）", "Imputation block size (bp)"],
-    "alpha.cis": ["顯著性門檻", "Significance cutoff"],
-    nperms: ["低頻及罕見區域置換", "Permutations (low/rare)"],
-    upstream: ["基因終點後的範圍（鹼基對）", "After gene end (base pairs)"],
-    downstream: ["基因起點前的範圍（鹼基對）", "Before gene start (base pairs)"],
-    nboots: ["重抽樣次數", "Bootstrap runs"],
-    ncis: ["ncis（原流程設定）", "ncis (recorded setting)"],
-    cor: ["工具變異相關性上限", "Instrument correlation limit"],
-    ncores: ["每個計算工作核心數", "Compute job cores"],
-    memory: ["每個計算工作記憶體（GB）", "Compute job memory (GB)"],
-    walltime: ["每個計算工作時間上限", "Compute job time limit"],
-    npc: ["主成分數", "Principal components"],
-    freq: ["頻率門檻", "Frequency threshold"],
-    ntop: ["顯示的子網路數上限", "Maximum displayed subnetworks"],
-    cpus: ["核心數", "CPU cores"],
-    mem_gb: ["記憶體（GB）", "Memory (GB)"],
-    hours: ["時間上限（小時）", "Time limit (hours)"],
+    "restrict.tcga.geno": "Chromosome",
+    "restrict.tcga": "Chromosome",
+    mind: "Max. sample missingness",
+    geno: "Max. variant missingness",
+    hwe: "HWE p-value cutoff",
+    int: "Imputation block size (bp)",
+    "alpha.cis": "Significance cutoff",
+    nperms: "Permutations (low/rare)",
+    upstream: "After gene end (base pairs)",
+    downstream: "Before gene start (base pairs)",
+    nboots: "Bootstrap runs",
+    ncis: "ncis (recorded setting)",
+    cor: "Instrument correlation limit",
+    ncores: "Compute job cores",
+    memory: "Compute job memory (GB)",
+    walltime: "Compute job time limit",
+    npc: "Principal components",
+    freq: "Frequency threshold",
+    ntop: "Maximum displayed subnetworks",
+    cpus: "CPU cores",
+    mem_gb: "Memory (GB)",
+    hours: "Time limit (hours)",
   };
   function rerunParameterFields(parameters) {
     const integerFields = new Set(["restrict.tcga.geno", "restrict.tcga", "int", "nperms", "upstream", "downstream", "nboots", "ncis", "ncores", "memory", "npc", "ntop", "cpus", "mem_gb"]);
-    return [["settings", ["設定", "Settings"]], ["options", ["分析選項", "Analysis options"]], ["resources", ["運算資源", "Resources"]]]
+    return [["settings", "Settings"], ["options", "Analysis options"], ["resources", "Resources"]]
       .filter(([group]) => Object.keys(parameters[group] ?? {}).length)
-      .map(([group, title]) => `<fieldset><legend>${historyText(...title)}</legend>${Object.entries(parameters[group]).map(([key, value]) => {
-        const label = Object.hasOwn(savedSettingLabels, key) ? historyText(...savedSettingLabels[key]) : key;
+      .map(([group, title]) => `<fieldset><legend>${escapeHistory(title)}</legend>${Object.entries(parameters[group]).map(([key, value]) => {
+        const label = Object.hasOwn(savedSettingLabels, key) ? escapeHistory(savedSettingLabels[key]) : escapeHistory(key);
         const number = typeof value === "number";
-        return `<label>${escapeHistory(label)}<input name="${escapeHistory(group + "-" + key)}" data-rerun-group="${group}" data-rerun-field="${escapeHistory(key)}" required
+        return `<label>${label}<input name="${escapeHistory(group + "-" + key)}" data-rerun-group="${group}" data-rerun-field="${escapeHistory(key)}" required
           type="${number ? "number" : "text"}" ${number ? `step="${integerFields.has(key) ? "1" : "any"}" min="0"` : 'spellcheck="false"'}
           ${key.startsWith("restrict.") ? "readonly" : ""} value="${escapeHistory(value)}"></label>`;
       }).join("")}</fieldset>`).join("");
   }
   const savedStepStates = {
-    loading: ["讀取階段封存結果…", "Loading the archived stage result…"],
-    empty: ["這次執行沒有可讀取的階段封存結果。", "This run has no readable result for this stage."],
-    error: ["無法載入階段封存結果。", "Could not load the archived stage result."],
+    loading: "Loading the archived stage result…",
+    empty: "This run has no readable result for this stage.",
+    error: "Could not load the archived stage result.",
+    timeout: resultReadTimeout,
   };
   const cisCategories = {
-    common: ["常見變異", "Common variants"],
-    low: ["低頻區域", "Low-frequency regions"],
-    rare: ["罕見區域", "Rare-variant regions"],
+    common: "Common variants",
+    low: "Low-frequency regions",
+    rare: "Rare-variant regions",
   };
   let archivedStepResult = null;
   let archivedStepRequest;
 
-  function viewArchivedStep(stage, summary, language) {
+  function viewArchivedStep(stage, summary) {
     const snapshot = snapshots.find(({number}) => number === stage);
-    const local = (zh, en) => [zh, en][language];
-    const label = (zh) => language ? englishLabel(zh) : zh;
     const count = (value) => countLabel.format(value);
-    const percent = (value) => `${Number((value * 100).toFixed(6))}%`;
     const view = {
-      title: label(snapshot.chartTitle), axis: label(snapshot.axis),
-      tableTitle: label(snapshot.tableTitle), headers: snapshot.headers.map(label),
+      title: snapshot.chartTitle, axis: snapshot.axis,
+      tableTitle: snapshot.tableTitle, headers: [...snapshot.headers],
       step: snapshot.step,
     };
     if (stage === 1) {
       const total = summary.genotype_codes.reduce((sum, value) => sum + value, 0);
-      view.metrics = [[local("樣本數", "Samples"), summary.samples], [local("變異數", "Variants"), summary.variants]];
+      view.metrics = [["Samples", summary.samples], ["Variants", summary.variants]];
       view.bars = snapshot.bars.map(([range], index) => [range, summary.nonzero_bins[index]]);
       view.rows = summary.genotype_codes.map((entries, index) =>
         [index, count(entries), total ? `${(entries / total * 100).toFixed(2)}%` : "—"]);
-      view.caption = local("各區間含下限，最後一組也含 100%。",
-        "Each bin includes its lower bound. The last also includes 100%.");
+      view.caption = "Each bin includes its lower bound. The last also includes 100%.";
     } else if (stage === 2) {
-      view.metrics = [[local("樣本數", "Samples"), summary.samples], [local("基因數", "Genes"), summary.genes]];
+      view.metrics = [["Samples", summary.samples], ["Genes", summary.genes]];
       view.bars = summary.histogram.map(({lower, upper, count: entries}) => [`${lower}–${upper}`, entries]);
       view.rows = summary.gene_summary.map(({gene, min, median, max}) =>
         [gene, min.toFixed(2), median.toFixed(2), max.toFixed(2)]);
-      view.caption = local("各區間含下限，最後一組也含上限。", "Each bin includes its lower bound. The last also includes its upper bound.");
+      view.caption = "Each bin includes its lower bound. The last also includes its upper bound.";
     } else if (stage === 4) {
       const total = summary.counts.common + summary.counts.low + summary.counts.rare;
-      view.metrics = [[local("顯著配對數", "Significant pairs"), total], [local("涉及基因數", "Genes represented"), summary.genes]];
-      view.bars = Object.entries(cisCategories).map(([key, names]) => [names[language], summary.counts[key]]);
-      view.headers[1] = local("類別內的變異／區域編號", "Variant / region index in category");
+      view.metrics = [["Significant pairs", total], ["Genes represented", summary.genes]];
+      view.bars = Object.entries(cisCategories).map(([key, names]) => [names, summary.counts[key]]);
+      view.headers[1] = "Variant / region index in category";
       view.rows = summary.pairs.map(({gene, variant, category, p_value}) =>
-        [gene, variant, cisCategories[category][language], p_value]);
-      view.caption = local("低頻與罕見變異依區域合併分析。", "Low-frequency and rare variants are grouped by region.");
+        [gene, variant, cisCategories[category], p_value]);
+      view.caption = "Low-frequency and rare variants are grouped by region.";
     } else {
       const total = summary.frequencies.reduce((sum, {count: edges}) => sum + edges, 0);
-      view.title = local("候選連線的重抽樣出現頻率", "Bootstrap frequency of candidate edges");
-      view.metrics = [[local("候選連線數", "Candidate edges"), total], [local("分析基因數", "Genes analyzed"), summary.genes]];
-      view.bars = summary.frequencies.map(({frequency, count: edges}) => [percent(frequency), edges]);
-      view.rows = summary.edges.map(({source, target, frequency}) => [source, target, percent(frequency)]);
-      view.caption = local("顯示至少出現一次的候選連線。第 6 階段會依出現頻率篩選。",
-        "Candidate edges appeared in at least one bootstrap run. Stage 6 filters them by frequency.");
-      if (!summary.edges.length) view.emptyText = local("這次執行沒有出現候選連線。", "This run produced no candidate edges.");
+      view.title = "Bootstrap frequency of candidate edges";
+      view.metrics = [["Candidate edges", total], ["Genes analyzed", summary.genes]];
+      view.frequencyAxis = "Bootstrap frequency";
+      view.bars = summary.frequencies.map(({frequency, count: edges}) => [frequency, edges]);
+      view.rows = summary.edges.map(({source, target, frequency}) => [source, target, percentLabel(frequency)]);
+      view.caption = "Candidate edges appeared in at least one bootstrap run. Stage 6 filters them by frequency.";
+      if (!summary.edges.length) view.emptyText = "This run produced no candidate edges.";
     }
 
     // Fit small and large archived results within the existing chart frame.
@@ -1924,18 +2151,16 @@
   }
 
   function renderArchivedStep() {
-    const language = root.lang === "en" ? 1 : 0;
-    const local = (zh, en) => [zh, en][language];
-    const recorded = (value) => value ?? local("未記錄", "Not recorded");
+    const recorded = (value) => value ?? "Not recorded";
     const stage = historyResult?.stage;
     const run = archiveSteps.has(stage)
       ? selectedHistoryResult() : null;
-    const view = run && archivedStepResult ? viewArchivedStep(stage, archivedStepResult.summary, language) : null;
+    const view = run && archivedStepResult ? viewArchivedStep(stage, archivedStepResult.summary) : null;
     if (view && stage === 4 && run.source === "live") {
-      view.tableTitle = local("顯著基因與變異關聯", "Significant gene–variant associations");
+      view.tableTitle = "Significant gene–variant associations";
     }
     if (view && stage === 5 && run.source === "live") {
-      view.tableTitle = local("候選連線與出現頻率", "Candidate edges and frequencies");
+      view.tableTitle = "Candidate edges and frequencies";
     }
     const state = archivedStepPanel.dataset.runState;
     const name = run ? stageData[stage - 1].name : "";
@@ -1943,30 +2168,30 @@
     const definition = (label, value, identity = "") =>
       `<dt>${escapeHistory(label)}</dt><dd${identity}>${escapeHistory(recorded(value))}</dd>`;
 
-    archivedStepPanel.querySelector("h2").textContent = language ? englishLabel(name) : name;
+    archivedStepPanel.querySelector("h2").textContent = name;
     const liveIncomplete = state === "empty" && run?.source === "live" && job?.state !== "completed";
     archivedStepStatus.textContent = liveIncomplete
-      ? genotypeHistoryState(job?.state)[language] : savedStepStates[state]?.[language] ?? "";
+      ? genotypeHistoryState(job?.state) : savedStepStates[state] ?? "";
     archivedStepStatus.hidden = !savedStepStates[state];
-    archivedStepRetry.hidden = state !== "error";
+    archivedStepRetry.hidden = !["error", "timeout"].includes(state);
     archivedStepChart.hidden = !view || !view.bars.length;
     archivedStepDock.hidden = !view;
     archivedStepMetrics.innerHTML = run ? [
-      [local("階段", "Stage"), local(`第 ${stage} 階段`, `Stage ${stage}`)],
-      [run.source === "live" ? local("執行", "Run") : local("封存執行", "Archived run"), run.name[language]],
-      ...(run.source === "live" ? [[local("狀態", "Status"), genotypeHistoryState(job?.state)[language]]] : []),
+      ["Stage", `Stage ${stage}`],
+      [run.source === "live" ? "Run" : "Archived run", run.name],
+      ...(run.source === "live" ? [["Status", genotypeHistoryState(job?.state)]] : []),
       ...(view?.metrics.map(([label, value]) => [label, countLabel.format(value)]) ?? []),
     ].map(([label, value]) => definition(label, value)).join("") : "";
 
     const resources = [
-      ["cpus", stage === 5 ? local("監控工作核心數", "Controller job cores") : local("排程工作核心數", "Scheduled job cores")],
-      ["mem_gb", stage === 5 ? local("監控工作記憶體（GB）", "Controller job memory (GB)") : local("排程工作記憶體（GB）", "Scheduled job memory (GB)")],
-      ["time", stage === 5 ? local("監控工作時間上限", "Controller job time limit") : local("排程工作時間上限", "Scheduled job time limit")],
+      ["cpus", stage === 5 ? "Controller job cores" : "Scheduled job cores"],
+      ["mem_gb", stage === 5 ? "Controller job memory (GB)" : "Scheduled job memory (GB)"],
+      ["time", stage === 5 ? "Controller job time limit" : "Scheduled job time limit"],
     ];
     const settings = Object.entries({...job?.settings, ...job?.options});
     archivedStepSettings.innerHTML = job ? [
-      definition(local("工作編號", "Job ID"), job.job_id),
-      ...settings.map(([key, value]) => definition(savedSettingLabels[key]?.[language] ?? key,
+      definition("Job ID", job.job_id),
+      ...settings.map(([key, value]) => definition(savedSettingLabels[key] ?? key,
         typeof value === "object" && value !== null ? JSON.stringify(value) : value,
         ` data-stage-setting="${escapeHistory(key)}" title="${escapeHistory(key)}"`)),
       ...resources.filter(([field]) => job.resources?.[field] != null).map(([field, label]) =>
@@ -1980,7 +2205,8 @@
     }
     archivedStepChart.querySelector("h3").textContent = view.title;
     archivedStepChart.querySelector("figcaption").textContent = view.caption;
-    archivedStepPlot.innerHTML = view.bars.length ? countChart(view.bars, view.step, view.axis, view.title) : "";
+    archivedStepPlot.innerHTML = view.bars.length
+      ? countChart(view.bars, view.step, view.axis, view.title, view.frequencyAxis) : "";
     archivedStepPanel.querySelector("[data-stage-table-title]").textContent = view.tableTitle;
     archivedStepTable.setAttribute("aria-label", view.tableTitle);
     archivedStepTable.tHead.rows[0].innerHTML = view.headers.map((title) =>
@@ -2009,11 +2235,8 @@
     archivedStepPanel.dataset.runState = "loading";
     renderArchivedStep();
     try {
-      const params = new URLSearchParams({run: runId, stage});
-      params.set("source", run.source);
-      const result = await getArchivedResult("/stage/results?" + params, {signal: request.signal});
+      const result = await getSavedStageResult(run, stage, request.signal);
       if (request.signal.aborted) return;
-      if (result.run_id !== runId || result.stage !== stage) throw new Error("Result does not match the selected run and stage");
       archivedStepResult = result;
       rememberTimelineResult(run, stage, result);
       archivedStepPanel.dataset.runId = runId;
@@ -2021,7 +2244,7 @@
       archivedStepPanel.dataset.runState = "ready";
     } catch (error) {
       if (request.signal.aborted) return;
-      archivedStepPanel.dataset.runState = error.status === 404 ? "empty" : "error";
+      archivedStepPanel.dataset.runState = archivedResultErrorState(error);
       rememberTimelineResult(run, stage, null, archivedStepPanel.dataset.runState);
     }
     renderArchivedStep();
@@ -2052,11 +2275,8 @@
     stage3HistoryPanel.dataset.runState = "loading";
     renderStage3History();
     try {
-      const params = new URLSearchParams({run: runId});
-      params.set("source", run.source);
-      const result = await getArchivedResult("/stage3/results?" + params, {signal: request.signal});
+      const result = await getSavedStageResult(run, 3, request.signal);
       if (request.signal.aborted) return;
-      if (result.run_id !== runId) throw new Error("Stage 3 result belongs to a different run");
       stage3Result = result;
       rememberTimelineResult(run, 3, result);
       stage3HistoryPanel.dataset.runId = runId;
@@ -2064,39 +2284,31 @@
       stage3HistoryPanel.dataset.runState = "ready";
     } catch (error) {
       if (request.signal.aborted) return;
-      stage3HistoryPanel.dataset.runState = error.status === 404 ? "empty" : "error";
+      stage3HistoryPanel.dataset.runState = archivedResultErrorState(error);
       rememberTimelineResult(run, 3, null, stage3HistoryPanel.dataset.runState);
     }
     renderStage3History();
   }
   stage3Retry.addEventListener("click", () => void loadStage3Run());
 
-  const newChatTitle = ["新對話", "New chat"];
-  const idleChatStatus = ["SIGNET Agent · 本機服務已啟動", "SIGNET Agent · Local service ready"];
-  const chatOutcomes = {completed: ["已結束", "Ended"], failed: ["失敗", "Failed"], needs_review: ["需要確認", "Needs review"]};
+  const newChatTitle = "New chat";
+  const idleChatStatus = "SIGNET Agent · Local service ready";
+  const chatOutcomes = {completed: "Ended", failed: "Failed", needs_review: "Needs review", cancelled: "Stopped"};
   const chatRecords = [];
-  const chatLabels = new Map();
-  let activeChat, chatBusy = false;
-
-  function renderChatLanguage() {
-    for (const [node, labels] of chatLabels) node.textContent = labels[root.lang === "en" ? 1 : 0];
-  }
-
-  function chatLabel(node, label) {
-    if (Array.isArray(label)) {
-      chatLabels.set(node, label);
-      node.textContent = label[root.lang === "en" ? 1 : 0];
-    } else {
-      chatLabels.delete(node);
-      node.textContent = label;
-    }
-  }
+  const sendButton = byId("send");
+  const stopButton = byId("stop");
+  const deleteChatDialog = byId("delete-chat-dialog");
+  const deleteChatConfirm = byId("delete-chat-confirm");
+  const deleteChatCancel = byId("delete-chat-cancel");
+  const deleteChatError = byId("delete-chat-error");
+  let activeChat, chatBusy = false, stopActiveChat;
+  let nextChatRecordId = 0;
+  let chatToDelete;
 
   function createMessage(className, text) {
     const message = document.createElement("p");
     message.className = className;
-    if (Array.isArray(text)) chatLabel(message, text);
-    else message.textContent = text;
+    message.textContent = text;
     return message;
   }
 
@@ -2106,10 +2318,10 @@
     event.open = !record.events.childElementCount;
     event.innerHTML = `<summary><i data-lucide="terminal" aria-hidden="true"></i><strong></strong>
       <span class="ml-chat-event-state"></span><i class="ml-chat-event-arrow" data-lucide="chevron-down" aria-hidden="true"></i></summary><p></p>`;
-    chatLabel(event.querySelector("strong"), title);
+    event.querySelector("strong").textContent = title;
     const status = event.querySelector(".ml-chat-event-state");
     const log = event.querySelector("p");
-    chatLabel(status, state);
+    status.textContent = state;
     log.textContent = result;
     record.emptyEvents.hidden = true;
     record.events.append(event);
@@ -2121,17 +2333,23 @@
     let data;
     try { data = JSON.parse(line.slice(12)); } catch { return false; }
     if (!/^[a-f0-9]{32}$/.test(data.operation_id) || !/^[\w]{1,100}$/.test(data.tool_name)) return false;
-    const states = {running: ["執行中", "Running"], completed: ["完成", "Completed"], failed: ["失敗", "Failed"], cancelled: ["已取消", "Cancelled"], needs_review: ["需要確認", "Needs review"]};
+    const states = {running: "Running", completed: "Completed", failed: "Failed", cancelled: "Cancelled", needs_review: "Needs review"};
     if (!states[data.status]) return false;
     let row = operations.get(data.operation_id);
     if (!row) { row = appendChatEvent(record, data.tool_name, "", states[data.status]); operations.set(data.operation_id, row); }
-    chatLabel(row.status, states[data.status]);
+    row.status.textContent = states[data.status];
     const elapsed = Number.isFinite(data.elapsed_ms) && data.elapsed_ms >= 0 ? `${(data.elapsed_ms / 1000).toFixed(2)} s` : "…";
-    chatLabel(row.log, [`驗證參數並呼叫工具（不顯示參數值）。\n耗時：${elapsed}\n結果：${String(data.result_summary || "—").slice(0, 300)}`, `Validate parameters and invoke tool (values hidden).\nElapsed: ${elapsed}\nResult: ${String(data.result_summary || "—").slice(0, 300)}`]);
+    row.log.textContent = `Validate parameters and invoke tool (values hidden).\nElapsed: ${elapsed}\nResult: ${String(data.result_summary || "—").slice(0, 300)}`;
     return true;
   }
 
   const chatDrawers = ["chat-list", "chat-activity"];
+  function scrollChatToEnd() {
+    if (byId("chat-transcripts").hidden) return;
+    const thread = byId("thread");
+    thread.scrollTop = thread.scrollHeight;
+  }
+
   function showChatDrawer(key) {
     for (const drawer of chatDrawers) {
       byId(drawer).hidden = drawer !== key;
@@ -2149,69 +2367,174 @@
       chat.button.setAttribute("aria-pressed", String(active));
       chat.transcript.hidden = chat.activity.hidden = !active;
     }
-    chatLabel(byId("chat-title"), record.title);
-    chatLabel(byId("chat-status"), chatOutcomes[record.outcome] ?? idleChatStatus);
+    byId("chat-title").textContent = record.title;
+    byId("chat-status").textContent = chatOutcomes[record.outcome] ?? idleChatStatus;
     input.value = record.draft;
     showChatDrawer(null);
-    if (record.transcript.lastElementChild) {
-      byId("thread").scrollTop = byId("thread").scrollHeight;
-    }
+    scrollChatToEnd();
   }
 
   function createChat(saved) {
     const title = saved?.title ?? newChatTitle;
+    const row = document.createElement("div");
+    row.className = "ml-chat-record";
+    row.hidden = !saved;
     const button = document.createElement("button");
     button.type = "button";
     button.className = "ml-nav-list-item";
     button.innerHTML = '<i data-lucide="message-square" aria-hidden="true"></i><span><strong></strong><small></small></span>';
-    chatLabel(button.querySelector("strong"), title);
-    chatLabel(button.querySelector("small"), ["已存對話", "Saved conversation"]);
-    button.hidden = !saved;
+    button.querySelector("strong").textContent = title;
+    button.querySelector("small").textContent = "Saved conversation";
     const transcript = document.createElement("div");
-    transcript.id = `ml-chat-record-${chatRecords.length + 1}`;
+    transcript.id = `ml-chat-record-${++nextChatRecordId}`;
     button.setAttribute("aria-controls", transcript.id);
+    const deleteButton = document.createElement("button");
+    deleteButton.type = "button";
+    deleteButton.className = "ml-icon-button ml-chat-delete";
+    deleteButton.setAttribute("data-delete-chat", "");
+    deleteButton.setAttribute("aria-label", `Delete chat “${title}”`);
+    deleteButton.title = "Delete chat";
+    deleteButton.innerHTML = '<i data-lucide="trash-2" aria-hidden="true"></i>';
     const activity = document.createElement("div");
-    const emptyEvents = createMessage("ml-saved-reply", ["目前沒有執行活動。", "No activity yet."]);
+    const emptyEvents = createMessage("ml-saved-reply", "No activity yet.");
     const eventList = document.createElement("div");
     eventList.className = "ml-chat-event-list";
     activity.append(emptyEvents, eventList);
-    const record = {session: saved?.session ?? crypto.randomUUID(), loaded: !saved, title, button, transcript,
+    const record = {session: saved?.session ?? crypto.randomUUID(), loaded: !saved, title, row, button, deleteButton, transcript,
       activity, events: eventList, emptyEvents, draft: ""};
     chatRecords.push(record);
     button.addEventListener("click", () => void selectSavedChat(record));
-    byId("chat-records").append(button);
+    deleteButton.addEventListener("click", () => askToDeleteChat(record));
+    row.append(button, deleteButton);
+    byId("chat-records").append(row);
     byId("chat-transcripts").append(transcript);
     byId("chat-events").append(activity);
     return record;
   }
 
   function setChatBusy(busy) {
+    const sendHadFocus = document.activeElement === sendButton;
     chatBusy = busy;
-    byId("send").disabled = byId("new").disabled = busy;
-    for (const {button} of chatRecords) button.disabled = busy;
+    const canStop = busy && Boolean(stopActiveChat);
+    sendButton.hidden = canStop;
+    stopButton.hidden = !canStop;
+    sendButton.disabled = byId("new").disabled = busy;
+    if (canStop && sendHadFocus) stopButton.focus({preventScroll: true});
+    for (const {button, deleteButton} of chatRecords) button.disabled = deleteButton.disabled = busy;
+  }
+  stopButton.addEventListener("click", () => stopActiveChat?.());
+
+  function askToDeleteChat(record) {
+    if (chatBusy || record.row.hidden || deleteChatDialog.open) return;
+    chatToDelete = record;
+    byId("delete-chat-name").textContent = record.title;
+    deleteChatError.hidden = true;
+    deleteChatDialog.showModal();
+  }
+
+  deleteChatCancel.addEventListener("click", () => {
+    chatToDelete = null;
+    deleteChatDialog.close();
+  });
+  deleteChatDialog.addEventListener("cancel", event => {
+    if (chatBusy) event.preventDefault();
+    else chatToDelete = null;
+  });
+  byId("delete-chat-form").addEventListener("submit", async event => {
+    event.preventDefault();
+    const record = chatToDelete;
+    if (!deleteChatDialog.open || !record || chatBusy) return;
+    setChatBusy(true);
+    deleteChatError.hidden = true;
+    deleteChatConfirm.disabled = deleteChatCancel.disabled = true;
+    deleteChatConfirm.textContent = "Deleting…";
+    let focus;
+    try {
+      const response = await fetch(`/chat/${encodeURIComponent(record.session)}`, {
+        method: "DELETE", headers: {"X-Chat-Token": chatToken},
+      });
+      if (!response.ok) throw Error(await readChatError(response));
+      const reply = await response.json().catch(() => null);
+      if (reply?.deleted !== record.session) throw Error("Could not confirm deletion. Try again.");
+
+      record.row.remove();
+      record.transcript.remove();
+      record.activity.remove();
+      chatRecords.splice(chatRecords.indexOf(record), 1);
+      if (record === activeChat) {
+        openChat(createChat());
+        showChatDrawer("chat-list");
+        globalThis.lucide?.createIcons();
+      }
+      byId("empty-chats").hidden = chatRecords.some(chat => !chat.row.hidden);
+      byId("chat-status").textContent = "Chat deleted.";
+      chatToDelete = null;
+      deleteChatDialog.close();
+      focus = byId("chat-list-toggle");
+    } catch (error) {
+      deleteChatError.textContent = error.message || "Could not delete this chat. Try again.";
+      deleteChatError.hidden = false;
+      focus = deleteChatConfirm;
+    } finally {
+      deleteChatConfirm.textContent = "Delete chat";
+      deleteChatConfirm.disabled = deleteChatCancel.disabled = false;
+      setChatBusy(false);
+      focus?.focus();
+    }
+  });
+
+  function appendChatMessage(record, sender, body) {
+    const message = document.createElement("div");
+    message.className = "ml-chat-message";
+    message.dataset.chatSender = sender;
+    const isUser = sender === "user";
+    const author = createMessage("ml-chat-author", isUser ? "You" : "Agent");
+    if (!isUser) {
+      const icon = document.createElement("i");
+      icon.dataset.lucide = "bot";
+      icon.setAttribute("aria-hidden", "true");
+      author.prepend(icon);
+    }
+    message.append(author, body);
+    record.transcript.append(message);
   }
 
   function createAgentReply(record) {
     const reply = document.createElement("div");
     reply.className = "ml-saved-reply ml-live-reply";
-    record.transcript.append(reply);
+    appendChatMessage(record, "assistant", reply);
     return reply;
   }
 
-  function renderAgentAnswer(reply, text) {
-    chatLabels.delete(reply);
-    reply.innerHTML = renderMarkdown(text);
+  const legacyModelFallback = /^\*\*Model fallback:\*\* `[a-z0-9.-]+` is unavailable \([^\r\n()]+\); this turn uses `([a-z0-9.-]{1,80})`\. Completed tools will not be rerun\.(?:\r?\n\r?\n|$)/;
+
+  function showModelFallback(reply, model) {
+    if (typeof model !== "string" || !/^[a-z0-9][a-z0-9.-]{0,79}$/.test(model)) return;
+    const message = reply.parentElement;
+    if (message.previousElementSibling?.dataset.chatNotice === "model-fallback") return;
+    const notice = document.createElement("p");
+    notice.className = "ml-chat-notice";
+    notice.dataset.chatNotice = "model-fallback";
+    notice.textContent = `Switched to ${model}`;
+    message.before(notice);
+  }
+
+  function renderAgentAnswer(reply, text, modelFallback) {
+    const legacy = legacyModelFallback.exec(text);
+    showModelFallback(reply, modelFallback ?? legacy?.[1]);
+    reply.innerHTML = renderMarkdown(legacy ? text.slice(legacy[0].length) : text);
   }
 
   async function readChatError(response) {
     const {error} = await response.json().catch(() => ({}));
-    return error ?? (root.lang === "en" ? "The local service rejected the request." : "本機服務拒絕請求。");
+    return error ?? "The local service rejected the request.";
   }
 
   function loadChat(record, saved) {
-    for (const {role, text} of saved.messages ?? []) {
-      if (role === "user") record.transcript.append(createMessage("ml-message", text));
-      else renderAgentAnswer(createAgentReply(record), text);
+    for (const {role, text, model_fallback} of saved.messages ?? []) {
+      if (role === "user") appendChatMessage(record, "user", createMessage("ml-message", text));
+      else if (role === "notice") record.transcript.append(createMessage("ml-chat-notice", text));
+      else renderAgentAnswer(createAgentReply(record), text, model_fallback);
     }
     for (const events of saved.events ?? []) {
       const operations = new Map();
@@ -2221,12 +2544,13 @@
           try { const saved = JSON.parse(line.slice(12)); if (chatOutcomes[saved.status]) outcome = saved.status; } catch {}
           return false;
         }
+        // Older saved turns may predate the structured outcome record.
         if (/回合失敗|Turn failed/.test(line)) outcome = "failed";
         else if (outcome !== "failed" && /回合需要確認|Turn needs review/.test(line)) outcome = "needs_review";
         return !toolActivity(record, line, operations);
       });
       record.outcome = outcome;
-      appendChatEvent(record, ["已存執行紀錄", "Saved activity"], logs.join("\n"), chatOutcomes[outcome]);
+      appendChatEvent(record, "Saved activity", logs.join("\n"), chatOutcomes[outcome]);
     }
     record.loaded = true;
   }
@@ -2243,7 +2567,7 @@
       globalThis.lucide?.createIcons();
       byId("chat-list-toggle").focus({preventScroll: true});
     } catch (error) {
-      chatLabel(byId("chat-status"), error.message);
+      byId("chat-status").textContent = error.message;
     } finally {
       setChatBusy(false);
     }
@@ -2259,117 +2583,141 @@
     byId(drawer + "-toggle").addEventListener("click", () => showChatDrawer(byId(drawer).hidden ? drawer : null));
   }
 
-  // Bind generated and static UI before any user messages are added.
-  const translations = [];
-  function bindTranslation(source, write, englishOverride, chineseOverride) {
-    const label = source.trim();
-    if (!label) return;
-    const english = englishOverride ?? englishLabel(label);
-    const chinese = chineseOverride ?? toChinese.get(label) ?? label;
-    if (english === chinese) return;
-    translations.push((inEnglish) => write(source.replace(label, () => inEnglish ? english : chinese)));
-  }
-
-  const textNodes = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-  for (let node = textNodes.nextNode(); node; node = textNodes.nextNode()) {
-    const parent = node.parentElement;
-    if (!parent || parent.closest("style, script, [data-live-language]")) continue;
-    bindTranslation(node.data, (value) => { node.data = value; }, parent.dataset.enText, parent.dataset.zhText);
-  }
-  for (const attribute of ["aria-label", "data-tooltip", "placeholder"]) {
-    for (const element of root.querySelectorAll(`[${attribute}]`)) {
-      bindTranslation(
-        element.getAttribute(attribute),
-        (value) => element.setAttribute(attribute, value),
-        element.getAttribute(`data-en-${attribute}`),
-        element.getAttribute(`data-zh-${attribute}`),
-      );
-    }
-  }
-
-  const languageButton = byId("language");
   byId("open-model-settings").addEventListener("click", () => {
     window.dispatchEvent(new CustomEvent("workspace-open-model-settings"));
   });
   const modelChip = byId("model-chip");
   modelChip.textContent = modelChip.title = chatModel;
-  byId("model-select").add(new Option(chatModel));
 
   const datasetSelect = byId("dataset-select");
+  const datasetEditor = byId("dataset-editor");
+  const datasetFiles = byId("dataset-files");
   const datasetForm = byId("dataset-form");
+  const datasetSaving = datasetForm.querySelector(".ml-dataset-saving span");
+  const duplicateDatasetName = "A dataset with this name already exists.";
   const datasetAdd = byId("dataset-add");
+  const datasetDelete = byId("dataset-delete");
+  const deleteDatasetDialog = byId("delete-dataset-dialog");
+  const deleteDatasetCancel = byId("delete-dataset-cancel");
+  const deleteDatasetConfirm = byId("delete-dataset-confirm");
+  const deleteDatasetError = byId("delete-dataset-error");
   const datasetName = byId("dataset-name");
   const datasetError = byId("dataset-error");
   const datasetCatalogNotice = byId("dataset-catalog-error");
   let creatingDataset = false;
+  let datasetToDelete, deletingDataset = false;
   let datasetFormError = "";
 
   function renderDatasetLabels() {
     datasetSelect.replaceChildren(...datasets.map((dataset) => {
       const option = document.createElement("option");
       option.value = dataset.id;
-      option.textContent = localDatasetName(dataset);
+      option.textContent = dataset.name;
       return option;
     }));
     datasetSelect.value = activeDataset.id;
+    if (!datasets.length) datasetSelect.add(new Option(emptyDataset.name, ""));
     datasetSelect.disabled = !datasetCatalogReady || !datasets.length;
     datasetAdd.disabled = creatingDataset;
-    const label = localDatasetName(activeDataset) || (root.lang === "en" ? "Datasets" : "資料組");
+    datasetDelete.disabled = !datasetCatalogReady || !activeDataset.persisted;
+    const label = activeDataset.name || "Datasets";
     byId("history-dataset-name").textContent = historyScope === "current" ? label
-      : historyScope === "unclassified" ? (root.lang === "en" ? "Unclassified runs" : "未分類的執行") : (root.lang === "en" ? "All runs" : "全部執行");
-    byId("history-scope-note").textContent = historyScope === "current" ? (root.lang === "en" ? "Selected dataset" : "目前資料組")
-      : (root.lang === "en" ? "All recorded sources" : "所有已保存的來源");
+      : historyScope === "unclassified" ? "Unclassified runs" : "All runs";
     byId("stage-dataset-title").textContent = label;
-    datasetError.textContent = datasetFormError || (root.lang === "en" ? "Enter a dataset name." : "請輸入資料組名稱。");
+    datasetError.textContent = datasetFormError || "Enter a dataset name.";
     datasetCatalogNotice.textContent = datasetCatalogError;
     datasetCatalogNotice.hidden = !datasetCatalogError;
   }
 
-  function setLanguage(lang) {
-    root.lang = lang;
-    const inEnglish = lang === "en";
-    for (const translate of translations) translate(inEnglish);
-    renderChatLanguage();
-    analysisNetwork.dispatchEvent(new Event("lens:language-changed"));
-    renderHistoryLanguage();
-    renderHistoryStatus();
-    renderStage6Status();
-    renderStage3History();
-    renderArchivedStep();
-    syncGenotypeContext();
-    renderDatasetLabels();
-    syncInputFiles();
-    languageButton.textContent = inEnglish ? "中文" : "EN";
-    languageButton.lang = inEnglish ? "zh-Hant" : "en";
-    languageButton.setAttribute("aria-label", inEnglish ? "切換為繁體中文" : "Switch to English");
-  }
-  languageButton.addEventListener("click", () => setLanguage(root.lang === "en" ? "zh-Hant" : "en"));
-  setLanguage(root.lang);
-
   function setSidebarOpen(open) {
-    byId("chat-panel").hidden = !open;
+    const sidebar = byId("chat-panel");
+    sidebar.inert = !open;
+    sidebar.hidden = !open;
     app.toggleAttribute("data-chat-closed", !open);
   }
 
+  function syncContextChat() {
+    const docked = ["data", "history"].includes(app.dataset.nav);
+    contextChat.hidden = !docked || !contextChatOpen;
+    showContextChat.hidden = !docked || contextChatOpen;
+    showContextChat.setAttribute("aria-expanded", String(docked && contextChatOpen));
+    hideContextChat.hidden = !docked;
+
+    if (docked) {
+      agentView.hidden = false;
+      if (agentView.parentElement !== contextChat) {
+        contextChat.append(agentView);
+        agentView.removeAttribute("role");
+        agentView.removeAttribute("aria-labelledby");
+        if (contextChatOpen) scrollChatToEnd();
+      }
+    } else if (agentView.parentElement === contextChat) {
+      byId("stage-view").before(agentView);
+      agentView.setAttribute("role", "tabpanel");
+      agentView.setAttribute("aria-labelledby", tabs[0].id);
+    }
+  }
+
+  showContextChat.addEventListener("click", () => {
+    contextChatOpen = true;
+    syncContextChat();
+    scrollChatToEnd();
+    hideContextChat.focus({preventScroll: true});
+  });
+
+  function animateContextChatCollapse() {
+    if (typeof contextChat.animate !== "function" || window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+    const {offsetWidth: width, offsetHeight: height} = contextChat;
+    // Measure the launcher before the next paint so it appears only after the dock shrinks.
+    showContextChat.hidden = false;
+    const {offsetWidth: buttonWidth, offsetHeight: buttonHeight} = showContextChat;
+    showContextChat.hidden = true;
+    if (!width || !height || !buttonWidth || !buttonHeight) return;
+    return contextChat.animate([
+      {scale: "1", opacity: 1},
+      {scale: `${buttonWidth / width} ${buttonHeight / height}`, opacity: .35},
+    ], {duration: 240, easing: "cubic-bezier(.4, 0, .2, 1)", fill: "forwards"});
+  }
+
+  hideContextChat.addEventListener("click", async () => {
+    if (contextChat.hidden || contextChat.inert) return;
+    const previousFocus = document.activeElement;
+    const animation = animateContextChatCollapse();
+    if (animation) {
+      contextChat.inert = true;
+      await animation.finished.catch(() => {});
+    }
+    contextChatOpen = false;
+    syncContextChat();
+    animation?.cancel();
+    contextChat.inert = false;
+    if (!showContextChat.hidden && (document.activeElement === previousFocus || document.activeElement === document.body)) {
+      showContextChat.focus({preventScroll: true});
+    }
+  });
+
   const selectedRuns = new Map();
   const historySelectionKey = () => historyScope === "current" ? `dataset:${activeDataset.id}` : historyScope;
-  function renderHistoryStatus() {
-    const copy = historyState === "loading"
-      ? ["讀取執行紀錄…", "Loading run history…", "", ""]
+  function renderHistoryStatus(runCount = matchingHistoryRuns().length) {
+    const [title, note] = historyState === "loading"
+      ? ["Loading run history…", ""]
       : historyState === "error"
-        ? ["無法讀取執行紀錄", "Could not load run history", "", ""]
-        : historyScope === "current" ? ["尚無執行紀錄", "No runs yet", "這裡會顯示目前資料組的執行紀錄。", "Runs for the selected dataset will appear here."]
-          : historyScope === "unclassified" ? ["尚無未分類紀錄", "No unclassified runs", "未記錄資料組歸屬的執行會顯示在這裡。", "Runs without recorded dataset ownership will appear here."]
-            : ["尚無執行紀錄", "No runs yet", "所有已保存的執行會顯示在這裡。", "All saved runs will appear here."];
-    const language = root.lang === "en" ? 1 : 0;
-    byId("empty-run-list").textContent = byId("empty-history-title").textContent = copy[language];
-    byId("empty-history-note").textContent = copy[language + 2];
+        ? ["Could not load run history", ""]
+        : historyScope === "current" ? ["No runs yet", "Runs for the selected dataset will appear here."]
+          : historyScope === "unclassified" ? ["No unclassified runs", "Runs without recorded dataset ownership will appear here."]
+            : ["No runs yet", "All saved runs will appear here."];
+    byId("empty-run-list").textContent = byId("empty-history-title").textContent = title;
+    byId("empty-history-note").textContent = note;
     byId("history-retry").hidden = historyState !== "error";
+    byId("history-scope-note").textContent = historyState !== "ready" && runCount === 0 ? ""
+      : `${runCount} ${runCount === 1 ? "run" : "runs"}`;
   }
 
   function updateHistoryView() {
     const inHistory = app.dataset.nav === "history";
     const savedAnalysis = savedAnalysisView();
+    const activeStage = activeStageButton()?.dataset.stage;
+    byId("start").hidden = Boolean(activeStage) || !["analysis", "settings"].includes(app.dataset.nav);
     const matchingRuns = matchingHistoryRuns();
     const previousSelection = selectedRuns.get(historySelectionKey());
     const selected = matchingRuns.find(run => historyKey(run) === previousSelection);
@@ -2393,23 +2741,23 @@
     const genotypePanel = root.querySelector("#lens-stage1");
     genotypePanel.classList.toggle("ml-workspace", !showGenotype);
     genotypePanel.classList.toggle("ml-nav-workspace", showGenotype);
-    genotypePanel.hidden = inHistory || savedAnalysis ? !showGenotype : timeline.querySelector('[aria-current="step"]').dataset.stage !== "1";
+    genotypePanel.hidden = inHistory || savedAnalysis ? !showGenotype : activeStage !== "1";
     const expressionPanel = root.querySelector("#lens-stage2");
     expressionPanel.classList.toggle("ml-workspace", !showExpression);
     expressionPanel.classList.toggle("ml-nav-workspace", showExpression);
-    expressionPanel.hidden = inHistory || savedAnalysis ? !showExpression : timeline.querySelector('[aria-current="step"]').dataset.stage !== "2";
+    expressionPanel.hidden = inHistory || savedAnalysis ? !showExpression : activeStage !== "2";
     const adjustmentPanel = root.querySelector("#lens-stage3");
     adjustmentPanel.classList.toggle("ml-workspace", !showAdjustment);
     adjustmentPanel.classList.toggle("ml-nav-workspace", showAdjustment);
-    adjustmentPanel.hidden = inHistory || savedAnalysis ? !showAdjustment : timeline.querySelector('[aria-current="step"]').dataset.stage !== "3";
+    adjustmentPanel.hidden = inHistory || savedAnalysis ? !showAdjustment : activeStage !== "3";
     const cisPanel = root.querySelector("#lens-stage4");
     cisPanel.classList.toggle("ml-workspace", !showCis);
     cisPanel.classList.toggle("ml-nav-workspace", showCis);
-    cisPanel.hidden = inHistory || savedAnalysis ? !showCis : timeline.querySelector('[aria-current="step"]').dataset.stage !== "4";
+    cisPanel.hidden = inHistory || savedAnalysis ? !showCis : activeStage !== "4";
     const networkPanel = root.querySelector("#lens-stage5");
     networkPanel.classList.toggle("ml-workspace", !showNetworkRun);
     networkPanel.classList.toggle("ml-nav-workspace", showNetworkRun);
-    networkPanel.hidden = inHistory || savedAnalysis ? !showNetworkRun : timeline.querySelector('[aria-current="step"]').dataset.stage !== "5";
+    networkPanel.hidden = inHistory || savedAnalysis ? !showNetworkRun : activeStage !== "5";
     runDetails.hidden = !inHistory || !selectedId || showResult;
     byId("empty-history").hidden = !inHistory || Boolean(selectedId);
     byId("empty-run-list").hidden = Boolean(selectedId);
@@ -2423,8 +2771,8 @@
     // One graph and table render the same run in both the analysis and history views.
     analysisNetwork.classList.toggle("ml-workspace", !showNetwork);
     analysisNetwork.classList.toggle("ml-nav-workspace", showNetwork);
-    analysisNetwork.hidden = inHistory || savedAnalysis ? !showNetwork : timeline.querySelector('[aria-current="step"]').dataset.stage !== "6";
-    renderHistoryStatus();
+    analysisNetwork.hidden = inHistory || savedAnalysis ? !showNetwork : activeStage !== "6";
+    renderHistoryStatus(matchingRuns.length);
     syncGenotypeContext();
     syncHistoryLogs();
     renderRunTimeline();
@@ -2434,15 +2782,11 @@
     const isExample = activeDataset.id === exampleDataset.id;
     const hasSavedResults = activeDataset.persisted || isExample || runsForDataset().length > 0;
     app.toggleAttribute("data-no-analysis", !hasSavedResults && historyState === "ready");
-    byId("empty-analysis").hidden = hasSavedResults || historyState !== "ready" || !["analysis", "settings"].includes(app.dataset.nav);
+    byId("empty-analysis").hidden = !activeStageButton() || hasSavedResults || historyState !== "ready" ||
+      !["analysis", "settings"].includes(app.dataset.nav);
     timeline.hidden = !hasSavedResults;
     byId("stage-header").querySelector("span").hidden = !hasSavedResults;
     byId("empty-stage").hidden = hasSavedResults || historyState !== "ready";
-    // Manual stages and saved network results share the existing stage workspace.
-    const activeStage = timeline.querySelector('[aria-current="step"]').dataset.stage;
-    if (!["1", "2", "3", "4", "5", "6"].includes(activeStage)) {
-      showStage(stageButtons[0], true);
-    }
     for (const button of stageButtons) {
       button.closest(".ml-stage-entry").hidden = !hasSavedResults;
     }
@@ -2460,18 +2804,17 @@
         getArchivedResult("/stage6/history"), requestDataset("/signet/datasets"),
       ]);
       if (request !== historyRequest) return;
-      if (!Array.isArray(savedDatasets)) throw new Error(root.lang === "en"
-        ? "The dataset catalog is unavailable." : "資料組清單無法使用。");
+      if (!Array.isArray(savedDatasets)) throw new Error("The dataset catalog is unavailable.");
       datasetCatalogReady = true;
       datasetCatalogError = "";
       // A catalog read started before a successful save must not replace the newer canonical response.
       if (catalogRevision === datasetRevision) {
         const catalog = savedDatasets.map(makeDataset);
-        if (!catalog.some(({id}) => id === exampleDataset.id)) catalog.unshift(makeDataset(exampleDataset));
         datasets.splice(0, datasets.length, ...catalog);
-        activeDataset = datasets.find(({id}) => id === activeDataset.id) ?? datasets[0];
+        activeDataset = datasets.find(({id}) => id === activeDataset.id) ?? datasets[0] ?? emptyDataset;
       }
-      historyRuns = [...runs].sort((a, b) => historyTime(b) - historyTime(a));
+      historyRuns = runs.map(run => ({...run, name: savedDisplayName(run.name) ?? run.run_id,
+        dataset_name: savedDisplayName(run.dataset_name)})).sort((a, b) => historyTime(b) - historyTime(a));
       historyState = "ready";
       renderHistoryRecords();
       if (!analysisRunByDataset.has(activeDataset.id)) {
@@ -2492,7 +2835,8 @@
       datasetCatalogError = error.message;
     }
     renderDatasetLabels();
-    syncInputFiles(true);
+    syncInputFiles();
+    syncDatasetReferences();
     updateAnalysisView();
     updateHistoryView();
     requestedStage6Run = null;
@@ -2508,7 +2852,7 @@
     if (app.dataset.nav !== "history" || !run) return;
     selectedRuns.set(historySelectionKey(), historyKey(run));
     clearHistoryResult();updateHistoryView();
-    runDetails.querySelector(`[data-run-stage="${stage}"][data-history-id="${CSS.escape(historyKey(run))}"]`)?.focus({preventScroll: true});
+    focusHistoryStage(historyKey(run), stage);
   }
   const openGenotypeHistory = runId => openWorkspaceHistory(runId, 1);
   const openExpressionHistory = runId => openWorkspaceHistory(runId, 2);
@@ -2541,14 +2885,29 @@
     }
   }
 
+  function setDatasetFormOpen(open) {
+    datasetEditor.hidden = !open;
+    datasetFiles.hidden = open;
+    datasetAdd.setAttribute("aria-expanded", String(open));
+  }
+
   function closeDatasetForm() {
-    if (creatingDataset) return;
-    datasetForm.hidden = true;
-    datasetAdd.setAttribute("aria-expanded", "false");
+    if (creatingDataset || datasetEditor.hidden) return;
+    setDatasetFormOpen(false);
     datasetForm.reset();
+    datasetName.removeAttribute("aria-invalid");
     datasetError.hidden = true;
     datasetFormError = "";
     datasetForm.dataset.saveState = "idle";
+  }
+
+  function focusDatasetPane(control) {
+    if (app.dataset.nav !== "data") return;
+    if (app.hasAttribute("data-chat-closed")) {
+      datasetFiles.querySelector("article:not([hidden]) h2").focus();
+    } else {
+      control.focus();
+    }
   }
 
   function selectDataset(dataset) {
@@ -2558,10 +2917,11 @@
       window.dispatchEvent(new Event("close-dataset-remote-files"));
       activeDataset = dataset;
       clearHistoryResult();
-      if (!runsForDataset().length) showStage(stageButtons[0], true);
+      if (activeStageButton() && !runsForDataset().length) showStage(stageButtons[0], true);
     }
     renderDatasetLabels();
-    syncInputFiles(true);
+    syncInputFiles();
+    syncDatasetReferences();
     updateAnalysisView();
     updateHistoryView();
     syncStage6Picker(true);
@@ -2570,18 +2930,66 @@
   datasetSelect.addEventListener("change", () => {
     selectDataset(datasets.find((dataset) => dataset.id === datasetSelect.value));
   });
+
+  datasetDelete.addEventListener("click", () => {
+    if (datasetDelete.disabled || deleteDatasetDialog.open || creatingDataset) return;
+    datasetToDelete = activeDataset;
+    byId("delete-dataset-name").textContent = datasetToDelete.name;
+    deleteDatasetError.hidden = true;
+    deleteDatasetDialog.showModal();
+  });
+  deleteDatasetCancel.addEventListener("click", () => deleteDatasetDialog.close());
+  deleteDatasetDialog.addEventListener("close", () => { datasetToDelete = undefined; });
+  deleteDatasetDialog.addEventListener("cancel", event => {
+    if (deletingDataset) event.preventDefault();
+  });
+  byId("delete-dataset-form").addEventListener("submit", async event => {
+    event.preventDefault();
+    const dataset = datasetToDelete;
+    if (!deleteDatasetDialog.open || !dataset || deletingDataset) return;
+    deletingDataset = true;
+    deleteDatasetConfirm.disabled = deleteDatasetCancel.disabled = true;
+    deleteDatasetConfirm.textContent = "Deleting…";
+    deleteDatasetError.hidden = true;
+    try {
+      const reply = await requestDataset(`/signet/datasets/${encodeURIComponent(dataset.id)}`, undefined, "DELETE");
+      if (reply.deleted !== dataset.id) throw new Error("Could not confirm the deletion. Try again.");
+      deletedDatasetIds.add(dataset.id);
+      datasetRevision++;
+      const index = datasets.findIndex(({id}) => id === dataset.id);
+      if (index !== -1) datasets.splice(index, 1);
+      if (activeDataset.id === dataset.id) selectDataset(datasets[0] ?? emptyDataset);
+      else renderDatasetLabels();
+      deleteDatasetDialog.close();
+      focusDatasetPane(datasets.length ? datasetSelect : datasetAdd);
+      void loadWorkspaceHistory();
+    } catch (error) {
+      deleteDatasetError.textContent = error.message || "Could not delete this dataset. Try again.";
+      deleteDatasetError.hidden = false;
+    } finally {
+      deletingDataset = false;
+      deleteDatasetConfirm.textContent = "Delete dataset";
+      deleteDatasetConfirm.disabled = deleteDatasetCancel.disabled = false;
+      if (deleteDatasetDialog.open) deleteDatasetConfirm.focus();
+    }
+  });
+
   datasetAdd.addEventListener("click", () => {
-    if (!datasetForm.hidden) {
+    if (!datasetEditor.hidden) {
       closeDatasetForm();
       return;
     }
-    datasetForm.hidden = false;
-    datasetAdd.setAttribute("aria-expanded", "true");
+    window.dispatchEvent(new Event("close-dataset-remote-files"));
+    setDatasetFormOpen(true);
     datasetName.focus();
   });
   byId("dataset-cancel").addEventListener("click", () => {
     closeDatasetForm();
-    datasetAdd.focus();
+    focusDatasetPane(datasetAdd);
+  });
+  datasetName.addEventListener("input", () => {
+    datasetName.removeAttribute("aria-invalid");
+    datasetError.hidden = true;
   });
   async function createDataset() {
     if (creatingDataset) return;
@@ -2590,6 +2998,7 @@
       datasetFormError = "";
       renderDatasetLabels();
       datasetError.hidden = false;
+      datasetName.setAttribute("aria-invalid", "true");
       datasetForm.dataset.saveState = "error";
       datasetName.focus();
       return;
@@ -2597,16 +3006,18 @@
     const previousDatasetId = activeDataset.id;
     creatingDataset = true;
     datasetForm.dataset.saveState = "saving";
+    datasetSaving.hidden = false;
     datasetError.hidden = true;
     datasetForm.querySelectorAll("input, button").forEach(control => { control.disabled = true; });
     datasetAdd.disabled = true;
     try {
-      const record = await requestDataset("/signet/datasets", {name: [name, name]}, "POST");
+      const record = await requestDataset("/signet/datasets", {name}, "POST");
       const dataset = acceptSavedDataset(record);
       creatingDataset = false;
       if (activeDataset.id === previousDatasetId) {
         selectDataset(dataset);
-        datasetSelect.focus();
+        showInputChoice(inputChoices[0]);
+        focusDatasetPane(datasetSelect);
       } else {
         closeDatasetForm();
         renderDatasetLabels();
@@ -2616,14 +3027,18 @@
       datasetFormError = error.message;
       renderDatasetLabels();
       datasetError.hidden = false;
+      if (datasetFormError === duplicateDatasetName) datasetName.setAttribute("aria-invalid", "true");
       datasetForm.dataset.saveState = "error";
     } finally {
       creatingDataset = false;
+      datasetSaving.hidden = true;
       datasetForm.querySelectorAll("input, button").forEach(control => { control.disabled = false; });
       datasetAdd.disabled = false;
+      if (!datasetError.hidden && !datasetEditor.hidden && app.dataset.nav === "data" && document.activeElement === document.body) {
+        datasetName.focus();
+      }
     }
   }
-  byId("dataset-create").addEventListener("click", () => void createDataset());
   datasetForm.addEventListener("submit", event => { event.preventDefault(); void createDataset(); });
   datasetName.addEventListener("keydown", (event) => {
     if (event.key !== "Enter" || event.isComposing) return;
@@ -2632,6 +3047,15 @@
   });
 
   const navigation = root.querySelectorAll("[data-nav-target]");
+  const startConnection = byId("start-connection");
+  const startConnectionStatus = byId("start-connection-status");
+  window.addEventListener("workspace-remote-context", event => {
+    const connected = event.detail?.connected === true;
+    const status = connected ? "Connected" : "Not connected";
+    startConnection.toggleAttribute("data-connected", connected);
+    if (startConnectionStatus.textContent !== status) startConnectionStatus.textContent = status;
+  });
+
   function openNavigation(view) {
     if (view !== "data") window.dispatchEvent(new Event("close-dataset-remote-files"));
     if (view === "history" && historyResult?.view === "analysis") {
@@ -2646,6 +3070,7 @@
     for (const tab of tabs) {
       root.querySelector("#" + tab.getAttribute("aria-controls")).hidden = !analysis || tab.getAttribute("aria-selected") !== "true";
     }
+    syncContextChat();
     for (const panel of root.querySelectorAll("[data-nav-left], [data-nav-right]")) {
       panel.hidden = (panel.dataset.navLeft ?? panel.dataset.navRight) !== view;
     }
@@ -2657,40 +3082,75 @@
       else button.removeAttribute("aria-current");
     }
     setSidebarOpen(true);
+    if (view === "data") syncDatasetReferences(true);
   }
   for (const button of navigation) {
     button.addEventListener("click", () => openNavigation(button.dataset.navTarget));
   }
-  const inputChoices = root.querySelectorAll("[data-input-target]");
+  for (const button of root.querySelectorAll("[data-start-view]")) {
+    button.addEventListener("click", () => {
+      openNavigation(button.dataset.startView);
+      root.querySelector(`[data-nav-target="${button.dataset.startView}"]`).focus();
+    });
+  }
+  byId("start-stage").addEventListener("click", () => {
+    openNavigation("analysis");
+    selectTab(tabs[1]);
+    if (timeline.hidden) {
+      tabs[1].focus();
+      return;
+    }
+    showStage(stageButtons[0], true);
+    stageButtons[0].focus();
+  });
+  const inputChoices = root.querySelectorAll("[data-input-target], [data-reference-navigation]");
+  function showInputChoice(button) {
+    for (const choice of inputChoices) {
+      const selected = choice === button;
+      choice.setAttribute("aria-pressed", String(selected));
+      root.querySelector("#" + choice.getAttribute("aria-controls")).hidden = !selected;
+    }
+    const references = button.hasAttribute("data-reference-navigation");
+    datasetFiles.querySelector("[data-input-validation]").hidden = references;
+    datasetFiles.closest("[data-nav-right]").scrollTop = 0;
+    if (references) syncDatasetReferences(true);
+    else inputValidation.select(button.dataset.inputTarget);
+  }
   for (const button of inputChoices) {
     button.addEventListener("click", () => {
+      closeDatasetForm();
       window.dispatchEvent(new Event("close-dataset-remote-files"));
-      for (const choice of inputChoices) {
-        const selected = choice === button;
-        choice.setAttribute("aria-pressed", String(selected));
-        root.querySelector("#" + choice.getAttribute("aria-controls")).hidden = !selected;
-      }
+      showInputChoice(button);
     });
   }
   byId("history-scope").addEventListener("change", event => {
     historyScope = ["current", "unclassified", "all"].includes(event.target.value) ? event.target.value : "current";
     clearHistoryResult();renderDatasetLabels();updateHistoryView();syncStage6Picker(true);
+    runDetails.scrollTop = 0;
   });
   runList.addEventListener("click", event => {
     const id = event.target.closest("[data-run-target]")?.dataset.runTarget;
     if (!matchingHistoryRuns().some(run => historyKey(run) === id)) return;
     selectedRuns.set(historySelectionKey(), id);
     clearHistoryResult();updateHistoryView();syncStage6Picker(true);
+    runDetails.scrollTop = 0;
   });
   runDetails.addEventListener("change", event => {
+    const picker = event.target.closest("[data-history-attempt-select]");
+    if (picker) {
+      const panel = picker.closest("[data-history-stage-panel]");
+      historyDetailSelection.set(panel.id, {...historyDetailSelection.get(panel.id), record: picker.value});
+      syncHistoryStageDetail(panel);
+      syncHistoryLogs();
+      return;
+    }
     const select = event.target.closest("[data-history-dataset]");
     const id = select?.closest("[data-history-assignment]")?.dataset.historyAssignment;
     if (id) {
       assignmentStates.set(id, {...assignmentStates.get(id), datasetId: select.value, error: "", saved: false});
       const form = select.closest("[data-history-assignment]");
       form.dataset.saveState = "idle";
-      form.querySelector("[data-history-assignment-status]").textContent = root.lang === "en"
-        ? "Assignment not yet saved; sample matching is not verified." : "歸類尚未保存；尚未確認樣本配對。";
+      form.querySelector("[data-history-assignment-status]").textContent = "Assignment not yet saved; sample matching is not verified.";
     }
   });
   runDetails.addEventListener("submit", async event => {
@@ -2703,7 +3163,7 @@
     const action = event.submitter?.value ?? "review", prior = submissionReviews.get(key);
     if (prior?.pending || action !== "review" && action !== prior?.result?.recovery?.outcome) return;
     const scope = recoveryRemote, attempt = job.attempt ?? 1, jobId = job.job_id ?? null;
-    const state = {...prior, pending: true};submissionReviews.set(key, state);renderHistoryRecords();
+    const state = {...prior, pending: true, error: null, staleEvidence: false};submissionReviews.set(key, state);renderHistoryRecords();updateHistoryView();
     try {
       const result = await requestDataset(`/signet/runs/${encodeURIComponent(run.run_id)}/steps/${encodeURIComponent(step)}/reconcile`,
         {expected_attempt: attempt, expected_job_id: jobId, action, confirmed: action !== "review"}, "POST");
@@ -2711,11 +3171,11 @@
           result.record?.step !== step || (result.record?.attempt ?? 1) !== attempt) return;
       state.result = result;state.error = null;
       if (action !== "review" && !result.applied) {
-        state.result = null;state.error = historyText("證據已變更或尚未完成審閱，請重新核對。", "Evidence changed or review is incomplete. Review the evidence again.");
+        state.result = null;state.staleEvidence = true;
       }
       if (result.applied) {submissionReviews.delete(key);await loadWorkspaceHistory();}
     } catch (error) {state.error = error.message;}
-    finally {state.pending = false;renderHistoryRecords();}
+    finally {state.pending = false;renderHistoryRecords();updateHistoryView();}
   });
   runDetails.addEventListener("submit", async event => {
     const editor = event.target.closest("[data-rerun-editor]");
@@ -2726,13 +3186,13 @@
     const id = form.dataset.historyAssignment, run = findHistoryRun(id), datasetId = form.querySelector("[data-history-dataset]").value;
     if (!run?.capabilities?.assign_dataset || assignmentStates.get(id)?.saving || !datasetCatalogReady) return;
     if (!datasets.some(dataset => dataset.persisted && dataset.id === datasetId)) {
-      assignmentStates.set(id, {datasetId, error: root.lang === "en" ? "Choose an existing dataset." : "請選擇現有資料組。"});
+      assignmentStates.set(id, {datasetId, error: "Choose an existing dataset."});
       renderHistoryRecords();updateHistoryView();return;
     }
     assignmentStates.set(id, {datasetId, saving: true});renderHistoryRecords();updateHistoryView();
     try {
       const saved = await requestDataset(`/signet/history/${encodeURIComponent(id)}/dataset`, {dataset_id: datasetId, revision: run.revision}, "PATCH");
-      if (historyKey(saved) !== id || saved.run_id !== run.run_id || saved.dataset_id !== datasetId) throw new Error(root.lang === "en" ? "The saved assignment does not match this record." : "保存的歸類與這筆紀錄不符。");
+      if (historyKey(saved) !== id || saved.run_id !== run.run_id || saved.dataset_id !== datasetId) throw new Error("The saved assignment does not match this record.");
       historyRequest++;
       historyState = "ready";
       const index = historyRuns.findIndex(candidate => historyKey(candidate) === id);
@@ -2756,12 +3216,12 @@
         const source = button.dataset.rerunSource, step = button.dataset.rerunReview;
         const review = await requestDataset(`/signet/runs/${encodeURIComponent(source)}/steps/${step}/rerun`);
         container.rerunReview = review;container.rerunPlan = null;
-        content.innerHTML = `<p>${historyText("沿用上游", "Reuse upstream")}: ${escapeHistory(review.reuse.join(", ") || "—")}<br>${historyText("必須重新執行", "Recompute")}: ${escapeHistory(review.invalidated.join(", "))}</p>
-          <p>${historyText("舊結果保留。建立後仍須另外確認送出；送出時核對遠端檔案。原始輸入固定，可編輯設定、資源及選項。", "Old results are preserved. Submission requires a separate confirmation and remote file checks. Keep original inputs; edit settings, resources and options.")}</p>
-          <form data-rerun-editor aria-label="${historyText("關聯執行參數", "Linked run parameters")}"><label>${historyText("新執行名稱", "New run name")}<input name="run-name" data-rerun-name required maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9_-]*" spellcheck="false" value="${escapeHistory(source.slice(0, 58))}-rerun"></label>
-          ${Object.keys(review.parameters.inputs ?? {}).length ? `<details><summary>${historyText("沿用的輸入檔案", "Retained input files")}</summary><dl class="ml-key-values">${savedDefinitions(review.parameters.inputs)}</dl></details>` : ""}
+        content.innerHTML = `<p>Reuse upstream: ${escapeHistory(review.reuse.join(", ") || "—")}<br>Recompute: ${escapeHistory(review.invalidated.join(", "))}</p>
+          <p>Old results are preserved. Submission requires a separate confirmation and remote file checks. Keep original inputs; edit settings, resources and options.</p>
+          <form data-rerun-editor aria-label="Linked run parameters"><label>New run name<input name="run-name" data-rerun-name required maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9_\\-]*" spellcheck="false" value="${escapeHistory(source.slice(0, 58))}-rerun"></label>
+          ${Object.keys(review.parameters.inputs ?? {}).length ? `<details><summary>Retained input files</summary><dl class="ml-key-values">${savedDefinitions(review.parameters.inputs)}</dl></details>` : ""}
           ${rerunParameterFields(review.parameters)}
-          <button type="button" data-rerun-create>${historyText("建立關聯執行（尚不送出）", "Create linked run (no submission)")}</button></form>`;
+          <button type="button" class="ml-nav-action" data-rerun-create>Create linked run (no submission)</button></form>`;
       } else if (button.hasAttribute("data-rerun-create")) {
         if (!content.querySelector("[data-rerun-editor]").reportValidity()) return;
         const review = container.rerunReview;
@@ -2776,20 +3236,36 @@
         container.rerunPlan = plan;
         content.querySelectorAll("input, textarea, button").forEach(control => {control.disabled = true;});
         const confirm = document.createElement("button");
-        confirm.type = "button";confirm.dataset.rerunSubmit = "";
-        confirm.textContent = root.lang === "en" ? `Confirm submission: ${plan.new_run_id}` : `確認送出：${plan.new_run_id}`;
+        confirm.type = "button";confirm.className = "ml-nav-action";confirm.dataset.rerunSubmit = "";
+        confirm.textContent = `Confirm submission: ${plan.new_run_id}`;
         content.append(confirm);
-        status.textContent = root.lang === "en" ? "Linked run created locally; nothing submitted." : "已建立本機關聯執行，尚未送出。";
+        status.textContent = "Linked run created locally; nothing submitted.";
       } else {
         await requestDataset(`/signet/runs/${encodeURIComponent(button.dataset.rerunRunId ?? container.rerunPlan.new_run_id)}/rerun/submit`, {confirmed: true}, "POST");
         button.dataset.rerunSubmitted = "true";
-        status.textContent = root.lang === "en" ? "Submission recorded. Reload history to inspect the new run." : "已記錄送出，請重新讀取歷史查看新執行。";
+        status.textContent = "Submission recorded. Reload history to inspect the new run.";
         return;
       }
     } catch (error) { status.textContent = error.message; }
     finally { if (!button.dataset.rerunSubmitted && (!button.hasAttribute("data-rerun-create") || !container.rerunPlan)) button.disabled = false; }
   });
   runDetails.addEventListener("click", event => {
+    const stageChoice = event.target.closest("[data-history-select-stage]");
+    if (stageChoice) {
+      const article = stageChoice.closest(".ml-history-run");
+      historyStageSelection.set(article.dataset.historyId, stageChoice.dataset.historySelectStage);
+      syncHistoryStageSelection(article);
+      syncHistoryLogs();
+      return;
+    }
+    const tab = event.target.closest("[data-history-detail-tab]");
+    if (tab) {
+      const panel = tab.closest("[data-history-stage-panel]");
+      historyDetailSelection.set(panel.id, {...historyDetailSelection.get(panel.id), tab: tab.dataset.historyDetailTab});
+      syncHistoryStageDetail(panel);
+      syncHistoryLogs();
+      return;
+    }
     const button = event.target.closest("[data-run-stage]");
     if (!button) return;
     const stage = Number(button.dataset.runStage), historyId = button.dataset.historyId;
@@ -2798,6 +3274,7 @@
     if (!run || !(canReadStage(run, stage) || stage === 6 && canReadGraph(run) || canContinue(run) &&
       (Boolean(savedJob) && savedJob.state !== "not_submitted" &&
         (stage > 1 || savedJob.state !== "completed") || stage > 1 && canStartStage(run, stage)))) return;
+    historyStageSelection.set(historyId, String(stage));
     clearHistoryResult();
     historyResult = {runId: run.run_id, historyId, stage};
     if (stage === 3 && canReadStage(run, 3)) void loadStage3Run();
@@ -2818,13 +3295,22 @@
       : stage === 3 ? stage3Back : stage === 6 ? stage6Back : archivedStepBack;
     back?.focus({preventScroll: true});
   });
+  function focusHistoryStage(historyId, stage) {
+    const article = runDetails.querySelector(`#ml-run-${CSS.escape(historyId)}`);
+    if (!article) return;
+    historyStageSelection.set(historyId, String(stage));
+    syncHistoryStageSelection(article);
+    syncHistoryLogs();
+    const control = article.querySelector(`[data-run-stage="${stage}"]`) ?? article.querySelector(`[data-history-select-stage="${stage}"]`);
+    control?.focus({preventScroll: true});
+  }
   function backToRunTimeline() {
     if (!historyResult) return;
     const {historyId, stage} = historyResult;
     clearHistoryResult();
     updateHistoryView();
     syncStage6Picker();
-    runDetails.querySelector(`[data-run-stage="${stage}"][data-history-id="${CSS.escape(historyId)}"]`)?.focus({ preventScroll: true });
+    focusHistoryStage(historyId, stage);
   }
   archivedStepBack.addEventListener("click", backToRunTimeline);
   stage3Back.addEventListener("click", backToRunTimeline);
@@ -2844,7 +3330,7 @@
   let navigationRevision = 0;
   let navigationAction = 0;
   root.addEventListener("click", event => {
-    if (event.isTrusted && event.target.closest("[data-nav-target], [data-nav-right], [data-run-stage], .ml-stage-button, [data-gene], #ml-run-list, #ml-stage6-run")) navigationRevision++;
+    if (event.isTrusted && event.target.closest("[data-nav-target], [data-nav-right], [data-run-stage], [data-history-select-stage], [data-history-detail-tab], .ml-stage-button, [data-gene], #ml-run-list, #ml-stage6-run")) navigationRevision++;
   }, true);
   root.addEventListener("change", event => {
     if (event.isTrusted) navigationRevision++;
@@ -2889,57 +3375,110 @@
     const text = input.value.trim();
     if (chatBusy || !text) return;
     const record = activeChat;
+    const turnId = crypto.randomUUID();
     const navigationAtSend = ++navigationRevision;
     const selection = {context: null};
     window.dispatchEvent(new CustomEvent("workspace-context-request", {detail: selection}));
     const workspace_context = selection.context;
     const status = byId("chat-status");
-    const needsReview = ["需要確認", "Needs review"];
-    const turn = appendChatEvent(record, ["對話回合", "Conversation turn"], "", ["執行中", "Running"]);
+    const needsReview = "Needs review";
+    const turn = appendChatEvent(record, "Conversation turn", "", "Running");
     turn.event.open = true;
 
-    setChatBusy(true);
-    chatLabel(status, ["等待 SIGNET Agent 回覆…", "Waiting for SIGNET Agent…"]);
-    record.transcript.append(createMessage("ml-message", text));
+    status.textContent = "Waiting for SIGNET Agent…";
+    appendChatMessage(record, "user", createMessage("ml-message", text));
     const reply = createAgentReply(record);
-    chatLabel(reply, ["處理中…進度可在「執行活動」查看。", "Working… Follow along in Activity."]);
+    const thinking = document.createElement("span");
+    thinking.className = "ml-thinking";
+    thinking.setAttribute("aria-hidden", "true");
+    thinking.append(...Array.from({length: 3}, () => document.createElement("span")));
+    reply.append(thinking);
+
+    let ready = false, stopRequested = false, finished = false, stopNotice;
+    let done = false, failed = false, answered = false, outcome = "completed", pendingAnswer;
+    function showStopNotice(message) {
+      if (!stopNotice) {
+        stopNotice = createMessage("ml-chat-notice", message);
+        reply.parentElement.after(stopNotice);
+      } else stopNotice.textContent = message;
+      scrollChatToEnd();
+    }
+    async function requestStop() {
+      try {
+        const response = await fetch("/chat/cancel", {
+          method: "POST",
+          headers: {"Content-Type": "application/json", "X-Chat-Token": chatToken},
+          body: JSON.stringify({session: record.session, turn_id: turnId}),
+          signal: AbortSignal.timeout(5000),
+        });
+        if (!response.ok) throw new Error();
+      } catch {
+        if (done || finished) return;
+        stopRequested = false;
+        stopButton.removeAttribute("aria-disabled");
+        thinking.hidden = false;
+        status.textContent = "Could not stop the response. Try again.";
+        turn.status.textContent = "Running";
+        showStopNotice(status.textContent);
+      }
+    }
+    stopActiveChat = () => {
+      if (done || stopRequested) return;
+      stopRequested = true;
+      navigationRevision++;
+      stopButton.setAttribute("aria-disabled", "true");
+      thinking.hidden = true;
+      status.textContent = "Stopping response…";
+      turn.status.textContent = "Stopping";
+      showStopNotice(status.textContent);
+      if (ready) void requestStop();
+    };
+    setChatBusy(true);
     input.value = "";
     showChatDrawer(null);
     globalThis.lucide?.createIcons();
     reply.scrollIntoView({ block: "nearest" });
 
     const operations = new Map();
-    let done = false, failed = false, answered = false, outcome = "completed";
+    function showAnswer(text) {
+      renderAgentAnswer(reply, text);
+      answered = true;
+    }
     function consume(line) {
-      if (!line.trim()) return;
+      if (done || !line.trim()) return;
       const event = JSON.parse(line);
+      if (event.type === "turn_started" && event.text?.turn_id === turnId && !ready) {
+        ready = true;
+        if (stopRequested) void requestStop();
+      }
       if (event.type === "ui" && event.text?.panel === "workflow" && event.text.visible === true &&
           record === activeChat && navigationAtSend === navigationRevision) {
         openNavigation("settings");
         window.dispatchEvent(new Event("workspace-setup-refresh"));
       }
       if (event.type === "progress" && toolActivity(record, event.text, operations)) return;
+      if (event.type === "model_fallback") showModelFallback(reply, event.text?.model);
       if (["progress", "error", "done"].includes(event.type)) {
         turn.log.textContent += (turn.log.textContent ? "\n" : "") + event.text;
       }
       if (event.type === "workspace_action") {
         void applyWorkspaceAction(event.workspace_action ?? event.text, record, navigationAtSend).then(applied => {
-          if (!applied) turn.log.textContent += "\n" + (root.lang === "en" ? "Navigation ignored: stale selection, unavailable result or invalid target." : "未套用導覽：選取已改變、結果不可用或目標無效。");
+          if (!applied) turn.log.textContent += "\n" + "Navigation ignored: stale selection, unavailable result or invalid target.";
         }).catch(() => {
-          turn.log.textContent += "\n" + (root.lang === "en" ? "Navigation unavailable; no analysis was executed." : "導覽目前不可用；未執行分析。");
+          turn.log.textContent += "\n" + "Navigation unavailable; no analysis was executed.";
         });
       }
       if (event.type === "answer") {
-        renderAgentAnswer(reply, event.text);
-        answered = true;
+        if (stopRequested) pendingAnswer = event.text;
+        else showAnswer(event.text);
       }
       if (event.type === "error") {
-        if (answered || failed) reply.after(createMessage("ml-saved-reply", event.text));
-        else chatLabel(reply, event.text);
+        if (answered || pendingAnswer !== undefined || failed) reply.after(createMessage("ml-saved-reply", event.text));
+        else reply.textContent = event.text;
         failed = true;
       }
       if (event.type === "done") {
-        outcome = event.status === "cancelled" ? "needs_review" : chatOutcomes[event.status] ? event.status : failed ? "needs_review" : "completed";
+        outcome = chatOutcomes[event.status] ? event.status : failed ? "needs_review" : "completed";
         if (failed && outcome === "completed") outcome = "needs_review";
         done = true;
       }
@@ -2949,7 +3488,7 @@
       const response = await fetch("/chat", {
         method: "POST",
         headers: {"Content-Type": "application/json", "X-Chat-Token": chatToken},
-        body: JSON.stringify({text, session: record.session, language: root.lang, workspace_context}),
+        body: JSON.stringify({text, session: record.session, workspace_context, turn_id: turnId}),
       });
       if (!response.ok) throw new Error(await readChatError(response));
       const reader = response.body.getReader();
@@ -2965,32 +3504,48 @@
       }
       consume(buffer);
       if (!done) throw new TypeError();
-      if (record.button.hidden) {
+      if (outcome === "cancelled") showStopNotice("Response stopped.");
+      else {
+        stopNotice?.remove();
+        if (pendingAnswer !== undefined) showAnswer(pendingAnswer);
+      }
+      if (record.row.hidden) {
         record.title = Array.from(text.replace(/\s+/g, " ")).slice(0, 80).join("");
-        chatLabel(record.button.querySelector("strong"), record.title);
-        chatLabel(byId("chat-title"), record.title);
-        record.button.hidden = false;
-        byId("chat-records").prepend(record.button);
+        record.button.querySelector("strong").textContent = record.title;
+        byId("chat-title").textContent = record.title;
+        record.deleteButton.setAttribute("aria-label", `Delete chat “${record.title}”`);
+        record.row.hidden = false;
+        byId("chat-records").prepend(record.row);
         byId("empty-chats").hidden = true;
       }
       record.outcome = outcome;
-      chatLabel(status, chatOutcomes[outcome]);
-      chatLabel(turn.status, chatOutcomes[outcome]);
+      status.textContent = chatOutcomes[outcome];
+      turn.status.textContent = chatOutcomes[outcome];
     } catch (error) {
-      const lostConnection = ["連線中斷。已啟動的工具可能仍在執行，請先核對工作狀態。",
-        "Connection interrupted. Check any active jobs before retrying."];
+      stopNotice?.remove();
+      const lostConnection = "Connection interrupted. Check any active jobs before retrying.";
       const detail = error instanceof TypeError || error instanceof SyntaxError ? lostConnection : error.message;
       if (answered || failed) reply.after(createMessage("ml-saved-reply", detail));
-      else chatLabel(reply, detail);
-      turn.log.textContent += (turn.log.textContent ? "\n" : "") + (Array.isArray(detail) ? detail[root.lang === "en" ? 1 : 0] : detail);
-      chatLabel(status, needsReview);
-      chatLabel(turn.status, needsReview);
+      else reply.textContent = detail;
+      turn.log.textContent += (turn.log.textContent ? "\n" : "") + detail;
+      status.textContent = needsReview;
+      turn.status.textContent = needsReview;
       record.outcome = "needs_review";
     } finally {
+      finished = true;
+      if (thinking.parentNode === reply) {
+        const message = reply.parentElement;
+        message.remove();
+      }
+      const chatHadFocus = agentView.contains(document.activeElement);
+      stopActiveChat = undefined;
+      stopButton.removeAttribute("aria-disabled");
       setChatBusy(false);
-      if (!byId("chat-transcripts").hidden && !byId("agent-view").hidden && !byId("chat-panel").hidden) {
-        input.focus({preventScroll: true});
-        byId("thread").scrollTop = byId("thread").scrollHeight;
+      if (!byId("chat-transcripts").hidden && !agentView.hidden && !agentView.parentElement.hidden) {
+        if (agentView.parentElement !== contextChat || chatHadFocus) {
+          input.focus({preventScroll: true});
+        }
+        scrollChatToEnd();
       }
     }
   }
@@ -3048,8 +3603,15 @@
     onBack: backToRunTimeline,
     onShowResults: showSavedStage6,
   });
+  root.addEventListener("change", event => {
+    if (event.target.matches(".ml-expression-run-label select")) renderRunTimeline();
+  });
+  root.addEventListener("click", event => {
+    if (event.target.closest("[data-genotype-new]")) renderRunTimeline();
+  });
   updateAnalysisView();
   updateHistoryView();
+  window.dispatchEvent(new Event("workspace-request-remote-context"));
   globalThis.lucide?.createIcons();
   void loadWorkspaceHistory();
 })();
