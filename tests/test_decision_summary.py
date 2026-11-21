@@ -41,8 +41,8 @@ class DecisionSummaryTest(unittest.TestCase):
         events = []
         answer = main.run_conversation(client, '有哪些分析？', [], progress=events.append)
         self.assertEqual(len(requests), 2)
-        self.assertIn('未產生有效回答', answer)
-        self.assertNotIn('模型完成文字回答。', events)
+        self.assertIn('did not produce a valid answer', answer)
+        self.assertNotIn('The model finished its answer.', events)
 
     def test_summary_filter_keeps_real_answer_and_code_examples(self):
         client, _ = client_for(response(SUMMARY + '\n\n可做關聯分析。'))
@@ -67,7 +67,7 @@ class DecisionSummaryTest(unittest.TestCase):
             return {'status':'ok'}
         with patch.object(main,'dispatch_tool',side_effect=dispatch):
             main.run_conversation(client,'前處理需要什麼資料',[],progress=events.append)
-        for field in ('選擇原因：','資訊依據：','尚缺資訊：'):
+        for field in ('Selection reason:', 'Evidence:', 'Missing information:'):
             index=next(i for i,text in enumerate(events) if field in text)
             self.assertLess(index,events.index('DISPATCH'))
         self.assertIs(requests[1][1],first.candidates[0].content)
@@ -83,7 +83,7 @@ class DecisionSummaryTest(unittest.TestCase):
         with patch.object(main,'dispatch_tool',return_value={'status':'ok'}):
             main.run_conversation(client,'前處理',[],progress=events.append)
         self.assertNotIn('PRIVATE-INTERNAL-TEXT','\n'.join(events))
-        self.assertIn('選擇原因：','\n'.join(events))
+        self.assertIn('Selection reason:','\n'.join(events))
 
     def test_missing_summary_is_reported_without_inventing_explanation(self):
         first=self.planned_response(None)
@@ -92,8 +92,8 @@ class DecisionSummaryTest(unittest.TestCase):
         with patch.object(main,'dispatch_tool',return_value={'status':'ok'}) as dispatch:
             main.run_conversation(client,'前處理',[],progress=events.append)
             dispatch.assert_called_once()
-        self.assertIn('模型未提供公開說明','\n'.join(events))
-        self.assertNotIn('選擇原因：','\n'.join(events))
+        self.assertIn('No public tool-selection note was provided','\n'.join(events))
+        self.assertNotIn('Selection reason:','\n'.join(events))
 
     def test_incomplete_summary_is_labeled_and_credentials_are_redacted(self):
         first=self.planned_response('選擇原因：查看工具。api_key=fake-summary-secret\x1b[31m')
@@ -102,7 +102,7 @@ class DecisionSummaryTest(unittest.TestCase):
         with patch.dict('os.environ',{'GEMINI_API_KEY':'fake-summary-secret'}),patch.object(main,'dispatch_tool',return_value={'status':'ok'}):
             main.run_conversation(client,'前處理',[],progress=events.append)
         joined='\n'.join(events)
-        self.assertIn('摘要欄位不完整',joined)
+        self.assertIn('Incomplete public note',joined)
         self.assertNotIn('fake-summary-secret',joined)
         self.assertNotIn('\x1b',joined)
 
@@ -114,7 +114,7 @@ class DecisionSummaryTest(unittest.TestCase):
             result=main.run_conversation(client,'前處理',[],progress=events.append)
             dispatch.assert_not_called()
         self.assertIn('503',result)
-        self.assertNotIn('決策摘要','\n'.join(events))
+        self.assertNotIn('Public tool-selection note','\n'.join(events))
 
     def test_each_round_can_update_its_summary_using_prior_results(self):
         first=self.planned_response()
@@ -123,8 +123,8 @@ class DecisionSummaryTest(unittest.TestCase):
         events=[]
         with patch.object(main,'dispatch_tool',return_value={'status':'ok'}):
             main.run_conversation(client,'前處理',[],progress=events.append)
-        self.assertEqual(sum('決策摘要（模型提供' in x for x in events),2)
-        self.assertIn('資訊依據：上一輪查詢成功。','\n'.join(events))
+        self.assertEqual(sum('Public tool-selection note' in x for x in events),2)
+        self.assertIn('Evidence: 上一輪查詢成功。','\n'.join(events))
 
 
 if __name__=='__main__':

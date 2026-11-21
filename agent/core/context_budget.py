@@ -93,7 +93,7 @@ def check_budget(body, model):
     count = input_tokens(body, model)
     if count > MAX_INPUT_TOKENS:
         raise ContextBudgetError(
-            f'精簡後輸入估算為 {count} 詞元，超過安全預算 {MAX_INPUT_TOKENS}；'
-            '為保留原始條件與完整工具證據，這次未送出模型請求。請縮小問題範圍，'
-            '或在新對話提供必要條件；完整紀錄仍保留，不會重跑工具。')
+            f'The estimated input is {count} tokens after compression and exceeds the safety budget of {MAX_INPUT_TOKENS}. '
+            'No model request was sent. Original requirements and tool evidence are retained. Narrow the question '
+            'or start a new conversation with the necessary context. Completed tools will not be rerun.')
     return count

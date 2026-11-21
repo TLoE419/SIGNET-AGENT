@@ -16,9 +16,8 @@ _STATES = {'ok', 'invalid', 'error', 'failed', 'blocked', 'unavailable', 'prepar
            'unknown', 'interrupted', 'skipped', 'passed', 'warning', 'incomplete', 'unchecked',
            'stale', 'missing', 'problem', 'in_progress', 'ready', 'not_ready', 'requires_review'}
 _STEPS = {'genotype', 'expression', 'adjust', 'cis', 'network', 'visualize'}
-_SETUP = {'workspace', 'signet', 'container', 'ref', 'gmap', 'gtf', 'clinical', 'prepare'}
-_CHECKS = {'connection', 'workspace', 'slurm', 'apptainer', 'signet_source', 'container',
-           'reference_ref', 'reference_gmap', 'reference_gtf', 'reference_clinical', 'imputation_reference'}
+_SETUP = {'workspace', 'signet', 'container'}
+_CHECKS = {'connection', 'workspace', 'slurm', 'apptainer', 'signet_source', 'container'}
 _CODES = {'exports_incomplete', 'missing_or_unreadable_file', 'missing_file', 'missing_command',
           'scientific_script_failed', 'scientific_runtime_error', 'nonzero_exit', 'missing_outputs',
           'scheduler_state_unknown', 'submission_unconfirmed', 'cancelled', 'unclassified_failure',
@@ -209,7 +208,10 @@ def safe_tool_result(name, value):
                                    if label in _PUBLIC_VALUES[key] and _number(count) is not _OMIT}
             result['per_column'][key] = clean
     elif name == 'check_hpc_environment':
-        result['checks'] = _project(value.get('checks', []), [{'item': _enum(_CHECKS), 'status': _enum(_STATES)}])
+        checks = _project(value.get('checks', []), [{'item': _enum(_CHECKS), 'status': _enum(_STATES)}])
+        result['checks'] = [check for check in checks if set(check) == {'item', 'status'}] if checks is not _OMIT else []
+        if {check['item'] for check in result['checks']} == _CHECKS:
+            result['ready'] = all(check['status'] == 'ok' for check in result['checks'])
     elif name == 'read_hpc_setup_log':
         from agent.runtime.step_report import failure_summary
         if 'lines' in value:

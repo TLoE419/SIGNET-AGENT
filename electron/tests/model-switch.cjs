@@ -13,7 +13,7 @@ global.fetch=(url,options)=>{if(String(url).startsWith('https://generativelangua
 let running;const deadline=setTimeout(()=>{console.error('Model switch deadline exceeded');app.exit(1)},45000);
 async function until(predicate){for(let i=0;i<200;i++){if(await predicate())return;await new Promise(r=>setTimeout(r,100))}throw Error('Model switch did not settle')}
 app.on('will-quit',()=>{clearTimeout(deadline);rmSync(temporary,{recursive:true,force:true})});
-launch({provider:'codex',visible:true,userData:temporary,stateFile}).then(async value=>{
+launch({visible:false,userData:temporary,stateFile}).then(async value=>{
  running=value;const w=value.window;
  const classicLoaded = once(w.webContents, 'did-finish-load');
  require('electron').Menu.getApplicationMenu().getMenuItemById('classic-view').click();
@@ -38,10 +38,22 @@ launch({provider:'codex',visible:true,userData:temporary,stateFile}).then(async 
  assert.equal((await w.webContents.executeJavaScript(`window.signetDesktop.environment.getSnapshot()`)).value.phase,'disconnected');
  assert.equal(verifications,1);
  const invalidChat=await w.webContents.executeJavaScript(`fetch('/chat',{method:'POST',body:'{}',headers:{'Content-Type':'application/json','X-Chat-Token':document.querySelector('meta[name="chat-token"]').content}}).then(r=>r.status)`);assert.equal(invalidChat,400);
+ const choose=provider=>w.webContents.executeJavaScript(`window.signetDesktop.model.selectProvider(${JSON.stringify(provider)})`);
+ const status=()=>w.webContents.executeJavaScript(`window.signetDesktop.model.getStatus()`);
+ assert.deepEqual(await choose('codex'),{ok:true,value:{restarting:true}});
+ await until(async()=>w.webContents.getURL()!==gemini&&await w.webContents.executeJavaScript(`document.querySelector('meta[name="model-label"]').content==='Codex CLI'`).catch(()=>false));
+ assert.deepEqual((await status()).value,{provider:'codex',geminiConfigured:true,encryptionAvailable:true});
+ assert.equal(await w.webContents.executeJavaScript(`document.querySelectorAll('#chat-list .chat-link').length`),1);
+ const codex=w.webContents.getURL();
+ assert.deepEqual(await choose('gemini'),{ok:true,value:{restarting:true}});
+ await until(async()=>w.webContents.getURL()!==codex&&await w.webContents.executeJavaScript(`document.querySelector('meta[name="model-label"]').content.toLowerCase().includes('gemini')`).catch(()=>false));
+ assert.equal((await status()).value.provider,'gemini');
+ assert.equal(verifications,1,'returning to saved Gemini uses the existing credential without a new verification');
+ const returnedGemini=w.webContents.getURL();
  const clear=await w.webContents.executeJavaScript(`window.signetDesktop.model.clearGeminiKey()`);assert.equal(clear.ok,true);
- await until(async()=>w.webContents.getURL()!==gemini&&await w.webContents.executeJavaScript(`!!document.querySelector('#workflow') && document.querySelector('meta[name="model-label"]').content.toLowerCase().includes('codex')`).catch(()=>false));
+ await until(async()=>w.webContents.getURL()!==returnedGemini&&await w.webContents.executeJavaScript(`!!document.querySelector('#workflow') && document.querySelector('meta[name="model-label"]').content.toLowerCase().includes('chat not configured')`).catch(()=>false));
  assert.equal(await w.webContents.executeJavaScript(`document.querySelectorAll('#chat-list .chat-link').length`),1);
  assert.ok(JSON.parse(readFileSync(stateFile,'utf8')).histories[id]);
- console.log('PASS: native renderer reloads across Codex → Gemini → Codex; history, workflow and environment bridge survive. Google verification used a local fixture; no model requests were sent.');
+ console.log('PASS: native renderer reloads across unconfigured → Gemini → Codex CLI → Gemini → unconfigured; saved key and chat history survive the provider switches. Google verification used a local fixture; no model requests were sent.');
  await running.quit();
 }).catch(async error=>{console.error(error);if(running)await running.quit();app.exit(1)});

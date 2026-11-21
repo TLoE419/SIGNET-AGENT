@@ -295,7 +295,7 @@ class ConversationTest(unittest.TestCase):
         call=types.FunctionCall(id='x',name='signet_catalog',args={})
         client=SimpleNamespace(models=SimpleNamespace(generate_content=lambda **kwargs:self.response(call)))
         with patch.object(main,'dispatch_tool',return_value={}) as dispatch:
-            self.assertIn('上限',main.run_conversation(client,'repeat'))
+            self.assertIn('limit',main.run_conversation(client,'repeat'))
             self.assertEqual(dispatch.call_count,4)
 
     def test_too_many_calls_no_execution(self):
@@ -303,7 +303,7 @@ class ConversationTest(unittest.TestCase):
         response.function_calls*=9
         client=SimpleNamespace(models=SimpleNamespace(generate_content=lambda **kwargs:response))
         with patch.object(main,'dispatch_tool') as dispatch:
-            self.assertIn('上限',main.run_conversation(client,'repeat'))
+            self.assertIn('Too many tool calls',main.run_conversation(client,'repeat'))
             dispatch.assert_not_called()
 
 

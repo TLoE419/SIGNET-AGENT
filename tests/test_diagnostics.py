@@ -16,7 +16,7 @@ class DiagnosticsTest(unittest.TestCase):
         self.assertIn('UNAVAILABLE',result)
         self.assertIn('overloaded',result)
         self.assertNotIn('fake-private-key',result)
-        self.assertIn('尚未呼叫任何工具',result)
+        self.assertIn('No tools have been called',result)
 
     def test_progress_distinguishes_model_request_tool_and_followup_failure(self):
         call=types.FunctionCall(id='c1',name='get_workspace_stage',args={'run_id':'private-run','stage':2})
@@ -26,16 +26,16 @@ class DiagnosticsTest(unittest.TestCase):
         with patch.object(main,'dispatch_tool',return_value={'status':'ok','settings':{'value':'private-scientific-data'}}):
             result=main.run_conversation(client,'研究需求',[],progress=events.append)
         joined='\n'.join(events)
-        self.assertIn('模型請求 1/5',events[0])
+        self.assertIn('Model request 1/5',events[0])
         self.assertIn('get_workspace_stage',joined)
         self.assertIn('status=ok',joined)
-        self.assertIn('模型請求 2/5',joined)
-        self.assertIn('已有 1 個工具結果',result)
+        self.assertIn('Model request 2/5',joined)
+        self.assertIn('1 tool results are retained',result)
         self.assertNotIn('private-run',joined)
         self.assertNotIn('private-scientific-data',joined)
 
     def test_api_error_categories_have_actionable_hints(self):
-        for code,hint in [(400,'請求格式'),(401,'金鑰權限'),(403,'金鑰權限'),(404,'模型名稱'),(429,'配額'),(500,'服務端')]:
+        for code,hint in [(400,'request format'),(401,'key permissions'),(403,'key permissions'),(404,'model name'),(429,'quota'),(500,'service reported an error')]:
             with self.subTest(code=code):
                 error=errors.APIError(code,{'error':{'status':'TEST_STATUS','message':'Provider explanation'}})
                 client,_=client_for(error,error)
@@ -64,7 +64,7 @@ class DiagnosticsTest(unittest.TestCase):
                          'missing_dependencies':['Rscript','Linux'], 'scientific_payload':'DO-NOT-DUMP'}):
             main.run_conversation(client,'preprocess',[],progress=events.append)
         joined='\n'.join(events)
-        self.assertIn('缺少依賴：Rscript, Linux',joined)
+        self.assertIn('Missing dependencies: Rscript, Linux',joined)
         self.assertIn('executed=False',joined)
         self.assertNotIn('DO-NOT-DUMP',joined)
 
@@ -77,8 +77,8 @@ class DiagnosticsTest(unittest.TestCase):
         client,_=client_for(response('受控回覆'))
         with patch('sys.argv',['main.py','--provider','gemini','研究需求']),patch.dict(os.environ,{'GEMINI_API_KEY':'fake-test-key'},clear=True),patch('dotenv.load_dotenv'),patch('google.genai.Client',return_value=contextlib.nullcontext(client)),patch('sys.stdout',new_callable=io.StringIO) as output:
             runpy.run_path(str(Path(main.__file__)),run_name='__main__')
-        self.assertIn('[過程] 模型請求 1/5',output.getvalue())
-        self.assertIn('模型完成文字回答',output.getvalue())
+        self.assertIn('[Progress] Model request 1/5',output.getvalue())
+        self.assertIn('The model finished its answer',output.getvalue())
         self.assertNotIn('fake-test-key',output.getvalue())
 
 

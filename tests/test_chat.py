@@ -29,15 +29,15 @@ class ChatTest(unittest.TestCase):
         events = []
         content = types.Content(role='model', parts=[types.Part.from_text(text='SIGNET_TOOL {"status":"completed"}\n工具結果：fake；status=ok；executed=True。')])
         main._report_decision_summary(content, events.append)
-        self.assertFalse(any(event.startswith(('SIGNET_TOOL ', '工具結果：')) for event in events))
+        self.assertFalse(any(event.startswith(('SIGNET_TOOL ', 'Tool result:', '工具結果：')) for event in events))
 
-    def test_selected_language_overrides_old_history_without_mutating_global_rules(self):
+    def test_english_prompt_preserves_user_text_without_mutating_global_rules(self):
         client, _ = client_for(response('English answer'))
         original = main.config.system_instruction
         with patch.object(client.models, 'generate_content', return_value=response('English answer')) as generate:
-            main.run_conversation(client, '中文問題', [], language='en')
+            main.run_conversation(client, '中文問題', [])
         instruction = generate.call_args.kwargs['config'].system_instruction
-        self.assertIn('UI language for this turn is English', instruction)
+        self.assertIn('Write answers and public tool-selection notes in English', instruction)
         self.assertEqual(main.config.system_instruction, original)
         self.assertEqual(generate.call_args.kwargs['contents'][0].parts[0].text, '中文問題')
 
@@ -101,7 +101,7 @@ class ChatTest(unittest.TestCase):
         history=[]
         with patch.object(main,'dispatch_tool',return_value={'status':'ok'}) as dispatch:
             failure=main.run_conversation(client,'我可以做什麼？',history)
-            self.assertIn('仍保留',failure)
+            self.assertIn('tool results are retained',failure)
             self.assertNotIn('SECRET',failure)
             self.assertEqual(len(history),3)
             main.run_conversation(client,'繼續',history)
@@ -112,15 +112,15 @@ class ChatTest(unittest.TestCase):
     def test_single_mode_error_does_not_claim_persistent_history(self):
         client,_=client_for(RuntimeError('PRIVATE'))
         result=main.run_conversation(client,'需求')
-        self.assertIn('單次模式不保留聊天紀錄',result)
-        self.assertNotIn('仍保留',result)
+        self.assertIn('One-shot mode does not retain chat history',result)
+        self.assertNotIn('tool results are retained',result)
         self.assertNotIn('PRIVATE',result)
 
     def test_service_interrupt_preserves_existing_conversation(self):
         client, _=client_for(response('需要哪些資料？'),KeyboardInterrupt(),response('繼續'))
         history=[]
         main.run_conversation(client,'研究目的',history)
-        self.assertIn('中斷',main.run_conversation(client,'補充資料',history))
+        self.assertIn('Stopped waiting for the model',main.run_conversation(client,'補充資料',history))
         self.assertEqual(len(history),3)
         self.assertEqual(main.run_conversation(client,'繼續',history),'繼續')
 
@@ -132,7 +132,7 @@ class ChatTest(unittest.TestCase):
                 history=[]
                 with patch.object(main,'dispatch_tool',side_effect=[{'status':'ok'},failure]) as dispatch:
                     text=main.run_conversation(client,'幫我研究',history)
-                    self.assertIn('未知',text)
+                    self.assertIn('Completion is unknown',text)
                     self.assertEqual(dispatch.call_count,2)
                 results=history[-1].parts
                 self.assertEqual([x.function_response.id for x in results],['0','1','2'])
@@ -145,7 +145,7 @@ class ChatTest(unittest.TestCase):
         client,_=client_for(response(calls=calls))
         history=[]
         with patch.object(main,'dispatch_tool',return_value={'status':'interrupted','executed':True}) as dispatch:
-            self.assertIn('中斷',main.run_conversation(client,'研究',history))
+            self.assertIn('A tool was interrupted',main.run_conversation(client,'研究',history))
             dispatch.assert_called_once()
         self.assertEqual(history[-1].parts[0].function_response.response['status'],'interrupted')
         self.assertEqual(history[-1].parts[1].function_response.response['status'],'skipped')
@@ -155,7 +155,7 @@ class ChatTest(unittest.TestCase):
         client,_=client_for(*[response(calls=[call]) for _ in range(5)],response('已停止重複呼叫。'))
         history=[]
         with patch.object(main,'dispatch_tool',return_value={'status':'ok'}) as dispatch:
-            self.assertIn('上限',main.run_conversation(client,'研究',history))
+            self.assertIn('Tool-round limit reached',main.run_conversation(client,'研究',history))
             self.assertEqual(dispatch.call_count,4)
             self.assertEqual(len(history),9)
             self.assertEqual(history[-1].role,'user')
@@ -166,22 +166,22 @@ class ChatTest(unittest.TestCase):
     def test_missing_candidate_never_executes_tool(self):
         client,_=client_for(SimpleNamespace(function_calls=[types.FunctionCall(name='signet_catalog')],candidates=[]))
         with patch.object(main,'dispatch_tool') as dispatch:
-            self.assertIn('完整內容',main.run_conversation(client,'研究',[]))
+            self.assertIn('did not return complete content',main.run_conversation(client,'研究',[]))
             dispatch.assert_not_called()
 
     def test_interactive_help_blank_and_exit_do_not_call_model(self):
         with patch('builtins.input',side_effect=['','/help','/exit']), patch('sys.stdout',new_callable=io.StringIO) as stdout, patch.object(main,'run_conversation') as run:
             main.interactive_chat(object())
             run.assert_not_called()
-            self.assertIn('研究目的',stdout.getvalue())
-            self.assertIn('已離開',stdout.getvalue())
+            self.assertIn('Describe your research goal',stdout.getvalue())
+            self.assertIn('Exited SIGNET assistant.',stdout.getvalue())
 
     def test_interactive_eof_and_interrupt_keep_history(self):
         client,_=client_for(response('你想用哪種資料？'),response('好的'))
         with patch('builtins.input',side_effect=['我想研究',KeyboardInterrupt(),'癌症資料',EOFError()]),patch('sys.stdout',new_callable=io.StringIO) as stdout:
             main.interactive_chat(client)
-            self.assertIn('對話仍保留',stdout.getvalue())
-            self.assertIn('已離開',stdout.getvalue())
+            self.assertIn('The conversation is retained',stdout.getvalue())
+            self.assertIn('Exited SIGNET assistant.',stdout.getvalue())
 
     def test_interactive_initial_prompt_and_quit(self):
         client,requests=client_for(response('請補充研究目的'))
@@ -196,11 +196,10 @@ class CliTest(unittest.TestCase):
         from pathlib import Path
         import runpy
         client,requests=client_for(response('受控回覆'))
-        with patch('sys.argv',['main.py',*arguments]), patch.dict(os.environ,{'GEMINI_API_KEY':'fake-cli-test-key'},clear=True), patch('dotenv.load_dotenv') as dotenv, patch('google.genai.Client',return_value=contextlib.nullcontext(client)), patch('agent.providers.codex_client.CodexClient',return_value=contextlib.nullcontext(client)) as codex, patch('builtins.input',side_effect=answers), patch('sys.stdout',new_callable=io.StringIO) as stdout:
+        with patch('sys.argv',['main.py',*arguments]), patch.dict(os.environ,{'GEMINI_API_KEY':'fake-cli-test-key'},clear=True), patch('dotenv.load_dotenv') as dotenv, patch('google.genai.Client',return_value=contextlib.nullcontext(client)) as gemini, patch('builtins.input',side_effect=answers), patch('sys.stdout',new_callable=io.StringIO) as stdout:
             runpy.run_path(str(Path(main.__file__)),run_name='__main__')
             dotenv.assert_called_once()
-            if '--provider' not in arguments:
-                codex.assert_called_once()
+            gemini.assert_called_once()
         return requests,stdout.getvalue()
 
     def test_single_prompt_remains_compatible(self):
@@ -208,17 +207,17 @@ class CliTest(unittest.TestCase):
         self.assertEqual(len(requests),1)
         self.assertEqual(requests[0][0].parts[0].text,'我想了解 需要哪些資料')
         self.assertIn('受控回覆',stdout)
-        self.assertNotIn('你 >',stdout)
+        self.assertNotIn('You >',stdout)
 
     def test_no_arguments_enters_chat_and_quits(self):
         requests,stdout=self.run_entry([],['/exit'])
         self.assertEqual(requests,[])
-        self.assertIn('直接描述',stdout)
+        self.assertIn('Describe your research goal',stdout)
 
     def test_chat_flag_initial_prompt_and_exit(self):
         requests,stdout=self.run_entry(['--chat','我要研究'],['/exit'])
         self.assertEqual(requests[0][0].parts[0].text,'我要研究')
-        self.assertIn('已離開',stdout)
+        self.assertIn('Exited SIGNET assistant.',stdout)
 
     def test_gemini_can_still_be_selected_explicitly(self):
         requests, stdout = self.run_entry(['--provider', 'gemini', '研究需求'])

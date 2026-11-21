@@ -49,13 +49,13 @@ def serve(server, control, events):
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--provider', choices=('codex', 'gemini', 'groq'), default='codex')
-    parser.add_argument('--state-file', type=Path, required=True)
-    args = parser.parse_args()
     events = sys.stdout
     sys.stdout = sys.stderr
-    from agent.app.chat_ui import create_server
+    from agent.app.chat_ui import BACKEND_PROVIDERS, create_server
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--provider', choices=BACKEND_PROVIDERS, default='none')
+    parser.add_argument('--state-file', type=Path, required=True)
+    args = parser.parse_args()
     args.state_file.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     server = create_server(args.provider, port=0, state_file=args.state_file)
     # A graceful signal follows the same drain path as closing the owner pipe.

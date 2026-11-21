@@ -50,11 +50,14 @@ class DesktopServerTest(unittest.TestCase):
             self.assertEqual(json.loads(path.read_text())['events']['test-session'], [['work finished']])
             self.assertEqual(json.loads(events.getvalue().splitlines()[-1])['event'], 'stopped')
 
-    def test_server_factory_keeps_loopback_and_browser_defaults(self):
-        with patch.object(chat_ui, 'load_dotenv'), patch('agent.providers.codex_client.configured_model', return_value='test-model'):
+    def test_server_factory_starts_on_loopback_without_model_credentials(self):
+        with patch.object(chat_ui, 'load_dotenv'), patch.dict(os.environ, {}, clear=True), \
+                patch.object(chat_ui, 'create_provider_adapter') as create_adapter:
             with chat_ui.create_server(port=0, state_file=None) as server:
                 self.assertEqual(server.server_address[0], '127.0.0.1')
-                self.assertEqual(server.model_label, 'Codex CLI / test-model')
+                self.assertEqual(server.model_label, 'Chat not configured')
+                self.assertIsNone(server.client_factory)
                 self.assertIsNone(server.state_file)
+                create_adapter.assert_not_called()
         with self.assertRaises(ValueError):
             chat_ui.create_server(provider='unsupported')
