@@ -18,15 +18,26 @@ export function DuoChallenge({challenge,onAnswer}:{challenge?:AuthChallenge|null
   }
   return values.slice(0,10);
  },[challenge?.challengeId,challenge?.instructions,challenge?.prompts.length]);
- useEffect(()=>{setAnswers(challenge?.prompts.map(()=> '')||[]);setError('');setBusy(false);if(challenge&&typeof requestAnimationFrame==='function')requestAnimationFrame(()=>section.current?.scrollIntoView({block:'nearest'}))},[challenge?.challengeId]);
+ useEffect(()=>{
+  setAnswers(challenge?.prompts.map(()=> '')||[]);
+  setError('');
+  setBusy(false);
+  section.current?.querySelector<HTMLElement>('.ssh-duo-options button, input')?.focus();
+ },[challenge?.challengeId]);
  if(!challenge)return null;
  async function submit(values:string[]){
   if(busy||values.length!==challenge!.prompts.length||values.some(value=>!value))return;
   setBusy(true);setError('');setAnswers(challenge!.prompts.map(()=> ''));
   try{await onAnswer(challenge!.sessionId,challenge!.challengeId,values)}catch(e){setError((e as Error).message);setBusy(false)}
  }
- return <section ref={section} className="ssh-auth-challenge" aria-label="Duo authentication" aria-live="polite"><strong>{challenge.name||'Duo authentication'}</strong><p className="ssh-duo-instructions">{challenge.instructions}</p>
-  {options.length>0&&<div className="ssh-duo-options" role="group" aria-label="Available Duo options">{options.map(option=><button key={option.value} type="button" disabled={busy} onClick={()=>void submit([option.value])}><b>{option.value}</b> {option.label}</button>)}</div>}
-  {challenge.prompts.map((prompt,index)=><label key={index}>{prompt.prompt}<input autoFocus={index===0&&options.length===0} autoComplete="one-time-code" type={prompt.echo?'text':'password'} value={answers[index]||''} disabled={busy} onChange={e=>setAnswers(values=>challenge.prompts.map((_,i)=>i===index?e.target.value:values[i]||''))}/></label>)}
-  <button type="button" disabled={busy||answers.length!==challenge.prompts.length||answers.some(value=>!value)} onClick={()=>void submit(answers)}>Submit authentication response</button>{busy&&<p role="status">Waiting for Duo authentication…</p>}{error&&<p role="alert">{error}</p>}</section>;
+ return <section ref={section} className="ssh-auth-challenge" aria-label="Duo authentication" aria-live="polite">
+  <form onSubmit={event=>{event.preventDefault();void submit(answers)}}>
+   <strong>{challenge.name||'Duo authentication'}</strong><p className="ssh-duo-instructions">{challenge.instructions}</p>
+   {options.length>0&&<div className="ssh-duo-options" role="group" aria-label="Available Duo options">{options.map(option=><button key={option.value} type="button" disabled={busy} onClick={()=>void submit([option.value])}><b>{option.value}</b> {option.label}</button>)}</div>}
+   {challenge.prompts.map((prompt,index)=><label key={index}>{prompt.prompt}<input autoComplete="one-time-code" type={prompt.echo?'text':'password'} value={answers[index]||''} disabled={busy} onChange={e=>setAnswers(values=>challenge.prompts.map((_,i)=>i===index?e.target.value:values[i]||''))}/></label>)}
+   <button type="submit" disabled={busy||answers.length!==challenge.prompts.length||answers.some(value=>!value)}>Submit authentication response</button>
+   {busy&&<p role="status">Waiting for Duo authentication…</p>}
+   {error&&<p role="alert">{error}</p>}
+  </form>
+ </section>;
 }

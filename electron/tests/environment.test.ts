@@ -11,10 +11,10 @@ import type {SshConnectionService} from '../main/ssh/SshConnectionService';
 import type {EnvironmentConfig} from '../shared/environment/types';
 const inventory={repository:'https://github.com/signet4grn/SIGNET.git',revision:'a'.repeat(40),scripts:[{path:'signet',sha256:'b'.repeat(64)}],support_files:[],example_files:[{path:'example/geno/example.ped',sha256:'c'.repeat(64)}]};
 class FakeSsh extends EventEmitter {
- connected=true;source=false;example=true;image=false;slurm=true;runtimeModule='';failStep='';commands:string[]=[];timeouts:number[]=[];pause?:()=>Promise<void>;
+ connected=true;source=false;example=true;image=false;slurm=true;workspaceTimeout=false;runtimeModule='';failStep='';commands:string[]=[];timeouts:number[]=[];pause?:()=>Promise<void>;
  getSnapshot(){return {selectedProfile:{id:'profile',username:'user',host:'host',port:22},connection:{status:this.connected?'connected':'disconnected',connectedAt:'now'}}}
  async exec(command:string,input:Buffer,timeout:number){this.timeouts.push(timeout);assert.equal(command,'bash -s');const s=input.toString();this.commands.push(s);await this.pause?.();
-  if(s.includes('printf \'home='))return {returncode:0,stderr:Buffer.alloc(0),stdout:Buffer.from(`home=/home/user\nroot=/home/user/signet\n${['bash','git','tar','sha256sum','timeout','python3','setsid','sbatch','scontrol','sinfo','squeue'].map(t=>`${t}=${t==='sbatch'&&!this.slurm?'no':'yes'}`).join('\n')}\nexecutor=/usr/bin/apptainer\nruntime_module=${this.runtimeModule}\npartition=standard\nwritable=yes\nsource=${this.source?'exists':'missing'}\nexample=${this.source&&this.example?'exists':'missing'}\nimage=${this.image?'exists':'missing'}\n`)};
+  if(s.includes('printf \'home='))return {returncode:0,stderr:Buffer.alloc(0),stdout:Buffer.from(`home=/home/user\nroot=/home/user/signet\n${['bash','git','tar','sha256sum','timeout','python3','setsid','sbatch','scontrol','sinfo','squeue'].map(t=>`${t}=${t==='sbatch'&&!this.slurm?'no':'yes'}`).join('\n')}\nexecutor=/usr/bin/apptainer\nruntime_module=${this.runtimeModule}\npartition=standard\n`+(this.workspaceTimeout?'workspace_timeout=yes\n':`writable=yes\nsource=${this.source?'exists':'missing'}\nexample=${this.source&&this.example?'exists':'missing'}\nimage=${this.image?'exists':'missing'}\n`))};
   if(s.includes('.example-XXXXXX')){if(!this.failStep)this.example=true}
   else if(s.includes('git -C')&&!this.failStep)this.source=true;
   return {returncode:this.failStep&&s.includes(this.failStep)?1:0,stdout:Buffer.alloc(0),stderr:Buffer.from(this.failStep&&s.includes(this.failStep)?'Download unavailable':'')};
@@ -41,6 +41,13 @@ test('an installation made before the example data existed reports only the exam
  assert.equal(exampleCheck({root:'/r',source:'/r/s',image:'/r/i',executor:'/e',workRoot:'/r/runs',revision:inventory.revision,partition:'p'},{...inventory,example_files:[]}),'true','an inventory without example data checks nothing');
 });
 test('missing Slurm blocks environment setup without disconnecting SSH',async t=>{const {ssh,service}=await fixture(t);ssh.slurm=false;assert.equal((await service.check()).phase,'blocked');assert.equal(ssh.connected,true)});
+test('a workspace timeout preserves configured paths and permits another check',async t=>{
+ const {ssh,service,file}=await fixture(t);ssh.workspaceTimeout=true;
+ const checked=await service.check();assert.equal(checked.phase,'blocked');assert.match(checked.message,/workspace directory timed out/);
+ assert.equal(checked.config?.root,'/home/user/signet');assert.equal(ssh.connected,true);assert.equal(ssh.commands.length,1);
+ await assert.rejects(readFile(file));
+ ssh.workspaceTimeout=false;assert.equal((await service.check()).phase,'needs-install');
+});
 test('a modified source fails the check, never becomes ready and can be retried',async t=>{const {ssh,service}=await fixture(t);ssh.source=true;ssh.image=true;ssh.failStep='SIGNET_HASHES';await assert.rejects(()=>service.check(),/source-integrity failed/);assert.equal(service.getSnapshot().phase,'error');assert.equal(ssh.connected,true);ssh.failStep='';assert.equal((await service.check()).phase,'ready')});
 test('runtime verification failure never persists a ready configuration',async t=>{
  const {ssh,service,file}=await fixture(t);ssh.source=true;ssh.image=true;ssh.failStep='Rscript -e';
