@@ -99,6 +99,27 @@
   const stage6RunsForDataset = () => runsForDataset().filter(canReadGraph);
   const stage6RunsForView = () => app.dataset.nav === "history" ? matchingHistoryRuns().filter(canReadGraph) : stage6RunsForDataset();
 
+  // Read current state synchronously at send time; never cache it on a chat/session.
+  window.addEventListener("workspace-context-request", event => {
+    if (!datasetCatalogReady || !["analysis", "history"].includes(app.dataset.nav)) return;
+    const inHistory = app.dataset.nav === "history";
+    const stage = inHistory ? historyResult?.stage : Number(timeline.querySelector('[aria-current="step"]')?.dataset.stage);
+    if (!Number.isInteger(stage) || stage < 1 || stage > 6) return;
+    let run = inHistory ? selectedHistoryResult() : null;
+    if (!inHistory && stage === 6) run = findHistoryRun(stage6RunSelect.value);
+    if (!inHistory && stage < 6) {
+      const panel = root.querySelector(`#lens-stage${stage}`);
+      const key = ["genotype", "expression", "adjust", "cis", "network"][stage - 1] + "RunId";
+      const runId = panel?.dataset[key];
+      run = runsForDataset().find(row => row.source === "live" && row.run_id === runId);
+    }
+    if (run && !inHistory && run.dataset_id !== activeDataset.id) return;
+    const gene = stage === 6 && analysisNetwork.dataset.historyId === (run && historyKey(run)) &&
+      analysisNetwork.dataset.runState === "ready" ? analysisNetwork.dataset.selectedGene : null;
+    event.detail.context = {version: 1, dataset_id: run ? run.dataset_id : activeDataset.id,
+      history_id: run ? historyKey(run) : null, stage, selected_genes: gene ? [gene] : []};
+  });
+
   async function requestDataset(path, body, method = "GET") {
     const response = await fetch(path, {method, body: JSON.stringify(body),
       headers: {"Content-Type": "application/json", "X-Chat-Token": chatToken}});
@@ -1778,6 +1799,7 @@
 
   const newChatTitle = ["新對話", "New chat"];
   const idleChatStatus = ["SIGNET Agent · 本機服務已啟動", "SIGNET Agent · Local service ready"];
+  const chatOutcomes = {completed: ["已結束", "Ended"], failed: ["失敗", "Failed"], needs_review: ["需要確認", "Needs review"]};
   const chatRecords = [];
   const chatLabels = new Map();
   let activeChat, chatBusy = false;
@@ -1820,6 +1842,21 @@
     return {event, status, log};
   }
 
+  function toolActivity(record, line, operations) {
+    if (typeof line !== "string" || !line.startsWith("SIGNET_TOOL ")) return false;
+    let data;
+    try { data = JSON.parse(line.slice(12)); } catch { return false; }
+    if (!/^[a-f0-9]{32}$/.test(data.operation_id) || !/^[\w]{1,100}$/.test(data.tool_name)) return false;
+    const states = {running: ["執行中", "Running"], completed: ["完成", "Completed"], failed: ["失敗", "Failed"], cancelled: ["已取消", "Cancelled"], needs_review: ["需要確認", "Needs review"]};
+    if (!states[data.status]) return false;
+    let row = operations.get(data.operation_id);
+    if (!row) { row = appendChatEvent(record, data.tool_name, "", states[data.status]); operations.set(data.operation_id, row); }
+    chatLabel(row.status, states[data.status]);
+    const elapsed = Number.isFinite(data.elapsed_ms) && data.elapsed_ms >= 0 ? `${(data.elapsed_ms / 1000).toFixed(2)} s` : "…";
+    chatLabel(row.log, [`驗證參數並呼叫工具（不顯示參數值）。\n耗時：${elapsed}\n結果：${String(data.result_summary || "—").slice(0, 300)}`, `Validate parameters and invoke tool (values hidden).\nElapsed: ${elapsed}\nResult: ${String(data.result_summary || "—").slice(0, 300)}`]);
+    return true;
+  }
+
   const chatDrawers = ["chat-list", "chat-activity"];
   function showChatDrawer(key) {
     for (const drawer of chatDrawers) {
@@ -1839,7 +1876,7 @@
       chat.transcript.hidden = chat.activity.hidden = !active;
     }
     chatLabel(byId("chat-title"), record.title);
-    chatLabel(byId("chat-status"), idleChatStatus);
+    chatLabel(byId("chat-status"), chatOutcomes[record.outcome] ?? idleChatStatus);
     input.value = record.draft;
     showChatDrawer(null);
     if (record.transcript.lastElementChild) {
@@ -1903,7 +1940,19 @@
       else renderAgentAnswer(createAgentReply(record), text);
     }
     for (const events of saved.events ?? []) {
-      appendChatEvent(record, ["已存執行紀錄", "Saved activity"], events.join("\n"), ["已結束", "Ended"]);
+      const operations = new Map();
+      let outcome = "completed";
+      const logs = events.filter(line => {
+        if (typeof line === "string" && line.startsWith("SIGNET_TURN ")) {
+          try { const saved = JSON.parse(line.slice(12)); if (chatOutcomes[saved.status]) outcome = saved.status; } catch {}
+          return false;
+        }
+        if (/回合失敗|Turn failed/.test(line)) outcome = "failed";
+        else if (outcome !== "failed" && /回合需要確認|Turn needs review/.test(line)) outcome = "needs_review";
+        return !toolActivity(record, line, operations);
+      });
+      record.outcome = outcome;
+      appendChatEvent(record, ["已存執行紀錄", "Saved activity"], logs.join("\n"), chatOutcomes[outcome]);
     }
     record.loaded = true;
   }
@@ -2500,13 +2549,61 @@
     input.focus();
   });
 
+  // A user's new selection invalidates outstanding navigation, including delayed graph loads.
+  let navigationRevision = 0;
+  let navigationAction = 0;
+  root.addEventListener("click", event => {
+    if (event.isTrusted && event.target.closest("[data-nav-target], [data-nav-right], [data-run-stage], .ml-stage-button, [data-gene], #ml-run-list, #ml-stage6-run")) navigationRevision++;
+  }, true);
+  root.addEventListener("change", event => {
+    if (event.isTrusted) navigationRevision++;
+  }, true);
+  async function applyWorkspaceAction(action, record, revision) {
+    if (!action || action.version !== 1 || !["view_stage", "select_gene"].includes(action.action) ||
+      !Number.isInteger(action.stage) || action.stage < 1 || action.stage > 6 ||
+      typeof action.history_id !== "string" ||
+      !/^(workspace|archive|recorded)--[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(action.history_id) ||
+      Object.keys(action).some(key => !["version", "action", "history_id", "stage", "gene"].includes(key)) ||
+      (action.action === "select_gene" ? action.stage !== 6 || typeof action.gene !== "string" ||
+        !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(action.gene) : action.gene !== undefined)) return false;
+    const actionNumber = ++navigationAction;
+    const current = () => activeChat === record && navigationRevision === revision && navigationAction === actionNumber;
+    const run = findHistoryRun(action.history_id);
+    const savedJob = run?.jobs?.[historySteps[action.stage - 1]];
+    const readable = canReadStage(run, action.stage) || action.stage === 6 && canReadGraph(run);
+    const reviewable = canContinue(run) && (Boolean(savedJob) && savedJob.state !== "not_submitted" &&
+      (action.stage > 1 || savedJob.state !== "completed") || action.stage > 1 && canStartStage(run, action.stage));
+    if (!current() || !run || !(action.action === "select_gene" ? action.stage === 6 && canReadGraph(run) : readable || reviewable)) return false;
+    const dataset = datasets.find(candidate => candidate.id === run.dataset_id);
+    if (run.dataset_id && !dataset) return false;
+    if (dataset) selectDataset(dataset);
+    historyScope = "all";
+    byId("history-scope").value = historyScope;
+    selectedRuns.set(historySelectionKey(), action.history_id);
+    clearHistoryResult();
+    historyResult = {runId: run.run_id, historyId: action.history_id, stage: action.stage};
+    openNavigation("history");
+    if (action.stage === 3) void loadStage3Run();
+    else if (archiveSteps.has(action.stage)) void loadArchivedStep();
+    if (action.action === "select_gene") {
+      await loadStage6Run(action.history_id);
+      if (!current() || historyResult?.historyId !== action.history_id || historyResult.stage !== 6 ||
+        stage6Result?.history_id !== action.history_id || !stage6Result.graph.nodes.includes(action.gene)) return false;
+      analysisNetwork.dispatchEvent(new CustomEvent("lens:select-gene", {detail: {gene: action.gene}}));
+    }
+    return true;
+  }
+
   async function sendMessage() {
     const text = input.value.trim();
     if (chatBusy || !text) return;
     const record = activeChat;
+    const navigationAtSend = ++navigationRevision;
+    const selection = {context: null};
+    window.dispatchEvent(new CustomEvent("workspace-context-request", {detail: selection}));
+    const workspace_context = selection.context;
     const status = byId("chat-status");
     const needsReview = ["需要確認", "Needs review"];
-    const ended = ["已結束", "Ended"];
     const turn = appendChatEvent(record, ["對話回合", "Conversation turn"], "", ["執行中", "Running"]);
     turn.event.open = true;
 
@@ -2520,29 +2617,43 @@
     globalThis.lucide?.createIcons();
     reply.scrollIntoView({ block: "nearest" });
 
-    let done = false, failed = false, answered = false;
+    const operations = new Map();
+    let done = false, failed = false, answered = false, outcome = "completed";
     function consume(line) {
       if (!line.trim()) return;
       const event = JSON.parse(line);
+      if (event.type === "progress" && toolActivity(record, event.text, operations)) return;
       if (["progress", "error", "done"].includes(event.type)) {
         turn.log.textContent += (turn.log.textContent ? "\n" : "") + event.text;
+      }
+      if (event.type === "workspace_action") {
+        void applyWorkspaceAction(event.workspace_action ?? event.text, record, navigationAtSend).then(applied => {
+          if (!applied) turn.log.textContent += "\n" + (root.lang === "en" ? "Navigation ignored: stale selection, unavailable result or invalid target." : "未套用導覽：選取已改變、結果不可用或目標無效。");
+        }).catch(() => {
+          turn.log.textContent += "\n" + (root.lang === "en" ? "Navigation unavailable; no analysis was executed." : "導覽目前不可用；未執行分析。");
+        });
       }
       if (event.type === "answer") {
         renderAgentAnswer(reply, event.text);
         answered = true;
       }
       if (event.type === "error") {
-        chatLabel(reply, event.text);
+        if (answered || failed) reply.after(createMessage("ml-saved-reply", event.text));
+        else chatLabel(reply, event.text);
         failed = true;
       }
-      if (event.type === "done") done = true;
+      if (event.type === "done") {
+        outcome = event.status === "cancelled" ? "needs_review" : chatOutcomes[event.status] ? event.status : failed ? "needs_review" : "completed";
+        if (failed && outcome === "completed") outcome = "needs_review";
+        done = true;
+      }
     }
 
     try {
       const response = await fetch("/chat", {
         method: "POST",
         headers: {"Content-Type": "application/json", "X-Chat-Token": chatToken},
-        body: JSON.stringify({text, session: record.session, language: root.lang}),
+        body: JSON.stringify({text, session: record.session, language: root.lang, workspace_context}),
       });
       if (!response.ok) throw new Error(await readChatError(response));
       const reader = response.body.getReader();
@@ -2566,8 +2677,9 @@
         byId("chat-records").prepend(record.button);
         byId("empty-chats").hidden = true;
       }
-      chatLabel(status, failed ? needsReview : ["回合結束", "Turn ended"]);
-      chatLabel(turn.status, failed ? needsReview : ended);
+      record.outcome = outcome;
+      chatLabel(status, chatOutcomes[outcome]);
+      chatLabel(turn.status, chatOutcomes[outcome]);
     } catch (error) {
       const lostConnection = ["連線中斷。已啟動的工具可能仍在執行，請先核對工作狀態。",
         "Connection interrupted. Check any active jobs before retrying."];
@@ -2577,6 +2689,7 @@
       turn.log.textContent += (turn.log.textContent ? "\n" : "") + (Array.isArray(detail) ? detail[root.lang === "en" ? 1 : 0] : detail);
       chatLabel(status, needsReview);
       chatLabel(turn.status, needsReview);
+      record.outcome = "needs_review";
     } finally {
       setChatBusy(false);
       if (!byId("chat-transcripts").hidden && !byId("agent-view").hidden && !byId("chat-panel").hidden) {

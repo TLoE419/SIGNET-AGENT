@@ -42,7 +42,7 @@ function setup(initial={}) {
   let finish, calls=0;
   const gate=new Promise(resolve=>finish=resolve);
   const workspace={active:false,runs:[],baseline:null,comparison:null,proposals:[],graphs:{}};
-  const events={};const storage=new Map();const navigation=[];
+  const events={};const storage=new Map();const navigation=[];const requests=[];
   const context=vm.createContext({document:{getElementById:id=>ids.get(id),createElement:tag=>new Element(tag),
     querySelector:selector=>selector.startsWith('meta')?{content:'token'}:find(selector),
     querySelectorAll:selector=>selector==='[data-tab]'?all.filter(e=>e.dataset.tab):[],addEventListener(){}},
@@ -52,9 +52,9 @@ function setup(initial={}) {
     addEventListener(name,fn){events[name]=fn;},dispatchEvent(event){events[event.type]?.(event);},
     sessionStorage:{getItem:k=>storage.get(k),setItem:(k,v)=>storage.set(k,v)},
     setInterval(){return 1;},clearInterval(){},setTimeout,clearTimeout,
-    fetch:async path=>{
+    fetch:async (path, options)=>{
       if(path.startsWith('/stage6'))return {ok:true,json:async()=>structuredClone(workspace)};
-      calls++;
+      calls++;requests.push(JSON.parse(options.body));
       if(context.failRequest)return {ok:false,json:async()=>({error:'Controlled service failure'})};
       let read=0;
       const chunk=items=>({done:false,value:Buffer.from(items.map(item=>JSON.stringify(item)+'\n').join(''))});
@@ -82,13 +82,15 @@ function setup(initial={}) {
     }
     return true;
   }
-  return {context,ids,events,visible,finish,workspace,navigation,calls:()=>calls};
+  return {requests,context,ids,events,visible,finish,workspace,navigation,calls:()=>calls};
 }
 
 (async()=>{
   const app=setup({sessions:[{session:'saved',title:'Saved'}]});await new Promise(setImmediate);
+  app.events['workspace-context-request']=event=>{event.detail.context={version:1,dataset_id:'cohort-a',history_id:'archive--same',stage:6,selected_genes:['A']};};
   const pending=vm.runInContext('send("Describe the tools without running analysis.")',app.context);
   await new Promise(setImmediate);
+  assert.equal(app.requests[0].workspace_context.history_id,'archive--same');
   const savedLink=app.ids.get('chat-list').children[0];
   assert.equal(savedLink.disabled,true);
   savedLink.events.click();
@@ -114,6 +116,10 @@ function setup(initial={}) {
   app.ids.get('chat-progress').open=true;
   assert.match(app.ids.get('activity').textContent,/signet_catalog/);
   assert.equal(app.calls(),1,'view changes must not repeat the request');
+
+  app.events['workspace-context-request']=event=>{event.detail.context=null;};
+  await vm.runInContext('send("After changing chats and workspace")',app.context);
+  assert.equal(app.requests[1].workspace_context,null,'next send must not reuse prior selection');
 
   const restored=setup({session:'saved-session',sessions:[{session:'saved-session',title:'Saved question'},{session:'other-session',title:'<script>literal title</script>'}],messages:[{role:'assistant',text:'Saved answer'}],events:[['Saved tool result']]});
   await new Promise(setImmediate);

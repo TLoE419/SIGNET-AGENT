@@ -82,7 +82,7 @@ class CodexProviderTest(unittest.TestCase):
             args[1](None)
             create_client.assert_called_once_with(timing=None)
 
-    def test_answer_keeps_22_tools_and_history_without_groq_budget_or_provider_keys(self):
+    def test_answer_keeps_controlled_tools_and_history_without_groq_budget_or_provider_keys(self):
         text = '不能刪除的研究條件。' * 1000
         events = []
         with patch.dict(os.environ, {key: 'fake-secret-credential' for key in
@@ -92,7 +92,13 @@ class CodexProviderTest(unittest.TestCase):
         self.assertEqual(answer, '已連線。')
         captured = json.loads(self.capture.read_text())
         self.assertEqual(captured['payload']['messages'][-1]['content'], text)
-        self.assertEqual(len(captured['payload']['available_tools']), 33)
+        from agent.tools.registry import ALL_TOOLS
+        from agent.tools.workspace import LEGACY_EXECUTION
+        names = {tool['function']['name'] for tool in captured['payload']['available_tools']}
+        self.assertEqual(names, {tool.__name__ for tool in ALL_TOOLS})
+        self.assertTrue({'get_workspace_stage', 'propose_workspace_stage', 'propose_workspace_dataset', 'navigate_workspace'} <= names)
+        self.assertFalse(names & LEGACY_EXECUTION)
+        self.assertNotIn('get_network_status', names)
         self.assertEqual(captured['keys_present'], [])
         self.assertNotIn('PRIVATE-REASONING', '\n'.join(events))
         for feature in DISABLED_FEATURES:
@@ -125,6 +131,14 @@ class CodexProviderTest(unittest.TestCase):
         self.assertEqual(call.id, result.id)
         self.assertTrue(call.id.startswith('codex-'))
         self.assertTrue(any('選擇原因' in event for event in events))
+        import json
+        activity = [json.loads(event[12:]) for event in events if event.startswith('SIGNET_TOOL ')]
+        self.assertEqual([event['status'] for event in activity], ['running', 'completed'])
+        self.assertEqual(activity[0]['operation_id'], activity[1]['operation_id'])
+        self.assertEqual(activity[1]['tool_name'], 'list_files')
+        self.assertGreaterEqual(activity[1]['elapsed_ms'], 0)
+        self.assertNotIn(str(PROJECT), str(activity))
+
 
     def test_invalid_or_failed_cli_responses_never_execute_tools_or_expose_raw_errors(self):
         for mode in ('badargs', 'unknown', 'mixed', 'fail', 'built-in'):

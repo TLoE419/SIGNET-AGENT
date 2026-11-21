@@ -15,11 +15,12 @@ from dotenv import load_dotenv
 from google.genai import types
 
 from agent.app import signet_api
+from agent.app.chat_outcome import ChatOutcome
 from agent.core.conversation import MODEL, run_conversation
 from agent.core.model_timing import ModelRequestTiming
 from agent.paths import PROJECT_ROOT
 from agent.providers import PROVIDERS, create_provider_adapter
-from agent.runtime import signet_jobs, workspace_genotype
+from agent.runtime import signet_jobs, workspace_genotype, workspace_context
 from agent.stage6.workspace import ARCHIVED_STEP_JOBS, CHAT_CONTEXT, Workspace
 from agent.tools.ui import UI_CHANNEL
 
@@ -201,6 +202,11 @@ class ChatHandler(BaseHTTPRequestHandler):
                 raise ValueError()
         except (ValueError, OSError):
             return self._error(400, '訊息格式不正確，請輸入 1 至 8000 字。')
+        try:
+            validated_context = workspace_context.validate(payload.get('workspace_context'), self.server.stage6.history)
+        except (ValueError, KeyError, TypeError, OSError):
+            return self._error(400, 'Workspace selection changed or is invalid; reselect the dataset/run and send again.'
+                               if language == 'en' else '工作區選取已變更或無效；請重新選取資料組與執行後再傳送。')
         if not self.server.turn_lock.acquire(blocking=False):
             return self._error(409, '另一個回合仍在執行，請等候結束；關閉頁面不會取消工具。')
         try:
@@ -214,14 +220,16 @@ class ChatHandler(BaseHTTPRequestHandler):
             self.connection.settimeout(None)
             self._headers(200, 'application/x-ndjson; charset=utf-8')
             connected = True
+            outcome = ChatOutcome()
 
             def emit(kind, message):
                 nonlocal connected
+                outcome.observe(kind, message)
                 if kind in ('progress', 'error', 'done'):
                     events.append(message)
                 if connected:
                     try:
-                        self.wfile.write((json.dumps({'type': kind, 'text': message}, ensure_ascii=False) + '\n').encode())
+                        self.wfile.write((json.dumps({'type': kind, 'text': message, **({'status': outcome.status} if kind == 'done' else {})}, ensure_ascii=False) + '\n').encode())
                         self.wfile.flush()
                     except OSError:
                         # Keep recording actual results if the browser disconnects; never replay tools.
@@ -232,19 +240,25 @@ class ChatHandler(BaseHTTPRequestHandler):
                 with self.server.client_factory(timing) as client:
                     context_token = CHAT_CONTEXT.set((self.server.stage6, session))
                     # Panel requests from show_panel go straight to this page as they happen.
-                    ui_token = UI_CHANNEL.set(lambda request: emit('ui', request))
+                    ui_token = UI_CHANNEL.set(lambda request: emit('workspace_action', request['workspace_action']) if 'workspace_action' in request else emit('ui', request))
                     try:
                         answer = run_conversation(client, text.strip(), history,
                                               progress=lambda message: emit('progress', message), http_timing=timing,
-                                                  language=language)
+                                                  language=language, workspace_context=validated_context)
                     finally:
                         UI_CHANNEL.reset(ui_token)
                         CHAT_CONTEXT.reset(context_token)
+                # Failure returns have no final model content; retain their public answer on reload.
+                if not history or history[-1].role != 'model' or any(part.function_call for part in history[-1].parts or []):
+                    history.append(types.Content(role='model', parts=[types.Part.from_text(text=answer)]))
                 emit('workspace', self.server.stage6.view(session))
                 emit('answer', answer)
             except Exception:
                 emit('error', '回合發生非預期錯誤；操作狀態可能未知，請核對工作狀態後再繼續。')
-            emit('done', '回合結束；分析是否成功請以工具狀態與回答為準。')
+            if not connected:
+                outcome.status = 'needs_review'
+            events.append('SIGNET_TURN ' + json.dumps({'status': outcome.status}))
+            emit('done', outcome.summary())
         finally:
             try:
                 self.server.save_state()
