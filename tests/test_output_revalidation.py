@@ -133,6 +133,51 @@ class OutputRevalidationTest(unittest.TestCase):
             self.check()
         self.assertFalse(any((self.root / 'work' / relative).exists() for relative in fixtures.OUTPUTS))
 
+    def test_status_accepts_a_configured_mount_alias_and_reports_the_job_exit(self):
+        jobs.submit('step_test', 'expression', self.f.inputs)
+        mount = self.f.hpc / 'mounted-workspace'
+        original = self.f.remote_dir.parent
+        original.rename(mount)
+        original.symlink_to(mount, target_is_directory=True)
+        self.f.finish_job(exit_code='1', outputs=())
+        record = jobs.status('step_test', 'expression', refresh=True)
+        self.assertEqual((record['state'], record.get('exit_code')), ('failed', '1'))
+        self.assertNotIn('connection', record)
+
+    def test_status_reports_an_untrusted_job_marker_without_claiming_connection_loss(self):
+        jobs.submit('step_test', 'expression', self.f.inputs)
+        (self.f.remote_dir / 'steps/expression.job').write_text('foreign\n')
+        record = jobs.status('step_test', 'expression', refresh=True)
+        self.assertEqual(record['state'], 'submitted')
+        self.assertIsNone(record.get('connection'))
+        self.assertEqual(record.get('status_check_issue'), 'output_source_mismatch')
+
+    def test_status_rejects_redirecting_a_run_below_the_configured_root(self):
+        jobs.submit('step_test', 'expression', self.f.inputs)
+        original = self.f.remote_dir
+        redirected = original.with_name('redirected')
+        original.rename(redirected)
+        original.symlink_to(redirected, target_is_directory=True)
+        self.f.finish_job()
+        record = jobs.status('step_test', 'expression', refresh=True)
+        self.assertEqual(record['state'], 'submitted')
+        self.assertEqual(record.get('status_check_issue'), 'output_source_mismatch')
+
+    def test_status_keeps_scheduler_evidence_when_remote_file_checks_time_out(self):
+        jobs.submit('step_test', 'expression', self.f.inputs)
+        self.f.finish_job(outputs=())
+        timeout = self.f.fake / 'bin' / 'timeout'
+        timeout.write_text('#!/bin/bash\nif [ "$4" = bash ]; then exit 124; fi\nshift 3\nexec "$@"\n')
+        timeout.chmod(0o755)
+        start = len(self.f.calls)
+        record = jobs.status('step_test', 'expression', refresh=True)
+        self.assertEqual((record['state'], record.get('slurm_state')), ('submitted', 'COMPLETED'))
+        self.assertIsNone(record.get('connection'))
+        self.assertEqual(record.get('status_check_issue'), 'output_check_timeout')
+        self.assertIsNone(record.get('exit_code'))
+        self.assertEqual(jobs._load(self.root, 'expression')['state'], 'submitted')
+        self.assert_no_compute_commands(self.f.calls[start:])
+
     def test_live_children_are_not_cancelled_or_downloaded_during_a_check(self):
         self.seed()
         self.f.finish_job()
