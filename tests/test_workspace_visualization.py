@@ -103,13 +103,22 @@ class WorkspaceVisualizationTest(unittest.TestCase):
         workspace = Workspace(Mock(state_file=None))
         run = {'run_id': self.run_id, 'dataset_id': 'dataset-study-a',
                'dataset_name': ['研究 A', 'Study A'],
+               'source': 'live', 'name': ['研究 A', 'Study A'], 'jobs': {}, 'graph': None,
                'inputs': {'genotype': ['/frozen/a.ped', '/frozen/a.map'], 'expression': [], 'clinical': []}}
+        for relative in (workspace_genotype.SNAPSHOT, workspace_genotype.VISUALIZE_SNAPSHOT,
+                         'steps/genotype.json', 'steps/visualize.json'):
+            path = self.root / relative
+            record = json.loads(path.read_text())
+            record['dataset_id'] = run['dataset_id']
+            path.write_text(json.dumps(record))
         with patch.object(workspace, 'archived_history', return_value={'datasets': [], 'runs': []}), \
                 patch.object(workspace_genotype, 'run_history', return_value=run):
             history = workspace.history()
         self.assertEqual(history['datasets'], [{'id': run['dataset_id'], 'name': run['dataset_name'],
                                                 'inputs': run['inputs']}])
-        self.assertEqual(history['runs'], [run])
+        self.assertEqual(len(history['runs']), 1)
+        self.assertEqual({key: history['runs'][0][key] for key in run}, run)
+        self.assertEqual(history['runs'][0]['history_id'], 'workspace--' + self.run_id)
 
     def test_incomplete_job_or_invalid_exports_do_not_become_a_graph(self):
         for invalid in (self.edge_header, self.edge_source.replace('0.5,0.2', '0.4,0.2'),

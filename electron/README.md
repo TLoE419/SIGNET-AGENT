@@ -83,6 +83,42 @@ Run history retains the dataset name, original source paths, frozen paths,
 settings, and reference-preparation summary. The unchanged built-in chromosome 1
 example keeps its existing execution path.
 
+### Complete run history
+
+**Run history** defaults to the current dataset. Its scope selector also shows
+unclassified records or all runs, including archives whose dataset is no longer
+in the current catalog. The list combines workspace snapshots, generic Slurm
+step records, old Agent operation/plan records, and saved archives. A run folder
+already represented by workspace snapshots keeps its old operation evidence in
+that same entry. Identical run names from different sources stay separate.
+
+Details show the original files, recorded settings/resources, job identifiers,
+and recorded execution states. A prepared plan is distinct from an executed
+process, and process completion is distinct from verified scientific output.
+Legacy records without saved settings show **Not recorded**; history never
+reads today's mutable configuration as historical settings. Result links only
+appear when the corresponding local reader has the required artifacts. History
+listing does not poll SSH or the scheduler.
+
+An unclassified record can be assigned to a saved dataset. That organizational
+assignment survives restarts in `data/workspace-history.json`; it does not edit
+original records, establish sample compatibility, or enable legacy execution.
+Explicit original dataset ownership cannot be replaced. Source changes reject
+stale assignments, and a replaced run folder does not inherit an old assignment.
+Current dataset file changes do not alter saved run inputs or settings.
+
+Each stage's saved-job disclosure also lists its individual submission attempts.
+Open an attempt to inspect its own inputs, settings, prompt options, compute
+resources, job identifier, timestamps, recorded state changes, failure reason,
+and output-check evidence. The latest attempt is marked separately. Earlier
+attempts come from the immutable `steps/<step>.attempt<N>.json` records; current
+configuration and current result folders never fill gaps in an older attempt.
+Missing or unreadable attempt records are identified explicitly. Archives that
+did not preserve attempt numbers show that limitation instead of inventing a
+first attempt. Output paths describe saved evidence; they are not links to
+today's result folders. These disclosures do not submit, retry, cancel, or poll
+remote work.
+
 ### Submit the chromosome 1 example
 
 Connect to HPC3 from **Settings → Remote compute**. The same panel can check
@@ -446,6 +482,8 @@ work through separate processes (the turn lock is per process).
 npm test --prefix electron
 npm run test:smoke --prefix electron
 npm run test:startup --prefix electron
+npm run test:history --prefix electron
+npm run test:attempts --prefix electron
 .venv/bin/python -m unittest discover -s tests -p 'test_desktop_server.py' -v
 ```
 

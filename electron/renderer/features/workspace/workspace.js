@@ -85,10 +85,19 @@
   let historyRuns = [];
   let historyState = "loading";
   let historyResult = null;
+  let historyScope = "current";
   const localDatasetName = (dataset) => dataset.name[root.lang === "en" ? 1 : 0];
+  const historyKey = run => run.history_id ?? `${run.source === "live" ? "workspace" : run.source}--${run.run_id}`;
+  const findHistoryRun = id => historyRuns.find(run => historyKey(run) === id);
+  const canContinue = run => run?.source === "live" && run.origin === "workspace" && run.capabilities?.continue_analysis === true;
+  const canReadStage = (run, stage) => run?.capabilities?.stage_results?.includes(String(stage)) === true;
+  const canReadGraph = run => run?.capabilities?.stage6_graph === true;
   const runsForDataset = () => historyRuns.filter((run) => run.dataset_id === activeDataset.id);
-  const stage6RunsForDataset = () => runsForDataset().filter((run) => run.graph &&
-    (run.source === "archive" || run.source === "live" && run.jobs.visualize?.state === "completed"));
+  const matchingHistoryRuns = () => historyRuns.filter(run => historyScope === "all" ||
+    (historyScope === "unclassified" ? !run.dataset_id : run.dataset_id === activeDataset.id));
+  const selectedHistoryResult = () => findHistoryRun(historyResult?.historyId);
+  const stage6RunsForDataset = () => runsForDataset().filter(canReadGraph);
+  const stage6RunsForView = () => app.dataset.nav === "history" ? matchingHistoryRuns().filter(canReadGraph) : stage6RunsForDataset();
 
   async function requestDataset(path, body, method = "GET") {
     const response = await fetch(path, {method, body: JSON.stringify(body),
@@ -256,23 +265,23 @@
 
   const stageData = [
     {
-      name: "基因型準備", note: "確認第 1 號染色體範例後送出基因型前處理。",
+      name: "基因型準備", note: "核對資料組檔案後，手動送出基因型前處理。",
       settings: "在右側確認檔案與送算設定。",
       output: "送出後可查看排隊、執行和輸出檢查進度。",
       icon: "grid-3x3",
       preview: matrixPreview(["05050000000000", "00050000000000", "00050000000000", "00000000000000"]),
     },
     {
-      name: "基因表現量準備", note: "擷取第 1 號染色體上的基因表現量。",
-      settings: "只保留第 1 號染色體",
-      output: "554 個樣本 × 95 個基因",
+      name: "基因表現量準備", note: "準備這筆執行所選染色體的基因表現量。",
+      settings: "在右側確認這筆執行的檔案與染色體。",
+      output: "完成後查看這筆執行的樣本與基因結果。",
       icon: "grid-3x3",
       preview: matrixPreview(["22433443320232", "23432432241223", "45224454353243", "12322342231244"]),
     },
     {
       name: "樣本配對與校正", note: "配對樣本，再用主成分校正基因表現量。",
-      settings: "使用 3 個主成分",
-      output: "初步配對 473 位個體，校正後保留 471 位",
+      settings: "在右側確認臨床資料與主成分數。",
+      output: "完成後查看這筆執行的配對與校正結果。",
       icon: "bar-chart-3",
       preview: barPreview([473, 471], ["#b7cfe2", "#4380b2"]),
     },
@@ -445,11 +454,15 @@
     ["第 1 號染色體 · 模擬結果", "Chromosome 1 · Simulated results"],
     ["第 1 號染色體 · 模擬結果節錄", "Chromosome 1 · Simulated results excerpt"],
     ["基因型準備", "Genotype preparation"],
-    ["確認第 1 號染色體範例後送出基因型前處理。", "Review the chromosome 1 example, then submit genotype preparation."],
+    ["核對資料組檔案後，手動送出基因型前處理。", "Review the dataset files, then manually submit genotype preparation."],
     ["在右側確認檔案與送算設定。", "Review files and submission settings on the right."],
     ["送出後可查看排隊、執行和輸出檢查進度。", "After submission, follow the queue, job, and output checks."],
     ["基因表現量準備", "Gene expression preparation"],
-    ["擷取第 1 號染色體上的基因表現量。", "Extract expression data for chromosome 1."],
+    ["準備這筆執行所選染色體的基因表現量。", "Prepare expression data for this run’s selected chromosome."],
+    ["在右側確認這筆執行的檔案與染色體。", "Review this run’s files and chromosome on the right."],
+    ["完成後查看這筆執行的樣本與基因結果。", "View this run’s sample and gene results after completion."],
+    ["在右側確認臨床資料與主成分數。", "Review the clinical file and principal component count on the right."],
+    ["完成後查看這筆執行的配對與校正結果。", "View this run’s matching and adjustment results after completion."],
     ["只保留第 1 號染色體", "Chromosome 1 only"],
     ["554 個樣本 × 95 個基因", "554 samples × 95 genes"],
     ["樣本配對與校正", "Sample matching and adjustment"],
@@ -673,7 +686,10 @@
   const stageResults = root.querySelectorAll(".ml-workspace");
   function syncGenotypeContext() {
     const stageContext = ["手動執行", "Manual execution"];
-    const liveRuns = runsForDataset().filter(run => run.source === "live");
+    const liveRuns = runsForDataset().filter(canContinue);
+    const historyRun = selectedHistoryResult();
+    const continuationRuns = app.dataset.nav === "history" ? (canContinue(historyRun) ? [historyRun] : []) : liveRuns;
+    const continuationDataset = app.dataset.nav === "history" ? historyRun?.dataset_id ?? activeDataset.id : activeDataset.id;
     byId("stage-header").querySelector("span").textContent = stageContext[root.lang === "en" ? 1 : 0];
     genotypeRun?.setContext({
       datasetId: activeDataset.id,
@@ -685,46 +701,46 @@
         timeline.querySelector('[aria-current="step"]')?.dataset.stage === "1",
     });
     expressionRun?.setContext({
-      datasetId: activeDataset.id,
+      datasetId: continuationDataset,
       language: root.lang,
       visible: app.dataset.nav === "analysis" &&
         timeline.querySelector('[aria-current="step"]')?.dataset.stage === "2" ||
         app.dataset.nav === "history" && historyResult?.stage === 2,
-      runs: liveRuns,
+      runs: continuationRuns,
       runId: app.dataset.nav === "history" && historyResult?.stage === 2 ? historyResult.runId : null,
     });
     adjustmentRun?.setContext({
-      datasetId: activeDataset.id,
+      datasetId: continuationDataset,
       language: root.lang,
       visible: app.dataset.nav === "analysis" &&
         timeline.querySelector('[aria-current="step"]')?.dataset.stage === "3" ||
         app.dataset.nav === "history" && historyResult?.stage === 3,
-      runs: liveRuns,
+      runs: continuationRuns,
       runId: app.dataset.nav === "history" && historyResult?.stage === 3 ? historyResult.runId : null,
     });
     cisRun?.setContext({
-      datasetId: activeDataset.id,
+      datasetId: continuationDataset,
       language: root.lang,
       visible: app.dataset.nav === "analysis" &&
         timeline.querySelector('[aria-current="step"]')?.dataset.stage === "4" ||
         app.dataset.nav === "history" && historyResult?.stage === 4,
-      runs: liveRuns,
+      runs: continuationRuns,
       runId: app.dataset.nav === "history" && historyResult?.stage === 4 ? historyResult.runId : null,
     });
     networkRun?.setContext({
-      datasetId: activeDataset.id,
+      datasetId: continuationDataset,
       language: root.lang,
       visible: app.dataset.nav === "analysis" &&
         timeline.querySelector('[aria-current="step"]')?.dataset.stage === "5" ||
         app.dataset.nav === "history" && historyResult?.stage === 5,
-      runs: liveRuns,
+      runs: continuationRuns,
       runId: app.dataset.nav === "history" && historyResult?.stage === 5 ? historyResult.runId : null,
     });
     visualizationRun?.setContext({
-      datasetId: activeDataset.id,
+      datasetId: continuationDataset,
       language: root.lang,
       visible: ["analysis", "history"].includes(app.dataset.nav) && visualizationFormVisible(),
-      runs: liveRuns,
+      runs: continuationRuns,
       runId: app.dataset.nav === "history" && historyResult?.stage === 6 ? historyResult.runId : null,
       resultsAvailable: stage6RunsForDataset().length > 0,
     });
@@ -949,75 +965,173 @@
   const notRecorded = () => historyText("未記錄", "Not recorded");
 
   const genotypeHistoryStates = {
-    submitting: ["正在提交", "Submitting"],
-    submitted: ["已送出", "Submitted"],
-    pending: ["排隊中", "Queued"],
-    running: ["執行中", "Running"],
-    validating: ["正在檢查輸出", "Checking outputs"],
-    completed: ["已完成", "Completed"],
-    failed: ["失敗", "Failed"],
-    cancelling: ["正在取消", "Cancelling"],
-    cancelled: ["已取消", "Cancelled"],
-    unknown: ["待確認狀態", "Status unconfirmed"],
+    submitting: ["正在提交", "Submitting"], submitted: ["已送出", "Submitted"],
+    pending: ["排隊中", "Queued"], running: ["執行中", "Running"],
+    validating: ["正在檢查輸出", "Checking outputs"], completed: ["已完成", "Completed"],
+    failed: ["失敗", "Failed"], cancelling: ["正在取消", "Cancelling"], cancelled: ["已取消", "Cancelled"],
+    unknown: ["待確認狀態", "Status unconfirmed"], not_submitted: ["尚未送出", "Not submitted"],
+    prepared: ["已準備，未記錄實際執行", "Prepared; execution not recorded"],
+    process_completed: ["程序已完成，未驗證科學結果", "Process completed; scientific outputs unverified"],
+    configured: ["已保存設定，未記錄執行", "Configured; execution not recorded"],
+    recorded: ["已保存工具紀錄", "Tool activity recorded"],
+    verified_completed: ["技術輸出已驗證", "Technical outputs verified"],
+    starting: ["執行是否開始待確認", "Execution start unconfirmed"],
+    not_recorded: ["未記錄", "Not recorded"],
   };
-  const genotypeHistoryState = (state) => genotypeHistoryStates[state] ?? ["尚未送出", "Not submitted"];
-  const historyJob = (run) => historySteps.map(key => run.jobs[key]).filter(Boolean).at(-1);
-
+  const genotypeHistoryState = state => genotypeHistoryStates[state] ?? (state ? [state, state] : ["未記錄", "Not recorded"]);
+  const historyJob = run => Object.values(run.jobs ?? {}).filter(job => job && typeof job === "object")
+    .sort((a, b) => (Date.parse(a.finished_at || a.submitted_at) || 0) - (Date.parse(b.finished_at || b.submitted_at) || 0)).at(-1);
+  const historyTime = run => Date.parse(run.finished_at || historyJob(run)?.finished_at || run.submitted_at || historyJob(run)?.submitted_at) || 0;
+  const historySourceName = run => ({workspace: ["工作區執行", "Workspace run"], slurm: ["舊工具排程工作", "Legacy scheduler job"],
+    agent: ["Agent 工具紀錄", "Agent tool record"], archive: ["封存結果", "Archived result"]})[run.origin] ?? ["來源未記錄", "Source not recorded"];
+  const associationName = run => run.association?.status === "manual" ? ["手動歸類", "Manually assigned"]
+    : run.dataset_id ? ["已記錄資料組", "Recorded dataset"] : ["未分類", "Unclassified"];
+  const historyStateLabel = (state, savedOnly = false) => (savedOnly ? historyText("最後保存的狀態：", "Last recorded state: ") : "") + historyText(...genotypeHistoryState(state));
+  const assignmentStates = new Map();
+  const historyDatasetName = id => datasets.find(dataset => dataset.id === id)?.name ?? (id ? [id, id] : ["未分類", "Unclassified"]);
+  const recordedValue = value => value == null ? notRecorded() : escapeHistory(typeof value === "object" ? JSON.stringify(value) : value);
+  const savedDefinitions = value => Object.entries(value ?? {}).map(([key, item]) =>
+    `<dt>${escapeHistory(key)}</dt><dd>${recordedValue(item)}</dd>`).join("") || `<dt>${historyText("內容", "Contents")}</dt><dd>${notRecorded()}</dd>`;
+  function savedJobContent(job, operation = false) {
+    const evidence = job.settings_evidence ?? (Object.keys(job.settings ?? {}).length || Object.keys(job.options ?? {}).length ? "recorded" : "not_recorded");
+    const evidenceCopy = ({recorded: ["實際保存的設定", "Recorded settings"], prepared_snapshot: ["準備時的設定；不代表已執行", "Prepared settings; execution not implied"],
+      not_recorded: ["設定未記錄", "Settings not recorded"]})[evidence] ?? [evidence, evidence];
+    return `<p data-settings-evidence="${escapeHistory(evidence)}">${historyText(...evidenceCopy)}</p>
+        <dl class="ml-key-values"><dt>${historyText("工作編號", "Job ID")}</dt><dd>${recordedValue(job.job_id)}</dd>
+          <dt>${historyText("送出時間", "Submitted at")}</dt><dd>${recordedValue(job.submitted_at)}</dd>
+          <dt>${historyText("開始時間", "Started at")}</dt><dd>${recordedValue(job.started_at)}</dd>
+          <dt>${historyText("結束時間", "Finished at")}</dt><dd>${recordedValue(job.finished_at ?? job.ended_at)}</dd>
+          ${operation ? `<dt>${historyText("實際執行", "Executed")}</dt><dd>${job.executed === true ? historyText("是", "Yes") : job.executed === false ? historyText("否", "No") : notRecorded()}</dd>` : ""}
+          <dt>${historyText("紀錄來源", "Record source")}</dt><dd>${recordedValue(job.record_file)}</dd>
+          ${job.reason ? `<dt>${historyText("說明", "Reason")}</dt><dd>${recordedValue(job.reason)}</dd>` : ""}</dl>
+        ${[["inputs", ["保存的輸入檔案", "Saved inputs"]], ["settings", ["保存的設定", "Saved settings"]], ["options", ["保存的選項", "Saved options"]], ["resources", ["保存的資源", "Saved resources"]]]
+          .filter(([field]) => field !== "options" || Object.keys(job.options ?? {}).length)
+          .map(([field, title]) => `<h4>${historyText(...title)}</h4><dl class="ml-key-values" data-history-saved="${field}">${savedDefinitions(job[field])}</dl>`).join("")}`;
+  }
+  const attemptResultNames = {
+    recorded_completed: ["紀錄顯示已完成", "Recorded as completed"],
+    recorded_failed: ["紀錄顯示失敗", "Recorded as failed"],
+    recorded_cancelled: ["紀錄顯示已取消", "Recorded as cancelled"],
+    pending: ["尚未記錄最終結果", "Final result not recorded"],
+    not_recorded: ["結果未記錄", "Result not recorded"],
+  };
+  function savedAttemptResult(attempt) {
+    const result = attempt.result ?? {};
+    const record = attempt.record ?? {};
+    const outputs = Array.isArray(result.outputs) ? result.outputs.filter(output => output && typeof output.path === "string") : [];
+    const outputStatus = {downloaded: ["紀錄顯示已下載", "Recorded as downloaded"], missing: ["紀錄顯示缺少", "Recorded as missing"],
+      not_recorded: ["檔案狀態未記錄", "File status not recorded"]};
+    return `<section class="ml-history-attempt-result" data-history-attempt-result>
+      <h4>${historyText("保存的結果", "Saved result")}</h4>
+      <p>${historyText(...(attemptResultNames[result.status] ?? attemptResultNames.not_recorded))}</p>
+      <dl class="ml-key-values">${[["slurm_state", ["排程器狀態", "Scheduler state"]], ["exit_code", ["結束代碼", "Exit code"]],
+        ["failure_hints", ["保存的失敗提示", "Recorded failure hints"]], ["missing_outputs", ["當時缺少的檔案", "Missing outputs at the time"]]]
+        .filter(([field]) => record[field] != null)
+        .map(([field, label]) => `<dt>${historyText(...label)}</dt><dd>${recordedValue(record[field])}</dd>`).join("")}</dl>
+      ${outputs.length ? `<ul class="ml-history-attempt-outputs">${outputs.map(output => `<li><code>${recordedValue(output.path)}</code> · ${historyText(...(outputStatus[output.status] ?? outputStatus.not_recorded))}</li>`).join("")}</ul>` : ""}
+    </section>`;
+  }
+  function savedAttempts(attempts) {
+    return `<div class="ml-history-attempts">${[...attempts].sort((a, b) => Number(b.current) - Number(a.current) || (b.number ?? 0) - (a.number ?? 0)).map(attempt => {
+      const number = attempt.number ?? "unknown";
+      const available = attempt.availability === "recorded" && Boolean(attempt.record);
+      const title = attempt.number == null ? historyText("嘗試次數未記錄", "Attempt number not recorded")
+        : historyText(`第 ${attempt.number} 次嘗試`, `Attempt ${attempt.number}`);
+      const state = available ? historyStateLabel(attempt.record.state ?? attempt.record.status, true)
+        : historyText(attempt.availability === "invalid" ? "保存的紀錄無法讀取" : "缺少保存的紀錄", attempt.availability === "invalid" ? "Saved record unreadable" : "Saved record missing");
+      const savedEvents = attempt.record?.history;
+      const events = Array.isArray(savedEvents) ? savedEvents.filter(event => event && typeof event.state === "string" && typeof event.at === "string") : [];
+      const unreadableEvents = savedEvents != null && (!Array.isArray(savedEvents) || events.length !== savedEvents.length);
+      return `<details class="ml-history-attempt" data-history-attempt="${escapeHistory(number)}" data-attempt-record="${escapeHistory(attempt.record_file)}" data-attempt-current="${attempt.current === true}" data-attempt-available="${available}">
+        <summary>${title}${attempt.current ? ` · ${historyText("目前紀錄", "Current record")}` : ""}<span class="ml-history-attempt-state">${state}</span></summary>
+        <div class="ml-history-job-content">
+          ${available ? savedJobContent({...attempt.record, record_file: attempt.record_file}) + savedAttemptResult(attempt) : `<p>${historyText("這次嘗試的檔案、設定與結果無法從現有紀錄確認。", "The inputs, settings and results of this attempt cannot be confirmed from the saved records.")}</p><p>${historyText("紀錄來源", "Record source")} · <code>${recordedValue(attempt.record_file)}</code></p>`}
+          ${(attempt.issues ?? []).length ? `<p class="ml-history-record-note">${attempt.issues.map(escapeHistory).join(" ")}</p>` : ""}
+          ${events.length ? `<h4>${historyText("保存的狀態時間線", "Recorded state timeline")}</h4><ol class="ml-history-attempt-events" data-history-attempt-events>${events.map(event => `<li>${historyText(...genotypeHistoryState(event.state))} · <time>${recordedValue(event.at)}</time>${event.reason ? ` · ${recordedValue(event.reason)}` : ""}</li>`).join("")}</ol>` : ""}
+          ${unreadableEvents ? `<p data-history-attempt-event-warning>${historyText("部分保存的時間線無法讀取。", "Part of the recorded timeline is unreadable.")}</p>` : ""}
+        </div></details>`;
+    }).join("")}</div>`;
+  }
+  function savedJobDetails(job, key, operation = false, savedOnly = false, attempts = []) {
+    return `<details class="ml-run-step ml-history-saved-job" ${operation ? `data-history-operation="${escapeHistory(key)}"` : `data-history-job="${escapeHistory(key)}"`}>
+      <summary>${escapeHistory(key)} · <span data-history-job-state>${historyStateLabel(job.state ?? job.status, savedOnly || operation)}</span>
+        ${attempts.length ? `<span class="ml-history-attempt-count">${historyText(`嘗試紀錄（${attempts.length}）`, `Attempt records (${attempts.length})`)}</span>` : ""}</summary>
+      ${attempts.length ? savedAttempts(attempts) : `<div class="ml-history-job-content">${savedJobContent(job, operation)}</div>`}</details>`;
+  }
+  function canStartStage(run, number) {
+    return canContinue(run) && number > 1 && historySteps.slice(0, number - 1).every(step => run.jobs?.[step]?.state === "completed");
+  }
+  function historyDisclosureKey(details) {
+    const job = details.closest("[data-history-job], [data-history-operation]");
+    const scope = job?.dataset.historyJob ?? job?.dataset.historyOperation ?? (details.hasAttribute("data-history-provenance") ? "provenance" : "inputs");
+    return `${details.closest("[data-history-id]")?.dataset.historyId}|${scope}|${details.dataset.attemptRecord ?? details.dataset.historyAttempt ?? ""}`;
+  }
   function renderHistoryRecords() {
-    runList.innerHTML = historyRuns.map((run) => {
-      const id = escapeHistory(run.run_id);
-      const started = fullTime(run.jobs.genotype?.submitted_at ?? historyJob(run)?.submitted_at);
-      const liveStatus = run.source === "live" ? historyText(...genotypeHistoryState(historyJob(run)?.state)) : "";
-      const icon = run.source === "live" && historyJob(run)?.state !== "completed" ? "history" : "circle-check";
-      return `<button class="ml-nav-list-item" type="button" data-run-target="${id}" aria-controls="ml-run-${id}" aria-pressed="false">
-        <i data-lucide="${icon}" aria-hidden="true"></i>
-        <span><strong>${historyText(...run.name)}</strong><small>${escapeHistory(started)}${liveStatus ? " · " + liveStatus : ""}</small></span>
-      </button>`;
+    const expanded = new Set([...runDetails.querySelectorAll("details[open]")].map(details =>
+      historyDisclosureKey(details)));
+    runList.innerHTML = historyRuns.map(run => {
+      const key = escapeHistory(historyKey(run)), id = escapeHistory(run.run_id);
+      const state = run.status ?? historyJob(run)?.state;
+      const started = fullTime(run.submitted_at ?? run.jobs?.genotype?.submitted_at ?? historyJob(run)?.submitted_at);
+      const icon = state === "completed" ? "circle-check" : "history";
+      return `<button class="ml-nav-list-item" type="button" data-run-target="${key}" data-history-id="${key}" data-run-id="${id}" aria-controls="ml-run-${key}" aria-pressed="false">
+        <i data-lucide="${icon}" aria-hidden="true"></i><span><strong>${historyText(...run.name)}</strong>
+        <small>${historyText(...historySourceName(run))} · ${historyStateLabel(state, run.source === "recorded")}</small>
+        <small>${escapeHistory(started)}</small></span></button>`;
     }).join("");
-    runDetails.innerHTML = historyRuns.map((run) => {
-      const id = escapeHistory(run.run_id);
-      const initialJob = run.jobs.genotype ?? historyJob(run);
-      const finished = fullTime(historyJob(run)?.finished_at);
-      const summary = run.graph
-        ? historyText(...networkOutput([run.graph.genes, run.graph.connections]))
-        : historyText(...genotypeHistoryState(historyJob(run)?.state));
-      const stages = historySteps.map((key, offset) => {
-        const job = run.jobs[key];
-        if (!job && !(run.source === "live" && (offset === 1 && run.jobs.genotype?.state === "completed" ||
-          offset === 2 && run.jobs.genotype?.state === "completed" && run.jobs.expression?.state === "completed" ||
-          offset === 3 && ["genotype", "expression", "adjust"].every(step => run.jobs[step]?.state === "completed") ||
-          offset === 4 && ["genotype", "expression", "adjust", "cis"].every(step => run.jobs[step]?.state === "completed") ||
-          offset === 5 && ["genotype", "expression", "adjust", "cis", "network"].every(step => run.jobs[step]?.state === "completed")))) return "";
-        const number = offset + 1;
-        const icon = job?.state === "completed" ? "circle-check" : "history";
-        const title = `<i data-lucide="${icon}" aria-hidden="true"></i>
+    runDetails.innerHTML = historyRuns.map(run => {
+      const key = escapeHistory(historyKey(run)), id = escapeHistory(run.run_id);
+      const initialJob = run.jobs?.genotype ?? historyJob(run);
+      const finished = fullTime(run.finished_at ?? historyJob(run)?.finished_at);
+      const state = run.status ?? historyJob(run)?.state;
+      const summary = canReadGraph(run) && run.graph ? historyText(...networkOutput([run.graph.genes, run.graph.connections])) : "";
+      const stages = historySteps.map((step, offset) => {
+        const job = run.jobs?.[step], number = offset + 1;
+        const attempts = run.attempts?.[step] ?? [];
+        const linked = canReadStage(run, number) || number === 6 && canReadGraph(run) ||
+          canContinue(run) && number > 1 && (Boolean(job) || canStartStage(run, number));
+        if (!job && !linked && !attempts.length) return "";
+        const title = `<i data-lucide="${job?.state === "completed" ? "circle-check" : "history"}" aria-hidden="true"></i>
           ${historyText(`第 ${number} 階段`, `Stage ${number}`)}<strong>${historyLabel(stageData[offset].name)}</strong>
           <time datetime="${escapeHistory(job?.finished_at)}">${escapeHistory(clockTime(job?.finished_at))}</time>`;
-        const panel = number === 6 && run.source === "live" && job?.state !== "completed" ? "lens-stage6-run"
-          : [2, 3, 4, 5].includes(number) && run.source === "live" && job?.state !== "completed" ? `lens-stage${number}`
+        const panel = number === 6 && canContinue(run) && job?.state !== "completed" ? "lens-stage6-run"
+          : [2, 3, 4, 5].includes(number) && canContinue(run) && job?.state !== "completed" ? `lens-stage${number}`
           : number === 3 ? "lens-history-stage3" : number === 6 ? "lens-stage6" : "lens-history-stage";
-        const legacy = number === 3 ? `data-run-adjustment="${id}"` : number === 6 ? `data-run-network="${id}"` : "";
-        return `<li><button type="button" class="ml-run-step-link" data-run-stage="${number}"
-          data-run-id="${id}" ${legacy} aria-controls="${panel}">
-          ${title}<i data-lucide="arrow-right" aria-hidden="true"></i>
-        </button></li>`;
+        const link = linked ? `<button type="button" class="ml-run-step-link" data-run-stage="${number}" data-run-id="${id}" data-history-id="${key}" aria-controls="${panel}">
+          ${title}<i data-lucide="arrow-right" aria-hidden="true"></i></button>` : "";
+        return `<li>${link}${job || attempts.length ? savedJobDetails(job ?? {}, step, false, run.source === "recorded", attempts) : ""}</li>`;
       }).join("");
+      const genericJobs = [...new Set([...Object.keys(run.jobs ?? {}), ...Object.keys(run.attempts ?? {})])].filter(step => !historySteps.includes(step))
+        .map(step => savedJobDetails(run.jobs?.[step] ?? {}, step, false, run.source === "recorded", run.attempts?.[step])).join("");
+      const operations = (run.operations ?? []).map(operation => savedJobDetails(operation, operation.operation ?? "operation", true)).join("");
       const snapshot = inputTypes.map(([type, zh, en]) => {
-        const files = run.inputs[type] ?? [];
-        return `<dt>${historyText(zh, en)}</dt><dd>${files.length ? files.map((file) =>
-          `<code>${escapeHistory(file)}</code>`).join("<br>") : notRecorded()}</dd>`;
+        const files = run.inputs?.[type] ?? [];
+        return `<dt>${historyText(zh, en)}</dt><dd>${files.length ? files.map(file => `<code>${escapeHistory(file)}</code>`).join("<br>") : notRecorded()}</dd>`;
       }).join("");
-      return `<article class="ml-nav-detail" id="ml-run-${id}" hidden>
+      const assignment = assignmentStates.get(historyKey(run)) ?? {};
+      const association = historyText(...associationName(run));
+      const associationNote = run.association?.status === "manual" ? historyText("此歸類僅供整理紀錄，不代表已確認樣本或檔案配對。", "This assignment organizes records; it does not verify sample or file matching.") : "";
+      const assignForm = run.capabilities?.assign_dataset ? `<form class="ml-history-assignment" data-history-assignment="${key}" data-save-state="${assignment.saving ? "saving" : assignment.error ? "error" : assignment.saved ? "saved" : "idle"}">
+        <label><span>${historyText("歸類到資料組", "Assign to dataset")}</span><select data-history-dataset ${assignment.saving || !datasetCatalogReady ? "disabled" : ""}>
+          <option value="">${root.lang === "en" ? "Choose an existing dataset" : "選擇現有資料組"}</option>
+          ${datasets.filter(dataset => dataset.persisted).map(dataset => `<option value="${escapeHistory(dataset.id)}" ${(assignment.datasetId ?? run.dataset_id) === dataset.id ? "selected" : ""}>${escapeHistory(localDatasetName(dataset))}</option>`).join("")}</select></label>
+        <button type="submit" class="ml-nav-action" data-history-assign ${assignment.saving || !datasetCatalogReady ? "disabled" : ""}>${historyText(assignment.saving ? "正在保存…" : "保存歸類", assignment.saving ? "Saving…" : "Save assignment")}</button>
+        <p data-history-assignment-status role="status">${assignment.error ? escapeHistory(assignment.error) : assignment.saved ? historyText("歸類已保存。", "Assignment saved.") : historyText("僅整理執行紀錄，不會更改檔案、設定或確認樣本配對。", "Organizes run history only; files, settings and sample matching are unchanged.")}</p></form>` : "";
+      return `<article class="ml-nav-detail" id="ml-run-${key}" data-history-id="${key}" data-run-id="${id}" hidden>
         <header class="ml-nav-detail-title"><i data-lucide="history" aria-hidden="true"></i><h2>${historyText(...run.name)}</h2></header>
-        <p class="ml-run-overview">${id}<br>${escapeHistory(fullTime(initialJob?.submitted_at))}${finished ? " – " + escapeHistory(finished) : ""}<br>
-          ${summary}</p>
-        <details class="ml-run-inputs" open>
-          <summary>${historyText("執行時使用的檔案", "Input files at execution")}</summary>
-          <dl class="ml-key-values">${snapshot}</dl>
-        </details>
+        <p class="ml-run-overview">${id}<br>${escapeHistory(fullTime(run.submitted_at ?? initialJob?.submitted_at))}${finished ? " – " + escapeHistory(finished) : ""}<br>
+          <span data-history-source>${historyText(...historySourceName(run))}</span> · <span data-history-state>${historyStateLabel(state, run.source === "recorded")}</span>${summary ? `<br>${summary}` : ""}</p>
+        <p data-history-association>${association} · ${historyText(...historyDatasetName(run.dataset_id))}${associationNote ? `<br>${associationNote}` : ""}</p>
+        ${run.provenance ? `<details class="ml-run-inputs" data-history-provenance><summary>${historyText("保存的執行來源", "Recorded run provenance")}</summary><dl class="ml-key-values">${savedDefinitions(run.provenance)}</dl></details>` : ""}
+        ${(run.issues ?? []).length ? `<p class="ml-history-record-note">${run.issues.map(escapeHistory).join(" ")}</p>` : ""}
+        ${assignForm}<details class="ml-run-inputs" open><summary>${historyText("執行時使用的檔案", "Input files at execution")}</summary><dl class="ml-key-values">${snapshot}</dl></details>
         <ol class="ml-run-timeline" aria-label="${root.lang === "en" ? "Run timeline" : "執行時間線"}">${stages}</ol>
+        ${genericJobs}${operations}${!stages && !genericJobs && !operations ? `<p>${historyText("未保存可讀的工作設定。", "No readable job settings were recorded.")}</p>` : ""}
       </article>`;
     }).join("");
+    for (const details of runDetails.querySelectorAll("details")) {
+      if (expanded.has(historyDisclosureKey(details))) details.open = true;
+    }
     renderHistoryLanguage();
     globalThis.lucide?.createIcons();
   }
@@ -1027,6 +1141,10 @@
     for (const node of root.querySelectorAll("[data-history-zh]")) node.textContent = node.dataset[key];
     for (const timeline of runDetails.querySelectorAll(".ml-run-timeline")) {
       timeline.setAttribute("aria-label", root.lang === "en" ? "Run timeline" : "執行時間線");
+    }
+    for (const option of runDetails.querySelectorAll("[data-history-dataset] option")) {
+      option.textContent = option.value ? historyDatasetName(option.value)[root.lang === "en" ? 1 : 0]
+        : root.lang === "en" ? "Choose an existing dataset" : "選擇現有資料組";
     }
   }
 
@@ -1065,13 +1183,13 @@
 
   function visualizationFormVisible() {
     if (app.dataset.nav === "history") {
-      const run = runsForDataset().find(run => run.run_id === historyResult?.runId);
-      return historyResult?.stage === 6 && run?.source === "live" && run.jobs.visualize?.state !== "completed";
+      const run = selectedHistoryResult();
+      return historyResult?.stage === 6 && canContinue(run) && run.jobs.visualize?.state !== "completed";
     }
     if (!["analysis", "settings"].includes(app.dataset.nav)) return false;
     return timeline.querySelector('[aria-current="step"]')?.dataset.stage === "6" &&
-      runsForDataset().some(run => run.source === "live") &&
-      !stage6RunsForDataset().some(run => run.run_id === stage6RunSelect.value);
+      runsForDataset().some(canContinue) &&
+      !stage6RunsForDataset().some(run => historyKey(run) === stage6RunSelect.value);
   }
 
   function syncVisualizationPanels() {
@@ -1085,16 +1203,16 @@
     analysisNetwork.classList.toggle("ml-workspace", !inHistory || !graph);
     analysisNetwork.classList.toggle("ml-nav-workspace", inHistory && graph);
     analysisNetwork.hidden = !graph;
-    stage6Prepare.hidden = inHistory || !runsForDataset().some(run => run.source === "live");
+    stage6Prepare.hidden = inHistory || !runsForDataset().some(canContinue);
   }
 
   function renderStage6Status() {
     const language = root.lang === "en" ? 1 : 0;
     const state = analysisNetwork.dataset.runState;
-    const run = stage6RunsForDataset().find(({run_id}) => run_id === stage6RunSelect.value);
+    const run = stage6RunsForView().find(run => historyKey(run) === stage6RunSelect.value);
     const [counts, frequency, topNetworks] = [stage6Result?.graph.counts, stage6Result?.frequency, stage6Result?.top_networks];
     const empty = stage6Result?.graph.edges.length === 0;
-    stage6Source.textContent = (run?.source === "archive" ? ["封存執行", "Archived run"] : ["執行", "Run"])[language];
+    stage6Source.textContent = run ? historySourceName(run)[language] : ["執行", "Run"][language];
     stage6RunSelect.options[0].textContent = ["選擇執行", "Select a run"][language];
     stage6RunSelect.title = run?.run_id ?? "";
     stage6HistoryLabel.textContent = run?.name[language] ?? "";
@@ -1148,14 +1266,15 @@
     return Object.fromEntries(genes.map((gene, index) => [gene, cells[index]]));
   }
 
-  async function loadStage6Run(runId) {
+  async function loadStage6Run(historyId) {
     stage6Request?.abort();
-    requestedStage6Run = runId;
+    requestedStage6Run = historyId;
     stage6Result = null;
     delete analysisNetwork.dataset.runId;
+    delete analysisNetwork.dataset.historyId;
     setLiveNetwork({}, []);
-    const matchingRuns = stage6RunsForDataset();
-    const run = matchingRuns.find(({run_id}) => run_id === runId);
+    const matchingRuns = stage6RunsForView();
+    const run = matchingRuns.find(run => historyKey(run) === historyId);
     if (!run) {
       const state = historyState === "error" ? "list-error" : historyState === "loading" ? "listing"
         : matchingRuns.length ? "choose" : "empty";
@@ -1166,6 +1285,7 @@
     stage6Request = request;
     setStage6RunState("loading");
     try {
+      const runId = run.run_id;
       const query = new URLSearchParams({run: runId, source: run.source});
       const result = await getArchivedResult("/stage6/results?" + query, {signal: request.signal});
       if (request.signal.aborted) return;
@@ -1179,10 +1299,11 @@
         edges = edges.filter(edge => displayed.has(edge.source) && displayed.has(edge.target));
       }
       setLiveNetwork(layoutStage6(nodes), edges.map(({source, target, frequency, coefficient}) =>
-        [source, target, frequency, coefficient]), selectedStage6Genes.get(runId));
-      stage6Result = {...result, graph: {...result.graph, nodes, edges,
+        [source, target, frequency, coefficient]), selectedStage6Genes.get(historyId));
+      stage6Result = {...result, history_id: historyId, graph: {...result.graph, nodes, edges,
         counts: {...result.graph.counts, genes: nodes.length, connections: edges.length}}};
       analysisNetwork.dataset.runId = runId;
+      analysisNetwork.dataset.historyId = historyId;
       setStage6RunState("ready");
     } catch {
       if (!request.signal.aborted) {
@@ -1198,16 +1319,19 @@
   }
 
   function syncStage6Picker(rebuild = false) {
-    const runs = stage6RunsForDataset();
+    const runs = stage6RunsForView();
     if (rebuild) {
-      stage6RunSelect.replaceChildren(new Option("", ""), ...runs.map(({run_id}) => new Option(run_id, run_id)));
+      stage6RunSelect.replaceChildren(new Option("", ""), ...runs.map(run => {
+        const option = new Option(`${run.run_id} · ${historySourceName(run)[root.lang === "en" ? 1 : 0]}`, historyKey(run));
+        option.dataset.runId = run.run_id;option.dataset.source = run.source;return option;
+      }));
       stage6RunSelect.disabled = !runs.length;
     }
     const inHistory = app.dataset.nav === "history" && historyResult?.stage === 6;
     stage6RunSelect.hidden = inHistory;
     stage6HistoryLabel.hidden = !inHistory;
     stage6Back.hidden = !inHistory;
-    stage6RunSelect.value = inHistory ? historyResult.runId : analysisRunByDataset.get(activeDataset.id) ?? "";
+    stage6RunSelect.value = inHistory ? historyResult.historyId : analysisRunByDataset.get(activeDataset.id) ?? "";
     if (!stage6RunSelect.value) stage6RunSelect.value = "";
     syncStage6Choice();
     if (visualizationRun) syncVisualizationPanels();
@@ -1229,7 +1353,7 @@
     else void loadWorkspaceHistory();
   });
   analysisNetwork.addEventListener("lens:gene-selected", ({detail}) => {
-    if (stage6Result) selectedStage6Genes.set(stage6Result.run_id, detail.gene);
+    if (stage6Result) selectedStage6Genes.set(stage6Result.history_id, detail.gene);
   });
 
   const stage3HistoryPanel = root.querySelector("#lens-history-stage3");
@@ -1274,7 +1398,7 @@
     const inEnglish = root.lang === "en";
     const locale = inEnglish ? "en" : "zh-Hant";
     const run = historyResult?.stage === 3
-      ? runsForDataset().find(({run_id}) => run_id === historyResult.runId) : null;
+      ? selectedHistoryResult() : null;
     const state = stage3HistoryPanel.dataset.runState;
     const number = new Intl.NumberFormat(locale);
     const formatSD = new Intl.NumberFormat(locale, {maximumFractionDigits: 5, minimumFractionDigits: 5});
@@ -1440,7 +1564,7 @@
     const recorded = (value) => value ?? local("未記錄", "Not recorded");
     const stage = historyResult?.stage;
     const run = archiveSteps.has(stage)
-      ? runsForDataset().find(({run_id}) => run_id === historyResult.runId) : null;
+      ? selectedHistoryResult() : null;
     const view = run && archivedStepResult ? viewArchivedStep(stage, archivedStepResult.summary, language) : null;
     if (view && stage === 4 && run.source === "live") {
       view.tableTitle = local("顯著基因與變異關聯", "Significant gene–variant associations");
@@ -1503,9 +1627,9 @@
 
   async function loadArchivedStep() {
     archivedStepRequest?.abort();
-    const {runId, stage} = historyResult ?? {};
-    const run = runsForDataset().find(({run_id}) => run_id === runId);
-    if (!archiveSteps.has(stage) || !run) return;
+    const {runId, historyId, stage} = historyResult ?? {};
+    const run = findHistoryRun(historyId);
+    if (!archiveSteps.has(stage) || !run || !canReadStage(run, stage)) return;
     const request = new AbortController();
     archivedStepRequest = request;
     archivedStepResult = null;
@@ -1515,12 +1639,13 @@
     renderArchivedStep();
     try {
       const params = new URLSearchParams({run: runId, stage});
-      if (run.source === "live") params.set("source", "live");
+      params.set("source", run.source);
       const result = await getArchivedResult("/stage/results?" + params, {signal: request.signal});
       if (request.signal.aborted) return;
       if (result.run_id !== runId || result.stage !== stage) throw new Error("Result does not match the selected run and stage");
       archivedStepResult = result;
       archivedStepPanel.dataset.runId = runId;
+      archivedStepPanel.dataset.historyId = historyId;
       archivedStepPanel.dataset.runState = "ready";
     } catch (error) {
       if (request.signal.aborted) return;
@@ -1538,8 +1663,9 @@
 
   async function loadStage3Run() {
     stage3Request?.abort();
-    const runId = historyResult?.runId;
-    if (historyResult?.stage !== 3 || !runsForDataset().some(({run_id}) => run_id === runId)) return;
+    const run = selectedHistoryResult();
+    const runId = run?.run_id, historyId = run && historyKey(run);
+    if (historyResult?.stage !== 3 || !run || !canReadStage(run, 3)) return;
     const request = new AbortController();
     stage3Request = request;
     stage3Result = null;
@@ -1548,12 +1674,13 @@
     renderStage3History();
     try {
       const params = new URLSearchParams({run: runId});
-      if (runsForDataset().find(run => run.run_id === runId)?.source === "live") params.set("source", "live");
+      params.set("source", run.source);
       const result = await getArchivedResult("/stage3/results?" + params, {signal: request.signal});
       if (request.signal.aborted) return;
       if (result.run_id !== runId) throw new Error("Stage 3 result belongs to a different run");
       stage3Result = result;
       stage3HistoryPanel.dataset.runId = runId;
+      stage3HistoryPanel.dataset.historyId = historyId;
       stage3HistoryPanel.dataset.runState = "ready";
     } catch (error) {
       if (request.signal.aborted) return;
@@ -1776,7 +1903,10 @@
     datasetSelect.disabled = !datasetCatalogReady || !datasets.length;
     datasetAdd.disabled = creatingDataset;
     const label = localDatasetName(activeDataset) || (root.lang === "en" ? "Datasets" : "資料組");
-    byId("history-dataset-name").textContent = label;
+    byId("history-dataset-name").textContent = historyScope === "current" ? label
+      : historyScope === "unclassified" ? (root.lang === "en" ? "Unclassified runs" : "未分類的執行") : (root.lang === "en" ? "All runs" : "全部執行");
+    byId("history-scope-note").textContent = historyScope === "current" ? (root.lang === "en" ? "Selected dataset" : "目前資料組")
+      : (root.lang === "en" ? "All recorded sources" : "所有已保存的來源");
     byId("stage-dataset-title").textContent = label;
     datasetError.textContent = datasetFormError || (root.lang === "en" ? "Enter a dataset name." : "請輸入資料組名稱。");
     datasetCatalogNotice.textContent = datasetCatalogError;
@@ -1810,12 +1940,15 @@
   }
 
   const selectedRuns = new Map();
+  const historySelectionKey = () => historyScope === "current" ? `dataset:${activeDataset.id}` : historyScope;
   function renderHistoryStatus() {
     const copy = historyState === "loading"
       ? ["讀取執行紀錄…", "Loading run history…", "", ""]
       : historyState === "error"
         ? ["無法讀取執行紀錄", "Could not load run history", "", ""]
-        : ["尚無執行紀錄", "No runs yet", "這裡會顯示目前資料組的執行紀錄。", "Runs for the selected dataset will appear here."];
+        : historyScope === "current" ? ["尚無執行紀錄", "No runs yet", "這裡會顯示目前資料組的執行紀錄。", "Runs for the selected dataset will appear here."]
+          : historyScope === "unclassified" ? ["尚無未分類紀錄", "No unclassified runs", "未記錄資料組歸屬的執行會顯示在這裡。", "Runs without recorded dataset ownership will appear here."]
+            : ["尚無執行紀錄", "No runs yet", "所有已保存的執行會顯示在這裡。", "All saved runs will appear here."];
     const language = root.lang === "en" ? 1 : 0;
     byId("empty-run-list").textContent = byId("empty-history-title").textContent = copy[language];
     byId("empty-history-note").textContent = copy[language + 2];
@@ -1824,19 +1957,20 @@
 
   function updateHistoryView() {
     const inHistory = app.dataset.nav === "history";
-    const matchingRuns = runsForDataset();
-    const previousSelection = selectedRuns.get(activeDataset.id);
-    const selected = matchingRuns.find(({run_id}) => run_id === previousSelection)?.run_id ?? matchingRuns[0]?.run_id;
-    const showResult = inHistory && Boolean(selected) && historyResult?.runId === selected;
+    const matchingRuns = matchingHistoryRuns();
+    const previousSelection = selectedRuns.get(historySelectionKey());
+    const selected = matchingRuns.find(run => historyKey(run) === previousSelection);
+    const selectedId = selected ? historyKey(selected) : matchingRuns[0] && historyKey(matchingRuns[0]);
+    const showResult = inHistory && Boolean(selectedId) && historyResult?.historyId === selectedId;
     const showNetwork = showResult && historyResult.stage === 6;
-    const selectedRun = matchingRuns.find(run => run.run_id === selected);
-    const showExpression = showResult && historyResult.stage === 2 && selectedRun?.source === "live" &&
+    const selectedRun = matchingRuns.find(run => historyKey(run) === selectedId);
+    const showExpression = showResult && historyResult.stage === 2 && canContinue(selectedRun) &&
       selectedRun.jobs.expression?.state !== "completed";
-    const showAdjustment = showResult && historyResult.stage === 3 && selectedRun?.source === "live" &&
+    const showAdjustment = showResult && historyResult.stage === 3 && canContinue(selectedRun) &&
       selectedRun.jobs.adjust?.state !== "completed";
-    const showCis = showResult && historyResult.stage === 4 && selectedRun?.source === "live" &&
+    const showCis = showResult && historyResult.stage === 4 && canContinue(selectedRun) &&
       selectedRun.jobs.cis?.state !== "completed";
-    const showNetworkRun = showResult && historyResult.stage === 5 && selectedRun?.source === "live" &&
+    const showNetworkRun = showResult && historyResult.stage === 5 && canContinue(selectedRun) &&
       selectedRun.jobs.network?.state !== "completed";
     stage3HistoryPanel.hidden = !showResult || historyResult.stage !== 3 || showAdjustment;
     archivedStepPanel.hidden = !showResult || showExpression || showCis || showNetworkRun || !archiveSteps.has(historyResult.stage);
@@ -1856,14 +1990,14 @@
     networkPanel.classList.toggle("ml-workspace", !showNetworkRun);
     networkPanel.classList.toggle("ml-nav-workspace", showNetworkRun);
     networkPanel.hidden = inHistory ? !showNetworkRun : timeline.querySelector('[aria-current="step"]').dataset.stage !== "5";
-    runDetails.hidden = !inHistory || !selected || showResult;
-    byId("empty-history").hidden = !inHistory || Boolean(selected);
-    byId("empty-run-list").hidden = Boolean(selected);
+    runDetails.hidden = !inHistory || !selectedId || showResult;
+    byId("empty-history").hidden = !inHistory || Boolean(selectedId);
+    byId("empty-run-list").hidden = Boolean(selectedId);
     for (const button of runList.querySelectorAll("[data-run-target]")) {
       const id = button.dataset.runTarget;
-      button.hidden = !matchingRuns.some(({run_id}) => run_id === id);
-      button.setAttribute("aria-pressed", String(id === selected));
-      root.querySelector("#" + button.getAttribute("aria-controls")).hidden = id !== selected;
+      button.hidden = !matchingRuns.some(run => historyKey(run) === id);
+      button.setAttribute("aria-pressed", String(id === selectedId));
+      root.querySelector("#" + button.getAttribute("aria-controls")).hidden = id !== selectedId;
     }
 
     // One graph and table render the same run in both the analysis and history views.
@@ -1915,30 +2049,19 @@
         datasets.splice(0, datasets.length, ...catalog);
         activeDataset = datasets.find(({id}) => id === activeDataset.id) ?? datasets[0];
       }
-      historyRuns = [...runs].sort((a, b) =>
-        (Date.parse(historyJob(b)?.finished_at || historyJob(b)?.submitted_at) || 0) -
-        (Date.parse(historyJob(a)?.finished_at || historyJob(a)?.submitted_at) || 0));
+      historyRuns = [...runs].sort((a, b) => historyTime(b) - historyTime(a));
       historyState = "ready";
       renderHistoryRecords();
       if (!analysisRunByDataset.has(activeDataset.id)) {
         const completed = stage6RunsForDataset().find(run => run.source === "live");
-        if (completed) analysisRunByDataset.set(activeDataset.id, completed.run_id);
+        if (completed) analysisRunByDataset.set(activeDataset.id, historyKey(completed));
       }
-      if (historyResult?.stage === 2 && historyRuns.find(run => run.run_id === historyResult.runId)?.jobs.expression?.state === "completed" &&
-        (archivedStepPanel.dataset.runId !== historyResult.runId || archivedStepPanel.dataset.stage !== "2")) {
-        void loadArchivedStep();
-      }
-      if (historyResult?.stage === 4 && historyRuns.find(run => run.run_id === historyResult.runId)?.jobs.cis?.state === "completed" &&
-        (archivedStepPanel.dataset.runId !== historyResult.runId || archivedStepPanel.dataset.stage !== "4")) {
-        void loadArchivedStep();
-      }
-      if (historyResult?.stage === 5 && historyRuns.find(run => run.run_id === historyResult.runId)?.jobs.network?.state === "completed" &&
-        (archivedStepPanel.dataset.runId !== historyResult.runId || archivedStepPanel.dataset.stage !== "5")) {
-        void loadArchivedStep();
-      }
-      if (historyResult?.stage === 3 && historyRuns.find(run => run.run_id === historyResult.runId)?.jobs.adjust?.state === "completed" &&
-        stage3HistoryPanel.dataset.runId !== historyResult.runId) {
-        void loadStage3Run();
+      const selectedRun = selectedHistoryResult();
+      if (selectedRun && canContinue(selectedRun)) {
+        const stage = historyResult.stage;
+        if ([2, 4, 5].includes(stage) && selectedRun.jobs[historySteps[stage - 1]]?.state === "completed" &&
+          (archivedStepPanel.dataset.historyId !== historyKey(selectedRun) || archivedStepPanel.dataset.stage !== String(stage))) void loadArchivedStep();
+        if (stage === 3 && selectedRun.jobs.adjust?.state === "completed" && stage3HistoryPanel.dataset.historyId !== historyKey(selectedRun)) void loadStage3Run();
       }
     } catch (error) {
       if (request !== historyRequest) return;
@@ -1955,71 +2078,28 @@
   }
   byId("history-retry").addEventListener("click", () => void loadWorkspaceHistory());
 
-  async function openGenotypeHistory(runId) {
+  async function openWorkspaceHistory(runId, stage) {
+    historyScope = "current";byId("history-scope").value = historyScope;
     openNavigation("history");
     await loadWorkspaceHistory();
-    if (app.dataset.nav !== "history" || !runsForDataset().some((run) => run.run_id === runId)) return;
-    selectedRuns.set(activeDataset.id, runId);
-    clearHistoryResult();
-    updateHistoryView();
-    runDetails.querySelector(`[data-run-stage="1"][data-run-id="${CSS.escape(runId)}"]`)?.focus({preventScroll: true});
+    const run = runsForDataset().find(run => run.run_id === runId && canContinue(run));
+    if (app.dataset.nav !== "history" || !run) return;
+    selectedRuns.set(historySelectionKey(), historyKey(run));
+    clearHistoryResult();updateHistoryView();
+    runDetails.querySelector(`[data-run-stage="${stage}"][data-history-id="${CSS.escape(historyKey(run))}"]`)?.focus({preventScroll: true});
   }
-
-  async function openExpressionHistory(runId) {
-    openNavigation("history");
-    await loadWorkspaceHistory();
-    if (app.dataset.nav !== "history" || !runsForDataset().some(run => run.run_id === runId)) return;
-    selectedRuns.set(activeDataset.id, runId);
-    clearHistoryResult();
-    updateHistoryView();
-    runDetails.querySelector(`[data-run-stage="2"][data-run-id="${CSS.escape(runId)}"]`)?.focus({preventScroll: true});
-  }
-
-  async function openAdjustmentHistory(runId) {
-    openNavigation("history");
-    await loadWorkspaceHistory();
-    if (app.dataset.nav !== "history" || !runsForDataset().some(run => run.run_id === runId)) return;
-    selectedRuns.set(activeDataset.id, runId);
-    clearHistoryResult();
-    updateHistoryView();
-    runDetails.querySelector(`[data-run-stage="3"][data-run-id="${CSS.escape(runId)}"]`)?.focus({preventScroll: true});
-  }
-
-  async function openCisHistory(runId) {
-    openNavigation("history");
-    await loadWorkspaceHistory();
-    if (app.dataset.nav !== "history" || !runsForDataset().some(run => run.run_id === runId)) return;
-    selectedRuns.set(activeDataset.id, runId);
-    clearHistoryResult();
-    updateHistoryView();
-    runDetails.querySelector(`[data-run-stage="4"][data-run-id="${CSS.escape(runId)}"]`)?.focus({preventScroll: true});
-  }
-
-  async function openNetworkHistory(runId) {
-    openNavigation("history");
-    await loadWorkspaceHistory();
-    if (app.dataset.nav !== "history" || !runsForDataset().some(run => run.run_id === runId)) return;
-    selectedRuns.set(activeDataset.id, runId);
-    clearHistoryResult();
-    updateHistoryView();
-    runDetails.querySelector(`[data-run-stage="5"][data-run-id="${CSS.escape(runId)}"]`)?.focus({preventScroll: true});
-  }
-
-  async function openVisualizationHistory(runId) {
-    openNavigation("history");
-    await loadWorkspaceHistory();
-    if (app.dataset.nav !== "history" || !runsForDataset().some(run => run.run_id === runId)) return;
-    selectedRuns.set(activeDataset.id, runId);
-    clearHistoryResult();
-    updateHistoryView();
-    runDetails.querySelector(`[data-run-stage="6"][data-run-id="${CSS.escape(runId)}"]`)?.focus({preventScroll: true});
-  }
+  const openGenotypeHistory = runId => openWorkspaceHistory(runId, 1);
+  const openExpressionHistory = runId => openWorkspaceHistory(runId, 2);
+  const openAdjustmentHistory = runId => openWorkspaceHistory(runId, 3);
+  const openCisHistory = runId => openWorkspaceHistory(runId, 4);
+  const openNetworkHistory = runId => openWorkspaceHistory(runId, 5);
+  const openVisualizationHistory = runId => openWorkspaceHistory(runId, 6);
 
   function showSavedStage6() {
     const available = stage6RunsForDataset();
-    const run = available.find(run => run.run_id === analysisRunByDataset.get(activeDataset.id)) ?? available[0];
+    const run = available.find(run => historyKey(run) === analysisRunByDataset.get(activeDataset.id)) ?? available[0];
     if (!run) return;
-    analysisRunByDataset.set(activeDataset.id, run.run_id);
+    analysisRunByDataset.set(activeDataset.id, historyKey(run));
     openNavigation("analysis");
     selectTab(tabs[1]);
     showStage(timeline.querySelector('[data-stage="6"]'), true);
@@ -2028,11 +2108,12 @@
 
   async function refreshVisualizationHistory(runId) {
     await loadWorkspaceHistory();
-    if (!stage6RunsForDataset().some(run => run.run_id === runId)) return;
-    const showingRun = app.dataset.nav === "history" && historyResult?.stage === 6 && historyResult.runId === runId;
+    const run = stage6RunsForDataset().find(run => run.run_id === runId && canContinue(run));
+    if (!run) return;
+    const showingRun = app.dataset.nav === "history" && historyResult?.stage === 6 && historyResult.historyId === historyKey(run);
     const showingForm = app.dataset.nav === "analysis" && visualizationFormVisible();
     if (showingRun || showingForm) {
-      analysisRunByDataset.set(activeDataset.id, runId);
+      analysisRunByDataset.set(activeDataset.id, historyKey(run));
       syncStage6Picker(true);
       updateHistoryView();
     }
@@ -2142,7 +2223,7 @@
     }
     updateAnalysisView();
     updateHistoryView();
-    syncStage6Picker();
+    syncStage6Picker(true);
     for (const button of navigation) {
       if (button.dataset.navTarget === view) button.setAttribute("aria-current", "page");
       else button.removeAttribute("aria-current");
@@ -2163,29 +2244,63 @@
       }
     });
   }
-  runList.addEventListener("click", (event) => {
-    const id = event.target.closest("[data-run-target]")?.dataset.runTarget;
-    if (!runsForDataset().some(({run_id}) => run_id === id)) return;
-    selectedRuns.set(activeDataset.id, id);
-    clearHistoryResult();
-    updateHistoryView();
-    syncStage6Picker();
+  byId("history-scope").addEventListener("change", event => {
+    historyScope = ["current", "unclassified", "all"].includes(event.target.value) ? event.target.value : "current";
+    clearHistoryResult();renderDatasetLabels();updateHistoryView();syncStage6Picker(true);
   });
-  runDetails.addEventListener("click", (event) => {
+  runList.addEventListener("click", event => {
+    const id = event.target.closest("[data-run-target]")?.dataset.runTarget;
+    if (!matchingHistoryRuns().some(run => historyKey(run) === id)) return;
+    selectedRuns.set(historySelectionKey(), id);
+    clearHistoryResult();updateHistoryView();syncStage6Picker(true);
+  });
+  runDetails.addEventListener("change", event => {
+    const select = event.target.closest("[data-history-dataset]");
+    const id = select?.closest("[data-history-assignment]")?.dataset.historyAssignment;
+    if (id) {
+      assignmentStates.set(id, {...assignmentStates.get(id), datasetId: select.value, error: "", saved: false});
+      const form = select.closest("[data-history-assignment]");
+      form.dataset.saveState = "idle";
+      form.querySelector("[data-history-assignment-status]").textContent = root.lang === "en"
+        ? "Assignment not yet saved; sample matching is not verified." : "歸類尚未保存；尚未確認樣本配對。";
+    }
+  });
+  runDetails.addEventListener("submit", async event => {
+    const form = event.target.closest("[data-history-assignment]");
+    if (!form) return;
+    event.preventDefault();
+    const id = form.dataset.historyAssignment, run = findHistoryRun(id), datasetId = form.querySelector("[data-history-dataset]").value;
+    if (!run?.capabilities?.assign_dataset || assignmentStates.get(id)?.saving || !datasetCatalogReady) return;
+    if (!datasets.some(dataset => dataset.persisted && dataset.id === datasetId)) {
+      assignmentStates.set(id, {datasetId, error: root.lang === "en" ? "Choose an existing dataset." : "請選擇現有資料組。"});
+      renderHistoryRecords();updateHistoryView();return;
+    }
+    assignmentStates.set(id, {datasetId, saving: true});renderHistoryRecords();updateHistoryView();
+    try {
+      const saved = await requestDataset(`/signet/history/${encodeURIComponent(id)}/dataset`, {dataset_id: datasetId, revision: run.revision}, "PATCH");
+      if (historyKey(saved) !== id || saved.run_id !== run.run_id || saved.dataset_id !== datasetId) throw new Error(root.lang === "en" ? "The saved assignment does not match this record." : "保存的歸類與這筆紀錄不符。");
+      historyRequest++;
+      historyState = "ready";
+      const index = historyRuns.findIndex(candidate => historyKey(candidate) === id);
+      if (index !== -1) historyRuns[index] = saved;
+      assignmentStates.set(id, {datasetId, saved: true});
+      if (!matchingHistoryRuns().some(candidate => historyKey(candidate) === id)) {
+        historyScope = "all";byId("history-scope").value = historyScope;selectedRuns.set(historySelectionKey(), id);
+      }
+    } catch (error) {assignmentStates.set(id, {datasetId, error: error.message});}
+    renderHistoryRecords();renderDatasetLabels();updateHistoryView();syncStage6Picker(true);
+  });
+  runDetails.addEventListener("click", event => {
     const button = event.target.closest("[data-run-stage]");
     if (!button) return;
-    const stage = Number(button.dataset.runStage);
-    const runId = button.dataset.runId;
-    if (!runsForDataset().some(({run_id}) => run_id === runId)) return;
+    const stage = Number(button.dataset.runStage), historyId = button.dataset.historyId;
+    const run = matchingHistoryRuns().find(run => historyKey(run) === historyId);
+    if (!run || !(canReadStage(run, stage) || stage === 6 && canReadGraph(run) || canContinue(run) && stage > 1 && (run.jobs?.[historySteps[stage - 1]] || canStartStage(run, stage)))) return;
     clearHistoryResult();
-    historyResult = {runId, stage};
-    if (stage === 3 && !(runsForDataset().find(run => run.run_id === runId)?.source === "live" &&
-      runsForDataset().find(run => run.run_id === runId)?.jobs.adjust?.state !== "completed")) void loadStage3Run();
-    else if (archiveSteps.has(stage) && !([2, 4, 5].includes(stage) &&
-      runsForDataset().find(run => run.run_id === runId)?.source === "live" &&
-      runsForDataset().find(run => run.run_id === runId)?.jobs[historySteps[stage - 1]]?.state !== "completed")) void loadArchivedStep();
-    updateHistoryView();
-    syncStage6Picker();
+    historyResult = {runId: run.run_id, historyId, stage};
+    if (stage === 3 && canReadStage(run, 3)) void loadStage3Run();
+    else if (archiveSteps.has(stage) && canReadStage(run, stage)) void loadArchivedStep();
+    updateHistoryView();syncStage6Picker(true);
     const expressionBack = root.querySelector("#lens-stage2 [data-expression-back]");
     const adjustmentBack = root.querySelector("#lens-stage3 [data-adjust-back]");
     const cisBack = root.querySelector("#lens-stage4 [data-cis-back]");
@@ -2197,15 +2312,15 @@
       : stage === 5 && !root.querySelector("#lens-stage5").hidden ? networkBack
       : stage === 6 && !visualizationPanel.hidden ? visualizationBack
       : stage === 3 ? stage3Back : stage === 6 ? stage6Back : archivedStepBack;
-    back.focus({ preventScroll: true });
+    back?.focus({preventScroll: true});
   });
   function backToRunTimeline() {
     if (!historyResult) return;
-    const {runId, stage} = historyResult;
+    const {historyId, stage} = historyResult;
     clearHistoryResult();
     updateHistoryView();
     syncStage6Picker();
-    runDetails.querySelector(`[data-run-stage="${stage}"][data-run-id="${CSS.escape(runId)}"]`)?.focus({ preventScroll: true });
+    runDetails.querySelector(`[data-run-stage="${stage}"][data-history-id="${CSS.escape(historyId)}"]`)?.focus({ preventScroll: true });
   }
   archivedStepBack.addEventListener("click", backToRunTimeline);
   stage3Back.addEventListener("click", backToRunTimeline);

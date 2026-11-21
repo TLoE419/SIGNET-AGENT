@@ -133,7 +133,10 @@
         <button type="button" class="ml-nav-action" data-input-validate data-live-language disabled>檢查輸入資料</button>
       </div>
       <div class="ml-nav-pane" data-nav-left="history" hidden>
-        <div class="ml-nav-pane-title"><h3 id="ml-history-dataset-name" data-live-language>第 1 號染色體範例</h3><span data-en-text="Selected dataset">目前資料組</span></div>
+        <div class="ml-nav-pane-title"><h3 id="ml-history-dataset-name" data-live-language>第 1 號染色體範例</h3><span id="ml-history-scope-note" data-live-language>目前資料組</span></div>
+        <label class="ml-history-scope"><span data-en-text="Show runs">顯示執行</span>
+          <select id="ml-history-scope"><option value="current" data-en-text="Current dataset">目前資料組</option><option value="unclassified" data-en-text="Unclassified">未分類</option><option value="all" data-en-text="All runs">全部執行</option></select>
+        </label>
         <div class="ml-nav-list" id="ml-run-list" aria-label="已保存的執行"></div>
         <p class="ml-dataset-empty-note" id="ml-empty-run-list" data-live-language role="status" hidden></p>
       </div>

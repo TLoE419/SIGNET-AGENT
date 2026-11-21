@@ -98,7 +98,7 @@ class WorkspaceNetworkTest(unittest.TestCase):
         query = f'?run={self.run_id}&stage=5&source=live'
         self.assertEqual(request(query, False)[0], 403)
         self.assertEqual(request(query + '&stage=5')[0], 400)
-        self.assertEqual(request(query.replace('source=live', 'source=archive'))[0], 400)
+        self.assertEqual(request(query.replace('source=live', 'source=archive'))[0], 404)
         with patch('agent.runtime.ssh_transport.remote', side_effect=AssertionError('Saved display must be local')):
             status, result = request(query)
         self.assertEqual((status, result['stage'], result['job']['settings']['nboots']), (200, 5, '2'))

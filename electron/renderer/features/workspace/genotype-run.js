@@ -329,6 +329,7 @@
     function restore(id, saved, datasetId = selectedDataset, run) {
       const item = stateFor(datasetId);
       if (item.runId || !id || saved?.dataset_id && saved.dataset_id !== datasetId) return;
+      item.reviewError = "";item.error = "";
       item.runId = id;item.runLegacy = run?.input_mode !== "dataset" && datasetId === exampleDataset;
       item.sourceInputs = run?.source_inputs ?? (run?.input_mode === "dataset" ? run.inputs : null) ?? saved?.source_inputs ?? null;
       if (saved?.run_id === id) item.record = saved;

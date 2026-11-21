@@ -11,6 +11,8 @@
     "test:smoke": "electron tests/smoke.cjs",
     "test:workspace": "npm run build && electron tests/workspace.cjs",
     "test:dataset": "npm run build && electron tests/custom-dataset.cjs",
+    "test:history": "npm run build && electron tests/history.cjs",
+    "test:attempts": "npm run build && electron tests/attempts.cjs",
     "test:startup": "electron tests/startup.cjs",
     "build": "node scripts/build.mjs",
     "prestart": "npm run build",
