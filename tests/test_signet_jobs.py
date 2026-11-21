@@ -163,7 +163,7 @@ class StepsTest(unittest.TestCase):
         self.assertEqual(self.code_of(steps.submit, 'step_test', 'expression', self.inputs), 'conflict')
         st.configure_signet('gtex_run', cohort='GTEx')
         self.assertEqual(self.code_of(steps.submit, 'gtex_run', 'expression', self.inputs), 'invalid_request')
-        self.assertEqual(self.code_of(steps.submit, 'step_test', 'visualize', self.inputs), 'not_found')
+        self.assertEqual(self.code_of(steps.submit, 'step_test', 'unknown_step', self.inputs), 'not_found')
         self.assertEqual(self.code_of(steps.status, 'missing_run', 'expression'), 'not_found')
 
     # ---------- retrying a failed step in the same run ----------
@@ -1235,6 +1235,115 @@ class StepsTest(unittest.TestCase):
                                             'downstream': 'flank'})
         self.assertIn('res/resc/signet_all.sig.pValue_{alpha.cis}', step['required_outputs'])
 
+    def test_workspace_cis_uses_same_run_and_preserves_previous_stages(self):
+        from agent.app.chat_ui import ChatServer
+        from agent.runtime import workspace_genotype as workspace
+
+        self.cis_ready()
+        genotype_inputs = self.genotype_inputs()
+        clinical = self.hpc / 'ws/refdata/clinical.tsv'
+        clinical.write_text('submitter_id\trace\tgender\nTCGA-AA-0001\twhite\tfemale\n')
+        inputs = {'genotype': genotype_inputs, 'expression': self.inputs, 'adjust': {'cli.file': str(clinical)}}
+        settings = {'genotype': {key: str(value) for key, value in workspace.DEFAULT_SETTINGS.items()},
+                    'expression': {'restrict.tcga': '1'}, 'adjust': {}}
+        snapshots = {'genotype': workspace.SNAPSHOT, 'expression': workspace.EXPRESSION_SNAPSHOT,
+                     'adjust': workspace.ADJUST_SNAPSHOT}
+        for name in ('genotype', 'expression', 'adjust'):
+            record = {'run_id': 'step_test', 'step': name, 'state': 'completed',
+                      'submitted_at': '2026-11-17T10:00:00-0800', 'remote_dir': str(self.remote_dir),
+                      'inputs': inputs[name], 'settings': settings[name],
+                      'resources': steps.STEPS[name].resources, 'options': {'npc': 3} if name == 'adjust' else {}}
+            (self.root / 'steps' / f'{name}.json').write_text(json.dumps(record))
+            snapshot = {**record, 'dataset_id': workspace.DATASET_ID, 'review_attempt': 1}
+            (self.root / snapshots[name]).write_text(json.dumps(snapshot))
+        preserved = {path: path.read_bytes() for path in [
+            *(self.root / name for name in snapshots.values()),
+            *(self.root / 'steps' / f'{name}.json' for name in snapshots),
+            *(self.remote_dir / 'work' / name for name in steps.STEPS['cis'].needs),
+        ]}
+        steps.update_settings('step_test', {'alpha.cis': 0.02, 'nperms': 123, 'upstream': 2500, 'downstream': 1500})
+        self.server = ChatServer(('127.0.0.1', 0), lambda: None)
+        self.addCleanup(self.server.server_close)
+        worker = threading.Thread(target=self.server.serve_forever, kwargs={'poll_interval': 0.01}, daemon=True)
+        worker.start()
+        self.addCleanup(worker.join, 3)
+        self.addCleanup(self.server.shutdown)
+        origin = f'http://127.0.0.1:{self.server.server_port}'
+
+        def request(method, path, body=None):
+            connection = http.client.HTTPConnection('127.0.0.1', self.server.server_port, timeout=5)
+            headers = {'X-Chat-Token': self.server.token, 'Origin': origin, 'Content-Type': 'application/json'}
+            try:
+                connection.request(method, path, None if body is None else json.dumps(body), headers)
+                response = connection.getresponse()
+                return response.status, json.loads(response.read())
+            finally:
+                connection.close()
+
+        route = '/signet/runs/step_test/cis/example'
+        status, review = request('GET', route)
+        self.assertEqual(status, 200)
+        self.assertTrue(review['ready'], review['reason'])
+        self.assertEqual(review['settings'], {'alpha.cis': 0.02, 'nperms': 123, 'upstream': 2500, 'downstream': 1500})
+        self.assertEqual(review['inputs'], {})
+        self.assertEqual(review['input_sources'], {key: str(self.remote_dir / 'work' / path)
+                                                  for key, path in steps.STEPS['cis'].links.items()})
+        self.assertFalse((self.root / workspace.CIS_SNAPSHOT).exists())
+        self.assertFalse((self.fake / 'sbatch_args').exists())
+        body = {key: review[key] for key in ('inputs', 'settings', 'resources')}
+        body['settings'] = {'alpha.cis': 0.01, 'nperms': 200, 'upstream': 0, 'downstream': 5000}
+        body['resources'] = {'cpus': 2, 'mem_gb': 16, 'hours': 1.5}
+
+        prior = self.root / 'steps/adjust.json'
+        pending_adjustment = json.loads(prior.read_text())
+        pending_adjustment['state'] = 'running'
+        prior.write_text(json.dumps(pending_adjustment))
+        status, unavailable = request('GET', route)
+        self.assertEqual(status, 200)
+        self.assertFalse(unavailable['ready'])
+        self.assertEqual(unavailable['settings'], review['settings'])
+        self.assertEqual(request('POST', route, body)[0], 409)
+        prior.write_bytes(preserved[prior])
+        missing = self.remote_dir / 'work/res/resa/signet_geno.data'
+        missing.unlink()
+        self.assertFalse(request('GET', route)[1]['ready'])
+        self.assertEqual(request('POST', route, body)[0], 412)
+        missing.write_bytes(preserved[missing])
+        for bad in ({'alpha.cis': 0}, {'nperms': 0}, {'upstream': -1}, {'downstream': 10_000_001}):
+            self.assertEqual(request('POST', route, {**body, 'settings': {**body['settings'], **bad}})[0], 400)
+        self.assertEqual(request('POST', route, {**body, 'inputs': {'cli.file': str(clinical)}})[0], 400)
+        self.assertEqual(request('POST', route, {**body, 'unexpected': True})[0], 400)
+        self.assertFalse((self.root / workspace.CIS_SNAPSHOT).exists())
+
+        status, submitted = request('POST', route, body)
+        self.assertEqual((status, submitted['state'], submitted['run_id']), (202, 'submitted', 'step_test'))
+        self.assertEqual(submitted['settings'], {key: str(value) for key, value in body['settings'].items()})
+        self.assertEqual(submitted['resources']['time'], '01:30:00')
+        self.assertIn('res/resc/signet_all.sig.pValue_0.01', submitted['required_outputs'])
+        saved_review = (self.root / workspace.CIS_SNAPSHOT).read_bytes()
+        calls = len(self.calls)
+        self.assertEqual(request('POST', route, body)[0], 409)
+        self.assertEqual(len(self.calls), calls)
+        self.assertEqual((self.root / workspace.CIS_SNAPSHOT).read_bytes(), saved_review)
+        step_route = '/signet/runs/step_test/steps/cis?refresh=1'
+        for queue_state, expected in (('PENDING', 'pending'), ('RUNNING', 'running')):
+            self.slurm(squeue=queue_state)
+            self.assertEqual(request('GET', step_route)[1]['state'], expected)
+        self.finish_cis('0.01')
+        self.assertEqual(request('GET', step_route)[1]['state'], 'completed')
+        steps.update_settings('step_test', {'alpha.cis': 0.5, 'nperms': 999})
+        calls = len(self.calls)
+        row = next(row for row in request('GET', '/stage6/history')[1]['runs'] if row['run_id'] == 'step_test')
+        self.assertEqual(set(row['jobs']), {'genotype', 'expression', 'adjust', 'cis'})
+        self.assertEqual(row['status'], 'completed')
+        self.assertEqual(row['jobs']['cis']['settings'], submitted['settings'])
+        self.assertEqual(row['jobs']['cis']['input_sources'], review['input_sources'])
+        self.assertEqual(len(self.calls), calls)
+        self.assertEqual(request('POST', route, body)[0], 409)
+        for path, contents in preserved.items():
+            self.assertEqual(path.read_bytes(), contents, str(path))
+        self.assertEqual(set(path.name for path in (self.project / 'runs').iterdir()), {'step_test'})
+
     def test_cis_needs_adjust_completed_in_the_same_run(self):
         self.adjust_ready()   # -t and -g done, -a not
         with self.assertRaises(steps.StepError) as caught:
@@ -1332,6 +1441,129 @@ class StepsTest(unittest.TestCase):
         self.assertEqual((step['flag'], step['inputs'], step['requires']), ('-n', [], ['cis']))
         self.assertEqual(set(step['settings']), {'nboots', 'ncis', 'cor', 'ncores', 'memory', 'walltime'})
         self.assertEqual(step['required_outputs'][0], 'res/resn/signet_Afreq')
+
+    def test_workspace_network_uses_saved_cis_and_preserves_previous_stages(self):
+        from agent.app.chat_ui import ChatServer
+        from agent.runtime import workspace_genotype as workspace
+
+        self.network_ready(settings=None)
+        (self.remote_dir / 'work/res/resc/signet_all.sig.pValue_0.05').rename(
+            self.remote_dir / 'work/res/resc/signet_all.sig.pValue_0.0500')
+        inputs = {'genotype': self.genotype_inputs(), 'expression': self.inputs,
+                  'adjust': {'cli.file': str(self.hpc / 'ws/refdata/clinical.tsv')}, 'cis': {}}
+        settings = {'genotype': {key: str(value) for key, value in workspace.DEFAULT_SETTINGS.items()},
+                    'expression': {'restrict.tcga': '1'}, 'adjust': {},
+                    'cis': {'alpha.cis': '0.0500', 'nperms': '100', 'upstream': '1000', 'downstream': '1000'}}
+        snapshots = {'genotype': workspace.SNAPSHOT, 'expression': workspace.EXPRESSION_SNAPSHOT,
+                     'adjust': workspace.ADJUST_SNAPSHOT, 'cis': workspace.CIS_SNAPSHOT}
+        for name in snapshots:
+            record = {'run_id': 'step_test', 'step': name, 'state': 'completed',
+                      'submitted_at': '2026-11-17T10:00:00-0800', 'remote_dir': str(self.remote_dir),
+                      'inputs': inputs[name], 'settings': settings[name],
+                      'resources': steps.STEPS[name].resources, 'options': {'npc': 3} if name == 'adjust' else {}}
+            (self.root / 'steps' / f'{name}.json').write_text(json.dumps(record))
+            snapshot = {**record, 'dataset_id': workspace.DATASET_ID, 'review_attempt': 1, 'input_sources': {}}
+            (self.root / snapshots[name]).write_text(json.dumps(snapshot))
+        preserved = {path: path.read_bytes() for path in [
+            *(self.root / name for name in snapshots.values()),
+            *(self.root / 'steps' / f'{name}.json' for name in snapshots),
+            *(self.remote_dir / 'work' / path.replace('{alpha.cis}', '0.0500')
+              for path in steps.STEPS['network'].needs),
+        ]}
+        st._update(self.root, {'ncores': '128', 'memory': '256', 'alpha.cis': '0.5'})
+        config_before = (self.root / 'work/config.ini').read_bytes()
+        self.server = ChatServer(('127.0.0.1', 0), lambda: None)
+        self.addCleanup(self.server.server_close)
+        worker = threading.Thread(target=self.server.serve_forever, kwargs={'poll_interval': 0.01}, daemon=True)
+        worker.start()
+        self.addCleanup(worker.join, 3)
+        self.addCleanup(self.server.shutdown)
+        origin = f'http://127.0.0.1:{self.server.server_port}'
+
+        def request(method, path, body=None):
+            connection = http.client.HTTPConnection('127.0.0.1', self.server.server_port, timeout=5)
+            headers = {'X-Chat-Token': self.server.token, 'Origin': origin, 'Content-Type': 'application/json'}
+            try:
+                connection.request(method, path, None if body is None else json.dumps(body), headers)
+                response = connection.getresponse()
+                return response.status, json.loads(response.read())
+            finally:
+                connection.close()
+
+        route = '/signet/runs/step_test/network/example'
+        status, review = request('GET', route)
+        self.assertEqual(status, 200)
+        self.assertTrue(review['ready'], review['reason'])
+        self.assertEqual((review['settings']['ncores'], review['settings']['memory']), (16, 32))
+        self.assertEqual(len(review['defaults_applied']), 2)
+        self.assertEqual(review['source_cis_alpha'], '0.0500')
+        self.assertTrue(review['input_sources']['sig.pair'].endswith('signet_all.sig.pValue_0.0500'))
+        self.assertEqual((self.root / 'work/config.ini').read_bytes(), config_before)
+        self.assertFalse((self.root / workspace.NETWORK_SNAPSHOT).exists())
+        self.assertFalse((self.fake / 'sbatch_args').exists())
+        body = {key: review[key] for key in ('inputs', 'settings', 'resources')}
+        body['settings'] = {'nboots': 4, 'ncis': 2, 'cor': 0.25, 'ncores': 4, 'memory': 16, 'walltime': '0:30:00'}
+        body['resources'] = {'cpus': 1, 'mem_gb': 8, 'hours': 2}
+        prior = self.root / 'steps/cis.json'
+        unavailable = json.loads(prior.read_text())
+        unavailable['state'] = 'failed'
+        prior.write_text(json.dumps(unavailable))
+        self.assertFalse(request('GET', route)[1]['ready'])
+        self.assertEqual(request('POST', route, body)[0], 412)
+        prior.write_bytes(preserved[prior])
+        source = self.remote_dir / 'work/res/resc/signet_all.sig.pValue_0.0500'
+        source.unlink()
+        self.assertFalse(request('GET', route)[1]['ready'])
+        self.assertEqual(request('POST', route, body)[0], 412)
+        source.write_bytes(preserved[source])
+        for bad in ({'nboots': 0}, {'cor': 0}, {'ncores': 65}, {'memory': 256}, {'walltime': '0:01:00'}):
+            self.assertEqual(request('POST', route, {**body, 'settings': {**body['settings'], **bad}})[0], 400)
+        self.assertEqual(request('POST', route, {**body, 'inputs': {'sig.pair': str(source)}})[0], 400)
+        self.assertFalse((self.root / workspace.NETWORK_SNAPSHOT).exists())
+        self.lose_connection_on = 'tar xzf'
+        self.assertEqual(request('POST', route, body)[0], 502)
+        self.lose_connection_on = None
+        status, submitted = request('POST', route, body)
+        self.assertEqual((status, submitted['state'], submitted['run_id']), (202, 'submitted', 'step_test'))
+        self.assertEqual(submitted['settings'], {key: str(value) for key, value in body['settings'].items()})
+        self.assertEqual(submitted['resources']['time'], '02:00:00')
+        self.assertIn('signet_all.sig.pValue_0.0500', (self.remote_dir / 'work/config.ini').read_text())
+        self.assertNotIn('signet_all.sig.pValue_0.5', (self.remote_dir / 'work/config.ini').read_text())
+        self.assertTrue((self.root / 'workspace-network.review1.json').is_file())
+        snapshot = (self.root / workspace.NETWORK_SNAPSHOT).read_bytes()
+        calls = len(self.calls)
+        self.assertEqual(request('POST', route, body)[0], 409)
+        self.assertEqual(len(self.calls), calls)
+        self.assertEqual((self.root / workspace.NETWORK_SNAPSHOT).read_bytes(), snapshot)
+        step_route = '/signet/runs/step_test/steps/network?refresh=1'
+        self.slurm(squeue='PENDING')
+        self.assertEqual(request('GET', step_route)[1]['state'], 'pending')
+        stage = self.remote_dir / 'work/tmp/tmpn/stage1'
+        stage.mkdir(parents=True, exist_ok=True)
+        (stage / 'params.txt').write_text('first\nsecond\n')
+        (stage / 'params1.txt.completed').write_text('first\n')
+        self.slurm(squeue='RUNNING')
+        running = request('GET', step_route)[1]
+        self.assertEqual((running['state'], running['progress']), ('running', {'stage1': '1 2'}))
+        for relative in steps.STEPS['network'].required:
+            target = self.remote_dir / 'work' / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text('data\n')
+        (self.remote_dir / 'steps/network.done').write_text('0 2026-11-17T12:00:00-08:00\n')
+        self.slurm(squeue='', sacct='COMPLETED')
+        self.assertEqual(request('GET', step_route)[1]['state'], 'completed')
+        steps.update_settings('step_test', {'nboots': 99, 'cor': 0.9, 'alpha.cis': 0.2})
+        calls = len(self.calls)
+        row = next(row for row in request('GET', '/stage6/history')[1]['runs'] if row['run_id'] == 'step_test')
+        self.assertEqual(set(row['jobs']), {'genotype', 'expression', 'adjust', 'cis', 'network'})
+        self.assertEqual(row['jobs']['network']['settings'], submitted['settings'])
+        self.assertEqual(row['jobs']['network']['source_cis_alpha'], '0.0500')
+        self.assertEqual(row['jobs']['network']['input_sources'], review['input_sources'])
+        self.assertEqual(len(self.calls), calls)
+        self.assertEqual(request('POST', route, body)[0], 409)
+        for path, contents in preserved.items():
+            self.assertEqual(path.read_bytes(), contents, str(path))
+        self.assertEqual(set(path.name for path in (self.project / 'runs').iterdir()), {'step_test'})
 
     def test_network_refused_while_the_run_keeps_signets_default_job_memory(self):
         self.network_ready(settings=None)   # config.ini.default has memory = 256
@@ -1476,6 +1708,167 @@ class StepsTest(unittest.TestCase):
                 self.assertEqual(steps.status('step_test', 'network', refresh=True)['state'], waiting)
                 queue.write_text('#!/bin/bash\n' + FAKE_SLURM['squeue'] + '\n')
                 self.assertEqual(steps.status('step_test', 'network', refresh=True)['state'], final)
+
+    # ---------- visualization (signet -v) ----------
+
+    def visualize_ready(self):
+        """One workspace run with its first five stages and saved network matrices complete."""
+        from agent.runtime import workspace_genotype as workspace
+
+        self.network_ready()
+        inputs = {'genotype': self.genotype_inputs(), 'expression': self.inputs,
+                  'adjust': {'cli.file': str(self.hpc / 'ws/refdata/clinical.tsv')}, 'cis': {}, 'network': {}}
+        settings = {'genotype': {key: str(value) for key, value in workspace.DEFAULT_SETTINGS.items()},
+                    'expression': {'restrict.tcga': '1'}, 'adjust': {}, 'cis': {'alpha.cis': '0.05'},
+                    'network': {key: str(value) for key, value in self.NETWORK_SETTINGS.items()}}
+        snapshots = {'genotype': workspace.SNAPSHOT, 'expression': workspace.EXPRESSION_SNAPSHOT,
+                     'adjust': workspace.ADJUST_SNAPSHOT, 'cis': workspace.CIS_SNAPSHOT,
+                     'network': workspace.NETWORK_SNAPSHOT}
+        for name, filename in snapshots.items():
+            record = {'run_id': 'step_test', 'step': name, 'state': 'completed',
+                      'submitted_at': '2026-11-17T10:00:00-0800', 'remote_dir': str(self.remote_dir),
+                      'inputs': inputs[name], 'settings': settings[name], 'resources': steps.STEPS[name].resources,
+                      'options': {'npc': 3} if name == 'adjust' else {}, 'input_sources': {},
+                      'source_cis_alpha': '0.05'}
+            (self.root / 'steps' / f'{name}.json').write_text(json.dumps(record))
+            (self.root / filename).write_text(json.dumps({**record, 'dataset_id': workspace.DATASET_ID,
+                                                        'review_attempt': 1}))
+        files = {'signet_Afreq': '0,0.5\n1,0\n', 'signet_CoeffMat0': '0,0.2\n-0.4,0\n',
+                 'signet_net.genepos': 'GENE1 1 100 200\nMEGF6 1 300 400\n'}
+        for base in (self.root, self.remote_dir):
+            folder = base / 'work/res/resn'
+            folder.mkdir(parents=True, exist_ok=True)
+            for name, contents in files.items():
+                (folder / name).write_text(contents)
+        return {path: path.read_bytes() for path in [
+            *(self.root / filename for filename in snapshots.values()),
+            *(self.root / 'steps' / f'{name}.json' for name in snapshots),
+            *(self.remote_dir / 'work/res/resn' / name for name in files),
+        ]}
+
+    def finish_visualize(self, record, marker=True):
+        for relative in record['required_outputs']:
+            path = self.remote_dir / 'work' / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if '_edgelist_' in relative:
+                path.write_text('source_gene_symbol,target_gene_symbol,frequency,coefficient\n'
+                                'MEGF6,GENE1,0.5,0.2\nGENE1,MEGF6,1,-0.4\n')
+            elif relative.endswith('_name.txt'):
+                path.write_text('GENE1\nMEGF6\n')
+            elif relative.endswith('.html'):
+                path.write_text('<html>visNetwork</html>\n')
+            else:
+                path.write_text('Saved original graph artifact\n')
+        (self.remote_dir / 'steps/visualize.done').write_text('0 2026-11-17T16:00:00-08:00\n')
+        (self.remote_dir / 'steps/visualize.out').write_text('SIGNET_STAGE6_EXPORTS_COMPLETED\n' if marker else '')
+        self.slurm(squeue='', sacct='COMPLETED')
+
+    def test_workspace_visualize_reviews_draft_and_keeps_the_same_run(self):
+        from agent.app.chat_ui import ChatServer
+        from agent.runtime import workspace_genotype as workspace
+
+        preserved = self.visualize_ready()
+        config_before = (self.root / 'work/config.ini').read_bytes()
+        server = ChatServer(('127.0.0.1', 0), lambda: None)
+        self.addCleanup(server.server_close)
+        worker = threading.Thread(target=server.serve_forever, kwargs={'poll_interval': 0.01}, daemon=True)
+        worker.start()
+        self.addCleanup(worker.join, 3)
+        self.addCleanup(server.shutdown)
+
+        def request(method, path, body=None):
+            connection = http.client.HTTPConnection('127.0.0.1', server.server_port, timeout=5)
+            headers = {'X-Chat-Token': server.token, 'Origin': f'http://127.0.0.1:{server.server_port}',
+                       'Content-Type': 'application/json'}
+            try:
+                connection.request(method, path, None if body is None else json.dumps(body), headers)
+                response = connection.getresponse()
+                return response.status, json.loads(response.read())
+            finally:
+                connection.close()
+
+        route = '/signet/runs/step_test/visualize/example'
+        review = request('GET', route)[1]
+        self.assertEqual(review['settings'], {'freq': 1, 'ntop': 3})
+        self.assertFalse(review['ready'])
+        self.assertIn('Only 1 connected subnetworks', review['reason'])
+        status, review = request('GET', route + '?freq=0.45&ntop=1')
+        self.assertEqual(status, 200)
+        self.assertTrue(review['ready'], review['reason'])
+        self.assertEqual(review['validation']['edges_at_threshold'], 2)
+        self.assertEqual(review['validation']['connected_subnetworks'], 1)
+        self.assertEqual(review['input_sources']['Afreq'], str(self.remote_dir / 'work/res/resn/signet_Afreq'))
+        self.assertEqual((self.root / 'work/config.ini').read_bytes(), config_before)
+        self.assertFalse((self.root / workspace.VISUALIZE_SNAPSHOT).exists())
+        self.assertFalse((self.fake / 'sbatch_args').exists())
+        for suffix in ('?freq=nan&ntop=1', '?freq=0.45&ntop=1.5', '?freq=0.45&ntop=0'):
+            self.assertEqual(request('GET', route + suffix)[0], 400)
+        self.assertFalse(request('GET', route + '?freq=0.45&ntop=2')[1]['ready'])
+        body = {key: review[key] for key in ('inputs', 'settings', 'resources')}
+        network = self.root / 'steps/network.json'
+        network.write_text(json.dumps({**json.loads(network.read_text()), 'state': 'running'}))
+        self.assertFalse(request('GET', route + '?freq=0.45&ntop=1')[1]['ready'])
+        self.assertEqual(request('POST', route, body)[0], 409)
+        network.write_bytes(preserved[network])
+        for bad in ({'freq': '0.45'}, {'freq': True}, {'freq': 1.1}, {'ntop': 1.5}, {'ntop': 101}):
+            self.assertEqual(request('POST', route, {**body, 'settings': {**body['settings'], **bad}})[0], 400)
+        self.assertEqual(request('POST', route, {**body, 'inputs': {'Afreq': review['input_sources']['Afreq']}})[0], 400)
+        status, record = request('POST', route, body)
+        self.assertEqual((status, record['state'], record['run_id']), (202, 'submitted', 'step_test'))
+        self.assertEqual(record['settings'], {'freq': '0.45', 'ntop': '1'})
+        self.assertEqual(record['remote_dir'], str(self.remote_dir))
+        self.assertEqual(len(record['required_outputs']), 6)
+        job = self.remote_dir / 'steps/visualize.sbatch'
+        self.assertEqual(subprocess.run(['bash', '-n', str(job)]).returncode, 0)
+        self.assertIn('--env cloud=T,', job.read_text())
+        self.assertIn('bash ./signet -v < /dev/null', job.read_text())
+        self.assertIn('Sys.setenv(freq=trimws(Sys.getenv("freq")))', job.read_text())
+        # A stand-in container exercises the per-run R patch, without executing SIGNET.
+        executor = self.fake / 'bin/apptainer'
+        executor.write_text('#!/bin/bash\ntrue\n')
+        executor.chmod(0o700)
+        self.assertEqual(self.remote('bash ' + str(job)).returncode, 0)
+        patched = (self.remote_dir / 'work/script/netvis/netshiny.R').read_text()
+        self.assertTrue(patched.startswith('Sys.setenv(freq=trimws(Sys.getenv("freq")))\n'))
+        self.assertTrue(patched.endswith('cat("SIGNET_STAGE6_EXPORTS_COMPLETED\\n")\n'))
+        (self.remote_dir / 'steps/visualize.done').unlink()
+        snapshot = (self.root / workspace.VISUALIZE_SNAPSHOT).read_bytes()
+        calls = len(self.calls)
+        self.assertEqual(request('POST', route, body)[0], 409)
+        self.assertEqual(len(self.calls), calls)
+        self.assertEqual((self.root / workspace.VISUALIZE_SNAPSHOT).read_bytes(), snapshot)
+        step_route = '/signet/runs/step_test/steps/visualize?refresh=1'
+        self.slurm(squeue='PENDING')
+        self.assertEqual(request('GET', step_route)[1]['state'], 'pending')
+        self.slurm(squeue='RUNNING')
+        self.assertEqual(request('GET', step_route)[1]['state'], 'running')
+        self.finish_visualize(record)
+        self.assertEqual(request('GET', step_route)[1]['state'], 'completed')
+        steps.update_settings('step_test', {'freq': 0.9, 'ntop': 3})
+        history = request('GET', '/stage6/history')[1]['runs'][0]
+        self.assertEqual(history['jobs']['visualize']['settings'], {'freq': '0.45', 'ntop': '1'})
+        self.assertEqual(history['graph'], {'genes': 2, 'connections': 2, 'subnetworks': 1, 'displayed': 1})
+        self.assertEqual((self.root / workspace.VISUALIZE_SNAPSHOT).read_bytes(), snapshot)
+        for path, contents in preserved.items():
+            self.assertEqual(path.read_bytes(), contents, path)
+
+    def test_visualize_requires_original_completion_marker_and_keeps_failed_review_on_retry(self):
+        from agent.runtime import workspace_genotype as workspace
+
+        self.visualize_ready()
+        settings = {'freq': 0.45, 'ntop': 1}
+        resources = steps.STEPS['visualize'].resources
+        first = workspace.submit_visualize('step_test', {}, settings, resources)
+        self.finish_visualize(first, marker=False)
+        failed = steps.status('step_test', 'visualize', refresh=True)
+        self.assertEqual(failed['state'], 'failed')
+        self.assertIn('completion marker is missing', failed['failure_hints'][0])
+        prior = (self.root / workspace.VISUALIZE_SNAPSHOT).read_bytes()
+        self.slurm(sbatch_reply='222')
+        retried = workspace.submit_visualize('step_test', {}, settings, resources)
+        self.assertEqual((retried['attempt'], retried['job_id']), (2, '222'))
+        self.assertEqual((self.root / 'workspace-visualize.review1.json').read_bytes(), prior)
+        self.assertTrue((self.root / 'steps/visualize.attempt1.json').is_file())
 
     def test_read_log_returns_last_lines_with_limits(self):
         steps.submit('step_test', 'expression', self.inputs)

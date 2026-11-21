@@ -93,7 +93,7 @@
       <div class="ml-stage-view" id="ml-stage-view" role="tabpanel" aria-labelledby="ml-stage-tab" hidden>
         <div class="ml-stage-heading" id="ml-stage-header">
           <h2 id="ml-stage-dataset-title" data-live-language>第 1 號染色體範例</h2>
-          <span>模擬分析</span>
+          <span data-live-language>手動執行</span>
         </div>
         <ol class="ml-timeline" id="ml-timeline"></ol>
         <p class="ml-stage-empty" id="ml-empty-stage" data-en-text="No stages have been run for this dataset." hidden>這組資料尚未執行任何階段。</p>
@@ -213,6 +213,7 @@
         <p class="ml-dataset-empty-note" data-en-text="Open Data to review the input files for this dataset.">可到「資料」檢查這組資料的輸入檔案。</p>
       </div>
     </section>
+    <section class="ml-workspace ml-stage-snapshot" id="lens-stage6-run" aria-labelledby="lens-stage6-run-title" hidden></section>
     <section class="ml-workspace" id="lens-stage6" data-selected-gene="" aria-labelledby="lens-stage6-title">
 
   <div class="ml-result-main">
@@ -267,6 +268,7 @@
     <div class="s6-summary" aria-live="polite" data-live-language>點選基因查看相連的調控關係。</div>
     <button class="s6-reset" data-s6-clear type="button" hidden>清除選取</button>
   </div>
+    <button type="button" id="ml-stage6-prepare" class="ml-nav-action" data-en-text="Run Stage 6" hidden>執行第 6 階段</button>
     <button type="button" id="ml-stage6-back" class="ml-nav-action" data-run-back data-en-text="Back to run timeline" hidden>回到執行時間線</button>
   </aside>
 

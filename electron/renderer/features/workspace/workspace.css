@@ -757,19 +757,19 @@ code:not(pre code) {
 
 #signet-lens-left-preview :is(#lens-stage1, .ml-expression-panel) .ml-genotype-main :is(h2, h3, p) { margin: 0; }
 #signet-lens-left-preview :is(#lens-stage1, .ml-expression-panel) .ml-genotype-main h2 { margin-block: 3px; font-size: 19px; font-weight: 600; }
-#signet-lens-left-preview :is(#lens-stage1, .ml-expression-panel) :is(.ml-genotype-eyebrow, [data-genotype-guidance], [data-expression-guidance], [data-adjust-guidance]) { color: var(--ml-muted); }
-#signet-lens-left-preview :is(#lens-stage1, .ml-expression-panel) .ml-genotype-main :is([data-genotype-readiness], [data-expression-readiness], [data-adjust-readiness]) { margin-top: 15px; font-weight: 600; }
-#signet-lens-left-preview :is(#lens-stage1, .ml-expression-panel) .ml-genotype-main :is([data-genotype-guidance], [data-expression-guidance], [data-adjust-guidance]) { margin-top: 4px; }
+#signet-lens-left-preview :is(#lens-stage1, .ml-expression-panel) :is(.ml-genotype-eyebrow, [data-genotype-guidance], [data-expression-guidance], [data-adjust-guidance], [data-cis-guidance]) { color: var(--ml-muted); }
+#signet-lens-left-preview :is(#lens-stage1, .ml-expression-panel) .ml-genotype-main :is([data-genotype-readiness], [data-expression-readiness], [data-adjust-readiness], [data-cis-readiness]) { margin-top: 15px; font-weight: 600; }
+#signet-lens-left-preview :is(#lens-stage1, .ml-expression-panel) .ml-genotype-main :is([data-genotype-guidance], [data-expression-guidance], [data-adjust-guidance], [data-cis-guidance]) { margin-top: 4px; }
 
-#signet-lens-left-preview :is(#lens-stage1, .ml-expression-panel) :is([data-genotype-form], [data-expression-form], [data-adjust-form]) {
+#signet-lens-left-preview :is(#lens-stage1, .ml-expression-panel) :is([data-genotype-form], [data-expression-form], [data-adjust-form], [data-cis-form]) {
   display: grid;
   margin-top: 14px;
   gap: 10px;
 }
 
-#signet-lens-left-preview :is(#lens-stage1, .ml-expression-panel) :is([data-genotype-form], [data-expression-form], [data-adjust-form]) h3 { font-size: 13px; font-weight: 600; }
-#signet-lens-left-preview :is(#lens-stage1, .ml-expression-panel) :is([data-genotype-form], [data-expression-form], [data-adjust-form]) code { overflow-wrap: anywhere; }
-#signet-lens-left-preview :is(#lens-stage1, .ml-expression-panel) :is([data-genotype-fields], [data-expression-fields], [data-adjust-fields]) {
+#signet-lens-left-preview :is(#lens-stage1, .ml-expression-panel) :is([data-genotype-form], [data-expression-form], [data-adjust-form], [data-cis-form]) h3 { font-size: 13px; font-weight: 600; }
+#signet-lens-left-preview :is(#lens-stage1, .ml-expression-panel) :is([data-genotype-form], [data-expression-form], [data-adjust-form], [data-cis-form]) code { overflow-wrap: anywhere; }
+#signet-lens-left-preview :is(#lens-stage1, .ml-expression-panel) :is([data-genotype-fields], [data-expression-fields], [data-adjust-fields], [data-cis-fields]) {
   min-width: 0;
   margin: 0;
   padding: 7px 10px 10px;
@@ -777,7 +777,7 @@ code:not(pre code) {
   border-radius: 5px;
 }
 
-#signet-lens-left-preview :is(#lens-stage1, .ml-expression-panel) :is([data-genotype-fields], [data-expression-fields], [data-adjust-fields]) legend { padding-inline: 4px; font-weight: 600; }
+#signet-lens-left-preview :is(#lens-stage1, .ml-expression-panel) :is([data-genotype-fields], [data-expression-fields], [data-adjust-fields], [data-cis-fields]) legend { padding-inline: 4px; font-weight: 600; }
 #signet-lens-left-preview :is(#lens-stage1, .ml-expression-panel) .ml-genotype-controls {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -831,3 +831,6 @@ code:not(pre code) {
 #signet-lens-left-preview .ml-expression-run-label select { width: 100%; padding: 6px; border: 1px solid var(--ml-rule); border-radius: 4px; background: #fff; color: var(--ml-ink); font: inherit; }
 
 #signet-lens-left-preview .ml-clinical-input { box-sizing: border-box; width: 100%; min-width: 0; padding: 6px; border: 1px solid var(--ml-rule); border-radius: 4px; background: #fff; color: var(--ml-ink); font: inherit; }
+
+#signet-lens-left-preview .ml-cis-inputs summary { color: var(--ml-muted); cursor: pointer; }
+#signet-lens-left-preview .ml-cis-inputs dl { margin-top: 8px; }

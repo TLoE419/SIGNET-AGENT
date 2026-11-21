@@ -90,6 +90,9 @@
   let genotypeRun;
   let expressionRun;
   let adjustmentRun;
+  let cisRun;
+  let networkRun;
+  let visualizationRun;
   let restoredGenotypeRun = false;
   let historyRequest = 0;
   let historyRuns = [];
@@ -97,7 +100,8 @@
   let historyResult = null;
   const localDatasetName = (dataset) => dataset.name[root.lang === "en" ? 1 : 0];
   const runsForDataset = () => historyRuns.filter((run) => run.dataset_id === activeDataset.id);
-  const stage6RunsForDataset = () => runsForDataset().filter((run) => run.source === "archive" && run.graph);
+  const stage6RunsForDataset = () => runsForDataset().filter((run) => run.graph &&
+    (run.source === "archive" || run.source === "live" && run.jobs.visualize?.state === "completed"));
   const tabs = [byId("agent-tab"), byId("stage-tab")];
   function selectTab(activeTab) {
     for (const tab of tabs) {
@@ -282,15 +286,15 @@
     },
     {
       name: "近端表現量關聯分析", note: "找出與鄰近基因表現量相關的變異。",
-      settings: "顯著門檻 0.05，上下游各 1,000 個鹼基對，置換 100 次",
-      output: "常見 156 筆、低頻 35 筆、罕見 15 筆",
+      settings: "在右側確認顯著門檻、分析範圍與置換次數。",
+      output: "完成後從歷次執行查看關聯結果。",
       icon: "bar-chart-3",
-      preview: barPreview([156, 35, 15], ["#4380b2", "#85afcf", "#b7cfe2"]),
+      preview: barPreview([3, 2, 1], ["#4380b2", "#85afcf", "#b7cfe2"]),
     },
     {
       name: "網路推論", note: "重抽樣推論基因間可能的調控方向。",
-      settings: "重抽樣 2 次，相關性門檻 0.3",
-      output: "394 條連線的出現頻率為 50%，337 條為 100%",
+      settings: "在右側確認重抽樣次數、相關性門檻與運算資源。",
+      output: "完成後從歷次執行查看候選連線與出現頻率。",
       icon: "bar-chart-3",
       preview: barPreview([394, 337], ["#85afcf", "#4380b2"]),
     },
@@ -462,6 +466,10 @@
     ["初步配對 473 位個體，校正後保留 471 位", "473 matched · 471 retained after adjustment"],
     ["近端表現量關聯分析", "Cis-eQTL analysis"],
     ["找出與鄰近基因表現量相關的變異。", "Test variants for associations with nearby genes."],
+    ["在右側確認顯著門檻、分析範圍與置換次數。", "Review the threshold, range and permutations on the right."],
+    ["完成後從歷次執行查看關聯結果。", "Open the association results from run history after completion."],
+    ["在右側確認重抽樣次數、相關性門檻與運算資源。", "Review bootstrap runs, the correlation threshold and resources on the right."],
+    ["完成後從歷次執行查看候選連線與出現頻率。", "Open candidate edges and frequencies from run history after completion."],
     ["顯著門檻 0.05，上下游各 1,000 個鹼基對，置換 100 次", "p < 0.05, ±1 kb, 100 permutations (low-frequency and rare)"],
     ["常見 156 筆、低頻 35 筆、罕見 15 筆", "156 common, 35 low-frequency, 15 rare pairs"],
     ["網路推論", "Network inference"],
@@ -672,6 +680,8 @@
   const stageButtons = timeline.querySelectorAll(".ml-stage-button");
   const stageResults = root.querySelectorAll(".ml-workspace");
   function syncGenotypeContext() {
+    const stageContext = ["手動執行", "Manual execution"];
+    byId("stage-header").querySelector("span").textContent = stageContext[root.lang === "en" ? 1 : 0];
     genotypeRun?.setContext({
       datasetId: activeDataset.id,
       language: root.lang,
@@ -696,6 +706,33 @@
       runs: activeDataset.id === exampleDataset.id ? runsForDataset().filter(run => run.source === "live") : [],
       runId: app.dataset.nav === "history" && historyResult?.stage === 3 ? historyResult.runId : null,
     });
+    cisRun?.setContext({
+      datasetId: activeDataset.id,
+      language: root.lang,
+      visible: app.dataset.nav === "analysis" &&
+        timeline.querySelector('[aria-current="step"]')?.dataset.stage === "4" ||
+        app.dataset.nav === "history" && historyResult?.stage === 4,
+      runs: activeDataset.id === exampleDataset.id ? runsForDataset().filter(run => run.source === "live") : [],
+      runId: app.dataset.nav === "history" && historyResult?.stage === 4 ? historyResult.runId : null,
+    });
+    networkRun?.setContext({
+      datasetId: activeDataset.id,
+      language: root.lang,
+      visible: app.dataset.nav === "analysis" &&
+        timeline.querySelector('[aria-current="step"]')?.dataset.stage === "5" ||
+        app.dataset.nav === "history" && historyResult?.stage === 5,
+      runs: activeDataset.id === exampleDataset.id ? runsForDataset().filter(run => run.source === "live") : [],
+      runId: app.dataset.nav === "history" && historyResult?.stage === 5 ? historyResult.runId : null,
+    });
+    visualizationRun?.setContext({
+      datasetId: activeDataset.id,
+      language: root.lang,
+      visible: ["analysis", "history"].includes(app.dataset.nav) && visualizationFormVisible(),
+      runs: activeDataset.id === exampleDataset.id ? runsForDataset().filter(run => run.source === "live") : [],
+      runId: app.dataset.nav === "history" && historyResult?.stage === 6 ? historyResult.runId : null,
+      resultsAvailable: stage6RunsForDataset().length > 0,
+    });
+    if (visualizationRun) syncVisualizationPanels();
   }
 
   function showStage(button, open) {
@@ -951,13 +988,17 @@
       const stages = historySteps.map((key, offset) => {
         const job = run.jobs[key];
         if (!job && !(run.source === "live" && (offset === 1 && run.jobs.genotype?.state === "completed" ||
-          offset === 2 && run.jobs.genotype?.state === "completed" && run.jobs.expression?.state === "completed"))) return "";
+          offset === 2 && run.jobs.genotype?.state === "completed" && run.jobs.expression?.state === "completed" ||
+          offset === 3 && ["genotype", "expression", "adjust"].every(step => run.jobs[step]?.state === "completed") ||
+          offset === 4 && ["genotype", "expression", "adjust", "cis"].every(step => run.jobs[step]?.state === "completed") ||
+          offset === 5 && ["genotype", "expression", "adjust", "cis", "network"].every(step => run.jobs[step]?.state === "completed")))) return "";
         const number = offset + 1;
         const icon = job?.state === "completed" ? "circle-check" : "history";
         const title = `<i data-lucide="${icon}" aria-hidden="true"></i>
           ${historyText(`第 ${number} 階段`, `Stage ${number}`)}<strong>${historyLabel(stageData[offset].name)}</strong>
           <time datetime="${escapeHistory(job?.finished_at)}">${escapeHistory(clockTime(job?.finished_at))}</time>`;
-        const panel = [2, 3].includes(number) && run.source === "live" && job?.state !== "completed" ? `lens-stage${number}`
+        const panel = number === 6 && run.source === "live" && job?.state !== "completed" ? "lens-stage6-run"
+          : [2, 3, 4, 5].includes(number) && run.source === "live" && job?.state !== "completed" ? `lens-stage${number}`
           : number === 3 ? "lens-history-stage3" : number === 6 ? "lens-stage6" : "lens-history-stage";
         const legacy = number === 3 ? `data-run-adjustment="${id}"` : number === 6 ? `data-run-network="${id}"` : "";
         return `<li><button type="button" class="ml-run-step-link" data-run-stage="${number}"
@@ -1007,6 +1048,8 @@
   const stage6Status = analysisNetwork.querySelector(".s6-result-status");
   const stage6Summary = analysisNetwork.querySelector(".s6-summary");
   const stage6Back = byId("stage6-back");
+  const stage6Prepare = byId("stage6-prepare");
+  const visualizationPanel = root.querySelector("#lens-stage6-run");
   const stage6HistoryLabel = byId("stage6-history-run");
   const stage6Labels = {
     listing: ["讀取已完成的執行…", "Finding completed runs…"],
@@ -1023,6 +1066,31 @@
   let stage6Request;
   let requestedStage6Run = null;
   analysisNetwork.dataset.runState = "listing";
+
+  function visualizationFormVisible() {
+    if (app.dataset.nav === "history") {
+      const run = runsForDataset().find(run => run.run_id === historyResult?.runId);
+      return historyResult?.stage === 6 && run?.source === "live" && run.jobs.visualize?.state !== "completed";
+    }
+    if (!["analysis", "settings"].includes(app.dataset.nav)) return false;
+    return timeline.querySelector('[aria-current="step"]')?.dataset.stage === "6" &&
+      activeDataset.id === exampleDataset.id && runsForDataset().some(run => run.source === "live") &&
+      !stage6RunsForDataset().some(run => run.run_id === stage6RunSelect.value);
+  }
+
+  function syncVisualizationPanels() {
+    const inHistory = app.dataset.nav === "history";
+    const form = visualizationFormVisible();
+    const graph = inHistory ? historyResult?.stage === 6 && !form
+      : timeline.querySelector('[aria-current="step"]')?.dataset.stage === "6" && !form;
+    visualizationPanel.classList.toggle("ml-workspace", !inHistory || !form);
+    visualizationPanel.classList.toggle("ml-nav-workspace", inHistory && form);
+    visualizationPanel.hidden = !form;
+    analysisNetwork.classList.toggle("ml-workspace", !inHistory || !graph);
+    analysisNetwork.classList.toggle("ml-nav-workspace", inHistory && graph);
+    analysisNetwork.hidden = !graph;
+    stage6Prepare.hidden = inHistory || activeDataset.id !== exampleDataset.id || !runsForDataset().some(run => run.source === "live");
+  }
 
   function renderStage6Status() {
     const language = root.lang === "en" ? 1 : 0;
@@ -1108,10 +1176,16 @@
       if (result.run_id !== runId || result.source !== run.source) {
         throw new Error("Stage 6 result belongs to a different run");
       }
-      const {nodes, edges} = result.graph;
+      let {nodes, edges} = result.graph;
+      if (run.source === "live" && result.graph.display_nodes) {
+        const displayed = new Set(result.graph.display_nodes);
+        nodes = nodes.filter(node => displayed.has(node));
+        edges = edges.filter(edge => displayed.has(edge.source) && displayed.has(edge.target));
+      }
       setLiveNetwork(layoutStage6(nodes), edges.map(({source, target, frequency, coefficient}) =>
         [source, target, frequency, coefficient]), selectedStage6Genes.get(runId));
-      stage6Result = result;
+      stage6Result = {...result, graph: {...result.graph, nodes, edges,
+        counts: {...result.graph.counts, genes: nodes.length, connections: edges.length}}};
       analysisNetwork.dataset.runId = runId;
       setStage6RunState("ready");
     } catch {
@@ -1140,11 +1214,19 @@
     stage6RunSelect.value = inHistory ? historyResult.runId : analysisRunByDataset.get(activeDataset.id) ?? "";
     if (!stage6RunSelect.value) stage6RunSelect.value = "";
     syncStage6Choice();
+    if (visualizationRun) syncVisualizationPanels();
   }
 
   stage6RunSelect.addEventListener("change", () => {
     analysisRunByDataset.set(activeDataset.id, stage6RunSelect.value);
     syncStage6Choice();
+    syncVisualizationPanels();
+  });
+  stage6Prepare.addEventListener("click", () => {
+    analysisRunByDataset.set(activeDataset.id, "");
+    stage6RunSelect.value = "";
+    syncStage6Choice();
+    syncGenotypeContext();
   });
   stage6Retry.addEventListener("click", () => {
     if (analysisNetwork.dataset.runState === "load-error") void loadStage6Run(stage6RunSelect.value);
@@ -1282,14 +1364,14 @@
     int: ["插補分塊長度（鹼基對）", "Imputation block size (bp)"],
     "alpha.cis": ["顯著性門檻", "Significance cutoff"],
     nperms: ["低頻及罕見區域置換", "Permutations (low/rare)"],
-    upstream: ["上游範圍（鹼基對）", "Upstream window (bp)"],
-    downstream: ["下游範圍（鹼基對）", "Downstream window (bp)"],
+    upstream: ["基因終點後的範圍（鹼基對）", "After gene end (base pairs)"],
+    downstream: ["基因起點前的範圍（鹼基對）", "Before gene start (base pairs)"],
     nboots: ["重抽樣次數", "Bootstrap runs"],
-    ncis: ["每個基因的標記數上限", "Max. markers per gene"],
-    cor: ["標記間絕對相關性上限", "Max. absolute marker correlation"],
-    ncores: ["重抽樣工作核心數", "Bootstrap worker cores"],
-    memory: ["重抽樣工作記憶體（GB）", "Bootstrap worker memory (GB)"],
-    walltime: ["重抽樣工作時間上限", "Bootstrap worker time limit"],
+    ncis: ["ncis（原流程設定）", "ncis (recorded setting)"],
+    cor: ["工具變異相關性上限", "Instrument correlation limit"],
+    ncores: ["每個計算工作核心數", "Compute job cores"],
+    memory: ["每個計算工作記憶體（GB）", "Compute job memory (GB)"],
+    walltime: ["每個計算工作時間上限", "Compute job time limit"],
   };
   const savedStepStates = {
     loading: ["讀取階段封存結果…", "Loading the archived stage result…"],
@@ -1345,6 +1427,7 @@
       view.rows = summary.edges.map(({source, target, frequency}) => [source, target, percent(frequency)]);
       view.caption = local("顯示至少出現一次的候選連線。第 6 階段會依出現頻率篩選。",
         "Candidate edges appeared in at least one bootstrap run. Stage 6 filters them by frequency.");
+      if (!summary.edges.length) view.emptyText = local("這次執行沒有出現候選連線。", "This run produced no candidate edges.");
     }
 
     // Fit small and large archived results within the existing chart frame.
@@ -1363,6 +1446,12 @@
     const run = archiveSteps.has(stage)
       ? runsForDataset().find(({run_id}) => run_id === historyResult.runId) : null;
     const view = run && archivedStepResult ? viewArchivedStep(stage, archivedStepResult.summary, language) : null;
+    if (view && stage === 4 && run.source === "live") {
+      view.tableTitle = local("顯著基因與變異關聯", "Significant gene–variant associations");
+    }
+    if (view && stage === 5 && run.source === "live") {
+      view.tableTitle = local("候選連線與出現頻率", "Candidate edges and frequencies");
+    }
     const state = archivedStepPanel.dataset.runState;
     const name = run ? stageData[stage - 1].name : "";
     const job = run ? archivedStepResult?.job ?? run.jobs[historySteps[stage - 1]] : null;
@@ -1385,9 +1474,9 @@
     ].map(([label, value]) => definition(label, value)).join("") : "";
 
     const resources = [
-      ["cpus", local("排程工作核心數", "Scheduled job cores")],
-      ["mem_gb", local("排程工作記憶體（GB）", "Scheduled job memory (GB)")],
-      ["time", local("排程工作時間上限", "Scheduled job time limit")],
+      ["cpus", stage === 5 ? local("監控工作核心數", "Controller job cores") : local("排程工作核心數", "Scheduled job cores")],
+      ["mem_gb", stage === 5 ? local("監控工作記憶體（GB）", "Controller job memory (GB)") : local("排程工作記憶體（GB）", "Scheduled job memory (GB)")],
+      ["time", stage === 5 ? local("監控工作時間上限", "Controller job time limit") : local("排程工作時間上限", "Scheduled job time limit")],
     ];
     const settings = Object.entries({...job?.settings, ...job?.options});
     archivedStepSettings.innerHTML = job ? [
@@ -1413,7 +1502,7 @@
       `<th scope="col">${escapeHistory(title)}</th>`).join("");
     const rows = view.rows.map((row) => `<tr>${row.map((value) =>
       `<td>${escapeHistory(value)}</td>`).join("")}</tr>`).join("");
-    archivedStepTable.tBodies[0].innerHTML = rows || `<tr><td colspan="${view.headers.length}">${recorded(null)}</td></tr>`;
+    archivedStepTable.tBodies[0].innerHTML = rows || `<tr><td colspan="${view.headers.length}">${escapeHistory(view.emptyText ?? recorded(null))}</td></tr>`;
   }
 
   async function loadArchivedStep() {
@@ -1743,8 +1832,12 @@
       selectedRun.jobs.expression?.state !== "completed";
     const showAdjustment = showResult && historyResult.stage === 3 && selectedRun?.source === "live" &&
       selectedRun.jobs.adjust?.state !== "completed";
+    const showCis = showResult && historyResult.stage === 4 && selectedRun?.source === "live" &&
+      selectedRun.jobs.cis?.state !== "completed";
+    const showNetworkRun = showResult && historyResult.stage === 5 && selectedRun?.source === "live" &&
+      selectedRun.jobs.network?.state !== "completed";
     stage3HistoryPanel.hidden = !showResult || historyResult.stage !== 3 || showAdjustment;
-    archivedStepPanel.hidden = !showResult || showExpression || !archiveSteps.has(historyResult.stage);
+    archivedStepPanel.hidden = !showResult || showExpression || showCis || showNetworkRun || !archiveSteps.has(historyResult.stage);
     const expressionPanel = root.querySelector("#lens-stage2");
     expressionPanel.classList.toggle("ml-workspace", !showExpression);
     expressionPanel.classList.toggle("ml-nav-workspace", showExpression);
@@ -1753,6 +1846,14 @@
     adjustmentPanel.classList.toggle("ml-workspace", !showAdjustment);
     adjustmentPanel.classList.toggle("ml-nav-workspace", showAdjustment);
     adjustmentPanel.hidden = inHistory ? !showAdjustment : timeline.querySelector('[aria-current="step"]').dataset.stage !== "3";
+    const cisPanel = root.querySelector("#lens-stage4");
+    cisPanel.classList.toggle("ml-workspace", !showCis);
+    cisPanel.classList.toggle("ml-nav-workspace", showCis);
+    cisPanel.hidden = inHistory ? !showCis : timeline.querySelector('[aria-current="step"]').dataset.stage !== "4";
+    const networkPanel = root.querySelector("#lens-stage5");
+    networkPanel.classList.toggle("ml-workspace", !showNetworkRun);
+    networkPanel.classList.toggle("ml-nav-workspace", showNetworkRun);
+    networkPanel.hidden = inHistory ? !showNetworkRun : timeline.querySelector('[aria-current="step"]').dataset.stage !== "5";
     runDetails.hidden = !inHistory || !selected || showResult;
     byId("empty-history").hidden = !inHistory || Boolean(selected);
     byId("empty-run-list").hidden = Boolean(selected);
@@ -1779,16 +1880,16 @@
     timeline.hidden = !hasSavedResults;
     byId("stage-header").querySelector("span").hidden = !hasSavedResults;
     byId("empty-stage").hidden = hasSavedResults || historyState !== "ready";
-    // Stages 1–3 use manual jobs; the later stages retain the saved walkthrough.
+    // Manual stages and saved network results share the existing stage workspace.
     const showWalkthrough = isExample && stage6RunsForDataset().length > 0;
     const activeStage = timeline.querySelector('[aria-current="step"]').dataset.stage;
-    if (!isExample || (!showWalkthrough && !["1", "2", "3", "6"].includes(activeStage))) {
+    if (!isExample || (!showWalkthrough && !["1", "2", "3", "4", "5", "6"].includes(activeStage))) {
       const lastStage = stageButtons[stageButtons.length - 1];
       showStage(lastStage, true);
     }
     for (const button of stageButtons) {
       button.closest(".ml-stage-entry").hidden = !showWalkthrough && button.dataset.stage !== "6" &&
-        !(isExample && ["1", "2", "3"].includes(button.dataset.stage));
+        !(isExample && ["1", "2", "3", "4", "5"].includes(button.dataset.stage));
     }
     syncGenotypeContext();
   }
@@ -1818,8 +1919,20 @@
         (Date.parse(historyJob(a)?.finished_at || historyJob(a)?.submitted_at) || 0));
       historyState = "ready";
       renderHistoryRecords();
+      if (!analysisRunByDataset.has(activeDataset.id)) {
+        const completed = stage6RunsForDataset().find(run => run.source === "live");
+        if (completed) analysisRunByDataset.set(activeDataset.id, completed.run_id);
+      }
       if (historyResult?.stage === 2 && historyRuns.find(run => run.run_id === historyResult.runId)?.jobs.expression?.state === "completed" &&
         (archivedStepPanel.dataset.runId !== historyResult.runId || archivedStepPanel.dataset.stage !== "2")) {
+        void loadArchivedStep();
+      }
+      if (historyResult?.stage === 4 && historyRuns.find(run => run.run_id === historyResult.runId)?.jobs.cis?.state === "completed" &&
+        (archivedStepPanel.dataset.runId !== historyResult.runId || archivedStepPanel.dataset.stage !== "4")) {
+        void loadArchivedStep();
+      }
+      if (historyResult?.stage === 5 && historyRuns.find(run => run.run_id === historyResult.runId)?.jobs.network?.state === "completed" &&
+        (archivedStepPanel.dataset.runId !== historyResult.runId || archivedStepPanel.dataset.stage !== "5")) {
         void loadArchivedStep();
       }
       if (historyResult?.stage === 3 && historyRuns.find(run => run.run_id === historyResult.runId)?.jobs.adjust?.state === "completed" &&
@@ -1874,6 +1987,59 @@
     clearHistoryResult();
     updateHistoryView();
     runDetails.querySelector(`[data-run-stage="3"][data-run-id="${CSS.escape(runId)}"]`)?.focus({preventScroll: true});
+  }
+
+  async function openCisHistory(runId) {
+    openNavigation("history");
+    await loadWorkspaceHistory();
+    if (app.dataset.nav !== "history" || !runsForDataset().some(run => run.run_id === runId)) return;
+    selectedRuns.set(activeDataset.id, runId);
+    clearHistoryResult();
+    updateHistoryView();
+    runDetails.querySelector(`[data-run-stage="4"][data-run-id="${CSS.escape(runId)}"]`)?.focus({preventScroll: true});
+  }
+
+  async function openNetworkHistory(runId) {
+    openNavigation("history");
+    await loadWorkspaceHistory();
+    if (app.dataset.nav !== "history" || !runsForDataset().some(run => run.run_id === runId)) return;
+    selectedRuns.set(activeDataset.id, runId);
+    clearHistoryResult();
+    updateHistoryView();
+    runDetails.querySelector(`[data-run-stage="5"][data-run-id="${CSS.escape(runId)}"]`)?.focus({preventScroll: true});
+  }
+
+  async function openVisualizationHistory(runId) {
+    openNavigation("history");
+    await loadWorkspaceHistory();
+    if (app.dataset.nav !== "history" || !runsForDataset().some(run => run.run_id === runId)) return;
+    selectedRuns.set(activeDataset.id, runId);
+    clearHistoryResult();
+    updateHistoryView();
+    runDetails.querySelector(`[data-run-stage="6"][data-run-id="${CSS.escape(runId)}"]`)?.focus({preventScroll: true});
+  }
+
+  function showSavedStage6() {
+    const available = stage6RunsForDataset();
+    const run = available.find(run => run.run_id === analysisRunByDataset.get(activeDataset.id)) ?? available[0];
+    if (!run) return;
+    analysisRunByDataset.set(activeDataset.id, run.run_id);
+    openNavigation("analysis");
+    selectTab(tabs[1]);
+    showStage(timeline.querySelector('[data-stage="6"]'), true);
+    syncStage6Picker();
+  }
+
+  async function refreshVisualizationHistory(runId) {
+    await loadWorkspaceHistory();
+    if (!stage6RunsForDataset().some(run => run.run_id === runId)) return;
+    const showingRun = app.dataset.nav === "history" && historyResult?.stage === 6 && historyResult.runId === runId;
+    const showingForm = app.dataset.nav === "analysis" && visualizationFormVisible();
+    if (showingRun || showingForm) {
+      analysisRunByDataset.set(activeDataset.id, runId);
+      syncStage6Picker(true);
+      updateHistoryView();
+    }
   }
 
   function closeDatasetForm() {
@@ -1987,15 +2153,21 @@
     historyResult = {runId, stage};
     if (stage === 3 && !(runsForDataset().find(run => run.run_id === runId)?.source === "live" &&
       runsForDataset().find(run => run.run_id === runId)?.jobs.adjust?.state !== "completed")) void loadStage3Run();
-    else if (archiveSteps.has(stage) && !(stage === 2 &&
+    else if (archiveSteps.has(stage) && !([2, 4, 5].includes(stage) &&
       runsForDataset().find(run => run.run_id === runId)?.source === "live" &&
-      runsForDataset().find(run => run.run_id === runId)?.jobs.expression?.state !== "completed")) void loadArchivedStep();
+      runsForDataset().find(run => run.run_id === runId)?.jobs[historySteps[stage - 1]]?.state !== "completed")) void loadArchivedStep();
     updateHistoryView();
     syncStage6Picker();
     const expressionBack = root.querySelector("#lens-stage2 [data-expression-back]");
     const adjustmentBack = root.querySelector("#lens-stage3 [data-adjust-back]");
+    const cisBack = root.querySelector("#lens-stage4 [data-cis-back]");
+    const networkBack = root.querySelector("#lens-stage5 [data-network-back]");
+    const visualizationBack = visualizationPanel.querySelector("[data-visualize-back]");
     const back = stage === 2 && !root.querySelector("#lens-stage2").hidden ? expressionBack
       : stage === 3 && !root.querySelector("#lens-stage3").hidden ? adjustmentBack
+      : stage === 4 && !root.querySelector("#lens-stage4").hidden ? cisBack
+      : stage === 5 && !root.querySelector("#lens-stage5").hidden ? networkBack
+      : stage === 6 && !visualizationPanel.hidden ? visualizationBack
       : stage === 3 ? stage3Back : stage === 6 ? stage6Back : archivedStepBack;
     back.focus({ preventScroll: true });
   });
@@ -2136,6 +2308,28 @@
     onHistoryChanged: () => void loadWorkspaceHistory(),
     onOpenHistory: (runId) => void openAdjustmentHistory(runId),
     onBack: backToRunTimeline,
+  });
+  cisRun = globalThis.mountCisRun({
+    panel: root.querySelector("#lens-stage4"),
+    token: chatToken,
+    onHistoryChanged: () => void loadWorkspaceHistory(),
+    onOpenHistory: (runId) => void openCisHistory(runId),
+    onBack: backToRunTimeline,
+  });
+  networkRun = globalThis.mountNetworkRun({
+    panel: root.querySelector("#lens-stage5"),
+    token: chatToken,
+    onHistoryChanged: () => void loadWorkspaceHistory(),
+    onOpenHistory: (runId) => void openNetworkHistory(runId),
+    onBack: backToRunTimeline,
+  });
+  visualizationRun = globalThis.mountVisualizationRun({
+    panel: visualizationPanel,
+    token: chatToken,
+    onHistoryChanged: (runId) => void refreshVisualizationHistory(runId),
+    onOpenHistory: (runId) => void openVisualizationHistory(runId),
+    onBack: backToRunTimeline,
+    onShowResults: showSavedStage6,
   });
   updateAnalysisView();
   updateHistoryView();

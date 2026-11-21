@@ -313,8 +313,8 @@ class ChatHandler(BaseHTTPRequestHandler):
         query = parse_qs(url.query, keep_blank_values=True)
         if (set(query) - {'run', 'stage', 'source'} or len(query.get('run', [])) != 1 or not query['run'][0]
                 or len(query.get('stage', [])) != 1 or query['stage'][0] not in ARCHIVED_STEP_JOBS
-                or ('source' in query and (query['source'] != ['live'] or query['stage'][0] not in ('1', '2')))):
-            return self._error(400, 'Provide a run ID and stage number (1, 2, 4, or 5). A live result requires stage 1 or 2.')
+                or ('source' in query and (query['source'] != ['live'] or query['stage'][0] not in ('1', '2', '4', '5')))):
+            return self._error(400, 'Provide a run ID and stage number (1, 2, 4, or 5).')
         run_id, stage = query['run'][0], query['stage'][0]
         try:
             result = (workspace_genotype.completed_result(run_id, stage) if 'source' in query
@@ -347,11 +347,12 @@ class ChatHandler(BaseHTTPRequestHandler):
         if not query:
             return self.json_response({'runs': self.server.stage6.completed_runs()})
         if (set(query) - {'run', 'source'} or len(query.get('run', [])) != 1
-                or ('source' in query and query['source'] != ['archive'])):
-            return self._error(400, 'Provide a single run ID and, optionally, the archived source.')
+                or ('source' in query and query['source'] not in (['archive'], ['live']))):
+            return self._error(400, 'Provide a single run ID and, optionally, the archive or live source.')
         try:
             return self.json_response(self.server.stage6.completed_result(
-                query['run'][0], archive_only='source' in query))
+                query['run'][0], archive_only=query.get('source') == ['archive'],
+                live_only=query.get('source') == ['live']))
         except (OSError, ValueError, KeyError, TypeError, csv.Error):
             return self._error(400, 'No readable completed Stage 6 result for this run.')
 

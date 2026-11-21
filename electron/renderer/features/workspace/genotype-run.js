@@ -413,21 +413,116 @@
     "cli.file": ["臨床資料檔案", "Clinical data file"],
   };
 
-  function mountContinuationRun({panel, token, onHistoryChanged, onOpenHistory, onBack}, adjustment = false) {
-    const step = adjustment ? "adjust" : "expression";
+  const cisCopy = {
+    title: ["基因與變異關聯分析", "Gene–variant associations"],
+    stage: ["第 4 階段", "Stage 4"],
+    run: expressionCopy.run,
+    empty: ["先選擇前 3 階段已完成的執行。", "Choose a run with completed Stages 1–3."],
+    prerequisite: ["這筆執行的前 3 階段完成後，即可送出第 4 階段。", "Submit Stage 4 after Stages 1–3 complete in this run."],
+    readyPrompt: ["核對顯著門檻、分析範圍與置換次數後，按「送出第 4 階段」。", "Review the significance threshold, analysis range and permutations, then select Submit Stage 4."],
+    submit: ["送出第 4 階段", "Submit Stage 4"],
+    review: ["檢查前階段結果", "Check prior results"],
+    checking: ["正在核對前階段結果…", "Checking prior results…"],
+    inputs: ["沿用這筆執行的檔案", "Files from this run"],
+    retry: expressionCopy.retry,
+    back: expressionCopy.back,
+    "alpha.cis": ["顯著門檻", "Significance threshold"],
+    upstream: ["基因終點後的範圍（鹼基對）", "After gene end (base pairs)"],
+    downstream: ["基因起點前的範圍（鹼基對）", "Before gene start (base pairs)"],
+    nperms: ["置換次數", "Permutations"],
+    positiveAlpha: ["顯著門檻必須大於 0。", "The significance threshold must be above 0."],
+  };
+
+  const networkCopy = {
+    title: ["候選網路推論", "Candidate network inference"],
+    stage: ["第 5 階段", "Stage 5"],
+    run: expressionCopy.run,
+    empty: ["先選擇前 4 階段已完成的執行。", "Choose a run with completed Stages 1–4."],
+    prerequisite: ["這筆執行的前 4 階段完成後，即可送出第 5 階段。", "Submit Stage 5 after Stages 1–4 complete in this run."],
+    readyPrompt: ["核對重抽樣次數、相關性門檻及運算資源後，按「送出第 5 階段」。", "Review bootstrap runs, the correlation threshold and resources, then select Submit Stage 5."],
+    submit: ["送出第 5 階段", "Submit Stage 5"],
+    review: cisCopy.review,
+    checking: cisCopy.checking,
+    inputs: cisCopy.inputs,
+    retry: expressionCopy.retry,
+    back: expressionCopy.back,
+    nboots: ["重抽樣次數", "Bootstrap runs"],
+    cor: ["工具變異相關性上限", "Instrument correlation limit"],
+    correlationNote: ["相關性門檻用於挑選各基因的工具變異。", "The correlation limit selects each gene’s instrumental variants."],
+    childResources: ["每個計算工作", "Each compute job"],
+    resources: ["流程監控工作", "Workflow controller"],
+    jobID: ["監控工作編號", "Controller job ID"],
+    controllerNote: ["監控工作會持續等待遠端計算工作完成，請保留足夠的執行時間。", "The controller waits for the compute jobs to finish, so allow enough time for the full workflow."],
+    ncores: ["核心數", "CPU cores"],
+    memory: ["記憶體（GB）", "Memory (GB)"],
+    walltime: ["時間上限（時:分:秒）", "Time limit (H:MM:SS)"],
+    positiveCorrelation: ["相關性門檻必須大於 0。", "The correlation threshold must be above 0."],
+    defaultsApplied: ["部分既有資源預設值超出支援範圍，請核對目前預填的資源後送出。", "Some saved resource defaults exceed supported ranges. Review the replacement values before submission."],
+    phase1: ["第一批模型工作", "First batch of model work items"],
+    phase2: ["第二批模型工作", "Second batch of model work items"],
+  };
+
+  const visualizationCopy = {
+    title: ["網路圖與連線匯出", "Network visualization and export"],
+    stage: ["第 6 階段", "Stage 6"],
+    run: expressionCopy.run,
+    empty: ["先選擇前 5 階段已完成的執行。", "Choose a run with completed Stages 1–5."],
+    prerequisite: ["這筆執行的前 5 階段完成後，即可送出第 6 階段。", "Submit Stage 6 after Stages 1–5 complete in this run."],
+    readyPrompt: ["核對出現頻率門檻與子網路數後，按「送出第 6 階段」。", "Review the frequency threshold and subnetwork count, then select Submit Stage 6."],
+    submit: ["送出第 6 階段", "Submit Stage 6"],
+    review: ["檢查網路與門檻", "Check network and thresholds"],
+    checking: ["正在核對網路與門檻…", "Checking network and thresholds…"],
+    inputs: cisCopy.inputs,
+    retry: expressionCopy.retry,
+    back: expressionCopy.back,
+    freq: ["連線出現頻率門檻", "Edge frequency threshold"],
+    ntop: ["顯示的子網路數", "Subnetworks to display"],
+    savedResults: ["已儲存網路圖", "Saved networks"],
+  };
+
+  function mountContinuationRun({panel, token, onHistoryChanged, onOpenHistory, onBack, onShowResults}, step = "expression") {
+    const adjustment = step === "adjust";
+    const cis = step === "cis";
+    const network = step === "network";
+    const visualization = step === "visualize";
+    const linkedInputs = cis || network || visualization;
+    const alwaysVisible = adjustment || linkedInputs;
     const prefix = step;
-    const stage = adjustment ? 3 : 2;
-    const copy = adjustment ? adjustmentCopy : expressionCopy;
-    const parameterKey = adjustment ? "npc" : "restrict.tcga";
+    const stage = visualization ? 6 : network ? 5 : cis ? 4 : adjustment ? 3 : 2;
+    const copy = visualization ? visualizationCopy : network ? networkCopy : cis ? cisCopy : adjustment ? adjustmentCopy : expressionCopy;
     const parameterGroup = adjustment ? "options" : "settings";
     const parameterAttribute = adjustment ? "option" : "setting";
-    const fileKeys = adjustment ? ["cli.file"] : ["gexp.file", "pmap.file"];
+    const parameterDefinitions = visualization ? [
+      {key: "freq", label: "freq", min: 0, max: 1, value: 0.45, step: "any"},
+      {key: "ntop", label: "ntop", min: 1, max: 100, value: 1, step: 1},
+    ] : network ? [
+      {key: "nboots", label: "nboots", min: 1, max: 1000, value: 100, step: 1},
+      {key: "cor", label: "cor", min: 0, max: 1, value: 0.3, step: "any"},
+      {key: "ncis", label: "ncis", min: 1, max: 10, value: 3, step: 1},
+      {key: "ncores", label: "ncores", min: 1, max: 64, value: 16, step: 1},
+      {key: "memory", label: "memory", min: 1, max: 128, value: 32, step: 1},
+      {key: "walltime", label: "walltime", value: "4:00:00", type: "text"},
+    ] : cis ? [
+      {key: "alpha.cis", label: "alpha.cis", min: 0, max: 1, value: 0.05, step: "any"},
+      {key: "downstream", label: "downstream", min: 0, max: 10_000_000, value: 1000, step: 1},
+      {key: "upstream", label: "upstream", min: 0, max: 10_000_000, value: 1000, step: 1},
+      {key: "nperms", label: "nperms", min: 1, max: 100_000, value: 100, step: 1},
+    ] : [{key: adjustment ? "npc" : "restrict.tcga", label: adjustment ? "npc" : "chromosome",
+      min: adjustment ? 0 : 1, max: adjustment ? 10 : 1, value: adjustment ? 3 : 1, step: 1}];
+    const initialResources = visualization ? {cpus: 2, mem_gb: 16, hours: 1}
+      : network ? {cpus: 2, mem_gb: 16, hours: 24}
+      : cis ? {cpus: 8, mem_gb: 32, hours: 4} : {cpus: 4, mem_gb: 16, hours: 2};
+    const fileKeys = linkedInputs ? [] : adjustment ? ["cli.file"] : ["gexp.file", "pmap.file"];
+    const parameterMarkup = definitions => definitions.map(({key, label, min, max, value, step: increment, type = "number"}) => `<label>
+      <span data-${prefix}-copy="${label}"></span>
+      <input type="${type}" data-${prefix}-${parameterAttribute}="${key}" ${type === "number" ? `min="${min}" max="${max}" step="${increment}"` : 'pattern="[0-9]{1,2}:[0-5][0-9]:[0-5][0-9]" placeholder="4:00:00"'} value="${value}" ${alwaysVisible ? 'required' : 'readonly'}>
+    </label>`).join("");
     panel.classList.add("ml-expression-panel");
     if (adjustment) panel.classList.add("ml-adjust-panel");
     panel.innerHTML = `
       <div class="ml-result-main ml-genotype-main" data-live-language>
         <header><p class="ml-genotype-eyebrow" data-${prefix}-copy="stage"></p>
-          <h2 id="lens-stage${stage}-title" data-${prefix}-copy="title"></h2></header>
+          <h2 id="${visualization ? 'lens-stage6-run-title' : `lens-stage${stage}-title`}" data-${prefix}-copy="title"></h2></header>
         <label class="ml-expression-run-label"><span data-${prefix}-copy="run"></span>
           <select data-${prefix}-run></select>
         </label>
@@ -435,22 +530,26 @@
         <p data-${prefix}-guidance></p>
         <button type="button" class="ml-nav-action" data-${prefix}-review data-${prefix}-copy="review"></button>
         <form data-${prefix}-form hidden>
-          <h3 data-${prefix}-copy="inputs"></h3>
-          <dl class="ml-key-values">${fileKeys.map(key => `<dt data-${prefix}-copy="${key}"></dt>
+          ${linkedInputs ? '' : `<h3 data-${prefix}-copy="inputs"></h3>`}
+          <dl class="ml-key-values" ${linkedInputs ? 'hidden' : ''}>${fileKeys.map(key => `<dt data-${prefix}-copy="${key}"></dt>
             <dd>${adjustment
               ? `<input class="ml-clinical-input" type="text" data-${prefix}-input="${key}" maxlength="2048" required>`
               : `<code data-${prefix}-input="${key}"></code>`}</dd>`).join("")}</dl>
           ${adjustment ? '<p class="ml-settings-note" data-adjust-clinical-summary role="status"></p>' : ''}
           <fieldset data-${prefix}-fields><legend data-${prefix}-copy="settings"></legend>
-            <div class="ml-genotype-controls"><label><span data-${prefix}-copy="${adjustment ? 'npc' : 'chromosome'}"></span>
-              <input type="number" data-${prefix}-${parameterAttribute}="${parameterKey}" min="${adjustment ? 0 : 1}" max="${adjustment ? 10 : 1}" value="${adjustment ? 3 : 1}" ${adjustment ? 'required' : 'readonly'}>
-            </label></div>
+            <div class="ml-genotype-controls">${parameterMarkup(network ? parameterDefinitions.slice(0, 2) : parameterDefinitions)}</div>
+            ${network ? '<input type="number" data-network-setting="ncis" value="3" readonly hidden><p class="ml-settings-note" data-network-copy="correlationNote"></p>' : ''}
           </fieldset>
+          ${network ? `<fieldset data-network-fields><legend data-network-copy="childResources"></legend>
+            <div class="ml-genotype-controls">${parameterMarkup(parameterDefinitions.slice(3))}</div>
+          </fieldset><p class="ml-settings-note" data-network-defaults hidden></p>` : ''}
           <fieldset data-${prefix}-fields><legend data-${prefix}-copy="resources"></legend>
+            ${network ? '<p class="ml-settings-note" data-network-copy="controllerNote"></p>' : ''}
             <div class="ml-genotype-controls">${resources.map(key => `<label><span data-${prefix}-copy="${key}"></span>
-              <input type="number" data-${prefix}-resource="${key}" step="${key === "hours" ? "any" : "1"}" value="${adjustment ? ({cpus:4, mem_gb:16, hours:2})[key] : ''}" required>
+              <input type="number" data-${prefix}-resource="${key}" step="${key === "hours" ? "any" : "1"}" value="${alwaysVisible ? initialResources[key] : ''}" required>
             </label>`).join("")}</div>
           </fieldset>
+          ${linkedInputs ? `<details class="ml-cis-inputs"><summary data-${prefix}-copy="inputs"></summary><dl class="ml-key-values" data-${prefix}-input-sources></dl></details>` : ''}
           <button type="button" class="ml-nav-action ml-genotype-submit" data-${prefix}-submit data-${prefix}-copy="submit"></button>
         </form>
       </div>
@@ -462,11 +561,13 @@
           <dt data-${prefix}-copy="jobID"></dt><dd data-${prefix}-job-id></dd>
         </dl>
         <ol class="ml-genotype-events" data-${prefix}-events hidden></ol>
+        ${network ? '<dl class="ml-key-values" data-network-work-progress hidden></dl>' : ''}
         <p class="ml-genotype-notice" data-${prefix}-notice role="status" hidden></p>
         <div class="ml-genotype-actions">
           <button type="button" class="ml-nav-action" data-${prefix}-refresh data-${prefix}-copy="refresh" hidden></button>
           <button type="button" class="ml-nav-action" data-${prefix}-history data-${prefix}-copy="history" hidden></button>
           <button type="button" class="ml-nav-action" data-${prefix}-retry data-${prefix}-copy="retry" hidden></button>
+          ${visualization ? '<button type="button" class="ml-nav-action" data-visualize-results data-visualize-copy="savedResults"></button>' : ''}
           <button type="button" class="ml-nav-action" data-${prefix}-back data-${prefix}-copy="back" hidden></button>
         </div>
       </aside>`;
@@ -475,7 +576,7 @@
     const form = part("form");
     const picker = part("run");
     const resourceInputs = new Map(resources.map(key => [key, panel.querySelector(`[data-${prefix}-resource="${key}"]`)]));
-    const parameterInputs = new Map([[parameterKey, panel.querySelector(`[data-${prefix}-${parameterAttribute}="${parameterKey}"]`)]]);
+    const parameterInputs = new Map(parameterDefinitions.map(({key}) => [key, panel.querySelector(`[data-${prefix}-${parameterAttribute}="${key}"]`)]));
     const fields = [...panel.querySelectorAll(`[data-${prefix}-fields]`)];
     const runStates = new Map();
     let context = {datasetId: "", language: "zh-Hant", visible: false, runs: [], runId: null};
@@ -517,12 +618,12 @@
       }
     }
 
-    function saveAdjustmentDraft() {
+    function saveDraft() {
       const item = current();
-      if (!adjustment || !item || item.record && !item.retry) return;
+      if (!alwaysVisible || !item || item.record && !item.retry) return;
       item.draft = {
-        clinical: panel.querySelector('[data-adjust-input="cli.file"]').value,
-        options: Object.fromEntries([...parameterInputs].map(([key, input]) => [key, input.value])),
+        clinical: adjustment ? panel.querySelector('[data-adjust-input="cli.file"]').value : "",
+        parameters: Object.fromEntries([...parameterInputs].map(([key, input]) => [key, input.value])),
         resources: Object.fromEntries([...resourceInputs].map(([key, input]) => [key, input.value])),
       };
     }
@@ -533,7 +634,11 @@
       const saved = item?.record;
       const state = item?.submitting ? "submitting" : item?.uncertain ? "unknown" : saved?.state ?? "idle";
       const hasAttempt = Boolean(saved) && !item?.retry || Boolean(item?.submitting || item?.uncertain);
-      const allowed = source()?.jobs.genotype?.state === "completed" && (!adjustment || source()?.jobs.expression?.state === "completed");
+      const allowed = source()?.jobs.genotype?.state === "completed" &&
+        (step === "expression" || source()?.jobs.expression?.state === "completed") &&
+        (!linkedInputs || source()?.jobs.adjust?.state === "completed") &&
+        (!(network || visualization) || source()?.jobs.cis?.state === "completed") &&
+        (!visualization || source()?.jobs.network?.state === "completed");
       const terminal = terminalStates.has(state);
       panel.dataset[`${prefix}State`] = state;
       panel.dataset[`${prefix}RunId`] = selectedRun;
@@ -549,16 +654,51 @@
       part("readiness").textContent = !selectedRun ? local("empty") : !allowed ? local("prerequisite")
         : item.checking ? local("checking") : item.review && !hasAttempt ? local(item.review.ready === false ? "unavailable" : "ready") : "";
       part("guidance").textContent = allowed && item?.review && !hasAttempt && item.review.ready !== false ? local("readyPrompt") : "";
-      part("review").hidden = !(adjustment ? selectedRun : allowed) || hasAttempt;
+      part("review").hidden = !(alwaysVisible ? selectedRun : allowed) || hasAttempt;
       part("review").disabled = Boolean(item?.checking);
-      form.hidden = !adjustment && (!allowed || !(hasAttempt ? saved?.inputs : item?.review));
-      for (const field of fields) field.disabled = hasAttempt || !selectedRun;
+      form.hidden = !alwaysVisible && (!allowed || !(hasAttempt ? saved?.inputs : item?.review));
+      for (const field of fields) field.disabled = hasAttempt || !selectedRun || visualization && Boolean(item?.checking);
       if (adjustment) {
         panel.querySelector('[data-adjust-input="cli.file"]').disabled = hasAttempt || Boolean(item?.checking) || !selectedRun;
         const clinical = item?.review?.clinical;
         part("clinical-summary").textContent = clinical
           ? (context.language === "en" ? `${clinical.rows ?? 0} clinical rows · ${(clinical.columns ?? []).join(", ")}`
             : `${clinical.rows ?? 0} 筆臨床資料 · ${(clinical.columns ?? []).join("、")}`) : "";
+      }
+      if (linkedInputs) {
+        const inputSources = saved?.input_sources ?? item?.review?.input_sources ?? source()?.jobs[step]?.input_sources ?? {};
+        const entries = Object.entries(inputSources);
+        const inputs = part("input-sources");
+        inputs.replaceChildren();
+        for (const [key, path] of entries) {
+          const label = document.createElement("dt");
+          const value = document.createElement("dd");
+          const code = document.createElement("code");
+          label.textContent = key;
+          code.textContent = path;
+          value.append(code);
+          inputs.append(label, value);
+        }
+        inputs.hidden = !entries.length;
+      }
+      if (network) {
+        const defaults = item?.review?.defaults_applied ?? [];
+        part("defaults").hidden = !defaults.length || hasAttempt;
+        part("defaults").textContent = defaults.length ? local("defaultsApplied") : "";
+        part("defaults").title = defaults.join("\n");
+        const progress = part("work-progress");
+        progress.replaceChildren();
+        for (const [key, label] of [["stage1", "phase1"], ["stage2", "phase2"]]) {
+          const value = saved?.progress?.[key];
+          const match = typeof value === "string" ? value.match(/^(\d+)\s+(\d+)$/) : null;
+          if (!match || Number(match[1]) > Number(match[2])) continue;
+          const term = document.createElement("dt");
+          const count = document.createElement("dd");
+          term.textContent = local(label);
+          count.textContent = `${match[1]} / ${match[2]}`;
+          progress.append(term, count);
+        }
+        progress.hidden = !progress.childElementCount;
       }
       part("submit").hidden = hasAttempt;
       part("submit").disabled = !allowed || !item?.review || item.review.ready === false || item.checking || item.submitting || hasAttempt;
@@ -571,6 +711,7 @@
       part("history").hidden = !saved;
       part("retry").hidden = !saved || !["failed", "cancelled"].includes(state) || Boolean(item?.retry || item?.uncertain);
       part("back").hidden = !context.runId;
+      if (visualization) part("results").disabled = !context.resultsAvailable;
       const message = [item?.uncertain ? local("uncertain") : "", item?.error].filter(Boolean).join(" ");
       part("notice").textContent = message;
       part("notice").hidden = !message;
@@ -629,20 +770,26 @@
     async function review() {
       const id = selectedRun;
       const item = current();
-      if (!id || !item || !source() || item.checking || item.submitting || item.uncertain || item.record && !item.retry || !adjustment && source()?.jobs.genotype?.state !== "completed") return;
+      if (!id || !item || !source() || item.checking || item.submitting || item.uncertain || item.record && !item.retry || !alwaysVisible && source()?.jobs.genotype?.state !== "completed") return;
       item.checking = item.attempted = true;
       item.error = "";
       render();
       try {
         const clinicalPath = adjustment ? panel.querySelector('[data-adjust-input="cli.file"]').value.trim() : "";
-        const query = clinicalPath ? `?clinical=${encodeURIComponent(clinicalPath)}` : "";
+        const params = new URLSearchParams();
+        if (clinicalPath) params.set("clinical", clinicalPath);
+        if (visualization && item.draft) {
+          for (const [key, input] of parameterInputs) params.set(key,
+            Number.isFinite(input.valueAsNumber) ? String(input.valueAsNumber) : input.value);
+        }
+        const query = params.size ? `?${params}` : "";
         const next = await request(`/signet/runs/${encodeURIComponent(id)}/${step}/example${query}`);
-        const preserve = adjustment || item.review && fileKeys.every(key => item.review.inputs[key] === next.inputs[key]);
+        const preserve = adjustment || (linkedInputs ? Boolean(item.draft) : item.review && fileKeys.every(key => item.review.inputs[key] === next.inputs[key]));
         item.review = next;
         item.error = next.issues?.join(" ") || next.reason || "";
         if (id === selectedRun) {
           fillReview(next, Boolean(preserve));
-          saveAdjustmentDraft();
+          saveDraft();
         }
       } catch (error) {
         item.review = null;
@@ -655,7 +802,7 @@
 
     function selectRun(id) {
       const changed = selectedRun !== id;
-      if (changed) saveAdjustmentDraft();
+      if (changed) saveDraft();
       selectedRun = id;
       clearTimeout(pollTimer);
       const item = id ? stateFor(id) : null;
@@ -665,10 +812,10 @@
       if (received) item.record = saved;
       if ((changed || received) && item?.record?.inputs && !item.retry) fillReview(item.record);
       else if (changed && item?.review) fillReview(item.review);
-      else if (changed && adjustment) fillReview({options: {npc: 3}, resources: {cpus: 4, mem_gb: 16, hours: 2}});
-      if (changed && adjustment && item?.draft && (!item.record || item.retry)) {
-        panel.querySelector('[data-adjust-input="cli.file"]').value = item.draft.clinical;
-        for (const [key, input] of parameterInputs) input.value = item.draft.options[key];
+      else if (changed && alwaysVisible) fillReview({[parameterGroup]: Object.fromEntries(parameterDefinitions.map(({key, value}) => [key, value])), resources: initialResources});
+      if (changed && alwaysVisible && item?.draft && (!item.record || item.retry)) {
+        if (adjustment) panel.querySelector('[data-adjust-input="cli.file"]').value = item.draft.clinical;
+        for (const [key, input] of parameterInputs) input.value = item.draft.parameters[key];
         for (const [key, input] of resourceInputs) input.value = item.draft.resources[key];
       }
       render();
@@ -680,8 +827,18 @@
     async function submit() {
       const id = selectedRun;
       const item = current();
-      if (!item || part("submit").disabled || !form.reportValidity()) return;
-      const values = inputs => Object.fromEntries([...inputs].map(([key, element]) => [key, element.valueAsNumber]));
+      if (!item || part("submit").disabled) return;
+      if (cis) {
+        const alpha = parameterInputs.get("alpha.cis");
+        alpha.setCustomValidity(alpha.valueAsNumber > 0 ? "" : local("positiveAlpha"));
+      }
+      if (network) {
+        const correlation = parameterInputs.get("cor");
+        correlation.setCustomValidity(correlation.valueAsNumber > 0 ? "" : local("positiveCorrelation"));
+      }
+      if (!form.reportValidity()) return;
+      const values = inputs => Object.fromEntries([...inputs].map(([key, element]) =>
+        [key, element.type === "number" ? element.valueAsNumber : element.value.trim()]));
       const body = {inputs: item.review.inputs, [parameterGroup]: values(parameterInputs), resources: values(resourceInputs)};
       item.submitting = true;
       item.retry = false;
@@ -715,10 +872,24 @@
         item.review = null;
         item.attempted = true;
         item.error = "";
-        saveAdjustmentDraft();
+        saveDraft();
         render();
       });
-      for (const input of [...parameterInputs.values(), ...resourceInputs.values()]) input.addEventListener("input", saveAdjustmentDraft);
+    }
+    if (alwaysVisible) for (const input of [...parameterInputs.values(), ...resourceInputs.values()]) {
+      input.addEventListener("input", () => {
+        input.setCustomValidity("");
+        if (visualization && [...parameterInputs.values()].includes(input)) {
+          const item = current();
+          if (item && (!item.record || item.retry)) {
+            item.review = null;
+            item.attempted = true;
+            item.error = "";
+          }
+        }
+        saveDraft();
+        if (visualization) render();
+      });
     }
     picker.addEventListener("change", () => selectRun(picker.value));
     part("review").addEventListener("click", () => void review());
@@ -726,6 +897,7 @@
     part("refresh").addEventListener("click", () => void refresh(true));
     part("history").addEventListener("click", () => onOpenHistory?.(selectedRun));
     part("back").addEventListener("click", () => onBack?.());
+    if (visualization) part("results").addEventListener("click", () => onShowResults?.());
     part("retry").addEventListener("click", () => {
       const item = current();
       if (!item || item.uncertain || item.submitting || !["failed", "cancelled"].includes(item.record?.state)) return;
@@ -743,6 +915,9 @@
   }
 
   window.mountExpressionRun = options => mountContinuationRun(options);
-  window.mountAdjustmentRun = options => mountContinuationRun(options, true);
+  window.mountAdjustmentRun = options => mountContinuationRun(options, "adjust");
+  window.mountCisRun = options => mountContinuationRun(options, "cis");
+  window.mountNetworkRun = options => mountContinuationRun(options, "network");
+  window.mountVisualizationRun = options => mountContinuationRun(options, "visualize");
 
 })();
