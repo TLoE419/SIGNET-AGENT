@@ -30,7 +30,7 @@ function harness(t, step, handler) {
   const q = part => panel.querySelector(`[data-${step}-${part}]`), click = part => {assert.ok(q(part), 'Missing ' + part); q(part).click();};
   const context = (rows, id = rows[0]?.run_id, overrides = {}) => controller.setContext({datasetId: 'dataset-a',
     dataset: {id: 'dataset-a', name: ['資料組', 'Dataset'], ready: true, persisted: true, inputs: {}},
-    visible: true, language: 'en', runs: rows, runId: id, ...overrides});
+    visible: true, runs: rows, runId: id, ...overrides});
   const remote = overrides => window.dispatchEvent(new window.CustomEvent('workspace-remote-context', {detail: {connected: true, identity: 'user@host|session', environmentKey: 'root', ...overrides}}));
   return {window, panel, calls, changed, controller, q, click, context, remote};
 }

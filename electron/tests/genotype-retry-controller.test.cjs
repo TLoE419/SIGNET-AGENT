@@ -33,7 +33,7 @@ function harness(t, handler) {
   window.fetch = async (url, options = {}) => {const call = {url, options, body: options.body ? JSON.parse(options.body) : undefined}; calls.push(call); return handler(call);};
   const controller = window.mountGenotypeRun({panel, token: 'test-token', onHistoryChanged: (...args) => changed.push(args)});
   const q = part => panel.querySelector(`[data-genotype-${part}]`), click = part => {assert.ok(q(part), 'Missing ' + part); q(part).click();};
-  const context = (rows, id = rows[0]?.run_id, d = dataset(), overrides = {}) => controller.setContext({datasetId: d.id, dataset: d, runs: rows, runId: id, language: 'en', visible: true, ...overrides});
+  const context = (rows, id = rows[0]?.run_id, d = dataset(), overrides = {}) => controller.setContext({datasetId: d.id, dataset: d, runs: rows, runId: id, visible: true, ...overrides});
   const remote = overrides => window.dispatchEvent(new window.CustomEvent('workspace-remote-context', {detail: {connected: true, identity: 'user@host|session', environmentKey: 'root', ...overrides}}));
   const edit = (part, value) => {const input = q(part); input.value = value; input.dispatchEvent(new window.Event('input', {bubbles: true}));};
   const acknowledge = () => {q('acknowledge').checked = true; q('acknowledge').dispatchEvent(new window.Event('change', {bubbles: true}));};

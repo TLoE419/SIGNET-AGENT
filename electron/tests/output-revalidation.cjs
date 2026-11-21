@@ -43,8 +43,11 @@ function frozenFiles(project, inputs) {
   function visit(folder) {
     for (const item of readdirSync(folder, {withFileTypes: true})) {
       const filename = path.join(folder, item.name);
-      if (item.isDirectory()) visit(filename);
-      else if (!filename.includes(path.sep + 'steps' + path.sep) || /\.attempt\d+\.json$/.test(filename)) {
+      if (item.isDirectory()) {
+        // Saved result views can write derived thumbnails without changing a run record.
+        if (item.name === 'workspace-projections' && path.dirname(folder) === path.join(project, 'runs')) continue;
+        visit(filename);
+      } else if (!filename.includes(path.sep + 'steps' + path.sep) || /\.attempt\d+\.json$/.test(filename)) {
         if (filename.includes(path.sep + 'work' + path.sep + 'res' + path.sep)) continue;
         result[filename] = createHash('sha256').update(readFileSync(filename)).digest('hex');
       }
@@ -72,7 +75,7 @@ function existingOutputs(fixture) {
 }
 
 async function verify() {
-  running = await launch({provider: 'codex', visible: false, userData: path.join(temporary, 'app'),
+  running = await launch({provider: 'none', visible: false, userData: path.join(temporary, 'app'),
     stateFile: path.join(temporary, 'chat.json')});
   const {window} = running;
   const fixturePath = path.join(temporary, 'fixture.json');
@@ -120,7 +123,8 @@ async function verify() {
     const key = 'workspace--' + record.run_id;
     await until(() => js(`!!document.querySelector('[data-run-target="${key}"]')?.getClientRects().length`), 'Revalidation run is missing from history');
     await click(`[data-run-target="${key}"]`);
-    await click(`[data-history-id="${key}"][data-run-stage="${record.stage}"]`);
+    await click(`#ml-run-${key} [data-history-select-stage="${record.stage}"]`);
+    await click(`#ml-run-${key} [data-run-stage="${record.stage}"]`);
     await connection(true);
   };
   const panel = record => record.stage === 6 ? '#lens-stage6-run' : '#lens-stage' + record.stage;
@@ -141,12 +145,11 @@ async function verify() {
     return js(`document.querySelector(${JSON.stringify(result)})?.dataset.runState==='ready'&&document.querySelector(${JSON.stringify(result)}).dataset.runId===${JSON.stringify(record.run_id)}`);
   };
 
-  await until(() => js(`!!document.querySelector('#ml-language')`), 'Workspace did not mount');
+  await until(() => js(`!!document.querySelector('#ml-stage-tab')`), 'Workspace did not mount');
   // The actual desktop broker remains disconnected. This isolated workflow
   // uses its explicitly mocked transport, whose connection events must agree.
   await isolateConnection();
-  await click('#ml-language');
-  assert.deepEqual(await geometry(), [1650, 894, 53, 542]);
+  assert.deepEqual(await geometry(), [1650, 894, 68, 542]);
   const listed = await request('/stage6/history');
   assert.equal(listed.status, 200);
   for (const record of fixture.records) {
@@ -249,7 +252,7 @@ async function verify() {
   for (const [filename, fingerprint] of Object.entries(priorOutputs)) assert.equal(finalOutputs[filename], fingerprint, 'Output recovery overwrote an existing saved result: ' + filename);
   assert.equal(existsSync(path.join(temporary, 'forbidden.ndjson')), false, 'Output checking attempted a mutation, cancellation or analysis');
   assert.ok(readFileSync(path.join(temporary, 'posts.ndjson'), 'utf8').trim().split('\n').every(line => JSON.parse(line).endsWith('/revalidate')));
-  assert.deepEqual(await geometry(), [1650, 894, 53, 542]);
+  assert.deepEqual(await geometry(), [1650, 894, 68, 542]);
   await replacement.stop(); replacement = undefined;
   await running.quit();
   console.log('PASS: all six failed stages manually checked without rerun, still-missing reasons then same-job/attempt recovery, preserved original failure/audits/snapshots/settings/previous attempts, ineligible/stale/disconnected guards, selection race isolation, saved result readers and Stage6 MEGF6 after Python restart, immutable sources and fixed geometry; read-only local scheduler/output fixtures only, no HPC/submission/cancellation/analysis');

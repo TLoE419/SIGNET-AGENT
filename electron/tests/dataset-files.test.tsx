@@ -15,7 +15,7 @@ import {RemoteFilesModal,RemoteFilesHost} from '../renderer/features/remote-file
 
 const originalFetch=globalThis.fetch;
 afterEach(()=>{cleanup();globalThis.fetch=originalFetch});
-const target={key:'genotype',inputKind:'genotype' as const,label:'Genotype',current:'example.ped',currentPaths:['example.ped','example.map'],datasetId:'dataset-a',multiple:true,language:'en'};
+const target={key:'genotype',inputKind:'genotype' as const,label:'Genotype',current:'example.ped',currentPaths:['example.ped','example.map'],datasetId:'dataset-a',multiple:true};
 const record=(id='dataset-a',paths=['/canonical/study.ped','/canonical/study.map'])=>({id,name:['A','A'],folder:'',inputs:{genotype:paths,expression:[],clinical:[]},default_inputs:{genotype:[],expression:[],clinical:[]},alternative_inputs:{},selections:{}});
 const entry=(name:string,folder='/pub/u',kind='file')=>({name,path:`${folder}/${name}`,kind,size:2048,supported:!name.includes(' ')});
 const calls:Array<{url:string;body:any;method:string}>=[];
@@ -47,6 +47,24 @@ test('dataset browser combines files across folders and saves only inspected can
  click('[data-remote-entry-path="/pub/u/study.ped"]');click('[data-remote-entry-path="/pub/u/other"]');
  await waitFor(()=>assert.equal(!!query('[data-remote-entry-path="/pub/u/other/study.map"]'),true));
  click('[data-remote-entry-path="/pub/u/other/study.map"]');assert.equal(document.querySelectorAll('[data-remote-selected-path]').length,2);
+ const row=query('[data-remote-selected-path="/pub/u/other/study.map"]');
+ const trigger=row.querySelector('button[popovertarget]')!;
+ const panel=document.getElementById(trigger.getAttribute('popovertarget')!)!;
+ const copied:string[]=[];
+ const desktop=Object.getOwnPropertyDescriptor(window,'signetDesktop');
+ Object.defineProperty(window,'signetDesktop',{configurable:true,value:{copyFilePath:async(path:string)=>{copied.push(path)}}});
+ try{
+  assert.equal(row.querySelector('.ml-file-directory')?.textContent,'/pub/u/other');
+  assert.equal(panel.querySelector('[data-full-file-path]')?.textContent,'/pub/u/other/study.map');
+  const requests=calls.length;
+  fireEvent.click(panel.querySelector('[data-copy-file-path]')!);
+  await waitFor(()=>assert.equal(panel.querySelector('[role="status"]')?.textContent,'Path copied.'));
+  assert.deepEqual(copied,['/pub/u/other/study.map']);
+  assert.equal(calls.length,requests,'copying does not inspect or save files');
+ }finally{
+  if(desktop)Object.defineProperty(window,'signetDesktop',desktop);
+  else Reflect.deleteProperty(window,'signetDesktop');
+ }
  click('[data-remote-apply]');await waitFor(()=>assert.equal(saved?.id,'dataset-a'));
  const inspect=calls.find(call=>call.url==='/hpc/files/inspect')!;
  assert.deepEqual(inspect.body,{paths:['/pub/u/study.ped','/pub/u/other/study.map']});
@@ -54,6 +72,58 @@ test('dataset browser combines files across folders and saves only inspected can
  assert.equal(patch.url,'/signet/datasets/dataset-a');
  assert.deepEqual(patch.body,{inputs:{genotype:['/canonical/study.ped','/canonical/other/study.map']}});
  assert.equal(calls.some(call=>call.url==='/hpc/files/select'),false);
+});
+
+const referenceTarget={key:'gtf',referenceKind:'gtf' as const,label:'Gene annotation',current:'/pub/u/original.gtf',datasetId:'dataset-a'};
+const referenceDirectory=(body:any)=>({status:'ok',kind:'folder',path:body.path,entries:[entry('original.gtf',body.path),entry('replacement.gtf',body.path)]});
+const replacement='[data-remote-entry-path="/pub/u/replacement.gtf"]';
+
+test('dataset reference picker replaces a single inspected path and emits the dataset-specific event',async()=>{
+ const saved={...record(),references:{gtf:'/canonical/replacement.gtf'}};
+ serve({'/hpc/files/list':referenceDirectory, '/signet/datasets/dataset-a':()=>saved});
+ render(<RemoteFilesHost connected connectionIdentity="account-a"/>);
+ const events:Event[]=[];
+ const capture=(event:Event)=>events.push(event);
+ const eventNames=['dataset-reference-selected','dataset-files-selected'];
+ for(const name of eventNames)window.addEventListener(name,capture);
+ try{
+  await act(async()=>window.dispatchEvent(new CustomEvent('open-remote-files',{detail:referenceTarget})));
+  await waitFor(()=>assert.equal(Boolean(query(replacement)),true));
+  assert.ok(query('[data-remote-selected-path="/pub/u/original.gtf"]'));
+  click(replacement);
+  assert.equal(document.querySelectorAll('[data-remote-selected-path]').length,1);
+  assert.ok(query('[data-remote-selected-path="/pub/u/replacement.gtf"]'));
+  click('[data-remote-apply]');
+  await waitFor(()=>assert.equal(Boolean(query('dialog')),false));
+  assert.deepEqual(calls.filter(call=>call.url==='/hpc/files/inspect'||call.method==='PATCH'),[
+   {url:'/hpc/files/inspect',body:{paths:['/pub/u/replacement.gtf']},method:'POST'},
+   {url:'/signet/datasets/dataset-a',body:{references:{gtf:'/canonical/replacement.gtf'}},method:'PATCH'},
+  ]);
+  assert.equal(calls.some(call=>call.url==='/hpc/files/select'),false);
+  assert.deepEqual(events.map(event=>event.type),['dataset-reference-selected']);
+  assert.deepEqual((events[0] as CustomEvent).detail,{datasetId:'dataset-a',referenceKind:'gtf',record:saved});
+ }finally{
+  for(const name of eventNames)window.removeEventListener(name,capture);
+ }
+});
+
+test('dataset reference picker rejects a successful reply for another dataset or reference path',async()=>{
+ const replies=[
+  {...record('dataset-other'),references:{gtf:'/canonical/replacement.gtf'}},
+  {...record(),references:{gtf:'/canonical/original.gtf'}},
+ ];
+ serve({'/hpc/files/list':referenceDirectory, '/signet/datasets/dataset-a':()=>replies.shift()});
+ let selected=0;
+ render(<RemoteFilesModal target={referenceTarget} onClose={()=>{}} onSelected={()=>selected++}/>);
+ await waitFor(()=>assert.equal(Boolean(query(replacement)),true));
+ click(replacement);
+ for(let attempts=0;attempts<2;attempts++){
+  click('[data-remote-apply]');
+  await waitFor(()=>assert.match(query('[data-remote-error]')?.textContent??'',/does not match/));
+  assert.equal(selected,0);
+  assert.ok(query('[data-remote-selected-path="/pub/u/replacement.gtf"]'));
+ }
+ assert.equal(calls.filter(call=>call.method==='PATCH').length,2);
 });
 
 test('inspection and persistence errors retain the basket and do not report success',async()=>{

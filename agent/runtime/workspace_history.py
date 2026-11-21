@@ -375,7 +375,7 @@ def _recorded(root, records, digests, issues, include_steps=True):
     if not states:
         states = [value['status'] for value in operations]
     result = {'run_id': run_id, 'source': 'recorded', 'origin': 'agent' if operations else 'slurm',
-              'name': [run_id, run_id], 'inputs': inputs, 'jobs': step_records,
+              'name': run_id, 'inputs': inputs, 'jobs': step_records,
               'operations': operations,
               # File/catalog order cannot establish which of several operations
               # is the freshest. Each saved step retains its own exact state.
@@ -452,7 +452,7 @@ def _save(associations):
         raise jobs.StepError('conflict', 'The history assignment could not be saved. Previous records remain unchanged.') from error
 
 
-def merge(history):
+def merge(history, *, deleted_dataset_ids=frozenset()):
     """Normalize supplied workspace/archive rows and discover other local runs."""
     with _LOCK:
         history = copy.deepcopy(history)
@@ -505,12 +505,16 @@ def merge(history):
             if conflict:
                 issues.append('Saved metadata contains conflicting dataset ownership. Review the original records.')
             if not claims and not invalid_claim and assignment:
-                if assignment['record_identity'] == row['record_identity'] and assignment['dataset_id'] in datasets:
+                if (assignment['record_identity'] == row['record_identity']
+                        and (assignment['dataset_id'] in datasets or assignment['dataset_id'] in deleted_dataset_ids)):
                     dataset_id = assignment['dataset_id']
                     association = {'status': 'manual', 'method': 'manual'}
                 else:
                     issues.append('The prior manual assignment no longer matches this run or an available dataset.')
             row['dataset_id'] = dataset_id
+            dataset_deleted = dataset_id in deleted_dataset_ids
+            if dataset_deleted:
+                row['dataset_deleted'] = True
             row['association'] = association
             legacy_graph = False
             if source == 'recorded' and records.get('visualization.json', {}).get('status') == 'verified_completed':
@@ -520,7 +524,7 @@ def merge(history):
                     legacy_graph = True
                 except (OSError, ValueError, KeyError, TypeError, ImportError):
                     issues.append('The original visualization settings or graph exports were not recorded or are unreadable.')
-            row['capabilities'] = {'continue_analysis': source == 'live' and not conflict and not invalid_claim,
+            row['capabilities'] = {'continue_analysis': source == 'live' and not dataset_deleted and not conflict and not invalid_claim,
                                    'stage_results': _readable_stages(row, root, records) if source in ('live', 'archive') else [],
                                    'stage6_graph': (legacy_graph or source in ('live', 'archive') and bool(row.get('graph'))) and not conflict and not invalid_claim,
                                    'assign_dataset': source in ('recorded', 'archive') and not claims and not invalid_claim}

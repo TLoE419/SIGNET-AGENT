@@ -9,6 +9,9 @@ import stat
 import sys
 import time
 
+if 'gtf_problem' not in globals():
+    from agent.runtime.jobs.step_inputs import gtf_problem
+
 BLOCKED = ('/tmp', '/var/tmp', '/dev/shm', '/run')
 
 
@@ -24,6 +27,22 @@ def text(path):
 
 def chromosome(value):
     return value[3:] if value.lower().startswith('chr') else value
+
+
+def declared_build(path, deadline):
+    """Recognize assembly declarations, not filenames or arbitrary annotation text."""
+    builds = set()
+    with text(path) as stream:
+        for line in lines(stream, deadline):
+            if line.strip() and not line.startswith('#'):
+                break
+            if line.lower().startswith(('##reference=', '##assembly=', '#!genome-build ', '##genome-build ')):
+                for build, aliases in (('GRCh37', ('grch37', 'hg19', 'b37')), ('GRCh38', ('grch38', 'hg38', 'b38'))):
+                    if any(re.search(r'(?<![a-z0-9])' + alias + r'(?![a-z0-9])', line.lower()) for alias in aliases):
+                        builds.add(build)
+    if len(builds) > 1:
+        raise ValueError('Conflicting genome-build declarations.')
+    return next(iter(builds), None)
 
 
 def lines(stream, deadline):
@@ -42,7 +61,8 @@ def lines(stream, deadline):
 
 def review(sources):
     deadline = time.monotonic() + 30
-    result = {'files': [], 'issues': [], 'chromosome': None}
+    result = {'files': [], 'issues': [], 'warnings': [], 'chromosome': None,
+              'compatibility': {'study_genome_build': 'unverified', 'reference_annotation_build': 'unverified'}}
     before = {}
     for role, source in sources.items():
         path = os.path.realpath(source['path'])
@@ -75,6 +95,16 @@ def review(sources):
             return result
         study_chromosome = next(iter(chromosomes))
         result['chromosome'] = int(study_chromosome)
+        annotation_problem = gtf_problem(files['annotation']['path'])
+        if annotation_problem:
+            result['issues'].append(annotation_problem)
+        reference_build = declared_build(files['reference']['path'], deadline)
+        annotation_build = None if annotation_problem else declared_build(files['annotation']['path'], deadline)
+        if reference_build and annotation_build:
+            result['compatibility']['reference_annotation_build'] = 'consistent' if reference_build == annotation_build else 'mismatch'
+            if reference_build != annotation_build:
+                result['issues'].append('The selected reference and gene annotation declare different genome builds.')
+        result['warnings'].append('Chromosome and genetic-map coverage are checked, but the study MAP does not declare a genome build; matching coordinates do not establish full genome-build compatibility.')
         if len(set(positions)) != len(positions):
             result['issues'].append('The study map has repeated positions; the reference preparer cannot safely match them.')
         with text(files['reference']['path']) as stream:

@@ -19,6 +19,7 @@ SAFE = re.compile(r'/[A-Za-z0-9_./-]+')
 BLOCKED = ('/tmp', '/var/tmp', '/dev/shm', '/run')
 RULE = 'TCGA patient = third dash-separated identifier component; preliminary before QC.'
 SCOPE = 'TCGA input structure, preliminary pre-QC matching and stage-specific input suitability only; not execution readiness or scientific validity.'
+FORMAT_SCOPE = 'Structure of the selected input only. Cross-file sample matching is checked separately.'
 MISSING = MISSING_COVARIATES
 
 
@@ -48,12 +49,14 @@ def issue(check, code, message, line=None):
 
 
 class Reader:
-    def __init__(self, path, role, budget, files):
+    def __init__(self, path, role, budget, files, *, scoped=False):
         self.path = os.path.realpath(path)
         self.budget, self.digest = budget, hashlib.sha256()
         self.stream, self.before = None, None
         self.meta = {'path': self.path, 'role': role, 'size': 0, 'mtime_ns': 0,
                      'sha256': None, 'complete': False, 'lines': 0}
+        if scoped:
+            self.meta['selected_path'] = path
         files.append(self.meta)
         if (not SAFE.fullmatch(self.path) or len(self.path) > 2048
                 or any(self.path == root or self.path.startswith(root + '/') for root in BLOCKED)):
@@ -247,12 +250,15 @@ def clinical(reader, check, state):
         issue(check, 'clinical_rows', 'Clinical data needs a header and patient rows.')
 
 
-def validate(inputs):
+def validate(inputs, *, kind=None):
+    if kind is not None and kind not in KINDS:
+        raise ValueError('Choose genotype, expression or clinical.')
+    selected_kind = kind
     checks = [{'id': kind + '_format', 'kind': kind,
                'label': {'genotype': 'PED/MAP structure', 'expression': 'TCGA expression structure',
                          'clinical': 'Clinical table structure'}[kind],
                'status': 'unchecked', 'message': '', 'paths': inputs.get(kind, []), 'metrics': {}, 'issues': []}
-              for kind in KINDS]
+              for kind in KINDS if selected_kind is None or kind == selected_kind]
     files, state = [], {}
     budget = {'bytes': 0, 'deadline': time.monotonic() + LIMITS['max_seconds']}
     incomplete = False
@@ -270,7 +276,7 @@ def validate(inputs):
                 if (not isinstance(path, str) or not SAFE.fullmatch(path) or len(path) > 2048
                         or '..' in path.split('/')):
                     raise StopReview('absolute_remote_path', 'Choose absolute remote paths with the remote file browser; saved example labels are not file locations.')
-                reader = Reader(path, kind, budget, files)
+                reader = Reader(path, kind, budget, files, scoped=selected_kind is not None)
                 {'genotype': genotype, 'expression': expression, 'clinical': clinical}[kind](reader, check, state)
             except StopReview as error:
                 if len(check['issues']) < 12:
@@ -315,6 +321,21 @@ def validate(inputs):
             check['status'] = 'warning'
         check['message'] = check['issues'][0]['message'] if check['issues'] else 'The checked table structure matches the current input layout.'
 
+    for check in checks:
+        for problem in check['issues']:
+            problem.update(stage=KINDS.index(check['kind']) + 1,
+                           severity='warning' if check['status'] == 'warning' else 'error')
+
+    if selected_kind is not None:
+        check = checks[0]
+        if selected_kind == 'expression' and 'duplicate_patients' in check['metrics']:
+            patient_ids = [key for value in state.get('expression_ids', []) if (key := patient(value))]
+            check['metrics']['duplicate_patients'] = len(patient_ids) - len(set(patient_ids))
+        return {'kind': selected_kind, 'status': 'incomplete' if incomplete else check['status'],
+                'checks': checks, 'pairing': {'status': 'unchecked', 'issues': []}, 'files': files,
+                'limits': LIMITS.copy(), 'read_only': True, 'executed': False, 'scope': FORMAT_SCOPE,
+                'stage_readiness': {}}
+
     pairing = {'status': 'unchecked', 'rule': RULE, 'genotype_patients': 0, 'expression_patients': 0,
                'matched_patients': 0, 'clinical_matched': None, 'unmatched_genotype': 0, 'unmatched_expression': 0, 'issues': []}
     clinical_issues = []
@@ -355,9 +376,6 @@ def validate(inputs):
                 clinical_issue('missing_covariates', 'Some matched clinical rows have missing race or gender values; resolve them before Stage 3.')
             if not covariates['needs_choice'] and (set(covariates['races_after']) != SIGNET_RACES or covariates['gender_groups'] < 2):
                 clinical_issue('adjustment_groups', 'The current Stage 3 execution guard requires its three supported race groups and at least two gender groups; this is a workflow constraint, not a universal clinical-file format rule.')
-    for check, stage in zip(checks, (1, 2, 3)):
-        for problem in check['issues']:
-            problem.update(stage=stage, severity='warning' if check['status'] == 'warning' else 'error')
     status = 'incomplete' if incomplete else 'failed' if any(check['status'] == 'failed' for check in checks) or pairing['status'] == 'failed' else 'warning' if clinical_issues or any(check['status'] == 'warning' for check in checks) or pairing['status'] == 'warning' else 'passed'
     result = {'status': status, 'checks': checks, 'pairing': pairing, 'files': files,
               'limits': LIMITS.copy(), 'read_only': True, 'executed': False, 'scope': SCOPE}
@@ -395,5 +413,5 @@ def stage_readiness(report, clinical_issues=None):
 
 
 if __name__ == '__main__':
-    result = validate(json.loads(sys.argv[1]))
+    result = validate(json.loads(sys.argv[1]), kind=sys.argv[2] if len(sys.argv) > 2 else None)
     print('@@result\t' + json.dumps(result))

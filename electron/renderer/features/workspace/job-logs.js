@@ -5,24 +5,24 @@
   const views = new Set();
   let remote = {connected: false, identity: "", environmentKey: ""};
   const copy = {
-    title: ["執行日誌與錯誤明細", "Execution logs and error details"],
-    errors: ["保存的錯誤明細", "Recorded error details"],
-    reason: ["狀態說明", "Recorded reason"], exit_code: ["結束代碼", "Exit code"],
-    slurm_state: ["排程器狀態", "Scheduler state"], missing_outputs: ["當時缺少的結果檔", "Missing outputs at the time"],
-    failure_hints: ["保存的失敗提示", "Recorded failure hints"],
-    out: ["標準輸出", "Output"], err: ["錯誤輸出", "Errors"], submission: ["送出錯誤", "Submission errors"], refresh: ["重新整理日誌", "Refresh log"],
-    idle: ["按「重新整理日誌」讀取這次工作的日誌。", "Select Refresh log to read this attempt’s log."],
-    loading: ["正在讀取日誌…", "Reading log…"],
-    empty: ["這份日誌目前沒有內容。", "This log is currently empty."],
-    missing: ["找不到這次嘗試的日誌，或當時沒有保存。", "This attempt’s log is missing or was not saved."],
-    disconnected: ["遠端未連線，尚未讀取日誌。", "The remote server is disconnected; the log has not been read."],
-    changed: ["紀錄已變更，請重新整理歷次執行後再查看。", "The record changed. Refresh run history before opening its log."],
-    failed: ["無法讀取日誌；不代表日誌沒有內容。", "Could not read this log; it has not been confirmed empty."],
-    unavailable: ["尚無可核對的日誌來源。", "A verifiable log source is not available."],
-    prepared: ["這是準備計畫，沒有實際執行日誌。", "This is a prepared plan, without execution logs."],
-    notRecorded: ["未記錄", "Not recorded"], noneListed: ["紀錄中未列出", "None listed in the record"],
-    local: ["本機保存的日誌", "Locally saved log"], remote: ["遠端日誌", "Remote log"],
-    retrieved: ["讀取時間", "Retrieved"], truncated: ["僅顯示最後一段內容，日誌已截短。", "Only the final part is shown; the log is truncated."],
+    title: "Execution logs and error details",
+    errors: "Recorded error details",
+    reason: "Recorded reason", exit_code: "Exit code",
+    slurm_state: "Scheduler state", missing_outputs: "Missing outputs at the time",
+    failure_hints: "Recorded failure hints",
+    out: "Output", err: "Errors", submission: "Submission errors", refresh: "Refresh log",
+    idle: "Select Refresh log to read this attempt’s log.",
+    loading: "Reading log…",
+    empty: "This log is currently empty.",
+    missing: "This attempt’s log is missing or was not saved.",
+    disconnected: "The remote server is disconnected; the log has not been read.",
+    changed: "The record changed. Refresh run history before opening its log.",
+    failed: "Could not read this log; it has not been confirmed empty.",
+    unavailable: "A verifiable log source is not available.",
+    prepared: "This is a prepared plan, without execution logs.",
+    notRecorded: "Not recorded", noneListed: "None listed in the record",
+    local: "Locally saved log", remote: "Remote log",
+    retrieved: "Retrieved", truncated: "Only the final part is shown; the log is truncated.",
   };
   const scope = () => JSON.stringify(remote);
   window.addEventListener("workspace-remote-context", event => {
@@ -32,9 +32,9 @@
     for (const view of views) view.remoteChanged();
   });
 
-  function mount({host, token}) {
-    host.innerHTML = `<details class="ml-job-logs" data-job-logs>
-      <summary data-job-log-title></summary>
+  function mount({host, token, inline = false}) {
+    host.innerHTML = `<details class="ml-job-logs" data-job-logs${inline ? " open" : ""}>
+      <summary data-job-log-title${inline ? " hidden" : ""}></summary>
       <div class="ml-job-log-content">
         <h4 data-job-log-errors-title></h4><dl class="ml-key-values" data-job-error-details></dl>
         <div class="ml-job-log-actions">
@@ -53,7 +53,6 @@
     const streams = [...host.querySelectorAll("[data-job-log-stream]")];
     const refresh = host.querySelector("[data-job-log-refresh]");
     let context = {}, key = "", entry = {open: false, stream: "out", buffers: {}}, request, generation = 0, destroyed = false;
-    const local = name => copy[name][context.language === "en" ? 1 : 0];
     const identity = value => JSON.stringify([value.historyId, value.runId, value.source, value.datasetId, value.step,
       value.number ?? null, value.current === true, value.recordFile, value.recordIdentity, value.record?.job_id ?? null,
       value.operation, value.recordRevision, scope()]);
@@ -78,35 +77,35 @@
     }
     function render() {
       host.hidden = !context.record;
-      host.querySelector("[data-job-log-title]").textContent = local("title");
-      host.querySelector("[data-job-log-errors-title]").textContent = local("errors");
+      host.querySelector("[data-job-log-title]").textContent = copy.title;
+      host.querySelector("[data-job-log-errors-title]").textContent = copy.errors;
       const errors = host.querySelector("[data-job-error-details]"); errors.replaceChildren();
       for (const field of ["reason", "slurm_state", "exit_code", "missing_outputs", "failure_hints"]) {
         const term = document.createElement("dt"), value = document.createElement("dd");
-        term.textContent = local(field);
+        term.textContent = copy[field];
         const saved = field === "exit_code" ? context.record?.exit_code ?? context.record?.returncode : context.record?.[field];
-        value.textContent = Array.isArray(saved) ? saved.length ? saved.join("\n") : local("noneListed")
-          : saved == null ? local("notRecorded") : String(saved);
+        value.textContent = Array.isArray(saved) ? saved.length ? saved.join("\n") : copy.noneListed
+          : saved == null ? copy.notRecorded : String(saved);
         errors.append(term, value);
       }
       for (const button of streams) {
-        button.textContent = local(button.dataset.jobLogStream);
+        button.textContent = copy[button.dataset.jobLogStream];
         button.setAttribute("aria-pressed", String(entry.stream === button.dataset.jobLogStream));
         button.hidden = Boolean(context.operation) && button.dataset.jobLogStream === "submission";
         button.disabled = !canRead();
       }
-      refresh.textContent = local("refresh");
+      refresh.textContent = copy.refresh;
       const buffer = entry.buffers[entry.stream] ?? {state: "idle"};
       refresh.disabled = !canRead() || buffer.state === "loading";
       const value = buffer.value;
-      status.textContent = context.prepared ? local("prepared") : !canRead() ? local("unavailable") : buffer.state === "error"
-        ? `${local(buffer.errorKind)}${buffer.error ? " " + buffer.error : ""}`
-        : buffer.state === "ready" ? value.status === "empty" ? local("empty") : value.truncated ? local("truncated") : ""
-          : local(buffer.state === "loading" ? "loading" : "idle");
+      status.textContent = context.prepared ? copy.prepared : !canRead() ? copy.unavailable : buffer.state === "error"
+        ? `${copy[buffer.errorKind]}${buffer.error ? " " + buffer.error : ""}`
+        : buffer.state === "ready" ? value.status === "empty" ? copy.empty : value.truncated ? copy.truncated : ""
+          : copy[buffer.state === "loading" ? "loading" : "idle"];
       text.hidden = buffer.state !== "ready" || value.status === "empty";
       text.textContent = text.hidden ? "" : value.lines.join("\n");
       source.hidden = buffer.state !== "ready";
-      source.textContent = source.hidden ? "" : `${local(value.origin)} · ${local("retrieved")}: ${buffer.at}`;
+      source.textContent = source.hidden ? "" : `${copy[value.origin]} · ${copy.retrieved}: ${buffer.at}`;
       details.dataset.logState = buffer.state;
     }
     async function load(force = false) {
@@ -134,7 +133,7 @@
             value.stream !== stream || !["ready", "empty"].includes(value.status) || !["local", "remote"].includes(value.origin) ||
             !Array.isArray(value.lines) || value.lines.some(line => typeof line !== "string")) throw Error("");
         buffer.state = "ready"; buffer.value = value;
-        buffer.at = new Date().toLocaleTimeString(context.language === "en" ? "en" : "zh-Hant");
+        buffer.at = new Date().toLocaleTimeString("en");
       } catch (error) {
         if (controller.signal.aborted || destroyed || epoch !== generation || capturedKey !== key) return;
         buffer.state = "error"; buffer.value = null; buffer.error = error.message;
@@ -160,15 +159,16 @@
         if (nextKey !== key) {
           abort(); context = next; key = nextKey;
           entry = cache.get(key) ?? {open: false, stream: "out", buffers: {}};
-          details.open = entry.open;
+          details.open = inline || entry.open;
         } else context = next;
         if (!visible()) abort();
         render();
+        if (inline) void load();
       },
       remoteChanged() {
-        abort(); key = ""; details.open = false;
+        abort(); key = ""; details.open = inline;
         view.setContext(context);
-        entry.open = false; details.open = false;
+        entry.open = false; details.open = inline;
       },
       destroy() {
         abort(); destroyed = true; views.delete(view);
