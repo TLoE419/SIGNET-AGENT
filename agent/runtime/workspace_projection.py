@@ -18,6 +18,7 @@ import agent.tools.signet as signet
 STEPS = {1: 'genotype', 2: 'expression', 3: 'adjust', 4: 'cis'}
 MAX_BYTES = 32 * 1024 * 1024
 _SOURCE = Path(__file__).with_name('jobs') / 'project_workspace.py'
+_READ_TIMEOUT = 'Reading the saved result files on HPC3 timed out.'
 
 
 def _digest(value):
@@ -248,15 +249,30 @@ def completed_result(run_id, stage='1', *, refresh=False):
                 ('root', 'source', 'image', 'executor', 'workRoot', 'partition', 'runtimeModule')):
             raise jobs.StepError('conflict', 'Select the original remote environment before reading these results.')
         guard = jobs._output_guard(root, record)
-        request = {'run_id': run_id, 'stage': stage, 'remote_dir': record['remote_dir'], 'job': record,
+        request = {'run_id': run_id, 'stage': stage, 'job': record,
                    'owner_token': owner['token'], 'reader_source': reader, 'reader_entry': entry}
-        script = (jobs._say() + guard + 'python3 - ' + shlex.quote(json.dumps(request))
-                  + " <<'SIGNET_PROJECT_WORKSPACE'\n" + helper + '\nSIGNET_PROJECT_WORKSPACE\n'
+        probe = ('if command -v timeout >/dev/null 2>&1; then\n'
+                 '  probe_exit=0\n'
+                 f'  timeout -k 1s 8s stat -L -- {shlex.quote(record["remote_dir"])} >/dev/null 2>&1 || probe_exit=$?\n'
+                 '  case "$probe_exit" in 124|137) exit 124;; esac\n'
+                 'fi\n')
+        # Use the canonical directory established by the ownership guard, not its configured mount alias.
+        script = (jobs._say() + probe + guard + 'python3 - ' + shlex.quote(json.dumps(request))
+                  + " \"$C\" <<'SIGNET_PROJECT_WORKSPACE'\n"
+                  + 'import json, sys\n'
+                  + 'projection_request = json.loads(sys.argv[1])\n'
+                  + 'projection_request["remote_dir"] = sys.argv[2]\n'
+                  + 'sys.argv[1] = json.dumps(projection_request)\n'
+                  + helper + '\nSIGNET_PROJECT_WORKSPACE\n'
                   + 'projection_status=$?\n[ "$projection_status" = 0 ] || exit "$projection_status"\n' + guard)
         try:
             response = ssh_transport.remote('bash -s', input=script.encode(), capture_output=True, timeout=180)
         except OSError as error:
+            if ssh_transport.is_timeout(error):
+                raise jobs.StepError('read_timeout', _READ_TIMEOUT) from error
             raise jobs.StepError('remote_failed', 'Could not read the completed remote result aggregates.') from error
+        if response.returncode == 124:
+            raise jobs.StepError('read_timeout', _READ_TIMEOUT)
         if response.returncode or len(response.stdout) > MAX_BYTES:
             raise jobs.StepError('remote_failed', 'The completed remote results could not be projected safely.')
         replies = [line.split('\t', 1)[1] for line in response.stdout.decode('utf-8').splitlines()

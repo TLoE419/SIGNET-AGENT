@@ -1,6 +1,7 @@
 import base64
 import json
 import math
+import os
 from pathlib import Path
 import struct
 import subprocess
@@ -144,6 +145,37 @@ class WorkspaceProjectionTest(unittest.TestCase):
         self.assertFalse(list((self.root / 'work').rglob('*.*')), 'no raw result files are copied to the desktop')
         self.assertEqual(len(self.calls), 2)
         self.assertFalse(any(command in script for script in self.calls for command in ('sbatch ', 'scancel ', 'tar cz')))
+
+    def test_completed_result_accepts_configured_workspace_mount_alias(self):
+        self.genotype()
+        mounted = self.remote.parent.with_name('physical-runs')
+        self.remote.parent.rename(mounted)
+        self.remote.parent.symlink_to(mounted, target_is_directory=True)
+        result = projection.completed_result(self.run_id, '1')
+        self.assertEqual((result['summary']['samples'], result['summary']['variants']), (2, 3))
+
+    def test_timed_out_result_reads_can_be_retried_without_caching_an_error(self):
+        self.genotype()
+        timeout = self.base / 'timeout'
+        timeout.write_text('#!/bin/sh\nexit 137\n')
+        timeout.chmod(0o755)
+        with patch.dict(os.environ, PATH=f'{self.base}:{os.environ["PATH"]}'), self.assertRaises(jobs.StepError) as probe:
+            projection.completed_result(self.run_id, '1')
+        self.assertEqual(probe.exception.code, 'read_timeout')
+        with patch.object(ssh_transport, 'remote', side_effect=ssh_transport.SshRemoteError('Slow', code='CONNECTION_TIMEOUT')):
+            with self.assertRaises(jobs.StepError) as transport:
+                projection.completed_result(self.run_id, '1')
+        self.assertEqual(transport.exception.code, 'read_timeout')
+        self.assertFalse((self.root / 'workspace-projections').exists())
+        self.assertEqual(projection.completed_result(self.run_id, '1')['summary']['samples'], 2)
+
+    def test_completed_result_rejects_redirecting_the_run_inside_the_workspace(self):
+        self.genotype()
+        moved = self.remote.with_name('redirected-run')
+        self.remote.rename(moved)
+        self.remote.symlink_to(moved, target_is_directory=True)
+        with self.assertRaises(jobs.StepError):
+            projection.completed_result(self.run_id, '1')
 
     def test_adjustment_png_comes_from_actual_scores_without_points_or_ids(self):
         self.adjustment()
