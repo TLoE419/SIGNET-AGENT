@@ -55,8 +55,33 @@ typed paths, and file sizes. Genotype files can be selected across folders;
 expression and clinical inputs each select one file. Applying checks canonical
 paths, readability, regular-file type, and nonempty size before saving. Cancel
 does not save, and **Use default** restores the dataset's saved defaults.
-This metadata selection does not validate scientific formats or change the
-inputs of the chromosome 1 execution controls.
+**Validate input files** checks the saved dataset on demand: the PED/MAP pair,
+the genes-by-samples expression matrix, required clinical columns, and
+preliminary matching by TCGA patient identifier. It reports file-specific
+errors and counts without returning sample identifiers or data values.
+Expression scale and the meaning of its final five rows require researcher
+confirmation; the pinned SIGNET code transforms the matrix and discards those
+rows. Warnings and incomplete scans are displayed explicitly. Changing files,
+datasets, remote accounts, or environments invalidates the previous report.
+These checks do not start an analysis.
+
+To run the saved dataset, open **Analysis → Stage 1 → Review dataset files**.
+Review all study files, the inferred chromosome, reference resources, settings,
+and compute resources. The submission requires explicit acknowledgement of the
+input and reference-preparation warnings. It queues one genotype job, which
+first copies and fingerprints the reviewed inputs into its owned run folder,
+prepares study-specific imputation references, and then runs the original
+SIGNET workflow. It never borrows another study's prepared reference files.
+Current support is TCGA data on one autosome, a matching raw VCF reference, and
+a genetic map covering the study markers. Missing or incompatible resources
+block submission with a reason; selecting a dataset does not install or run it.
+
+Stages 2–6 use that run's prerequisites and snapshots. Expression, annotation,
+and clinical inputs are frozen at Stage 1, so later changes in Data or reference
+settings apply to new runs. Custom-run clinical paths are read-only in Stage 3.
+Run history retains the dataset name, original source paths, frozen paths,
+settings, and reference-preparation summary. The unchanged built-in chromosome 1
+example keeps its existing execution path.
 
 ### Submit the chromosome 1 example
 

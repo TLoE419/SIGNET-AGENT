@@ -83,6 +83,34 @@ class WorkspaceVisualizationTest(unittest.TestCase):
         self.assertEqual(result['graph']['display_nodes'], ['MEGF6', 'Z'])
         self.assertEqual(result['graph']['counts']['subnetworks'], 2)
 
+    def test_custom_dataset_graph_binds_to_the_original_run_snapshot(self):
+        origin_path = self.root / workspace_genotype.SNAPSHOT
+        origin = json.loads(origin_path.read_text())
+        origin['dataset_id'] = 'dataset-study-a'
+        origin_path.write_text(json.dumps(origin))
+        snapshot = {**self.snapshot, 'dataset_id': origin['dataset_id']}
+        self.snapshot_path.write_text(json.dumps(snapshot))
+        self.assertEqual(live_completed_result(self.run_id)['graph']['counts']['connections'], 4)
+        self.snapshot_path.write_text(json.dumps({**snapshot, 'dataset_id': 'dataset-study-b'}))
+        with self.assertRaises(ValueError):
+            live_completed_result(self.run_id)
+        self.snapshot_path.write_text(json.dumps(snapshot))
+        origin_path.unlink()
+        with self.assertRaises(ValueError):
+            live_completed_result(self.run_id)
+
+    def test_history_recovers_the_saved_custom_dataset_name_without_a_catalog_entry(self):
+        workspace = Workspace(Mock(state_file=None))
+        run = {'run_id': self.run_id, 'dataset_id': 'dataset-study-a',
+               'dataset_name': ['研究 A', 'Study A'],
+               'inputs': {'genotype': ['/frozen/a.ped', '/frozen/a.map'], 'expression': [], 'clinical': []}}
+        with patch.object(workspace, 'archived_history', return_value={'datasets': [], 'runs': []}), \
+                patch.object(workspace_genotype, 'run_history', return_value=run):
+            history = workspace.history()
+        self.assertEqual(history['datasets'], [{'id': run['dataset_id'], 'name': run['dataset_name'],
+                                                'inputs': run['inputs']}])
+        self.assertEqual(history['runs'], [run])
+
     def test_incomplete_job_or_invalid_exports_do_not_become_a_graph(self):
         for invalid in (self.edge_header, self.edge_source.replace('0.5,0.2', '0.4,0.2'),
                         self.edge_source + 'MEGF6,B,0.5,0.2\n',

@@ -76,7 +76,15 @@ def live_completed_result(run_id):
     root = st._run(run_id)
     snapshot = json.loads(st._no_links(root / workspace_genotype.VISUALIZE_SNAPSHOT).read_text(encoding='utf-8'))
     job = json.loads(st._no_links(root / 'steps/visualize.json').read_text(encoding='utf-8'))
-    if (snapshot['run_id'] != run_id or snapshot['dataset_id'] != workspace_genotype.DATASET_ID
+    dataset_id = st._name(snapshot['dataset_id'])
+    origin_path = st._no_links(root / workspace_genotype.SNAPSHOT)
+    if origin_path.is_file():
+        origin = json.loads(origin_path.read_text(encoding='utf-8'))
+        if origin['run_id'] != run_id or origin['dataset_id'] != dataset_id:
+            raise ValueError('The Stage 6 dataset does not match this run’s original inputs.')
+    elif dataset_id != workspace_genotype.DATASET_ID:
+        raise ValueError('The original dataset snapshot is missing from this run.')
+    if (snapshot['run_id'] != run_id
             or job.get('run_id') != run_id or job.get('step') != 'visualize' or job.get('state') != 'completed'):
         raise ValueError('Select a completed Stage 6 job belonging to this workspace run.')
     settings = job['settings']
@@ -408,12 +416,18 @@ class Workspace:
                 live.append(workspace_genotype.run_history(st._run(snapshot.parent.name)))
             except (OSError, ValueError, KeyError, TypeError):
                 continue
-        if live and not any(entry['id'] == workspace_genotype.DATASET_ID for entry in history['datasets']):
-            history['datasets'].append({
-                'id': workspace_genotype.DATASET_ID,
-                'name': ['第 1 號染色體範例', 'Chromosome 1 example'],
-                'inputs': {'genotype': ['study.ped', 'study.map'], 'expression': [], 'clinical': []},
-            })
+        dataset_ids = {entry['id'] for entry in history['datasets']}
+        for run in live:
+            if run['dataset_id'] not in dataset_ids:
+                fallback_name = (['第 1 號染色體範例', 'Chromosome 1 example']
+                                 if run['dataset_id'] == workspace_genotype.DATASET_ID
+                                 else [run['dataset_id'], run['dataset_id']])
+                history['datasets'].append({
+                    'id': run['dataset_id'],
+                    'name': run.get('dataset_name', fallback_name),
+                    'inputs': run['inputs'],
+                })
+                dataset_ids.add(run['dataset_id'])
         history['runs'].extend(live)
         return history
 

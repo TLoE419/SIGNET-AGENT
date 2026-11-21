@@ -138,6 +138,9 @@ Inside the API:
 | 10 | `GET /signet/datasets` | no | Saved workspace dataset catalog and file selections |
 | 11 | `POST /signet/datasets` | no | Save a new workspace dataset |
 | 12 | `PATCH /signet/datasets/{dataset_id}` | no | Save current file selections for one dataset |
+| 13 | `POST /signet/datasets/{dataset_id}/validate` | no | Read-only structure and preliminary sample matching checks |
+| 14 | `POST /signet/datasets/{dataset_id}/genotype/review` | no | Review this dataset's Stage 1 inputs and reference resources |
+| 15 | `POST /signet/datasets/{dataset_id}/genotype` | yes | Manually submit a dataset-bound genotype run |
 
 ### Workspace dataset metadata
 
@@ -176,9 +179,75 @@ limit). It returns canonical paths and byte sizes for readable, nonempty
 regular files. It checks shared-path restrictions without reading contents,
 writing remote selection state, converting references, or scheduling jobs.
 The UI then saves those paths through the dataset PATCH route. This is a
-metadata check; scientific format validation and use of custom dataset inputs
-in analysis remain separate integration steps. The legacy reference-specific
+metadata check; the separate dataset validation action below checks structure.
+Custom dataset execution uses the separate review and submission routes below. The legacy reference-specific
 `/hpc/files/select` route keeps its own validation and preparation behavior.
+
+`POST /signet/datasets/{dataset_id}/validate` requires `{"inputs": {...}}`
+containing all three current saved input arrays. The service compares this
+snapshot before and after the remote read, returning 409 if it changed. The
+report contains `dataset_id`, `inputs`, `checked_at`, `status`, per-category
+`checks`, preliminary `pairing` counts, file metadata/digests, `limits`,
+`read_only: true`, and `executed: false`. A check has an ID, category, status,
+message, paths, metrics, and bounded issue codes with optional line numbers.
+No sample identifiers, genotype calls, expression values, or clinical values
+are returned to the browser or conversation.
+
+The TCGA check verifies the PED/MAP structure, expression matrix shape and
+numeric cells, clinical columns, and preliminary patient overlap using the
+official third barcode component. It does not reproduce later QC, PCA,
+duplicate-sample filtering, or reference/annotation compatibility. The pinned
+expression code unconditionally drops five final rows and applies
+`round(2^x - 1)`; a structurally readable matrix therefore retains a warning
+because its intended scale and trailing rows cannot be inferred reliably.
+Clinical execution-compatibility warnings are distinct from column/row errors.
+`passed`, `warning`, `failed`, and `incomplete` describe this read-only check,
+not analysis readiness or biological validity.
+
+Remote reads are bounded to 128 MiB per file, 256 MiB total, 4 MiB per line,
+one million rows, and 30 seconds. A limit or detected file change is reported
+as incomplete, never as a complete pass. The service creates no run, writes
+no file, changes no selection, and submits no job. Files may change later;
+execution performs a fresh review before submission.
+
+### Dataset-bound manual execution
+
+`POST /signet/datasets/{dataset_id}/genotype/review` accepts the same exact
+`{"inputs": {...}}` saved snapshot as validation. It returns the Stage 1 form
+fields plus `dataset_id`, `dataset_name`, `source_inputs`, `reference_sources`,
+`source_files`, `review_token`, `ready`, `issues`, and `warnings`. Review is
+read-only: it checks the current dataset, remote environment, file identities,
+study chromosome, and configured raw reference/map/annotation selections.
+Custom execution currently supports one TCGA autosome (1–22), a matching raw
+VCF reference, and a genetic map covering the study positions. Ambiguous GEN
+provenance or mismatched resources blocks preparation. The default downloaded
+reference is chromosome 1; other chromosomes require matching selected resources.
+
+`POST /signet/datasets/{dataset_id}/genotype` requires `run_id`, `inputs`
+(the reviewed form inputs), `settings`, `resources`, `review_token`, and
+`acknowledge_warnings`. The service rechecks the review and rejects a changed
+dataset, environment, source, resource selection, or token before creating a
+run. The chromosome must match the study, and warnings require an explicit true
+acknowledgement. This submits only genotype through the existing job lifecycle.
+
+The genotype job first freezes the study PED/MAP, expression, clinical, and gene
+annotation files under its owned run directory and checks their fingerprints.
+It then invokes the existing reference preparer for this study and executes
+the original `signet -g`. Prepared outputs and an input manifest are retained
+with the genotype results. Original inputs and other runs are never replaced.
+The global step input-root allowlist is unchanged; later jobs consume only the
+owned run paths. Reference preparation can remove unmatched markers, consumes
+the reviewed Stage 1 resources, and does not establish biological validity.
+
+The initial `workspace-genotype.json` records dataset identity/name, source and
+frozen inputs, source fingerprints, reference selections, environment, settings,
+resources, token and acknowledgement. Later stage snapshots bind to this
+initial dataset ID. Existing expression/adjust/cis/network/visualize review and
+submit routes continue the same run; their `/example` suffix remains for API
+compatibility. Dataset runs read expression, annotation, and clinical inputs
+from their frozen snapshot, not the current catalog or global selections.
+A differing clinical override is rejected for a frozen run. The original
+unchanged chromosome 1 example endpoints retain their existing behavior.
 
 ### Workspace chromosome 1 review and submission
 

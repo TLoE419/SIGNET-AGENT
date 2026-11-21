@@ -10,6 +10,7 @@
     "test": "npm run typecheck && node --test tests/*.test.cjs && node --import tsx --test tests/ssh.test.ts tests/environment.test.ts tests/environment-verify.test.ts tests/runtime-modules.test.ts && node --import tsx --test tests/ui.test.tsx tests/model-ui.test.tsx tests/remote-readiness.test.tsx tests/dataset-files.test.tsx",
     "test:smoke": "electron tests/smoke.cjs",
     "test:workspace": "npm run build && electron tests/workspace.cjs",
+    "test:dataset": "npm run build && electron tests/custom-dataset.cjs",
     "test:startup": "electron tests/startup.cjs",
     "build": "node scripts/build.mjs",
     "prestart": "npm run build",

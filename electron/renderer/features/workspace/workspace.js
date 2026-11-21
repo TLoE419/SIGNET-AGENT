@@ -81,7 +81,6 @@
   let cisRun;
   let networkRun;
   let visualizationRun;
-  let restoredGenotypeRun = false;
   let historyRequest = 0;
   let historyRuns = [];
   let historyState = "loading";
@@ -137,6 +136,7 @@
     });
   }
 
+  let inputValidation;
   const syncInputFiles = (() => {
     const template = byId("current-files-template");
     const inputs = [];
@@ -166,6 +166,7 @@
 
     function renderFiles() {
       for (const input of inputs) renderInput(input);
+      inputValidation?.sync();
     }
 
     async function restoreDefaults(input) {
@@ -231,6 +232,11 @@
     });
     return renderFiles;
   })();
+
+  inputValidation = window.SignetInputValidation.create({root, getDataset: () => ({
+    id: activeDataset.id, name: activeDataset.name, inputs: activeDataset.inputs,
+    persisted: activeDataset.persisted, ready: datasetCatalogReady,
+  })});
 
   function matrixPreview(rows) {
     const colors = ["#edf3f8", "#d7e6f2", "#b7d1e6", "#91b8d7", "#5f92bf", "#306b9f"];
@@ -667,9 +673,13 @@
   const stageResults = root.querySelectorAll(".ml-workspace");
   function syncGenotypeContext() {
     const stageContext = ["手動執行", "Manual execution"];
+    const liveRuns = runsForDataset().filter(run => run.source === "live");
     byId("stage-header").querySelector("span").textContent = stageContext[root.lang === "en" ? 1 : 0];
     genotypeRun?.setContext({
       datasetId: activeDataset.id,
+      dataset: {id: activeDataset.id, name: activeDataset.name, inputs: activeDataset.inputs,
+        persisted: activeDataset.persisted, ready: datasetCatalogReady},
+      runs: liveRuns,
       language: root.lang,
       visible: app.dataset.nav === "analysis" &&
         timeline.querySelector('[aria-current="step"]')?.dataset.stage === "1",
@@ -680,7 +690,7 @@
       visible: app.dataset.nav === "analysis" &&
         timeline.querySelector('[aria-current="step"]')?.dataset.stage === "2" ||
         app.dataset.nav === "history" && historyResult?.stage === 2,
-      runs: activeDataset.id === exampleDataset.id ? runsForDataset().filter(run => run.source === "live") : [],
+      runs: liveRuns,
       runId: app.dataset.nav === "history" && historyResult?.stage === 2 ? historyResult.runId : null,
     });
     adjustmentRun?.setContext({
@@ -689,7 +699,7 @@
       visible: app.dataset.nav === "analysis" &&
         timeline.querySelector('[aria-current="step"]')?.dataset.stage === "3" ||
         app.dataset.nav === "history" && historyResult?.stage === 3,
-      runs: activeDataset.id === exampleDataset.id ? runsForDataset().filter(run => run.source === "live") : [],
+      runs: liveRuns,
       runId: app.dataset.nav === "history" && historyResult?.stage === 3 ? historyResult.runId : null,
     });
     cisRun?.setContext({
@@ -698,7 +708,7 @@
       visible: app.dataset.nav === "analysis" &&
         timeline.querySelector('[aria-current="step"]')?.dataset.stage === "4" ||
         app.dataset.nav === "history" && historyResult?.stage === 4,
-      runs: activeDataset.id === exampleDataset.id ? runsForDataset().filter(run => run.source === "live") : [],
+      runs: liveRuns,
       runId: app.dataset.nav === "history" && historyResult?.stage === 4 ? historyResult.runId : null,
     });
     networkRun?.setContext({
@@ -707,14 +717,14 @@
       visible: app.dataset.nav === "analysis" &&
         timeline.querySelector('[aria-current="step"]')?.dataset.stage === "5" ||
         app.dataset.nav === "history" && historyResult?.stage === 5,
-      runs: activeDataset.id === exampleDataset.id ? runsForDataset().filter(run => run.source === "live") : [],
+      runs: liveRuns,
       runId: app.dataset.nav === "history" && historyResult?.stage === 5 ? historyResult.runId : null,
     });
     visualizationRun?.setContext({
       datasetId: activeDataset.id,
       language: root.lang,
       visible: ["analysis", "history"].includes(app.dataset.nav) && visualizationFormVisible(),
-      runs: activeDataset.id === exampleDataset.id ? runsForDataset().filter(run => run.source === "live") : [],
+      runs: liveRuns,
       runId: app.dataset.nav === "history" && historyResult?.stage === 6 ? historyResult.runId : null,
       resultsAvailable: stage6RunsForDataset().length > 0,
     });
@@ -1060,7 +1070,7 @@
     }
     if (!["analysis", "settings"].includes(app.dataset.nav)) return false;
     return timeline.querySelector('[aria-current="step"]')?.dataset.stage === "6" &&
-      activeDataset.id === exampleDataset.id && runsForDataset().some(run => run.source === "live") &&
+      runsForDataset().some(run => run.source === "live") &&
       !stage6RunsForDataset().some(run => run.run_id === stage6RunSelect.value);
   }
 
@@ -1075,7 +1085,7 @@
     analysisNetwork.classList.toggle("ml-workspace", !inHistory || !graph);
     analysisNetwork.classList.toggle("ml-nav-workspace", inHistory && graph);
     analysisNetwork.hidden = !graph;
-    stage6Prepare.hidden = inHistory || activeDataset.id !== exampleDataset.id || !runsForDataset().some(run => run.source === "live");
+    stage6Prepare.hidden = inHistory || !runsForDataset().some(run => run.source === "live");
   }
 
   function renderStage6Status() {
@@ -1866,22 +1876,19 @@
 
   function updateAnalysisView() {
     const isExample = activeDataset.id === exampleDataset.id;
-    const hasSavedResults = isExample || runsForDataset().length > 0;
+    const hasSavedResults = activeDataset.persisted || isExample || runsForDataset().length > 0;
     app.toggleAttribute("data-no-analysis", !hasSavedResults && historyState === "ready");
     byId("empty-analysis").hidden = hasSavedResults || historyState !== "ready" || !["analysis", "settings"].includes(app.dataset.nav);
     timeline.hidden = !hasSavedResults;
     byId("stage-header").querySelector("span").hidden = !hasSavedResults;
     byId("empty-stage").hidden = hasSavedResults || historyState !== "ready";
     // Manual stages and saved network results share the existing stage workspace.
-    const showWalkthrough = isExample && stage6RunsForDataset().length > 0;
     const activeStage = timeline.querySelector('[aria-current="step"]').dataset.stage;
-    if (!isExample || (!showWalkthrough && !["1", "2", "3", "4", "5", "6"].includes(activeStage))) {
-      const lastStage = stageButtons[stageButtons.length - 1];
-      showStage(lastStage, true);
+    if (!["1", "2", "3", "4", "5", "6"].includes(activeStage)) {
+      showStage(stageButtons[0], true);
     }
     for (const button of stageButtons) {
-      button.closest(".ml-stage-entry").hidden = !showWalkthrough && button.dataset.stage !== "6" &&
-        !(isExample && ["1", "2", "3", "4", "5"].includes(button.dataset.stage));
+      button.closest(".ml-stage-entry").hidden = !hasSavedResults;
     }
     syncGenotypeContext();
   }
@@ -1932,13 +1939,6 @@
       if (historyResult?.stage === 3 && historyRuns.find(run => run.run_id === historyResult.runId)?.jobs.adjust?.state === "completed" &&
         stage3HistoryPanel.dataset.runId !== historyResult.runId) {
         void loadStage3Run();
-      }
-      if (genotypeRun && !restoredGenotypeRun) {
-        restoredGenotypeRun = true;
-        const active = historyRuns.find((run) => run.source === "live" &&
-          ["submitting", "submitted", "pending", "running", "validating", "cancelling", "unknown"]
-            .includes(run.jobs.genotype?.state));
-        if (active) genotypeRun.restore(active.run_id, active.jobs.genotype);
       }
     } catch (error) {
       if (request !== historyRequest) return;
@@ -2055,6 +2055,7 @@
       window.dispatchEvent(new Event("close-dataset-remote-files"));
       activeDataset = dataset;
       clearHistoryResult();
+      if (!runsForDataset().length) showStage(stageButtons[0], true);
     }
     renderDatasetLabels();
     syncInputFiles(true);
