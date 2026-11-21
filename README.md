@@ -1,8 +1,8 @@
 # SIGNET Local Research Assistant
 
-Use a local chat interface to explore SIGNET's analysis capabilities, inspect files you provide, and run operations through controlled tools. The interface supports English and Traditional Chinese, tool progress, and parameter proposals and comparisons for Stage 6 network results.
+Use a local chat interface to explore SIGNET's analysis capabilities, inspect files you provide, and run operations through controlled tools. The interface shows tool progress and supports parameter proposals and comparisons for Stage 6 network results.
 
-The desktop opens to the bilingual workspace. The chat uses the existing SIGNET Agent with your configured model and saved conversations. Data and Run history show saved dataset records and their archived runs. Each run has an input snapshot and a timeline that opens its saved stage results. Analysis can submit Stage 1 for the chromosome 1 example through the existing HPC3 workflow. After Stage 1 completes, open Stage 2 of that run to review and manually submit expression preprocessing. Stage 3 continues that run with a reviewed clinical file and principal component count, live progress, and saved sample matching, PCA and expression adjustment results. Stage 4 reviews the association threshold, analysis range and permutations before submitting cis-eQTL mapping in the same run, with saved settings and the complete association table. Stage 5 continues with reviewed bootstrap, instrument correlation and compute settings, follows the controller and model work progress, and shows all saved candidate connections and bootstrap frequencies. Stage 6 reviews the frequency threshold and subnetwork count, runs the original exports, and opens the same run's graph and linked edge table with gene filtering. Use **Settings → Remote compute** to connect to HPC3 and check remote resources.
+The desktop opens to a new chat. The chat uses the existing SIGNET Agent with your configured model and saved conversations. Data and Run history show saved dataset records and their archived runs. Each run has an input snapshot and a timeline that opens its saved stage results. Analysis can submit Stage 1 for the chromosome 1 example through the existing HPC3 workflow. After Stage 1 completes, open Stage 2 of that run to review and manually submit expression preprocessing. Stage 3 continues that run with a reviewed clinical file and principal component count, live progress, and saved sample matching, PCA and expression adjustment results. Stage 4 reviews the association threshold, analysis range and permutations before submitting cis-eQTL mapping in the same run, with saved settings and the complete association table. Stage 5 continues with reviewed bootstrap, instrument correlation and compute settings, follows the controller and model work progress, and shows all saved candidate connections and bootstrap frequencies. Stage 6 reviews the frequency threshold and subnetwork count, runs the original exports, and opens the same run's graph and linked edge table with gene filtering. Use **Settings → Remote compute** to connect to HPC3 and check remote resources.
 
 Datasets created in **Data** and their current file selections survive an app
 restart. Each dataset shows only its own run history, whose original files and
@@ -91,7 +91,7 @@ The application has been checked on macOS with Python 3.11. Python 3.11 or later
 
 Download and extract this project, then run these commands from its root directory:
 
-If Python is not installed yet or you need to set up Codex CLI, follow the [from-scratch installation guide](docs/INSTALL.md) first.
+Follow the [from-scratch installation guide](docs/INSTALL.md) to install Python or configure a chat model.
 
 ```sh
 python3 -m venv .venv
@@ -100,11 +100,11 @@ npm ci --prefix electron
 npm start --prefix electron
 ```
 
-Electron opens the application and starts its Python API automatically. Requires Node.js 22.12+ on macOS or Linux. Opening the window does not establish model sign-in or scientific readiness.
+Electron opens the application and starts its Python API automatically. Requires Node.js 22.12+ on macOS or Linux. The workspace and saved conversations are available before setting up a chat model.
 
 When Gemini is selected, chat starts with `gemini-3.8-flash`. On HTTP 500, 502, 503, 504 or a transport timeout, the failed model request is sent once to `gemini-3.5-flash-lite` with the same conversation and tool results. The activity log and answer identify the fallback; completed tools are not replayed. The rest of that turn stays on Flash-Lite, while each new user turn starts with 3.8 again. Authentication, request-format, model-name and quota errors do not trigger fallback. If Flash-Lite also fails, the turn stops and preserves existing results.
 
-Chat uses your own signed-in Codex CLI by default. See the [installation guide](docs/INSTALL.md) for installation, sign-in checks, and other model providers. The CLI version checked for this project is `0.162.1`; other versions need compatible command arguments and structured responses.
+To send new chat messages, configure your own Gemini key in **Settings → Chat model** or launch with a configured Gemini or Groq key. For local testing, you can also launch with a signed-in Codex CLI. See the [installation guide](docs/INSTALL.md).
 
 ## Desktop client and independent Python backend
 
@@ -171,7 +171,6 @@ See the [file tree](docs/FILE_TREE.md) for file responsibilities and [third-part
 - **Python:** the language and runtime used for the chat service and tools.
 - **Ubuntu:** the Linux distribution used by CI.
 - **Unix-like environment:** an operating environment supporting the process-management and command-line operations required by some tools.
-- **Codex CLI:** the default model command-line tool; users sign in with their own accounts.
 - **Git:** the version-control tool used to obtain the pinned official source.
 - **Node.js:** the runtime used for frontend checks and network-output verification.
 
@@ -183,13 +182,14 @@ with the operating system key store. Saving or removing an active key restarts
 the owned Python service after active work finishes; saved conversations remain.
 Do not enter private research data unless your chosen provider is appropriate.
 
-Open **Workflow** to prepare the shared installation; **HPC3 settings** changes its root and partition.
+Open **Settings → Environment readiness** to check the shared installation.
+**HPC3 settings** changes its root and partition.
 The same verified root, source revision, container runtime module and Slurm
 partition are used by analysis and reference preparation. The workflow never
-creates a second installation under `/pub`. Reference downloads and example
-reference conversion require confirmation and run as remote Slurm jobs. Their
-logs and state live in `<installation-root>/.signet-agent/steps`; raw reference
-files live in `<installation-root>/refdata`. Existing paths and data are not migrated.
+creates a second installation under `/pub`. The manual container download runs
+as a Slurm job. Setup logs and state live in
+`<installation-root>/.signet-agent/steps`. Upload study files and references to
+HPC3 and select them for the dataset in **Data**.
 The preprocessing and results stages in this panel are placeholders; the existing
 analysis tools and Stage 6 workspace retain their own readiness requirements.
 A passing setup check is not evidence of a biologically valid analysis.

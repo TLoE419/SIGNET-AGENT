@@ -73,6 +73,63 @@ test('account setup follows generation and clears the account password on submit
  assert.ok(screen.getByRole('heading',{name:'Set up SSH key'}));assert.equal(screen.queryByLabelText('Private-key passphrase'),null);fireEvent.change(screen.getByLabelText('UCInetID / username'),{target:{value:'testuser'}});fireEvent.change(screen.getByLabelText('UCInetID password'),{target:{value:'account-secret'}});fireEvent.click(screen.getByRole('button',{name:'Sign in and set up key'}));await screen.findByText('Retry authentication');assert.equal(logins,1);assert.equal(done,0);assert.equal((screen.getByLabelText('UCInetID password') as HTMLInputElement).value,'');fireEvent.click(screen.getByRole('button',{name:'Cancel'}));assert.equal(cancels,1);
 });
 
+test('Duo verification replaces the password form until sign-in finishes', async () => {
+ let rejectLogin: (error: Error) => void = () => assert.fail('Sign-in did not start');
+ const logins: string[][] = [], replies: string[][] = [];
+ const props = {
+  open: true,
+  username: 'testuser',
+  onClose: () => {},
+  onComplete: () => assert.fail('The simulated sign-in fails'),
+  onTrust: async () => {},
+  onLogin: (username: string, password: string) => {
+   logins.push([username, password]);
+   return new Promise<void>((_, reject) => {rejectLogin = reject});
+  },
+  onAnswer: async (session: string, challenge: string, answers: string[]) => {
+   replies.push([session, challenge, ...answers]);
+  },
+ };
+ const challenge = {
+  sessionId: 'connection-7', challengeId: 'challenge-7', name: 'Duo authentication',
+  instructions: 'Choose a verification method.\n1. Send a Push to XXX-XXX-1234',
+  prompts: [{prompt: 'Passcode or option:', echo: false}],
+ };
+
+ const result = render(<AccountLoginPrompt {...props}/>);
+ assert.ok(screen.getByRole('dialog', {name: 'Sign in with Duo'}));
+ assert.equal(screen.queryByRole('region', {name: 'Duo authentication'}), null);
+ fireEvent.change(screen.getByLabelText('UCInetID password'), {target: {value: 'fixture-password'}});
+ fireEvent.click(screen.getByRole('button', {name: 'Sign in'}));
+ assert.deepEqual(logins, [['testuser', 'fixture-password']]);
+ assert.ok(screen.getByRole('button', {name: 'Signing in…'}));
+
+ result.rerender(<AccountLoginPrompt {...props} challenge={challenge}/>);
+ assert.ok(screen.getByRole('dialog', {name: 'Verify with Duo'}));
+ assert.equal(screen.queryByLabelText('UCInetID / username'), null);
+ assert.equal(screen.queryByLabelText('UCInetID password'), null);
+ assert.equal(document.activeElement, screen.getByRole('button', {name: '1 Send a Push to XXX-XXX-1234'}));
+ const passcode = screen.getByLabelText('Passcode or option:');
+ fireEvent.change(passcode, {target: {value: '654321'}});
+ await act(async () => {fireEvent.submit(passcode.closest('form')!)});
+ assert.deepEqual(replies, [['connection-7', 'challenge-7', '654321']]);
+ assert.equal(logins.length, 1);
+
+ result.rerender(<AccountLoginPrompt {...props} challenge={null}/>);
+ assert.ok(screen.getByRole('dialog', {name: 'Verify with Duo'}));
+ const status = screen.getByRole('status');
+ assert.equal(status.textContent, 'Finishing sign-in...');
+ assert.equal(status.hasAttribute('tabindex'), false);
+ const dots = status.querySelector('.ssh-sign-in-dots[aria-hidden="true"]');
+ assert.equal(dots?.children.length, 3);
+ assert.equal(document.activeElement, screen.getByRole('button', {name: 'Cancel'}));
+ assert.equal(screen.queryByLabelText('UCInetID password'), null);
+ await act(async () => {rejectLogin(Error('Authentication failed.'))});
+ assert.ok(screen.getByRole('dialog', {name: 'Sign in with Duo'}));
+ assert.equal(screen.getByRole('alert').textContent, 'Authentication failed.');
+ assert.equal((screen.getByLabelText('UCInetID password') as HTMLInputElement).value, '');
+});
+
 test('Duo challenge forwards the server instructions and selected push option',async()=>{
  const replies:Array<{session:string;challenge:string;answers:string[]}>=[];
  render(<DuoChallenge challenge={{sessionId:'connection-3',challengeId:'challenge-1',name:'Duo two-factor login for testuser',instructions:'Enter a passcode or select one of the following options:\n\n 1. Duo Push to XXX-XXX-1234',prompts:[{prompt:'Passcode or option (1-1):',echo:false}]}} onAnswer={async(session,challenge,answers)=>{replies.push({session,challenge,answers})}}/>);
@@ -258,27 +315,28 @@ test('HPC3 settings only chooses and checks the location; installing belongs to 
  fireEvent.click(screen.getByRole('button',{name:'Check environment'}));await waitFor(()=>assert.equal(checks.length,1));
 });
 
-test('the file window browses, refuses unsupported names and keeps format errors visible',async()=>{
+test('the dataset file window browses, refuses unsupported paths and keeps inspection errors visible',async()=>{
  const {RemoteFilesModal}=await import('../renderer/features/remote-files/RemoteFilesModal');
  const previous=globalThis.fetch,calls:[string,any][]=[];let selected=0;
  const replies:Record<string,(body:any)=>object>={
   '/hpc/files/shortcuts':()=>({status:'ok',shortcuts:[{label:'Home',path:'/home/u'},{label:'Personal (/pub)',path:'/pub/u'},{label:'Lab: genome',path:'/dfs7/genome'}]}),
   '/hpc/files/list':body=>({status:'ok',kind:'folder',path:body.path,entries:body.path==='/dfs7/genome'?[{name:'refs',path:'/dfs7/genome/refs',kind:'folder',size:0,supported:true}]:[{name:'g.gtf',path:body.path+'/g.gtf',kind:'file',size:2048,supported:true},{name:'bad name.gtf',path:body.path+'/bad name.gtf',kind:'file',size:1,supported:false}]}),
-  '/hpc/files/select':body=>body.path.endsWith('g.gtf')&&!selected++?{status:'invalid',error:'This GTF is not collapsed.'}:{status:'ok'},
+  '/hpc/files/inspect':body=>!selected++?{status:'invalid',error:'The selected file is unreadable.'}:{status:'ok',files:[{path:body.paths[0],size:2048}]},
+  '/signet/datasets/study':body=>({id:'study',inputs:{},references:body.references}),
  };
  globalThis.fetch=(async(url:string,init:any)=>{const body=JSON.parse(init.body);calls.push([url,body]);return {ok:true,json:async()=>replies[url](body)}}) as any;
  let done=0;
  try{
-  render(<RemoteFilesModal target={{key:'gtf',label:'Gene annotation',current:''}} onClose={()=>{}} onSelected={()=>done++}/>);
+  render(<RemoteFilesModal target={{key:'gtf',label:'Gene annotation',current:'',referenceKind:'gtf',datasetId:'study'}} onClose={()=>{}} onSelected={()=>done++}/>);
   await waitFor(()=>assert.ok(screen.getByRole('button',{name:/g\.gtf/})));
   assert.deepEqual(calls[1],['/hpc/files/list',{path:'/pub/u'}],'starts in the personal space');
   assert.equal((screen.getByRole('button',{name:/bad name/}) as HTMLButtonElement).disabled,true);
   fireEvent.click(screen.getByRole('button',{name:'Lab: genome'}));await waitFor(()=>assert.ok(screen.getByRole('button',{name:'refs/'})));
   fireEvent.click(screen.getByRole('button',{name:'refs/'}));await waitFor(()=>assert.ok(screen.getByRole('button',{name:/g\.gtf/})));
-  fireEvent.click(screen.getByRole('button',{name:/g\.gtf/}));fireEvent.click(screen.getByRole('button',{name:'Use this file'}));
-  await waitFor(()=>assert.ok(screen.getByRole('alert').textContent?.includes('not collapsed')));assert.equal(done,0);
-  fireEvent.click(screen.getByRole('button',{name:'Use this file'}));await waitFor(()=>assert.equal(done,1));
-  assert.deepEqual(calls.at(-1),['/hpc/files/select',{key:'gtf',path:'/dfs7/genome/refs/g.gtf'}]);
+  fireEvent.click(screen.getByRole('button',{name:/g\.gtf/}));fireEvent.click(screen.getByRole('button',{name:'Apply file selection'}));
+  await waitFor(()=>assert.ok(screen.getByRole('alert').textContent?.includes('unreadable')));assert.equal(done,0);
+  fireEvent.click(screen.getByRole('button',{name:'Apply file selection'}));await waitFor(()=>assert.equal(done,1));
+  assert.deepEqual(calls.at(-1),['/signet/datasets/study',{references:{gtf:'/dfs7/genome/refs/g.gtf'}}]);
  }finally{globalThis.fetch=previous}
 });
 

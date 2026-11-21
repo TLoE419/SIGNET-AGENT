@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-Hant">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -22,197 +22,436 @@
   <script defer src="./renderer.js"></script>
 </head>
 <body>
-<div id="signet-lens-left-preview" lang="zh-Hant">
+<div id="signet-lens-left-preview">
   <div class="ml-app" data-nav="analysis">
-    <nav class="ml-rail" aria-label="工作區導覽">
-      <button class="ml-rail-item" type="button" data-nav-target="analysis" aria-current="page" aria-label="分析" data-tooltip="分析" data-tooltip-placement="right"><i data-lucide="flask-conical" aria-hidden="true"></i></button>
-      <button class="ml-rail-item" type="button" data-nav-target="data" aria-label="資料" data-tooltip="資料" data-tooltip-placement="right"><i data-lucide="database" aria-hidden="true"></i></button>
-      <button class="ml-rail-item" type="button" data-nav-target="history" aria-label="歷次執行" data-tooltip="歷次執行" data-tooltip-placement="right"><i data-lucide="history" aria-hidden="true"></i></button>
-      <button class="ml-rail-item ml-rail-settings" type="button" data-nav-target="settings" aria-label="設定" data-tooltip="設定" data-tooltip-placement="right"><i data-lucide="settings" aria-hidden="true"></i></button>
+    <nav class="ml-rail" aria-label="Workspace navigation">
+      <button class="ml-rail-item" type="button" data-nav-target="analysis" aria-current="page" aria-label="Analysis" data-tooltip="Analysis" data-tooltip-placement="right"><i data-lucide="flask-conical" aria-hidden="true"></i></button>
+      <button class="ml-rail-item" type="button" data-nav-target="data" aria-label="Data" data-tooltip="Data" data-tooltip-placement="right"><i data-lucide="database" aria-hidden="true"></i></button>
+      <button class="ml-rail-item" type="button" data-nav-target="history" aria-label="Run history" data-tooltip="Run history" data-tooltip-placement="right"><i data-lucide="history" aria-hidden="true"></i></button>
+      <button class="ml-rail-item ml-rail-settings" type="button" data-nav-target="settings" aria-label="Settings" data-tooltip="Settings" data-tooltip-placement="right"><i data-lucide="settings" aria-hidden="true"></i></button>
     </nav>
-    <section class="ml-chat" id="ml-chat-panel" aria-label="工作區側欄">
+    <dialog id="ml-delete-dataset-dialog" class="ml-delete-confirmation" aria-labelledby="ml-delete-dataset-title" aria-describedby="ml-delete-dataset-name ml-delete-dataset-description">
+      <form id="ml-delete-dataset-form">
+        <h2 id="ml-delete-dataset-title">Delete this dataset?</h2>
+        <p class="ml-delete-confirmation-name" id="ml-delete-dataset-name"></p>
+        <p id="ml-delete-dataset-description">This removes the dataset and its saved file selections. Original files stay where they are. Past results remain under Run history → All runs.</p>
+        <p id="ml-delete-dataset-error" class="ml-delete-confirmation-error" role="alert" hidden></p>
+        <div class="ml-delete-confirmation-actions">
+          <button type="button" id="ml-delete-dataset-cancel" class="ml-input-button" autofocus>Cancel</button>
+          <button type="submit" id="ml-delete-dataset-confirm" class="ml-input-button ml-delete-confirmation-submit">Delete dataset</button>
+        </div>
+      </form>
+    </dialog>
+    <section class="ml-chat" id="ml-chat-panel" aria-label="Workspace sidebar">
       <header class="ml-heading">
-        <div class="ml-segment" role="tablist" aria-label="側欄檢視">
+        <div class="ml-segment" role="tablist" aria-label="Sidebar views">
           <button type="button" id="ml-agent-tab" role="tab" aria-selected="true" aria-controls="ml-agent-view">Agent</button>
           <button type="button" id="ml-stage-tab" role="tab" aria-selected="false" aria-controls="ml-stage-view" tabindex="-1">Stage</button>
         </div>
-        <h2 class="ml-nav-heading" data-nav-left="data" hidden>資料</h2>
-        <h2 class="ml-nav-heading" data-nav-left="history" hidden>歷次執行</h2>
-        <h2 class="ml-nav-heading" data-nav-left="settings" hidden>設定</h2>
+        <h2 class="ml-nav-heading" data-nav-left="data" hidden>Data</h2>
+        <h2 class="ml-nav-heading" data-nav-left="history" hidden>Run history</h2>
+        <h2 class="ml-nav-heading" data-nav-left="settings" hidden>Settings</h2>
         <div class="ml-heading-actions">
-          <button type="button" class="ml-language" id="ml-language" aria-label="Switch to English" lang="en">EN</button>
-          <button type="button" class="ml-icon-button" id="ml-close" aria-label="關閉側欄"><i data-lucide="x" aria-hidden="true"></i></button>
+          <button type="button" class="ml-icon-button" id="ml-close" aria-label="Close sidebar"><i data-lucide="x" aria-hidden="true"></i></button>
         </div>
       </header>
       <div class="ml-agent-view" id="ml-agent-view" role="tabpanel" aria-labelledby="ml-agent-tab">
         <div class="ml-toolbar">
           <div class="ml-chat-toolbar-title">
             <button type="button" class="ml-icon-button" id="ml-new" aria-label="New conversation"><i data-lucide="plus" aria-hidden="true"></i></button>
-            <strong id="ml-chat-title" data-live-language></strong>
+            <strong id="ml-chat-title"></strong>
           </div>
           <div class="ml-chat-toolbar-actions">
             <button type="button" id="ml-chat-list-toggle" aria-expanded="false" aria-controls="ml-chat-list">
-              <i data-lucide="history" aria-hidden="true"></i><span data-en-text="Saved chats">對話紀錄</span>
+              <i data-lucide="history" aria-hidden="true"></i><span>Saved chats</span>
             </button>
             <button type="button" id="ml-chat-activity-toggle" aria-expanded="false" aria-controls="ml-chat-activity">
-              <i data-lucide="activity" aria-hidden="true"></i><span data-en-text="Activity">執行活動</span>
+              <i data-lucide="activity" aria-hidden="true"></i><span>Activity</span>
             </button>
+            <button type="button" class="ml-icon-button" id="ml-context-chat-hide" aria-label="Hide chat" title="Hide chat" aria-controls="ml-context-chat" hidden><i data-lucide="chevron-down" aria-hidden="true"></i></button>
           </div>
         </div>
         <div class="ml-thread" id="ml-thread" aria-label="Conversation">
           <section class="ml-chat-drawer" id="ml-chat-list" aria-labelledby="ml-chat-list-toggle" hidden>
-            <h3 data-en-text="Saved conversations">已存對話</h3>
-            <p id="ml-empty-chats" class="ml-saved-reply" data-en-text="No saved conversations yet.">目前沒有已存對話。</p>
-            <div class="ml-nav-list" id="ml-chat-records" data-live-language></div>
+            <h3>Saved conversations</h3>
+            <p id="ml-empty-chats" class="ml-saved-reply">No saved conversations yet.</p>
+            <div class="ml-nav-list" id="ml-chat-records"></div>
           </section>
           <section class="ml-chat-drawer" id="ml-chat-activity" aria-labelledby="ml-chat-activity-toggle" hidden>
             <div class="ml-chat-drawer-title">
-              <h3 data-en-text="Execution activity">執行活動</h3>
+              <h3>Execution activity</h3>
             </div>
-            <div id="ml-chat-events" data-live-language></div>
+            <div id="ml-chat-events"></div>
           </section>
-          <div id="ml-chat-transcripts" aria-live="polite" data-live-language></div>
+          <div id="ml-chat-transcripts" aria-live="polite"></div>
         </div>
-        <div class="ml-run-footer" aria-live="polite">
-          <div class="ml-chat-state">
-            <i data-lucide="circle-check" aria-hidden="true"></i>
-            <span id="ml-chat-status" data-live-language></span>
-          </div>
-        </div>
+        <span id="ml-chat-status" aria-live="polite"></span>
         <form class="ml-composer" id="ml-composer" aria-label="Write a message">
           <textarea id="ml-input" rows="1" maxlength="8000" aria-label="Type your message" placeholder="Type your message..."></textarea>
           <div class="ml-composer-toolbar">
             <div class="ml-chips">
-              <button type="button" id="ml-open-model-settings" class="ml-chip" aria-label="Model settings" data-zh-aria-label="模型設定"><i data-lucide="bot" aria-hidden="true"></i><span id="ml-model-chip" data-live-language></span><i class="ml-chip-chevron" data-lucide="settings" aria-hidden="true"></i></button>
+              <button type="button" id="ml-open-model-settings" class="ml-chip" aria-label="Model settings"><i data-lucide="bot" aria-hidden="true"></i><span id="ml-model-chip"></span><i class="ml-chip-chevron" data-lucide="settings" aria-hidden="true"></i></button>
             </div>
             <div class="ml-composer-actions">
               <button id="ml-send" class="ml-icon-button ml-send" type="submit" aria-label="Send message"><i data-lucide="send" aria-hidden="true"></i></button>
+              <button id="ml-stop" class="ml-icon-button ml-send" type="button" aria-label="Stop response" title="Stop response" hidden><i data-lucide="square" aria-hidden="true"></i></button>
             </div>
           </div>
         </form>
+        <dialog id="ml-delete-chat-dialog" class="ml-delete-confirmation" aria-labelledby="ml-delete-chat-title" aria-describedby="ml-delete-chat-description">
+          <form id="ml-delete-chat-form">
+            <h2 id="ml-delete-chat-title">Delete this chat?</h2>
+            <p class="ml-delete-confirmation-name" id="ml-delete-chat-name"></p>
+            <p id="ml-delete-chat-description">This permanently deletes the conversation and its chat activity.</p>
+            <p id="ml-delete-chat-error" class="ml-delete-confirmation-error" role="alert" hidden></p>
+            <div class="ml-delete-confirmation-actions">
+              <button type="button" id="ml-delete-chat-cancel" class="ml-input-button" autofocus>Cancel</button>
+              <button type="submit" id="ml-delete-chat-confirm" class="ml-input-button ml-delete-confirmation-submit">Delete chat</button>
+            </div>
+          </form>
+        </dialog>
       </div>
       <div class="ml-stage-view" id="ml-stage-view" role="tabpanel" aria-labelledby="ml-stage-tab" hidden>
         <div class="ml-stage-heading" id="ml-stage-header">
-          <h2 id="ml-stage-dataset-title" data-live-language>第 1 號染色體範例</h2>
-          <span data-live-language>手動執行</span>
+          <h2 id="ml-stage-dataset-title">Chromosome 1 example</h2>
+          <span>Manual execution</span>
         </div>
         <ol class="ml-timeline" id="ml-timeline"></ol>
-        <p class="ml-stage-empty" id="ml-empty-stage" data-en-text="No stages have been run for this dataset." hidden>這組資料尚未執行任何階段。</p>
+        <p class="ml-stage-empty" id="ml-empty-stage" hidden>No stages have been run for this dataset.</p>
       </div>
       <div class="ml-nav-pane" data-nav-left="data" hidden>
         <div class="ml-dataset-control">
-          <label for="ml-dataset-select" data-en-text="Switch datasets">切換資料組</label>
+          <label for="ml-dataset-select">Switch datasets</label>
           <div class="ml-dataset-control-row">
             <select id="ml-dataset-select"></select>
-            <button class="ml-input-button" type="button" id="ml-dataset-add" aria-controls="ml-dataset-form" aria-expanded="false">
-              <i data-lucide="plus" aria-hidden="true"></i><span data-en-text="Add dataset">新增資料組</span>
+            <button class="ml-input-button" type="button" id="ml-dataset-add" aria-controls="ml-dataset-editor" aria-expanded="false">
+              <i data-lucide="plus" aria-hidden="true"></i><span>Add dataset</span>
+            </button>
+            <button class="ml-input-button" type="button" id="ml-dataset-delete" aria-label="Delete selected dataset" title="Delete selected dataset" aria-haspopup="dialog" disabled>
+              <i data-lucide="trash-2" aria-hidden="true"></i>
             </button>
           </div>
         </div>
-        <p id="ml-dataset-catalog-error" class="ml-dataset-empty-note" role="alert" data-live-language hidden></p>
-        <form class="ml-dataset-form" id="ml-dataset-form" hidden>
-          <label for="ml-dataset-name" data-en-text="Dataset name">資料組名稱</label>
-          <input type="text" id="ml-dataset-name" maxlength="60" required placeholder="例如：另一組研究資料" data-en-placeholder="For example, another research dataset">
-          <p id="ml-dataset-error" role="alert" data-live-language hidden></p>
-          <div class="ml-input-actions">
-            <button class="ml-input-button ml-input-primary" type="button" id="ml-dataset-create" data-en-text="Create dataset">建立資料組</button>
-            <button class="ml-input-button" type="button" id="ml-dataset-cancel" data-en-text="Cancel">取消</button>
-          </div>
-        </form>
-        <div class="ml-nav-list" aria-label="輸入資料">
+        <p id="ml-dataset-catalog-error" class="ml-dataset-empty-note" role="alert" hidden></p>
+        <div class="ml-nav-list" aria-label="Inputs">
           <button class="ml-nav-list-item" type="button" data-input-target="genotype" aria-controls="ml-input-genotype" aria-pressed="true">
-            <i data-lucide="dna" aria-hidden="true"></i><span><strong>基因型資料</strong><small>example.ped · example.map</small></span>
+            <i data-lucide="dna" aria-hidden="true"></i><span><strong>Genotype data</strong><small>example.ped · example.map</small></span>
           </button>
           <button class="ml-nav-list-item" type="button" data-input-target="expression" aria-controls="ml-input-expression" aria-pressed="false">
-            <i data-lucide="table-2" aria-hidden="true"></i><span><strong>基因表現量資料</strong><small>example_gexp</small></span>
+            <i data-lucide="table-2" aria-hidden="true"></i><span><strong>Gene expression data</strong><small>example_gexp</small></span>
           </button>
           <button class="ml-nav-list-item" type="button" data-input-target="clinical" aria-controls="ml-input-clinical" aria-pressed="false">
-            <i data-lucide="clipboard-list" aria-hidden="true"></i><span><strong>臨床資料</strong><small>official-demo-chr1-restart-clinical.tsv</small></span>
+            <i data-lucide="clipboard-list" aria-hidden="true"></i><span><strong>Clinical data</strong><small>official-demo-chr1-restart-clinical.tsv</small></span>
+          </button>
+          <button class="ml-nav-list-item" type="button" data-reference-navigation aria-controls="ml-input-references" aria-pressed="false">
+            <i data-lucide="folder" aria-hidden="true"></i><span><strong>Reference files</strong><small data-reference-caption></small></span>
           </button>
         </div>
-        <button type="button" class="ml-nav-action" data-input-validate data-live-language disabled>檢查輸入資料</button>
       </div>
-      <div class="ml-nav-pane" data-nav-left="history" hidden>
-        <div class="ml-nav-pane-title"><h3 id="ml-history-dataset-name" data-live-language>第 1 號染色體範例</h3><span id="ml-history-scope-note" data-live-language>目前資料組</span></div>
-        <label class="ml-history-scope"><span data-en-text="Show runs">顯示執行</span>
-          <select id="ml-history-scope"><option value="current" data-en-text="Current dataset">目前資料組</option><option value="unclassified" data-en-text="Unclassified">未分類</option><option value="all" data-en-text="All runs">全部執行</option></select>
+      <div class="ml-nav-pane ml-history-sidebar" data-nav-left="history" hidden>
+        <label class="ml-history-scope"><span>Show runs</span>
+          <select id="ml-history-scope"><option value="current">Current dataset</option><option value="unclassified">Unclassified</option><option value="all">All runs</option></select>
         </label>
-        <div class="ml-nav-list" id="ml-run-list" aria-label="已保存的執行"></div>
-        <p class="ml-dataset-empty-note" id="ml-empty-run-list" data-live-language role="status" hidden></p>
+        <div class="ml-nav-pane-title">
+          <h3 id="ml-history-dataset-name">Current dataset</h3>
+          <span id="ml-history-scope-note"></span>
+        </div>
+        <div class="ml-nav-list" id="ml-run-list" aria-label="Saved runs"></div>
+        <p class="ml-dataset-empty-note" id="ml-empty-run-list" role="status" hidden></p>
       </div>
       <div class="ml-nav-pane" data-nav-left="settings" hidden>
-        <div class="ml-nav-pane-title"><h3>工作區設定</h3></div>
+        <div class="ml-nav-pane-title"><h3>Workspace settings</h3></div>
         <section class="ml-settings-block" aria-labelledby="ml-remote-title">
-          <h4 id="ml-remote-title" data-en-text="Remote compute">遠端運算</h4>
-          <div id="ml-remote-controls" data-live-language></div>
+          <h4 id="ml-remote-title">Remote compute</h4>
+          <div id="ml-remote-controls"></div>
         </section>
         <section class="ml-settings-block" aria-labelledby="ml-model-title">
-          <div class="ml-settings-model-row">
-            <label id="ml-model-title" for="ml-model-select" data-en-text="Chat model">聊天模型</label>
-            <select id="ml-model-select" disabled data-live-language></select>
-          </div>
-          <div id="ml-model-settings" data-live-language></div>
+          <h4 id="ml-model-title">Chat model</h4>
+          <div id="ml-model-settings"></div>
         </section>
-        <div id="ml-environment-settings" data-live-language></div>
+        <div id="ml-environment-settings"></div>
       </div>
     </section>
-    <section class="ml-nav-workspace" data-nav-right="data" aria-label="輸入資料明細" hidden>
-      <article class="ml-nav-detail" id="ml-input-genotype">
-        <header class="ml-nav-detail-title"><i data-lucide="dna" aria-hidden="true"></i><h2>基因型資料</h2></header>
-      </article>
-      <article class="ml-nav-detail" id="ml-input-expression" hidden>
-        <header class="ml-nav-detail-title"><i data-lucide="table-2" aria-hidden="true"></i><h2>基因表現量資料</h2></header>
-      </article>
-      <article class="ml-nav-detail" id="ml-input-clinical" hidden>
-        <header class="ml-nav-detail-title"><i data-lucide="clipboard-list" aria-hidden="true"></i><h2>臨床資料</h2></header>
-      </article>
-      <section class="ml-nav-detail ml-input-validation" data-input-validation data-live-language aria-labelledby="ml-input-validation-title" aria-live="polite"></section>
+    <section class="ml-nav-workspace" data-nav-right="data" aria-label="Input details" hidden>
+      <section class="ml-dataset-editor" id="ml-dataset-editor" aria-labelledby="ml-dataset-title" hidden>
+        <div class="ml-dataset-editor-content">
+          <header class="ml-dataset-intro">
+            <span class="ml-dataset-intro-icon" aria-hidden="true"><i data-lucide="database"></i></span>
+            <div>
+              <h2 id="ml-dataset-title">New dataset</h2>
+              <p>Give this study its own input files and run history.</p>
+            </div>
+          </header>
+          <div class="ml-dataset-editor-grid">
+            <form class="ml-dataset-form" id="ml-dataset-form" aria-labelledby="ml-dataset-form-title" method="post" action="/signet/datasets" novalidate>
+              <div class="ml-dataset-form-body">
+                <h3 id="ml-dataset-form-title">Dataset details</h3>
+                <label for="ml-dataset-name">
+                  <span>Dataset name</span>
+                  <small aria-hidden="true">Required</small>
+                </label>
+                <input type="text" name="name" id="ml-dataset-name" maxlength="60" required aria-describedby="ml-dataset-name-help ml-dataset-error" placeholder="e.g. Lung cancer study, chromosome 1">
+                <p id="ml-dataset-name-help">This name appears in the dataset picker and run history.</p>
+                <p id="ml-dataset-error" role="alert" hidden></p>
+              </div>
+              <footer class="ml-dataset-form-footer">
+                <p role="status" class="ml-dataset-saving"><span hidden>Creating dataset…</span></p>
+                <div class="ml-input-actions">
+                  <button class="ml-input-button" type="button" id="ml-dataset-cancel">Cancel</button>
+                  <button class="ml-input-button ml-input-primary" type="submit" id="ml-dataset-create">Create dataset</button>
+                </div>
+              </footer>
+            </form>
+            <section class="ml-dataset-next" aria-labelledby="ml-dataset-next-title">
+              <h3 id="ml-dataset-next-title">Files to prepare</h3>
+              <p>After creating the dataset, select these inputs from your remote workspace and validate them.</p>
+              <ul class="ml-dataset-file-types">
+                <li>
+                  <span class="ml-dataset-file-icon" aria-hidden="true"><i data-lucide="dna"></i></span>
+                  <div><strong>Genotype data</strong><small>A matching PED and MAP file pair</small></div>
+                </li>
+                <li>
+                  <span class="ml-dataset-file-icon" aria-hidden="true"><i data-lucide="table-2"></i></span>
+                  <div><strong>Gene expression data</strong><small>An expression matrix with sample columns</small></div>
+                </li>
+                <li>
+                  <span class="ml-dataset-file-icon" aria-hidden="true"><i data-lucide="clipboard-list"></i></span>
+                  <div><strong>Clinical data</strong><small>A table with sample IDs, race and gender</small></div>
+                </li>
+              </ul>
+            </section>
+          </div>
+        </div>
+      </section>
+      <div id="ml-dataset-files" class="ml-dataset-editor">
+        <div class="ml-dataset-editor-content">
+          <article id="ml-input-genotype">
+            <header class="ml-dataset-intro">
+              <span class="ml-dataset-intro-icon" aria-hidden="true"><i data-lucide="dna"></i></span>
+              <div><h2 tabindex="-1">Genotype data</h2><p data-file-dataset></p></div>
+            </header>
+            <div class="ml-dataset-editor-grid">
+              <section class="ml-dataset-next">
+                <h3>What to select</h3>
+                <p>Select one PED file and its matching MAP file.</p>
+                <dl class="ml-file-requirements">
+                  <div><dt>PED</dt><dd>Sample IDs and genotypes</dd></div>
+                  <div><dt>MAP</dt><dd>Variant IDs and genomic positions</dd></div>
+                </dl>
+              </section>
+            </div>
+          </article>
+          <article id="ml-input-expression" hidden>
+            <header class="ml-dataset-intro">
+              <span class="ml-dataset-intro-icon" aria-hidden="true"><i data-lucide="table-2"></i></span>
+              <div><h2 tabindex="-1">Gene expression data</h2><p data-file-dataset></p></div>
+            </header>
+            <div class="ml-dataset-editor-grid">
+              <section class="ml-dataset-next">
+                <h3>What to select</h3>
+                <p>Select one gene expression matrix.</p>
+                <dl class="ml-file-requirements">
+                  <div><dt>First column</dt><dd>Gene identifiers</dd></div>
+                  <div><dt>Remaining columns</dt><dd>One column per sample</dd></div>
+                </dl>
+              </section>
+            </div>
+          </article>
+          <article id="ml-input-clinical" hidden>
+            <header class="ml-dataset-intro">
+              <span class="ml-dataset-intro-icon" aria-hidden="true"><i data-lucide="clipboard-list"></i></span>
+              <div><h2 tabindex="-1">Clinical data</h2><p data-file-dataset></p></div>
+            </header>
+            <div class="ml-dataset-editor-grid">
+              <section class="ml-dataset-next">
+                <h3>What to select</h3>
+                <p>Select a tab-separated table with these column names.</p>
+                <dl class="ml-file-requirements">
+                  <div><dt><code>submitter_id</code></dt><dd>Participant ID</dd></div>
+                  <div><dt><code>race</code></dt><dd>Race</dd></div>
+                  <div><dt><code>gender</code></dt><dd>Gender</dd></div>
+                </dl>
+              </section>
+            </div>
+          </article>
+          <article id="ml-input-references" hidden>
+            <header class="ml-dataset-intro">
+              <span class="ml-dataset-intro-icon" aria-hidden="true"><i data-lucide="folder"></i></span>
+              <div>
+                <h2 tabindex="-1">Reference files</h2>
+                <p data-reference-dataset></p>
+              </div>
+            </header>
+            <section class="ml-current-input ml-reference-files" aria-labelledby="ml-reference-files-title">
+              <header class="ml-current-input-body">
+                <h3 id="ml-reference-files-title">References for this dataset</h3>
+                <p>Choose individual files or use the environment defaults. Stage 1 checks the chromosome and prepares the imputation files.</p>
+                <div class="ml-reference-feedback">
+                  <p data-reference-feedback role="status" hidden></p>
+                  <button type="button" class="ml-input-button" data-reference-retry hidden>Retry loading defaults</button>
+                </div>
+              </header>
+              <ul class="ml-reference-list">
+                <li data-reference-role="ref">
+                  <div class="ml-reference-info">
+                    <h4>Imputation reference panel</h4>
+                    <p>Stage 1 · Reference variants for the selected chromosome</p>
+                    <code data-reference-path hidden></code>
+                  </div>
+                  <div class="ml-reference-actions">
+                    <span class="ml-current-file-count" data-reference-origin></span>
+                    <div class="ml-input-actions">
+                      <button type="button" class="ml-input-button ml-input-primary" data-reference-choose aria-label="Choose imputation reference panel">Choose file</button>
+                      <button type="button" class="ml-input-button" data-reference-reset aria-label="Use environment default for imputation reference" hidden>Use default</button>
+                    </div>
+                    <p class="ml-input-status" data-reference-status role="status" hidden></p>
+                  </div>
+                </li>
+                <li data-reference-role="gmap">
+                  <div class="ml-reference-info">
+                    <h4>Genetic map</h4>
+                    <p>Stage 1 · Genetic distances for the same chromosome and genome build</p>
+                    <code data-reference-path hidden></code>
+                  </div>
+                  <div class="ml-reference-actions">
+                    <span class="ml-current-file-count" data-reference-origin></span>
+                    <div class="ml-input-actions">
+                      <button type="button" class="ml-input-button ml-input-primary" data-reference-choose aria-label="Choose genetic map">Choose file</button>
+                      <button type="button" class="ml-input-button" data-reference-reset aria-label="Use environment default for genetic map" hidden>Use default</button>
+                    </div>
+                    <p class="ml-input-status" data-reference-status role="status" hidden></p>
+                  </div>
+                </li>
+                <li data-reference-role="gtf">
+                  <div class="ml-reference-info">
+                    <h4>Gene annotation</h4>
+                    <p>Stage 2 · Gene coordinates for the expression matrix</p>
+                    <code data-reference-path hidden></code>
+                  </div>
+                  <div class="ml-reference-actions">
+                    <span class="ml-current-file-count" data-reference-origin></span>
+                    <div class="ml-input-actions">
+                      <button type="button" class="ml-input-button ml-input-primary" data-reference-choose aria-label="Choose gene annotation">Choose file</button>
+                      <button type="button" class="ml-input-button" data-reference-reset aria-label="Use environment default for gene annotation" hidden>Use default</button>
+                    </div>
+                    <p class="ml-input-status" data-reference-status role="status" hidden></p>
+                  </div>
+                </li>
+              </ul>
+            </section>
+          </article>
+          <section class="ml-input-validation" data-input-validation aria-labelledby="ml-input-validation-title"></section>
+        </div>
+      </div>
       <template id="ml-current-files-template">
         <section class="ml-current-input">
-          <div class="ml-input-subheading">
-            <h3 data-en-text="Selected files">目前採用的檔案</h3>
-            <span data-en-text="Dataset file settings">資料組檔案設定</span>
+          <div class="ml-current-input-body">
+            <div class="ml-input-subheading">
+              <h3>Selected files</h3>
+              <span class="ml-current-file-count" data-current-file-count hidden></span>
+            </div>
+            <p class="ml-input-empty" data-current-file-empty>No files selected</p>
+            <ul class="ml-input-paths" data-current-files hidden></ul>
           </div>
-          <div class="ml-input-paths" data-current-files></div>
-          <div class="ml-input-actions">
-            <button type="button" class="ml-input-button ml-input-primary" data-input-replace data-en-text="Choose remote files">選擇遠端檔案</button>
-            <button type="button" class="ml-input-button" data-input-reset disabled data-en-text="Use default">改用預設</button>
-          </div>
-          <p class="ml-input-status" role="status">
-            <span data-file-status="saving" data-en-text="Saving file selection…" hidden>正在儲存檔案選擇…</span>
-            <span data-file-status="applied" data-en-text="Remote file selection saved to this dataset." hidden>遠端檔案選擇已儲存至這組資料。</span>
-            <span data-file-status="default" data-en-text="Default file selection saved." hidden>已儲存預設檔案選擇。</span>
-            <span data-file-status="error" data-live-language hidden></span>
-          </p>
+          <footer class="ml-current-input-footer">
+            <div class="ml-input-actions">
+              <button type="button" class="ml-input-button ml-input-primary" data-input-replace>
+                <i data-lucide="folder" aria-hidden="true"></i><span>Choose remote files</span>
+              </button>
+              <button type="button" class="ml-input-button" data-input-reset disabled></button>
+            </div>
+            <p class="ml-input-status" role="status">
+              <span data-file-status="saving" hidden>Saving file selection…</span>
+              <span data-file-status="applied" hidden>Remote file selection saved to this dataset.</span>
+              <span data-file-status="default" hidden></span>
+              <span data-file-status="error" hidden></span>
+            </p>
+          </footer>
         </section>
       </template>
+      <template id="ml-selected-file-path-template">
+        <div class="ml-file-location">
+          <code class="ml-file-directory" dir="ltr"><span class="ml-file-directory-prefix"></span><span class="ml-file-directory-tail"><bdi dir="ltr"></bdi></span></code>
+          <button type="button" class="ml-file-path-trigger" data-show-file-path>Full path</button>
+          <div class="ml-file-path-panel" data-file-path-panel popover role="region">
+            <header>
+              <strong>Full path</strong>
+              <button type="button" class="ml-input-button" data-copy-file-path>Copy path</button>
+            </header>
+            <code data-full-file-path dir="ltr"></code>
+            <p data-file-path-status role="status"></p>
+          </div>
+        </div>
+      </template>
     </section>
-    <section class="ml-nav-workspace" id="ml-run-details" aria-label="執行明細" hidden></section>
-    <section class="ml-nav-workspace" id="ml-empty-history" aria-labelledby="ml-empty-history-title" hidden>
-      <div class="ml-nav-detail">
-        <header class="ml-nav-detail-title"><i data-lucide="history" aria-hidden="true"></i><h2 id="ml-empty-history-title" data-live-language>尚無執行紀錄</h2></header>
-        <p class="ml-dataset-empty-note" id="ml-empty-history-note" data-live-language>這裡會顯示目前資料組的執行紀錄。</p>
-        <button type="button" id="ml-history-retry" class="ml-nav-action" data-en-text="Refresh run history" hidden>重新整理執行紀錄</button>
+    <section class="ml-nav-workspace ml-history-workspace" id="ml-run-details" aria-label="Run details" hidden></section>
+    <section class="ml-nav-workspace ml-history-workspace" id="ml-empty-history" aria-labelledby="ml-empty-history-title" hidden>
+      <div class="ml-history-run">
+        <header class="ml-dataset-intro ml-history-intro">
+          <span class="ml-dataset-intro-icon" aria-hidden="true"><i data-lucide="history"></i></span>
+          <div>
+            <h2 id="ml-empty-history-title">No runs yet</h2>
+            <p id="ml-empty-history-note">Runs for the selected dataset will appear here.</p>
+            <button type="button" id="ml-history-retry" class="ml-nav-action" hidden>Refresh run history</button>
+          </div>
+        </header>
+      </div>
+    </section>
+    <section class="ml-nav-workspace ml-start" id="ml-start" aria-labelledby="ml-start-title">
+      <div class="ml-start-content">
+        <header class="ml-start-heading">
+          <span class="ml-start-icon" aria-hidden="true"><i data-lucide="flask-conical"></i></span>
+          <div>
+            <h2 id="ml-start-title">Start an analysis</h2>
+            <p>Connect to your remote environment, choose your inputs, and review Stage 1.</p>
+          </div>
+        </header>
+        <section class="ml-start-connection" id="ml-start-connection" aria-labelledby="ml-start-connection-title">
+          <span class="ml-start-connection-icon" aria-hidden="true"><i data-lucide="server"></i></span>
+          <div class="ml-start-connection-copy">
+            <div class="ml-start-connection-heading">
+              <h3 id="ml-start-connection-title">Remote connection</h3>
+              <span class="ml-start-connection-status" id="ml-start-connection-status" role="status">Not connected</span>
+            </div>
+            <p>Check environment readiness before submitting.</p>
+          </div>
+          <button type="button" class="ml-start-remote-action" data-start-view="settings">
+            Remote settings <i data-lucide="arrow-right" aria-hidden="true"></i>
+          </button>
+        </section>
+        <div class="ml-start-actions">
+          <button type="button" class="ml-start-step" data-start-view="data">
+            <i data-lucide="folder" aria-hidden="true"></i>
+            <span><strong>Prepare input files</strong><small>Choose and validate your files.</small></span>
+          </button>
+          <button type="button" class="ml-start-step" id="ml-start-stage">
+            <i data-lucide="sliders-horizontal" aria-hidden="true"></i>
+            <span><strong>Open Stage 1</strong><small>Review genotype preparation.</small></span>
+          </button>
+        </div>
+        <button type="button" class="ml-start-history" data-start-view="history">
+          <i data-lucide="history" aria-hidden="true"></i> Run history
+        </button>
       </div>
     </section>
     <section class="ml-nav-workspace" id="ml-empty-analysis" aria-labelledby="ml-empty-analysis-title" hidden>
       <div class="ml-nav-detail">
-        <header class="ml-nav-detail-title"><i data-lucide="chart-no-axes-combined" aria-hidden="true"></i><h2 id="ml-empty-analysis-title" data-en-text="No analysis results yet">尚無分析結果</h2></header>
-        <p class="ml-dataset-empty-note" data-en-text="Open Data to review the input files for this dataset.">可到「資料」檢查這組資料的輸入檔案。</p>
+        <header class="ml-nav-detail-title"><i data-lucide="chart-no-axes-combined" aria-hidden="true"></i><h2 id="ml-empty-analysis-title">No analysis results yet</h2></header>
+        <p class="ml-dataset-empty-note">Open Data to review the input files for this dataset.</p>
       </div>
     </section>
     <section class="ml-workspace ml-stage-snapshot" id="lens-stage6-run" aria-labelledby="lens-stage6-run-title" hidden></section>
-    <section class="ml-workspace" id="lens-stage6" data-selected-gene="" aria-labelledby="lens-stage6-title">
+    <section class="ml-workspace" id="lens-stage6" data-selected-gene="" aria-labelledby="lens-stage6-title" hidden>
 
   <div class="ml-result-main">
-    <div class="s6-zoom" role="group" aria-label="網路圖縮放">
-      <button type="button" id="s6-zoom-out" data-zoom="out" aria-label="縮小網路圖"><i data-lucide="zoom-out" aria-hidden="true"></i></button>
-      <input id="s6-zoom" type="range" min="75" max="140" step="5" value="100" aria-label="網路圖縮放">
-      <button type="button" id="s6-zoom-in" data-zoom="in" aria-label="放大網路圖"><i data-lucide="zoom-in" aria-hidden="true"></i></button>
+    <div class="s6-zoom" role="group" aria-label="Network zoom">
+      <button type="button" id="s6-zoom-out" data-zoom="out" aria-label="Zoom out on network"><i data-lucide="zoom-out" aria-hidden="true"></i></button>
+      <input id="s6-zoom" type="range" min="75" max="140" step="5" value="100" aria-label="Network zoom">
+      <button type="button" id="s6-zoom-in" data-zoom="in" aria-label="Zoom in on network"><i data-lucide="zoom-in" aria-hidden="true"></i></button>
     </div>
   <div id="lens-stage6-graph" class="s6-graph-frame" tabindex="-1">
     <svg class="s6-graph" viewBox="0 0 620 320" role="group" aria-labelledby="lens-stage6-graph-label">
-      <title id="lens-stage6-graph-label">可選取基因的調控網路</title>
+      <title id="lens-stage6-graph-label">Regulatory network with selectable genes</title>
       <defs>
         <marker id="lens-s6-arrow" viewBox="0 0 7 7" markerWidth="7" markerHeight="7" markerUnits="userSpaceOnUse" refX="6.7" refY="3.5" orient="auto">
           <path d="M0 0L7 3.5L0 7Z" fill="#9eafc4"></path>
@@ -226,79 +465,79 @@
     </svg>
   </div>
   <details id="lens-stage6-table" class="ml-result-dock" tabindex="-1" open>
-    <summary><i data-lucide="table-2" aria-hidden="true"></i>連線資料 <span class="s6-row-count" data-live-language></span><i class="ml-result-chevron" data-lucide="chevron-down" aria-hidden="true"></i></summary>
+    <summary><i data-lucide="table-2" aria-hidden="true"></i>Edge data <span class="s6-row-count"></span><i class="ml-result-chevron" data-lucide="chevron-down" aria-hidden="true"></i></summary>
     <div class="ml-result-table">
-      <table aria-label="基因調控連線">
+      <table aria-label="Gene regulatory edges">
         <thead>
-          <tr><th scope="col">來源基因</th><th scope="col">目標基因</th><th scope="col">重抽樣頻率</th><th scope="col">係數</th></tr>
+          <tr><th scope="col">Source gene</th><th scope="col">Target gene</th><th scope="col">Bootstrap frequency</th><th scope="col">Coefficient</th></tr>
         </thead>
         <tbody></tbody>
       </table>
     </div>
   </details>
   </div>
-  <aside class="ml-result-inspector" aria-label="網路圖資訊">
+  <aside class="ml-result-inspector" aria-label="Network details">
     <header class="ml-result-inspector-heading">
       <i data-lucide="network" aria-hidden="true"></i>
-      <h2 id="lens-stage6-title">基因調控網路</h2>
+      <h2 id="lens-stage6-title">Gene regulatory network</h2>
     </header>
     <dl class="ml-result-context">
-      <dt>階段</dt><dd>第 6 階段</dd>
-      <dt data-s6-run-label data-live-language>執行</dt>
-      <dd data-s6-run-value><select id="ml-stage6-run" aria-label="已完成的執行" data-en-aria-label="Completed run" disabled>
-        <option value="">選擇執行</option>
+      <dt>Stage</dt><dd>Stage 6</dd>
+      <dt data-s6-run-label>Run</dt>
+      <dd data-s6-run-value><select id="ml-stage6-run" aria-label="Completed run" disabled>
+        <option value="">Select a run</option>
       </select><span id="ml-stage6-history-run" hidden></span></dd>
-      <dt>圖中範圍</dt><dd class="s6-graph-meta"></dd>
+      <dt>Shown</dt><dd class="s6-graph-meta"></dd>
     </dl>
   <div class="s6-selection">
-    <div class="s6-result-status" role="status" data-live-language></div>
-    <button class="s6-reset" id="ml-stage6-retry" type="button" data-en-text="Refresh results" hidden>重新整理結果</button>
-    <div class="s6-summary" aria-live="polite" data-live-language>點選基因查看相連的調控關係。</div>
-    <button class="s6-reset" data-s6-clear type="button" hidden>清除選取</button>
+    <div class="s6-result-status" role="status"></div>
+    <button class="s6-reset" id="ml-stage6-retry" type="button" hidden>Refresh results</button>
+    <div class="s6-summary" aria-live="polite">Select a gene to see its connections.</div>
+    <button class="s6-reset" data-s6-clear type="button" hidden>Clear selection</button>
   </div>
-    <button type="button" id="ml-stage6-prepare" class="ml-nav-action" data-en-text="Run Stage 6" hidden>執行第 6 階段</button>
-    <button type="button" id="ml-stage6-back" class="ml-nav-action" data-run-back data-en-text="Back to run timeline" hidden>回到執行時間線</button>
+    <button type="button" id="ml-stage6-prepare" class="ml-nav-action" hidden>Run Stage 6</button>
+    <button type="button" id="ml-stage6-back" class="ml-nav-action" data-run-back hidden>Back to run timeline</button>
   </aside>
 
 </section>
     <section class="ml-workspace" id="lens-stage3" aria-labelledby="lens-stage3-title" hidden>
       <div class="ml-result-main">
         <figure class="s3-figure">
-          <h3>前兩個主成分的樣本分布</h3>
-          <svg class="s3-chart" viewBox="0 0 660 410" role="img" aria-label="471 位個體的散點圖，橫軸為第 1 主成分，縱軸為第 2 主成分">
+          <h3>Sample distribution on the first two principal components</h3>
+          <svg class="s3-chart" viewBox="0 0 660 410" role="img" aria-label="Scatter plot of 471 individuals. PC1 is on the horizontal axis and PC2 on the vertical axis.">
             <g class="s3-axes" aria-hidden="true"></g>
             <g class="s3-points" aria-hidden="true"></g>
-            <text x="352" y="402" text-anchor="middle" class="s3-axis-title">第 1 主成分</text>
-            <text x="17" y="183" text-anchor="middle" transform="rotate(-90 17 183)" class="s3-axis-title">第 2 主成分</text>
+            <text x="352" y="402" text-anchor="middle" class="s3-axis-title">PC1</text>
+            <text x="17" y="183" text-anchor="middle" transform="rotate(-90 17 183)" class="s3-axis-title">PC2</text>
           </svg>
-          <figcaption>每個點代表 1 位個體。圖中分數由同次分析保留的基因型資料重算並標準化。</figcaption>
+          <figcaption>Each point is one individual. Scores were recomputed from genotypes retained in this run and standardized.</figcaption>
         </figure>
         <details class="ml-result-dock" open>
-          <summary><i data-lucide="table-2" aria-hidden="true"></i>樣本配對 <i class="ml-result-chevron" data-lucide="chevron-down" aria-hidden="true"></i></summary>
+          <summary><i data-lucide="table-2" aria-hidden="true"></i>Sample matching <i class="ml-result-chevron" data-lucide="chevron-down" aria-hidden="true"></i></summary>
           <div class="ml-result-table">
-            <table aria-label="樣本配對與校正結果">
-              <thead><tr><th scope="col">處理步驟</th><th scope="col">數量</th></tr></thead>
+            <table aria-label="Sample matching and adjustment results">
+              <thead><tr><th scope="col">Processing step</th><th scope="col">Count</th></tr></thead>
               <tbody>
-                <tr><td>基因型輸入</td><td>560 筆樣本</td></tr>
-                <tr><td>基因表現量輸入</td><td>554 筆樣本</td></tr>
-                <tr><td>初步配對</td><td>473 位個體</td></tr>
-                <tr><td>校正後保留</td><td>471 位個體</td></tr>
+                <tr><td>Genotype inputs</td><td>560 samples</td></tr>
+                <tr><td>Gene expression inputs</td><td>554 samples</td></tr>
+                <tr><td>Initially matched</td><td>473 individuals</td></tr>
+                <tr><td>Retained after adjustment</td><td>471 individuals</td></tr>
               </tbody>
             </table>
           </div>
         </details>
       </div>
-      <aside class="ml-result-inspector" aria-label="第 3 階段資訊">
+      <aside class="ml-result-inspector" aria-label="Stage 3 details">
         <header class="ml-result-inspector-heading">
           <i data-lucide="chart-scatter" aria-hidden="true"></i>
-          <h2 id="lens-stage3-title">樣本配對與校正</h2>
+          <h2 id="lens-stage3-title">Sample matching and adjustment</h2>
         </header>
         <dl class="ml-result-context">
-          <dt>階段</dt><dd>第 3 階段</dd>
-          <dt>資料</dt><dd>第 1 號染色體 · 模擬結果</dd>
-          <dt>主成分數</dt><dd>前 <strong>3</strong> 個</dd>
-          <dt>保留變異</dt><dd>1,110 個</dd>
-          <dt>分析基因</dt><dd>95 個</dd>
+          <dt>Stage</dt><dd>Stage 3</dd>
+          <dt>Data</dt><dd>Chromosome 1 · Simulated results</dd>
+          <dt>Principal components</dt><dd>Top <strong>3</strong> </dd>
+          <dt>Retained variants</dt><dd>1,110</dd>
+          <dt>Genes analyzed</dt><dd>95</dd>
         </dl>
       </aside>
 
@@ -313,76 +552,80 @@
           <figcaption></figcaption>
         </figure>
         <details class="ml-result-dock" open data-stage-results hidden>
-          <summary><i data-lucide="table-2" aria-hidden="true"></i><span data-stage-table-title data-live-language></span><i class="ml-result-chevron" data-lucide="chevron-down" aria-hidden="true"></i></summary>
+          <summary><i data-lucide="table-2" aria-hidden="true"></i><span data-stage-table-title></span><i class="ml-result-chevron" data-lucide="chevron-down" aria-hidden="true"></i></summary>
           <div class="ml-result-table">
-            <table data-stage-table data-live-language>
+            <table data-stage-table>
               <thead><tr></tr></thead>
               <tbody></tbody>
             </table>
           </div>
         </details>
       </div>
-      <aside class="ml-result-inspector" aria-label="階段資訊" data-en-aria-label="Stage details">
+      <aside class="ml-result-inspector" aria-label="Stage details">
         <header class="ml-result-inspector-heading">
           <i data-lucide="bar-chart-3" aria-hidden="true"></i>
-          <h2 id="lens-history-stage-title" data-live-language></h2>
+          <h2 id="lens-history-stage-title"></h2>
         </header>
-        <dl class="ml-result-context" data-stage-metrics data-live-language></dl>
-        <dl class="ml-result-context" data-stage-settings data-live-language></dl>
-        <p class="ml-dataset-empty-note" data-stage-status data-live-language role="status" hidden></p>
-        <button type="button" class="ml-nav-action" id="ml-archive-stage-retry" data-en-text="Retry loading result" hidden>重新讀取結果</button>
-        <button type="button" class="ml-nav-action" id="ml-archive-stage-back" data-run-back data-en-text="Back to run timeline">回到執行時間線</button>
+        <dl class="ml-result-context" data-stage-metrics></dl>
+        <dl class="ml-result-context" data-stage-settings></dl>
+        <p class="ml-dataset-empty-note" data-stage-status role="status" hidden></p>
+        <button type="button" class="ml-nav-action" id="ml-archive-stage-retry" hidden>Retry loading result</button>
+        <button type="button" class="ml-nav-action" id="ml-archive-stage-back" data-run-back>Back to run timeline</button>
       </aside>
     </section>
     <section class="ml-nav-workspace" id="lens-history-stage3" aria-labelledby="lens-history-stage3-title" data-run-state="idle" hidden>
       <div class="ml-result-main">
         <figure class="s3-figure">
-          <h3 data-en-text="Sample distribution on the first two principal components">前兩個主成分的樣本分布</h3>
-          <svg class="s3-chart" viewBox="0 0 660 410" role="img" data-live-language hidden>
+          <h3>Sample distribution on the first two principal components</h3>
+          <svg class="s3-chart" viewBox="0 0 660 410" role="img" hidden>
             <g class="s3-axes" aria-hidden="true"></g>
             <g class="s3-points" aria-hidden="true"></g>
             <text x="352" y="402" text-anchor="middle" class="s3-axis-title"></text>
             <text x="17" y="183" text-anchor="middle" transform="rotate(-90 17 183)" class="s3-axis-title"></text>
           </svg>
-          <figcaption data-live-language></figcaption>
+          <figcaption></figcaption>
         </figure>
         <details class="ml-result-dock" open>
-          <summary><i data-lucide="table-2" aria-hidden="true"></i><span data-en-text="Expression before and after adjustment">基因表現量校正前後</span><i class="ml-result-chevron" data-lucide="chevron-down" aria-hidden="true"></i></summary>
+          <summary><i data-lucide="table-2" aria-hidden="true"></i><span>Expression before and after adjustment</span><i class="ml-result-chevron" data-lucide="chevron-down" aria-hidden="true"></i></summary>
           <div class="ml-result-table">
-            <table data-s3-difference aria-label="基因表現量校正前後" data-en-aria-label="Expression before and after adjustment">
+            <table data-s3-difference aria-label="Expression before and after adjustment">
               <thead><tr>
-                <th scope="col" data-en-text="Adjustment">校正方式</th>
-                <th scope="col" data-en-text="Median standard deviation">標準差中位數</th>
-                <th scope="col" data-en-text="Change from before">與校正前的差異</th>
+                <th scope="col">Adjustment</th>
+                <th scope="col">Median standard deviation</th>
+                <th scope="col">Change from before</th>
               </tr></thead>
-              <tbody data-live-language></tbody>
+              <tbody></tbody>
             </table>
-            <p class="s3-metric-note" data-en-text="Standard deviations use the same retained individuals. The table shows the median across genes.">以同一批保留個體計算各基因的表現量標準差，再取中位數。</p>
+            <p class="s3-metric-note">Standard deviations use the same retained individuals. The table shows the median across genes.</p>
           </div>
         </details>
       </div>
-      <aside class="ml-result-inspector" aria-label="第 3 階段資訊" data-en-aria-label="Stage 3 details">
+      <aside class="ml-result-inspector" aria-label="Stage 3 details">
         <header class="ml-result-inspector-heading">
           <i data-lucide="chart-scatter" aria-hidden="true"></i>
-          <h2 id="lens-history-stage3-title" data-en-text="Sample matching and adjustment">樣本配對與校正</h2>
+          <h2 id="lens-history-stage3-title">Sample matching and adjustment</h2>
         </header>
         <dl class="ml-result-context" data-s3-matching>
-          <dt data-en-text="Stage">階段</dt><dd data-en-text="Stage 3">第 3 階段</dd>
-          <dt data-en-text="Archived run">封存執行</dt><dd data-s3-run data-live-language></dd>
-          <dt data-en-text="Principal components used">校正使用的主成分數</dt><dd data-s3-components data-live-language></dd>
-          <dt data-en-text="Genotype input">基因型輸入</dt><dd data-s3-count="genotype" data-live-language></dd>
-          <dt data-en-text="Expression input">基因表現量輸入</dt><dd data-s3-count="expression" data-live-language></dd>
-          <dt data-en-text="Initially matched">初步配對</dt><dd data-s3-count="matched" data-live-language></dd>
-          <dt data-en-text="Retained after adjustment">校正後保留</dt><dd data-s3-count="retained" data-live-language></dd>
-          <dt data-en-text="Excluded after matching">配對後排除</dt><dd data-s3-count="excluded" data-live-language></dd>
-          <dt data-en-text="Retained variants">保留變異</dt><dd data-s3-count="variants" data-live-language></dd>
-          <dt data-en-text="Genes analyzed">分析基因</dt><dd data-s3-count="genes" data-live-language></dd>
+          <dt>Stage</dt><dd>Stage 3</dd>
+          <dt>Archived run</dt><dd data-s3-run></dd>
+          <dt>Principal components used</dt><dd data-s3-components></dd>
+          <dt>Genotype input</dt><dd data-s3-count="genotype"></dd>
+          <dt>Expression input</dt><dd data-s3-count="expression"></dd>
+          <dt>Initially matched</dt><dd data-s3-count="matched"></dd>
+          <dt>Retained after adjustment</dt><dd data-s3-count="retained"></dd>
+          <dt>Excluded after matching</dt><dd data-s3-count="excluded"></dd>
+          <dt>Retained variants</dt><dd data-s3-count="variants"></dd>
+          <dt>Genes analyzed</dt><dd data-s3-count="genes"></dd>
         </dl>
-        <p data-s3-status role="status" data-live-language hidden></p>
-        <button type="button" class="ml-nav-action" id="ml-stage3-retry" data-en-text="Retry loading result" hidden>重新讀取結果</button>
-        <button type="button" class="ml-nav-action" id="ml-stage3-back" data-run-back data-en-text="Back to run timeline">回到執行時間線</button>
+        <p data-s3-status role="status" hidden></p>
+        <button type="button" class="ml-nav-action" id="ml-stage3-retry" hidden>Retry loading result</button>
+        <button type="button" class="ml-nav-action" id="ml-stage3-back" data-run-back>Back to run timeline</button>
       </aside>
     </section>
+    <section class="ml-context-chat" id="ml-context-chat" aria-label="Agent chat" hidden></section>
+    <button type="button" class="ml-context-chat-show" id="ml-context-chat-show" aria-controls="ml-context-chat" aria-expanded="false" hidden>
+      <i data-lucide="message-square" aria-hidden="true"></i>Chat
+    </button>
   </div>
 </div>
 </body>

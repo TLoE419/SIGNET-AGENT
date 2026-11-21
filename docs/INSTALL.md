@@ -1,6 +1,6 @@
 # Install from Scratch and Run the Chat Demo
 
-This guide starts with a newly downloaded copy of SIGNET and ends with the local chat page open. The basic demo needs Python and one model provider. It does not need study data, Node.js, R, Docker, a VM, or a scheduler.
+This guide starts with a newly downloaded copy of SIGNET and ends with the desktop chat open. The desktop demo needs Python, Node.js, and one model provider. Study data, R, Docker, a VM, and a scheduler are only needed for scientific work.
 
 The verified desktop platform is macOS with Python 3.11. The project requires Python 3.11 or later. CI checks run on Ubuntu 24.04, but that is not a full Linux desktop acceptance test. Native Windows operation has not been verified; use [Windows Subsystem for Linux (WSL)](https://learn.microsoft.com/windows/wsl/install) if you need a Unix-like command line on Windows, and treat that route as unverified.
 
@@ -48,25 +48,11 @@ The last command should report `No broken requirements found.` The project pins 
 
 ## 4. Set up a model provider
 
-Choose one provider. The default is Codex CLI, which uses your own sign-in:
-
-1. Install Codex CLI with the official macOS/Linux installer, or follow the [official installation instructions](https://learn.chatgpt.com/docs/codex/cli):
-
-   ```sh
-   curl -fsSL https://chatgpt.com/codex/install.sh | sh
-   ```
-
-2. Open a new terminal and run:
-
-   ```sh
-   codex --version
-   codex login
-   codex login status
-   ```
-
-3. Complete sign-in yourself when prompted. `codex login status` should report that you are logged in. This project was checked with Codex CLI `0.162.1`; other versions may use incompatible command options or response formats. The CLI uses your account's available usage allowance.
-
-Alternatively, provide your own [Groq API key](https://console.groq.com/keys) or [Gemini API key](https://aistudio.google.com/app/apikey). Create the key in the provider console, then copy `.env.example` only when `.env` does not already exist:
+The workspace opens without model credentials. For desktop chat, create a
+[Gemini API key](https://aistudio.google.com/app/apikey) and save it under
+**Settings → Chat model** after launch. To configure chat from the terminal,
+create a Gemini or [Groq API key](https://console.groq.com/keys) and copy
+`.env.example` only when `.env` does not already exist.
 
 ```sh
 cp -n .env.example .env
@@ -76,16 +62,17 @@ Add the key to the matching `GROQ_API_KEY` or `GEMINI_API_KEY` line in `.env`. K
 
 ## 5. Start and check the chat page
 
-From the project root, start the default Codex provider:
+From the project root, install the desktop dependencies and launch the app.
 
 ```sh
 npm ci --prefix electron
 npm start --prefix electron
 ```
 
-Electron opens the desktop client and starts its Python API. Send a short question to check model sign-in, then follow the [no-data demonstration](DEMO.md).
+Electron opens the desktop client and starts its Python API. With a model
+configured, send a short question, then follow the [no-data demonstration](DEMO.md).
 
-If you chose Groq or Gemini, start the selected provider instead:
+To use a provider configured in `.env`, start the desktop with that provider.
 
 ```sh
 npm start --prefix electron -- --provider groq
@@ -95,10 +82,13 @@ npm start --prefix electron -- --provider groq
 npm start --prefix electron -- --provider gemini
 ```
 
+For local testing with an installed and signed-in Codex CLI, launch with
+`npm start --prefix electron -- --provider codex`.
+
 Electron chooses an available local API port automatically. Closing the app
 waits for active work. For backend-only development, run
-`.venv/bin/python -m agent.app.chat_ui --port 8881`; this serves APIs, not a browser UI.
-Model requests still use the selected provider's network service.
+`.venv/bin/python -m agent.app.chat_ui --port 8881`. Add `--provider gemini` or
+`--provider groq` to enable chat using the configured key.
 
 ## Troubleshooting
 
@@ -107,27 +97,28 @@ Model requests still use the selected provider's network service.
 | `python3` is missing or older than 3.11 | Install a supported Python version, open a new terminal, and rerun `python3 --version`. |
 | `venv` creation fails on Ubuntu | Install `python3-venv` with `sudo apt install python3-venv`, then retry. |
 | `pip install` fails | Check network access, confirm the terminal is in the project root, and retry the install command. Do not use `sudo pip`. |
-| `codex` is not found | Complete the official CLI installation, open a new terminal, and run `codex --version`. |
-| Model sign-in fails | Run `codex login status` and complete sign-in again, or switch to a provider with a valid key in `.env`. |
-| The page opens but chat fails | Check the selected provider's sign-in or key and inspect the terminal where Electron was launched. |
+| Chat says a model is required | Save a Gemini key in Settings, or launch with a provider configured in `.env`. |
+| Model requests fail | Check the selected key, model access, provider quota, and terminal output. |
 | Port 8880 is busy | Electron uses an available port; standalone API development can use `--port 8881`. |
 
 ## Scientific analysis requires a separate setup
 
 The steps above install and run the chat interface; they do not prepare the scientific analysis environment. For the scientific software, VM, data, and stage-by-stage prerequisites, read the [scientific setup guide](SCIENTIFIC_SETUP.md). This repository does not include study or reference datasets, VM disks, or container images, and it does not provide a from-scratch scientific-environment installer. The repository has not been verified to run all six scientific stages from a clean machine.
 
-For terminal chat instead of the web page, run `.venv/bin/python -m agent.core.conversation` from the project root.
+For terminal chat, run `.venv/bin/python -m agent.core.conversation` from the project
+root with a Gemini key, or add `--provider groq` with a Groq key.
 
 ### Desktop model and workflow controls
 
-After launching Electron, configure SSH and open **Workflow** to check the pinned
-source, container and reference inputs. Individual install, download and conversion
-buttons ask first; downloads run as jobs on the configured Slurm partition. Use
-**HPC3 settings** to change the installation root or partition.
+After launching Electron, configure SSH and open **Settings → Environment
+readiness** to check the pinned source, container, and remote infrastructure.
+Install SIGNET and download the container from the setup actions as needed. The
+container download uses the configured Slurm partition. Use **HPC3 settings**
+to change the installation root or partition. Select your uploaded study files
+and references under **Data**.
 The desktop environment settings are authoritative: `SIGNET_HPC_WORKSPACE` does
 not override them. This preserves the root already selected for your SSH account.
 
 The Gemini panel accepts your own key, verifies it with Google, and stores it
-only when OS key-store encryption is available. Switching models waits for active
-Python work, restarts the backend, and restores conversation history. You can keep
-using the signed-in Codex CLI without adding a Gemini key.
+only when OS key-store encryption is available. Changing the chat configuration
+waits for active Python work, restarts the backend, and restores conversation history.

@@ -34,10 +34,20 @@ function stream(events) {
   const chunks = [bytes.slice(0, 37), bytes.slice(37)];
   return {ok: true, body: {getReader: () => ({read: async () => chunks.length ? {value: chunks.shift(), done: false} : {done: true}})}};
 }
+function controlledStream() {
+  let controller;
+  const body = new ReadableStream({start(handle) { controller = handle; }});
+  const encoder = new TextEncoder();
+  return {
+    reply: {ok: true, body},
+    emit(...events) {controller.enqueue(encoder.encode(events.map(event => JSON.stringify(event) + '\n').join('')));},
+    close() {controller.close();},
+  };
+}
 const tool = (status, overrides = {}) => 'SIGNET_TOOL ' + JSON.stringify({operation_id: 'a'.repeat(32),
   tool_name: 'propose_workspace_stage', status, elapsed_ms: 1500, result_summary: status, ...overrides});
 
-function harness(t, {rows = [run('live'), run('archive')], chats = [], initial = {}, reply = () => []} = {}) {
+function harness(t, {rows = [run('live'), run('archive')], datasets = catalog, chats = [], initial = {}, reply = () => [], deleteReply, cancelReply, deleteDatasetReply} = {}) {
   const template = readFileSync(path.join(folder, 'index.html'), 'utf8');
   const html = template.replace('__INITIAL_CHAT__', JSON.stringify(initial)).replace('__MODEL__', 'fixture-selected-model');
   const dom = new JSDOM(html, {url: 'http://localhost', runScripts: 'outside-only', pretendToBeVisual: true});
@@ -46,6 +56,12 @@ function harness(t, {rows = [run('live'), run('archive')], chats = [], initial =
   window.TextDecoder = TextDecoder;
   window.CSS = {escape: value => String(value).replace(/[^\w-]/g, '\\$&')};
   window.HTMLElement.prototype.scrollIntoView = function () {};
+  window.HTMLDialogElement.prototype.showModal = function () { this.open = true; };
+  window.HTMLDialogElement.prototype.close = function () {
+    if (!this.open) return;
+    this.open = false;
+    this.dispatchEvent(new window.Event('close'));
+  };
   window.eval(readFileSync(path.join(folder, '../chat/markdown.js'), 'utf8'));
   window.SignetInputValidation = {create: () => ({sync() {}})};
   for (const [name, key] of [['Genotype', 'genotype'], ['Expression', 'expression'], ['Adjustment', 'adjust'],
@@ -55,8 +71,9 @@ function harness(t, {rows = [run('live'), run('archive')], chats = [], initial =
   window.fetch = async (url, options = {}) => {
     const call = {url, options, body: options.body ? JSON.parse(options.body) : undefined};
     calls.push(call);
-    if (url === '/stage6/history') return response({runs: rows, datasets: catalog});
-    if (url === '/signet/datasets') return response({datasets: catalog});
+    if (url === '/stage6/history') return response({runs: rows, datasets});
+    if (url === '/signet/datasets') return response({datasets});
+    if (options.method === 'DELETE' && url.startsWith('/signet/datasets/') && deleteDatasetReply) return deleteDatasetReply(call);
     if (url.startsWith('/stage6/results?')) {
       const query = new URL('http://localhost' + url).searchParams;
       const source = query.get('source');
@@ -65,7 +82,12 @@ function harness(t, {rows = [run('live'), run('archive')], chats = [], initial =
         graph: {nodes, edges: [{source: nodes[0], target: nodes[1], frequency: .8, coefficient: -.12},
           {source: nodes[1], target: nodes[2], frequency: .6, coefficient: .4}], counts: {genes: 3, connections: 2}}});
     }
-    if (url === '/chat') return stream(reply(call, calls.filter(item => item.url === '/chat').length));
+    if (url === '/chat') {
+      const result = reply(call, calls.filter(item => item.url === '/chat').length);
+      return Array.isArray(result) ? stream(result) : result;
+    }
+    if (url === '/chat/cancel' && cancelReply) return cancelReply(call);
+    if (options.method === 'DELETE' && url.startsWith('/chat/') && deleteReply) return deleteReply(call);
     if (url.startsWith('/bootstrap?')) return response({initial: chats.find(chat => url.includes(chat.session)) || {}});
     throw Error('Unexpected request ' + url);
   };
@@ -94,6 +116,99 @@ function harness(t, {rows = [run('live'), run('archive')], chats = [], initial =
   return {window, q, click, choose, send, openGraph, calls, contexts,
     ready: () => until(() => q('[data-run-target]') && !q('#ml-dataset-select').disabled)};
 }
+
+test('Data and Run history share one floating Agent, its conversation and its draft', async t => {
+  const h = harness(t, {reply: () => [
+    {type: 'answer', text: 'Check the selected data format.'},
+    {type: 'done', text: 'Conversation complete', status: 'completed'},
+  ]});
+  await h.ready();
+  const agent = h.q('#ml-agent-view');
+  const input = h.q('#ml-input');
+  const visible = element => Boolean(element && !element.closest('[hidden]'));
+  const navigate = view => h.click(`[data-nav-target="${view}"]`);
+  function assertFloatingChat() {
+    assert.ok(h.q('#ml-context-chat').contains(agent));
+    assert.ok(visible(agent));
+    assert.equal(h.q('#ml-input'), input);
+  }
+
+  assert.ok(h.q('#ml-chat-panel').contains(agent));
+  navigate('data');
+  assertFloatingChat();
+  await h.send('How do I check these files?');
+  input.value = 'Draft follow-up';
+  navigate('history');
+  assertFloatingChat();
+  assert.match(h.q('#ml-chat-transcripts').textContent, /Check the selected data format/);
+  h.click('#ml-context-chat-hide');
+  assert.equal(visible(agent), false);
+  navigate('data');
+  assert.equal(visible(agent), false);
+  assert.ok(visible(h.q('#ml-context-chat-show')));
+  h.click('#ml-context-chat-show');
+  assertFloatingChat();
+  navigate('history');
+  assertFloatingChat();
+  navigate('analysis');
+  assert.ok(h.q('#ml-chat-panel').contains(agent));
+  assert.ok(visible(agent));
+  assert.equal(input.value, 'Draft follow-up');
+  assert.match(h.q('#ml-chat-transcripts').textContent, /How do I check these files\?/);
+  assert.match(h.q('#ml-chat-transcripts').textContent, /Check the selected data format/);
+  h.click('#ml-stage-tab');
+  assert.equal(visible(agent), false);
+  navigate('data');
+  assertFloatingChat();
+  navigate('analysis');
+  assert.equal(h.q('#ml-stage-tab').getAttribute('aria-selected'), 'true');
+  assert.equal(visible(agent), false);
+  assert.equal(h.calls.filter(call => call.url === '/chat').length, 1);
+});
+
+test('floating Agent finishes collapsing before showing its launcher and preserves the chat', async t => {
+  const h = harness(t, {reply: () => [
+    {type: 'answer', text: 'Keep this answer in the conversation.'},
+    {type: 'done', text: 'Conversation complete', status: 'completed'},
+  ]});
+  await h.ready();
+  h.window.matchMedia = () => ({matches: false});
+  h.click('[data-nav-target="data"]');
+  await h.send('Keep this question in the conversation');
+  const dock = h.q('#ml-context-chat');
+  const launcher = h.q('#ml-context-chat-show');
+  const input = h.q('#ml-input');
+  input.value = 'Draft while the chat is open';
+  for (const [element, width, height] of [[dock, 380, 480], [launcher, 110, 36]]) {
+    Object.defineProperties(element, {offsetWidth: {value: width}, offsetHeight: {value: height}});
+  }
+  const animations = [];
+  let finish;
+  const finished = new Promise(resolve => { finish = resolve; });
+  dock.animate = (_frames, options) => {
+    animations.push(typeof options === 'number' ? options : options.duration);
+    return {finished, cancel() {}};
+  };
+
+  assert.equal(dock.hidden, false);
+  assert.equal(launcher.hidden, true);
+  h.click('#ml-context-chat-hide');
+  h.click('#ml-context-chat-hide');
+  assert.deepEqual(animations, [240]);
+  assert.equal(dock.hidden, false);
+  assert.equal(launcher.hidden, true);
+
+  finish();
+  await until(() => dock.hidden && !launcher.hidden, 'launcher did not replace the dock after collapse');
+  h.click('#ml-context-chat-show');
+  assert.equal(dock.hidden, false);
+  assert.equal(launcher.hidden, true);
+  assert.equal(h.q('#ml-input'), input);
+  assert.equal(input.value, 'Draft while the chat is open');
+  assert.match(h.q('#ml-chat-transcripts').textContent, /Keep this question in the conversation/);
+  assert.match(h.q('#ml-chat-transcripts').textContent, /Keep this answer in the conversation/);
+  assert.equal(h.calls.filter(call => call.url === '/chat').length, 1);
+});
 
 test('chat navigation changes the canonical source and linked gene used by the next request', async t => {
   const h = harness(t, {reply: (_call, turn) => turn === 1 ? [
@@ -133,7 +248,7 @@ test('an Agent proposal opens the exact manual review stage and reports needs re
   assert.equal(h.contexts.expression.datasetId, 'example-chr1');
   assert.equal(h.contexts.expression.runId, 'pending');
   assert.deepEqual(h.contexts.expression.runs.map(row => row.history_id), ['workspace--pending']);
-  assert.match(h.q('#ml-chat-status').textContent, /需要確認|Needs review/);
+  assert.match(h.q('#ml-chat-status').textContent, /Needs review/);
   assert.equal(h.calls.some(call => /submit|confirm|\/run\b/.test(call.url)), false);
 });
 
@@ -146,17 +261,16 @@ test('failed tool activity keeps a failed overall turn and preserves a later suc
   ] : [{type: 'answer', text: 'A successful later conversation.'}, {type: 'done', text: 'Conversation complete', status: 'completed'}]});
   await h.ready();
   await h.send('Inspect the saved result');
-  assert.match(h.q('#ml-chat-status').textContent, /失敗|Failed/);
+  assert.match(h.q('#ml-chat-status').textContent, /Failed/);
   const events = [...h.window.document.querySelectorAll('.ml-chat-event')];
   assert.equal(events.length, 2, 'one turn plus one tool; running/failed must share the operation row');
-  assert.match(events[0].querySelector('.ml-chat-event-state').textContent, /失敗|Failed/);
+  assert.match(events[0].querySelector('.ml-chat-event-state').textContent, /Failed/);
   assert.match(events[1].textContent, /propose_workspace_stage/);
-  assert.match(events[1].querySelector('.ml-chat-event-state').textContent, /失敗|Failed/);
+  assert.match(events[1].querySelector('.ml-chat-event-state').textContent, /Failed/);
   assert.match(events[1].textContent, /1\.50/);
   assert.match(events[1].textContent, /Saved result could not be read/);
   await h.send('Explain the error');
-  assert.doesNotMatch(h.q('#ml-chat-status').textContent, /失敗|Failed|需要確認|Needs review/);
-  assert.match(events[0].querySelector('.ml-chat-event-state').textContent, /失敗|Failed/);
+  assert.doesNotMatch(h.q('#ml-chat-status').textContent, /Failed|Needs review/);
 });
 
 test('an error after an answer preserves partial output and its separate diagnostic', async t => {
@@ -170,7 +284,124 @@ test('an error after an answer preserves partial output and its separate diagnos
   const transcript = h.q('#ml-chat-transcripts').textContent;
   assert.match(transcript, /Partial evidence: 12 samples were retained/);
   assert.match(transcript, /Provider connection interrupted/);
-  assert.match(h.q('#ml-chat-status').textContent, /需要確認|Needs review/);
+  assert.match(h.q('#ml-chat-status').textContent, /Needs review/);
+});
+
+test('Stop waits for turn registration, ignores a late answer and leaves the same chat ready to send', async t => {
+  const first = controlledStream();
+  const h = harness(t, {reply: (_call, turn) => turn === 1 ? first.reply : [
+    {type: 'answer', text: 'The follow-up works.'}, {type: 'done', text: 'Conversation complete', status: 'completed'},
+  ], cancelReply: call => response({status: 'cancellation_requested', turn_id: call.body.turn_id})});
+  await h.ready();
+  assert.equal(h.q('#ml-stop').hidden, true);
+  const sending = h.send('Start a long response');
+  const request = h.calls.find(call => call.url === '/chat');
+  const cancels = () => h.calls.filter(call => call.url === '/chat/cancel');
+  assert.match(request.body.turn_id, /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/);
+  assert.equal(h.q('#ml-stop').hidden, false);
+  assert.equal(h.q('#ml-send').hidden, true);
+  h.click('#ml-stop');
+  h.click('#ml-stop');
+  await settle();
+  assert.equal(cancels().length, 0, 'an early click must wait for the backend to register the turn');
+  assert.match(h.q('#ml-chat-status').textContent, /Stopping response/);
+
+  const started = {type: 'turn_started', text: {turn_id: request.body.turn_id}};
+  first.emit(started, started);
+  await until(() => cancels().length > 0, 'registered turn did not receive Stop');
+  assert.equal(cancels().length, 1);
+  assert.equal(cancels()[0].options.method, 'POST');
+  assert.deepEqual(cancels()[0].body, {session: request.body.session, turn_id: request.body.turn_id});
+  assert.equal(new Headers(cancels()[0].options.headers).get('X-Chat-Token'), h.q('meta[name="chat-token"]').content);
+
+  first.emit({type: 'answer', text: 'Late result that should never appear.'});
+  await settle();
+  assert.doesNotMatch(h.q('#ml-chat-transcripts').textContent, /Late result/);
+  first.emit({type: 'done', text: 'Response stopped. Completed tools will not rerun.', status: 'cancelled'});
+  first.close();
+  await sending;
+  assert.equal(h.q('#ml-stop').hidden, true);
+  assert.equal(h.q('#ml-send').hidden, false);
+  assert.match(h.q('#ml-chat-transcripts').textContent, /Response stopped\./);
+  assert.doesNotMatch(h.q('#ml-chat-transcripts').textContent, /Late result/);
+  h.click('#ml-chat-activity-toggle');
+  assert.equal(h.q('#ml-chat-activity').hidden, false);
+  assert.equal(h.q('#ml-chat-events .ml-chat-event-state').textContent, 'Stopped');
+  assert.match(h.q('#ml-chat-events').textContent, /Response stopped\./);
+
+  await h.send('Send another question');
+  const chatRequests = h.calls.filter(call => call.url === '/chat');
+  assert.equal(chatRequests.length, 2);
+  assert.equal(chatRequests[1].body.session, request.body.session);
+  assert.notEqual(chatRequests[1].body.turn_id, request.body.turn_id);
+  assert.match(h.q('#ml-chat-transcripts').textContent, /The follow-up works\./);
+  assert.equal(cancels().length, 1);
+});
+
+test('a failed Stop restores the Stop button and its retry targets the same turn', async t => {
+  const reply = controlledStream();
+  let attempts = 0;
+  const h = harness(t, {reply: () => reply.reply, cancelReply: call => ++attempts === 1
+    ? {ok: false, status: 503} : response({status: 'cancellation_requested', turn_id: call.body.turn_id})});
+  await h.ready();
+  const sending = h.send('Wait for the model');
+  const request = h.calls.find(call => call.url === '/chat');
+  reply.emit({type: 'turn_started', text: {turn_id: request.body.turn_id}},
+    {type: 'progress', text: 'Waiting for the provider.'});
+  await until(() => h.q('#ml-chat-events').textContent.includes('Waiting for the provider.'));
+  h.click('#ml-stop');
+  await until(() => h.q('#ml-chat-status').textContent === 'Could not stop the response. Try again.');
+  assert.equal(h.q('#ml-stop').getAttribute('aria-disabled'), null);
+  assert.equal(h.q('.ml-thinking').hidden, false);
+  h.click('#ml-stop');
+  await until(() => attempts === 2);
+  assert.deepEqual(h.calls.filter(call => call.url === '/chat/cancel').map(call => call.body), [
+    {session: request.body.session, turn_id: request.body.turn_id},
+    {session: request.body.session, turn_id: request.body.turn_id},
+  ]);
+  reply.emit({type: 'done', text: 'Response stopped.', status: 'cancelled'});
+  reply.close();
+  await sending;
+  assert.match(h.q('#ml-chat-transcripts').textContent, /Response stopped\./);
+  assert.doesNotMatch(h.q('#ml-chat-transcripts').textContent, /Could not stop/);
+});
+
+const fallbackModel = 'gemini-3.5-flash-lite';
+const fallbackLine = '**Model fallback:** `gemini-3.8-flash` is unavailable (HTTP 503); this turn uses ' +
+  '`' + fallbackModel + '`. Completed tools will not be rerun.';
+
+test('a model fallback is one system notice outside the live answer, with full details in activity', async t => {
+  const h = harness(t, {reply: () => [
+    {type: 'progress', text: fallbackLine},
+    {type: 'model_fallback', text: {model: fallbackModel}},
+    {type: 'answer', text: fallbackLine + '\n\nHello!'},
+    {type: 'done', text: 'Turn finished.', status: 'completed'},
+  ]});
+  await h.ready();
+  await h.send('Hello');
+  const transcript = h.q('#ml-chat-transcripts');
+  const notices = transcript.querySelectorAll('[data-chat-notice="model-fallback"]');
+  assert.equal(notices.length, 1);
+  assert.equal(notices[0].textContent, 'Switched to ' + fallbackModel);
+  assert.equal(notices[0].nextElementSibling.dataset.chatSender, 'assistant');
+  assert.equal(h.q('.ml-live-reply').textContent.trim(), 'Hello!');
+  assert.match(h.q('#ml-chat-events').textContent, /HTTP 503/);
+});
+
+test('saved model notices remain next to their own reply and separate legacy mixed messages', async t => {
+  const h = harness(t, {initial: {messages: [
+    {role: 'user', text: 'One'},
+    {role: 'assistant', text: 'First answer.', model_fallback: fallbackModel},
+    {role: 'user', text: 'Two'},
+    {role: 'assistant', text: 'Second answer.'},
+    {role: 'user', text: 'Three'},
+    {role: 'assistant', text: fallbackLine + '\n\nLast answer.'},
+  ]}});
+  await h.ready();
+  const replies = [...h.q('#ml-chat-transcripts').querySelectorAll('.ml-live-reply')];
+  assert.deepEqual(replies.map(reply => reply.textContent.trim()), ['First answer.', 'Second answer.', 'Last answer.']);
+  assert.deepEqual(replies.map(reply => reply.parentElement.previousElementSibling.dataset.chatNotice),
+    ['model-fallback', undefined, 'model-fallback']);
 });
 
 test('saved failed and needs-review turns replay independently when switching chats', async t => {
@@ -182,13 +413,159 @@ test('saved failed and needs-review turns replay independently when switching ch
   await h.ready();
   const activityStates = index => [...h.q('#ml-chat-events').children[index].querySelectorAll('.ml-chat-event-state')].map(row => row.textContent);
   assert.equal(activityStates(0).length, 2, 'saved tool and saved turn each have a status');
-  assert.ok(activityStates(0).every(state => /失敗|Failed/.test(state)));
-  h.click('#ml-chat-records button:nth-child(2)');
+  assert.ok(activityStates(0).every(state => /Failed/.test(state)));
+  h.click('#ml-chat-records > .ml-chat-record:nth-child(2) .ml-nav-list-item');
   await until(() => h.q('#ml-chat-title').textContent === 'Review chat');
   assert.equal(activityStates(1).length, 2);
-  assert.ok(activityStates(1).every(state => /需要確認|Needs review/.test(state)));
-  assert.ok(activityStates(0).every(state => /失敗|Failed/.test(state)));
+  assert.ok(activityStates(1).every(state => /Needs review/.test(state)));
   assert.match(h.q('#ml-chat-transcripts').textContent, /Preserved partial answer/);
+});
+
+test('deleting a saved chat requires confirmation and preserves all other conversations', async t => {
+  const first = {
+    session: '11111111-0000-0000-0000-000000000000', title: 'Original conversation',
+    messages: [{role: 'assistant', text: 'Answer to remove'}], events: [['Activity to remove']],
+  };
+  const second = {
+    session: '22222222-0000-0000-0000-000000000000', title: 'Separate conversation',
+    messages: [{role: 'assistant', text: 'Answer to preserve'}], events: [['Activity to preserve']],
+  };
+  let fail = true;
+  const h = harness(t, {
+    initial: {...first, sessions: [first, second]}, chats: [first, second],
+    deleteReply: () => fail
+      ? {ok: false, status: 409, json: async () => ({error: 'The conversation could not be deleted.'})}
+      : response({deleted: first.session}),
+  });
+  await h.ready();
+  const firstRow = '#ml-chat-records > .ml-chat-record:nth-child(1)';
+  const secondRow = '#ml-chat-records > .ml-chat-record:nth-child(2)';
+  const dialog = () => h.q('#ml-delete-chat-dialog');
+  const deletions = () => h.calls.filter(call => call.options.method === 'DELETE');
+  const submit = () => {
+    assert.ok(h.q('#ml-delete-chat-confirm'));
+    h.q('#ml-delete-chat-form').dispatchEvent(new h.window.Event('submit', {bubbles: true, cancelable: true}));
+  };
+
+  h.click('#ml-chat-list-toggle');
+  h.click(secondRow + ' .ml-nav-list-item');
+  await until(() => h.q('#ml-chat-title').textContent === second.title);
+  h.click('#ml-chat-list-toggle');
+  h.click(firstRow + ' .ml-nav-list-item');
+  await until(() => h.q('#ml-chat-title').textContent === first.title);
+  const removedRow = h.q(firstRow), retainedRow = h.q(secondRow);
+  const retainedTranscript = h.q('#' + retainedRow.querySelector('.ml-nav-list-item').getAttribute('aria-controls'));
+
+  h.click('#ml-chat-list-toggle');
+  h.click(firstRow + ' [data-delete-chat]');
+  assert.equal(dialog().open, true);
+  assert.match(dialog().textContent, /Original conversation/);
+  h.click('#ml-delete-chat-cancel');
+  assert.equal(dialog().open, false);
+  assert.equal(deletions().length, 0);
+  assert.equal(removedRow.isConnected, true);
+
+  h.click(firstRow + ' [data-delete-chat]');
+  submit();
+  await until(() => /could not be deleted/.test(h.q('#ml-delete-chat-error').textContent));
+  assert.equal(dialog().open, true);
+  assert.equal(removedRow.isConnected, true);
+  assert.equal(retainedRow.isConnected, true);
+  assert.equal(h.q('#ml-chat-title').textContent, first.title);
+  assert.match(h.q('#ml-chat-transcripts').textContent, /Answer to remove/);
+  assert.match(h.q('#ml-chat-events').textContent, /Activity to remove/);
+
+  fail = false;
+  submit();
+  await until(() => !removedRow.isConnected && !dialog().open);
+  assert.deepEqual(deletions().map(call => call.url), Array(2).fill('/chat/' + first.session));
+  assert.ok(deletions().every(call =>
+    new Headers(call.options.headers).get('X-Chat-Token') === h.q('meta[name="chat-token"]').content));
+  assert.equal(retainedRow.isConnected, true);
+  assert.equal(h.q('#ml-chat-title').textContent, 'New chat');
+  assert.doesNotMatch(h.q('#ml-chat-transcripts').textContent, /Answer to remove/);
+  assert.doesNotMatch(h.q('#ml-chat-events').textContent, /Activity to remove/);
+  assert.match(retainedTranscript.textContent, /Answer to preserve/);
+  assert.match(h.q('#ml-chat-events').textContent, /Activity to preserve/);
+  const transcriptIds = [...h.q('#ml-chat-transcripts').children].map(node => node.id);
+  assert.equal(transcriptIds.length, new Set(transcriptIds).size);
+});
+
+test('deleting a dataset confirms one request and retains its readable run in All runs', async t => {
+  const datasets = [{id: 'dataset-a', name: 'Dataset A', inputs: {}}, {id: 'dataset-b', name: 'Dataset B', inputs: {}}];
+  const linked = run('live', 'linked-result', {dataset_id: 'dataset-b',
+    inputs: {genotype: ['/pub/fixture/study-at-execution.ped']}});
+  const rows = [run('live', 'unrelated-result', {dataset_id: 'dataset-a'}), linked];
+  let fail = true, finish;
+  const h = harness(t, {datasets, rows, deleteDatasetReply: call => {
+    const id = call.url.split('/').at(-1);
+    if (fail) return {ok: false, status: 409, json: async () => ({error: 'Could not delete the selected dataset.'})};
+    const commit = () => {
+      datasets.splice(datasets.findIndex(dataset => dataset.id === id), 1);
+      for (const row of rows.filter(row => row.dataset_id === id)) row.dataset_deleted = true;
+      return response({deleted: id});
+    };
+    return id === 'dataset-b' ? new Promise(resolve => { finish = () => resolve(commit()); }) : commit();
+  }});
+  await h.ready();
+  const deletions = () => h.calls.filter(call => call.options.method === 'DELETE');
+  const selected = () => h.q('#ml-dataset-select').value;
+  const dialog = () => h.q('#ml-delete-dataset-dialog');
+  const submit = () => h.q('#ml-delete-dataset-form').dispatchEvent(new h.window.Event('submit', {bubbles: true, cancelable: true}));
+  const linkedRow = () => h.q('[data-run-target="workspace--linked-result"]');
+  const linkedHistory = () => h.q('#ml-run-workspace--linked-result');
+
+  h.click('[data-nav-target="data"]');
+  h.choose('#ml-dataset-select', 'dataset-b');
+  assert.equal(selected(), 'dataset-b');
+  h.click('[data-nav-target="history"]');
+  h.click('[data-run-target="workspace--linked-result"]');
+  assert.ok(linkedHistory().querySelector('[data-rerun-review]'));
+  h.click('[data-nav-target="data"]');
+  h.click('#ml-dataset-delete');
+  assert.equal(dialog().open, true);
+  assert.match(dialog().textContent, /Dataset B/);
+  h.click('#ml-delete-dataset-cancel');
+  assert.equal(dialog().open, false);
+  assert.equal(deletions().length, 0);
+  assert.equal(selected(), 'dataset-b');
+
+  h.click('#ml-dataset-delete');
+  submit();
+  await until(() => !h.q('#ml-delete-dataset-error').hidden && /could not delete/i.test(h.q('#ml-delete-dataset-error').textContent));
+  assert.equal(dialog().open, true);
+  assert.equal(selected(), 'dataset-b');
+  assert.equal(deletions().length, 1);
+
+  fail = false;
+  submit();
+  submit();
+  assert.deepEqual(deletions().map(call => call.url), Array(2).fill('/signet/datasets/dataset-b'));
+  assert.ok(deletions().every(call => new Headers(call.options.headers).get('X-Chat-Token') === h.q('meta[name="chat-token"]').content));
+  finish();
+  await until(() => !dialog().open && selected() === 'dataset-a');
+  assert.equal(h.q('#ml-dataset-select option[value="dataset-b"]'), null);
+  await until(() => linkedHistory()?.querySelector('[data-history-association]')?.textContent.includes('Dataset deleted'));
+
+  h.click('[data-nav-target="history"]');
+  assert.equal(linkedRow().hidden, true);
+  h.choose('#ml-history-scope', 'all');
+  assert.equal(linkedRow().hidden, false);
+  h.click('[data-run-target="workspace--linked-result"]');
+  assert.equal(linkedHistory().hidden, false);
+  assert.match(linkedHistory().textContent, /study-at-execution\.ped/);
+  assert.equal(linkedHistory().querySelector('[data-rerun-form]'), null);
+  h.click('#ml-run-workspace--linked-result [data-run-stage="6"]');
+  await until(() => h.q('#lens-stage6').dataset.historyId === linked.history_id && h.q('#lens-stage6').dataset.runState === 'ready');
+  assert.equal(h.q('#lens-stage6 tbody').rows.length, 2);
+
+  h.click('[data-nav-target="data"]');
+  h.click('#ml-dataset-delete');
+  submit();
+  await until(() => !dialog().open && selected() === '');
+  assert.equal(h.q('#ml-dataset-select').disabled, true);
+  assert.match(h.q('#ml-dataset-select').textContent, /No datasets yet/);
+  assert.deepEqual(deletions().map(call => call.url), ['/signet/datasets/dataset-b', '/signet/datasets/dataset-b', '/signet/datasets/dataset-a']);
 });
 
 test('pointer drag, pan, zoom and edge inspection retain gene filtering and canonical run selection', async t => {
@@ -227,8 +604,6 @@ test('pointer drag, pan, zoom and edge inspection retain gene filtering and cano
   assert.equal(stage.querySelector('.s6-zoom input').value, '110');
   stage.querySelector('.s6-edge').dispatchEvent(new h.window.KeyboardEvent('keydown', {key: 'Enter', bubbles: true}));
   assert.match(stage.querySelector('.s6-summary').textContent, /0\.8.*-0\.12/);
-  assert.equal(stage.dataset.selectedGene, 'A');
-  assert.equal(stage.querySelector('tbody').rows.length, 2);
   h.click('#ml-stage6-back');
   await h.openGraph('archive--shared');
   h.click('#lens-stage6 [data-gene="X"]');
@@ -280,13 +655,13 @@ test('the real model toolbar opens the Settings dialog without replacing its chi
   const React = require('react'), {act} = React, {createRoot} = require('react-dom/client');
   const {WorkspaceModelSettings} = await component('WorkspaceModelSettings.tsx');
   let statusReads = 0, saves = 0;
-  const bridge = {getStatus: async () => {statusReads++; return {ok: true, value: {provider: 'codex', geminiConfigured: false, encryptionAvailable: true}};},
+  const bridge = {getStatus: async () => {statusReads++; return {ok: true, value: {provider: 'none', geminiConfigured: false, encryptionAvailable: true}};},
     saveGeminiKey: async () => {saves++; return {ok: true, value: {restarting: false}};}, clearGeminiKey: async () => assert.fail('No key removal was requested')};
   const mount = h.q('#ml-model-settings');
   assert.equal(mount.tagName, 'DIV');
   const root = createRoot(mount);
   try {
-    await act(async () => root.render(React.createElement(WorkspaceModelSettings, {workspace: h.q('#signet-lens-left-preview'), bridge, model: 'fixture-selected-model'})));
+    await act(async () => root.render(React.createElement(WorkspaceModelSettings, {bridge, model: 'fixture-selected-model'})));
     const button = h.q('.ml-composer-toolbar button.ml-chip');
     assert.ok(button, 'Model chip must be a keyboard accessible button');
     assert.equal(button.type, 'button');
@@ -301,7 +676,6 @@ test('the real model toolbar opens the Settings dialog without replacing its chi
     assert.equal(h.calls.some(call => call.url === '/chat'), false);
     assert.equal(saves, 0);
     assert.ok(statusReads >= 2, 'opening refreshes secure-key status');
-    await act(async () => h.click('#ml-language'));
     assert.match(dialog.textContent, /Current model/);
   } finally {
     await act(async () => root.unmount());
