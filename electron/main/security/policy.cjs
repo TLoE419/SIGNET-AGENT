@@ -8,7 +8,7 @@ function localURL(value, origin) {
 function navigationAllowed(value, origin) {
   if (!localURL(value, origin)) return false;
   const url = new URL(value);
-  return url.pathname === '/' || resultDownloadPath(url.pathname);
+  return ['/', '/classic'].includes(url.pathname) || resultDownloadPath(url.pathname);
 }
 function resultDownloadPath(pathname) {
   return pathname === '/signet/result-download';

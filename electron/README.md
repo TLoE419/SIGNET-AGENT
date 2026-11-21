@@ -31,12 +31,54 @@ Python, its dependencies, Codex CLI when selected, and scientific prerequisites
 must still be installed. No scientific data, Python runtime or model credentials
 are bundled.
 
-### Workspace interface preview
+### Workspace
 
-Run `npm run workspace --prefix electron` to open the bilingual workspace design
-with simulated data, or choose **View → Workspace Preview** from the desktop app.
-The preview runs offline in its own window. File choices, connection checks, and
-chat actions stay in that preview session.
+The desktop opens directly to the bilingual workspace. The left chat uses the
+existing SIGNET Agent, model configuration, and saved conversations. Choose a
+dataset in **Data**, then open **Run history** to see that dataset's completed
+runs. A run shows its saved input filenames, and its six timeline stages open
+the results for that run. Stages 1 and 2 show genotype and expression outputs.
+Stage 3 shows sample matching, the recorded principal component count, and the
+archived expression comparison. Stage 4 shows significant association pairs,
+and Stage 5 shows candidate edges grouped by their recorded bootstrap frequency.
+Stage 6 opens the network and edge table, with a filter for the selected gene.
+Each stage uses the settings preserved with its job. The Stage 6 selector in
+**Analysis** also follows the selected dataset. The first five stage previews
+in **Analysis** still use simulated data.
+
+Archived HPC3 exports remain local. The application reads these records under
+the ignored `data/` directory:
+
+- `datasets/<dataset-id>.json` supplies `id`, `name` (Chinese and English),
+  and current `inputs` grouped as `genotype`, `expression`, and `clinical`
+  filename arrays.
+- `stage6-results/<run-id>/history.json` supplies `run_id`, `dataset_id`,
+  `name` (Chinese and English), and a separate `inputs` snapshot in the same
+  format. Record the filenames confirmed for that run.
+- Beside `history.json`, keep the original `verification.json` and
+  `signet_edgelist_<frequency>.txt` from the completed visualization. The
+  verification report supplies the run's timestamps, settings, and counts.
+- If available, `stage3.json` beside the verification report contains that run's
+  matching counts, principal component scatter, and expression comparison. The
+  recorded component count must match the completed adjustment job.
+- `stages.json` contains the same `run_id` and a `stages` object for stages
+  `1`, `2`, `4`, and `5`. These summaries come from the archived genotype
+  codes, transformed expression matrix, per-category significant pairs, and
+  network frequency matrix. The Stage 5 chart counts positive frequencies in
+  that matrix before the separate Stage 6 display threshold. Settings and
+  resources come from `verification.json`.
+
+The viewer reads supplied archive summaries; it does not compute them or
+copy person-level outputs from HPC3. New analyses retain the current main
+branch's remote-only execution and person-level data handling. Historical
+archives are read-only and are not model-callable evidence or execution inputs.
+
+Creating a dataset in the workspace adds a draft for the current session. An
+archive is a read-only result and remains tied to its saved input snapshot.
+
+Use **View → Classic Interface** for model and SSH setup, current HPC3 confirmation
+cards and results, and the development terminal when started with `--dev`. **View → Workspace** returns to the new
+interface.
 
 ## Development terminal
 
@@ -49,8 +91,8 @@ npm run dev --prefix electron -- --provider groq
 ```
 
 Quit an already-running SIGNET instance first; a second launch focuses the
-existing instance and does not change its mode. Before signing in, click
-**Dev terminal → Connection diagnostics** at the bottom right. Then use the
+existing instance and does not change its mode. Choose **View → Classic Interface**.
+Before signing in, click **Dev terminal → Connection diagnostics** at the bottom right. Then use the
 normal SSH controls to Connect; dev login/unlock dialogs also show the live log.
 
 - **Connection diagnostics** monitors local key unlock, system OpenSSH startup,

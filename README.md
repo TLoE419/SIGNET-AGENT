@@ -2,7 +2,9 @@
 
 Use a local chat interface to explore SIGNET's analysis capabilities, inspect files you provide, and run operations through controlled tools. The interface supports English and Traditional Chinese and tool progress. SIGNET's six stages run on UCI HPC3 from confirmation cards in the chat, and the results card shows the network, SIGNET's plots and a connection table.
 
-**This version includes no study data, example datasets, reference datasets, or precomputed results.** After installation, you can open the Electron desktop client. With your own model sign-in configured, you can chat, query the analysis catalog, and list project files. Network visualization and comparison require your own analysis results that have passed the technical output checks; no example graph appears on first launch.
+**This version includes no study data, example datasets, reference datasets, or precomputed results.**
+
+The desktop opens to the bilingual workspace. The chat uses the existing SIGNET Agent with your configured model and saved conversations. Data and Run history show saved dataset records and their archived runs. Each run has an input snapshot and a timeline that opens its six saved stage results. Stages 1–5 in Analysis use simulated data. Use **View → Classic Interface** for model setup and remote connection controls.
 
 ## Replacing the Former Desktop Workbench
 
@@ -62,7 +64,7 @@ To run an analysis on HPC3 from start to finish, follow the [user guide](docs/US
 
 Create `data/` yourself for inputs; scientific tools create `runs/`. Both directories are excluded from version control. Credentials in `.env`, chat histories, execution logs and screenshots are also excluded.
 
-The **Activity** control below the conversation opens when you send a request. It shows status, elapsed time, and tool records, and you can collapse and reopen it after completion. 
+The **Activity** control below the conversation opens when you send a request. It shows status, elapsed time, and tool records, and you can collapse and reopen it after completion.
 
 The service listens only on `127.0.0.1`. Chat messages and content needed by the tools are sent to your selected model service; a local interface does not mean the model runs offline. Web chat history is saved locally in `.chat-state.json`; do not share this file. Closing a tab does not cancel tools that have already started. If a process is interrupted, inspect its recorded status before retrying instead of automatically running it again.
 

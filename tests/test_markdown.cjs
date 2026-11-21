@@ -5,7 +5,7 @@ const path = require('node:path');
 const root = path.join(__dirname, '..', 'electron', 'renderer', 'features', 'chat');
 const context = vm.createContext({});
 context.window = context;
-vm.runInContext(fs.readFileSync(path.join(root, 'chat.js'), 'utf8').split('// SIGNET chat interface')[0], context);
+vm.runInContext(fs.readFileSync(path.join(root, 'markdown.js'), 'utf8'), context);
 const render = source => {context.source = source; return vm.runInContext('renderMarkdown(source)', context);};
 
 const labels = ['顯著配對清單', '找到多少', '關聯證據', '變異分組'];

@@ -1,5 +1,6 @@
 """Loopback-only Python API for the Electron client and standalone backend development."""
 import argparse
+import csv
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
@@ -20,6 +21,7 @@ from agent.paths import PROJECT_ROOT
 from agent.providers import PROVIDERS, create_provider_adapter
 from agent.runtime import analysis_family
 from agent.runtime.step_proposal import CHAT_SESSION
+from agent.stage6.workspace import ARCHIVED_STEP_JOBS, Workspace
 from agent.tools.ui import UI_CHANNEL
 
 ROOT = PROJECT_ROOT
@@ -60,6 +62,7 @@ class ChatServer(ThreadingHTTPServer):
                                     for item in state.get('pending_history', [])]
         # Scientific tools share local runs, so serialize turns across browser tabs.
         self.turn_lock = threading.Lock()
+        self.stage6 = Workspace(self)
         super().__init__(address, ChatHandler)
 
     def server_bind(self):
@@ -129,6 +132,14 @@ class ChatHandler(BaseHTTPRequestHandler):
             if not secrets.compare_digest(self.headers.get('X-Chat-Token', ''), self.server.token):
                 return self._error(403, 'Page token required.')
             return signet_api.handle(self, 'GET', url)
+        if url.path == '/stage/results':
+            return self.archived_stage_results_get(url)
+        if url.path == '/stage3/results':
+            return self.stage3_results_get(url)
+        if url.path == '/stage6/results':
+            return self.stage6_results_get(url)
+        if url.path == '/stage6/history':
+            return self.stage6_history_get(url)
         if url.path != '/bootstrap':
             return self._error(404, '找不到此 API。')
         if not self.server.turn_lock.acquire(blocking=False):
@@ -250,6 +261,57 @@ class ChatHandler(BaseHTTPRequestHandler):
                 self.server.save_state()
             finally:
                 self.server.turn_lock.release()
+
+
+    def archived_stage_results_get(self, url):
+        if not secrets.compare_digest(self.headers.get('X-Chat-Token', ''), self.server.token):
+            return self._error(403, 'Workspace token required.')
+        query = parse_qs(url.query, keep_blank_values=True)
+        if (set(query) != {'run', 'stage'} or len(query['run']) != 1 or not query['run'][0]
+                or len(query['stage']) != 1 or query['stage'][0] not in ARCHIVED_STEP_JOBS):
+            return self._error(400, 'Provide a run ID and an archived stage number (1, 2, 4, or 5).')
+        try:
+            result = self.server.stage6.archived_stage_result(query['run'][0], query['stage'][0])
+        except (OSError, ValueError, KeyError, TypeError, OverflowError):
+            return self._error(404, 'No readable archived result for this stage.')
+        return self.json_response(result)
+
+
+    def stage3_results_get(self, url):
+        if not secrets.compare_digest(self.headers.get('X-Chat-Token', ''), self.server.token):
+            return self._error(403, 'Workspace token required.')
+        query = parse_qs(url.query, keep_blank_values=True)
+        if set(query) != {'run'} or len(query['run']) != 1 or not query['run'][0]:
+            return self._error(400, 'Provide a single run ID.')
+        try:
+            result = self.server.stage6.archived_stage3(query['run'][0])
+        except (OSError, ValueError, KeyError, TypeError, OverflowError):
+            return self._error(404, 'No readable archived Stage 3 result for this run.')
+        return self.json_response(result)
+
+
+    def stage6_results_get(self, url):
+        if not secrets.compare_digest(self.headers.get('X-Chat-Token', ''), self.server.token):
+            return self._error(403, 'Workspace token required.')
+        query = parse_qs(url.query, keep_blank_values=True)
+        if not query:
+            return self.json_response({'runs': self.server.stage6.completed_runs()})
+        if (set(query) - {'run', 'source'} or len(query.get('run', [])) != 1
+                or ('source' in query and query['source'] != ['archive'])):
+            return self._error(400, 'Provide a single run ID and, optionally, the archived source.')
+        try:
+            return self.json_response(self.server.stage6.completed_result(
+                query['run'][0], archive_only='source' in query))
+        except (OSError, ValueError, KeyError, TypeError, csv.Error):
+            return self._error(400, 'No readable completed Stage 6 result for this run.')
+
+
+    def stage6_history_get(self, url):
+        if not secrets.compare_digest(self.headers.get('X-Chat-Token', ''), self.server.token):
+            return self._error(403, 'Workspace token required.')
+        if url.query:
+            return self._error(400, 'The Stage 6 history does not accept query parameters.')
+        return self.json_response(self.server.stage6.archived_history())
 
 
     def json_response(self, value, status=200):

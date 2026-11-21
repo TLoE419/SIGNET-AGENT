@@ -6,7 +6,6 @@ const {GeminiKeyStore, ModelController, installModelHandlers} = require('../mode
 const {randomBytes} = require('node:crypto');
 const {Backend} = require('../backend/backend.cjs');
 const {createRendererHandler} = require('../renderer/protocol.cjs');
-const {openWorkspacePreview} = require('./workspace-preview.cjs');
 const {localURL, navigationAllowed, resultDownloadPath, resultPreviewPath} = require('../security/policy.cjs');
 const {SshConnectionService, SshProfileRepository, HostKeyTrustStore, AppManagedKeyStore, installSshHandlers, installDevTerminal, EnvironmentService, installEnvironmentHandlers} = require('../../build/ssh/index.cjs');
 const {SshBroker} = require('../ssh/ipc/broker.cjs');
@@ -18,7 +17,7 @@ async function launch({provider, visible = true, userData, stateFile, startupMs,
   if (!app.requestSingleInstanceLock()) { app.quit(); return; }
   devMode = devMode === true && !app.isPackaged;
   let devTerminal;
-  let window, origin, quitting = false, finished = false, disposeSsh, disposeModel, disposeEnvironment, switching;
+  let window, origin, view = '/', changingView = false, quitting = false, finished = false, disposeSsh, disposeModel, disposeEnvironment, switching;
   const sshToken = randomBytes(32).toString('base64url');
   // macOS limits Unix socket paths to roughly 100 bytes. /tmp is the stable,
   // short alias for its much longer per-user temporary directory.
@@ -66,7 +65,7 @@ async function launch({provider, visible = true, userData, stateFile, startupMs,
         try { await startBackend(previous.provider, previous.key); }
         catch { void quit(); return; }
       }
-      if (!quitting && window && !window.isDestroyed()) await window.loadURL(origin + '/');
+      if (!quitting && window && !window.isDestroyed()) await window.loadURL(origin + view);
     })().finally(() => { switching = undefined; });
     return switching;
   }
@@ -78,6 +77,29 @@ async function launch({provider, visible = true, userData, stateFile, startupMs,
     void quit();
   });
   app.on('window-all-closed', () => { void quit(); });
+  async function showView(nextView) {
+    if (!window || window.isDestroyed() || view === nextView || changingView || quitting || switching) return;
+    changingView = true;
+    try {
+      // Bootstrap shares the chat turn lock. Keep the current page visible during a turn.
+      const reply = await fetch(origin + '/bootstrap?new=1', {signal: AbortSignal.timeout(5000)});
+      await reply.body?.cancel();
+      if (quitting || switching || window.isDestroyed()) return;
+      if (reply.status === 409) {
+        await dialog.showMessageBox(window, {message: 'Wait for the current chat turn to finish before switching interfaces.'});
+        return;
+      }
+      if (!reply.ok) throw Error('The local service could not load the requested interface.');
+      await window.loadURL(origin + nextView);
+      view = nextView;
+    } catch (error) {
+      if (!quitting && error.code !== 'ERR_ABORTED') {
+        dialog.showErrorBox('SIGNET could not switch interfaces', error.message);
+      }
+    } finally {
+      changingView = false;
+    }
+  }
   async function quit() {
     if (quitting) return;
     quitting = true;
@@ -113,11 +135,8 @@ async function launch({provider, visible = true, userData, stateFile, startupMs,
     ...(process.platform === 'darwin' ? [{role: 'appMenu'}] : []),
     {role: 'fileMenu'}, {role: 'editMenu'},
     {label: 'View', submenu: [
-      {label: 'Workspace Preview', click: () => {
-        void openWorkspacePreview().catch(error => {
-          dialog.showErrorBox('SIGNET could not load the workspace preview', error.message);
-        });
-      }},
+      {id: 'workspace-view', label: 'Workspace', click: () => { void showView('/'); }},
+      {id: 'classic-view', label: 'Classic Interface', click: () => { void showView('/classic'); }},
       {type: 'separator'}, {role: 'reload'}, {role: 'resetZoom'}, {role: 'zoomIn'}, {role: 'zoomOut'}, {role: 'togglefullscreen'},
     ]},
     {role: 'windowMenu'},
@@ -159,7 +178,7 @@ async function launch({provider, visible = true, userData, stateFile, startupMs,
     if (contents !== window?.webContents || !localURL(item.getURL(), origin) || !resultDownloadPath(new URL(item.getURL()).pathname)) event.preventDefault();
     // Valid result downloads retain Chromium's normal save dialog.
   });
-  window = new BrowserWindow({width: 1320, height: 900, minWidth: 760, minHeight: 540, show: false,
+  window = new BrowserWindow({width: 1650, height: 894, minWidth: 760, minHeight: 460, useContentSize: true, show: false,
     title: 'SIGNET Research Assistant', webPreferences: {session: isolated, nodeIntegration: false,
       contextIsolation: true, sandbox: true, webSecurity: true, webviewTag: false,
       additionalArguments: devMode ? ['--signet-dev-terminal'] : [],
@@ -184,7 +203,7 @@ async function launch({provider, visible = true, userData, stateFile, startupMs,
   window.webContents.on('did-start-navigation',event=>{if(event.isMainFrame)devTerminal?.close()});
   window.webContents.on('render-process-gone', () => { void quit(); });
   try {
-    await window.loadURL(origin + '/');
+    await window.loadURL(origin + view);
     if (visible && !quitting) window.show();
   } catch (error) {
     if (!quitting) await dialog.showMessageBox({type: 'error', title: 'SIGNET could not load', message: 'Could not load the local interface.'});

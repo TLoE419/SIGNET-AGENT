@@ -1,5 +1,6 @@
 'use strict';
 // Native lifecycle test; only Google's key verification is replaced with a local fixture.
+const {once} = require('node:events');
 const assert=require('node:assert/strict');
 const {mkdtempSync,writeFileSync,readFileSync,rmSync}=require('node:fs');
 const os=require('node:os');const path=require('node:path');const {app}=require('electron');
@@ -14,6 +15,9 @@ async function until(predicate){for(let i=0;i<200;i++){if(await predicate())retu
 app.on('will-quit',()=>{clearTimeout(deadline);rmSync(temporary,{recursive:true,force:true})});
 launch({provider:'codex',visible:true,userData:temporary,stateFile}).then(async value=>{
  running=value;const w=value.window;
+ const classicLoaded = once(w.webContents, 'did-finish-load');
+ require('electron').Menu.getApplicationMenu().getMenuItemById('classic-view').click();
+ await classicLoaded;
  async function workflowCheck(){
   const result=await w.webContents.executeJavaScript(`fetch('/hpc/check',{method:'POST',body:'{}',headers:{'Content-Type':'application/json','X-Chat-Token':document.querySelector('meta[name="chat-token"]').content}}).then(async r=>({status:r.status,body:await r.json()}))`);
   assert.equal(result.status,200);

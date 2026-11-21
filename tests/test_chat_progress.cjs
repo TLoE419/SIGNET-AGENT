@@ -60,7 +60,7 @@ function setup(initial={}, analysisApi) {
     querySelector:selector=>selector.startsWith('meta')?{content:'token'}:find(selector),
     querySelectorAll:selector=>selector==='[data-tab]'?all.filter(e=>e.dataset.tab):[],addEventListener(){}},
     uiLanguage:'en',uiText(el,text){el.dataset.i18n=text;el.textContent=text;},
-    crypto:{randomUUID:()=> 'test-session'},history:{replaceState(){}},location:{assign:path=>navigation.push(path)},performance:{now:()=>1000},TextDecoder,
+    crypto:{randomUUID:()=> 'test-session'},history:{replaceState(){}},location:{pathname:'/classic',assign:path=>navigation.push(path)},performance:{now:()=>1000},TextDecoder,
     Event:class {constructor(type){this.type=type;}},CustomEvent:class {constructor(type,options){this.type=type;this.detail=options.detail;}},
     addEventListener(name,fn){events[name]=fn;},dispatchEvent(event){events[event.type]?.(event);},
     sessionStorage:{getItem:k=>storage.get(k),setItem:(k,v)=>storage.set(k,v)},
@@ -80,6 +80,7 @@ function setup(initial={}, analysisApi) {
       }})}};
     }});
   context.window=context;
+  vm.runInContext(fs.readFileSync('electron/renderer/features/chat/markdown.js','utf8'),context);
   vm.runInContext(fs.readFileSync('electron/renderer/features/chat/chat.js','utf8'),context);
   if(analysisApi)for(const file of ['step-review.js','analysis-results.js','analysis-progress.js'])
     vm.runInContext(fs.readFileSync('electron/renderer/features/chat/'+file,'utf8'),context);
@@ -138,9 +139,9 @@ function setup(initial={}, analysisApi) {
   links[0].events.click();
   assert.equal(restored.navigation.length,0,'the open conversation is not reloaded');
   links[1].events.click();
-  assert.equal(restored.navigation.at(-1),'/?session=other-session');
+  assert.equal(restored.navigation.at(-1),'/classic?session=other-session');
   restored.ids.get('new-chat').events.click();
-  assert.equal(restored.navigation.at(-1),'/?new=1');
+  assert.equal(restored.navigation.at(-1),'/classic?new=1');
   const failed=setup();await new Promise(setImmediate);failed.context.failRequest=true;
   await vm.runInContext('send("Controlled error")',failed.context);
   assert.equal(failed.visible(failed.ids.get('state')),true,'failure status remains visible when the log is closed');

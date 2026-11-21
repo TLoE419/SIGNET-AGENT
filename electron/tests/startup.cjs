@@ -6,7 +6,7 @@ const {once} = require('node:events');
 const {randomBytes} = require('node:crypto');
 const os = require('node:os');
 const path = require('node:path');
-const {app, BrowserWindow} = require('electron');
+const {app, BrowserWindow, Menu} = require('electron');
 const temporary = mkdtempSync(path.join(os.tmpdir(), 'signet-entry-test-'));
 app.setPath('appData', temporary);
 const stateFile = path.join(temporary, 'SIGNET Research Assistant', 'state', '.chat-state.json');
@@ -35,6 +35,9 @@ app.once('browser-window-created', (_event, window) => {
       assert.equal(BrowserWindow.getAllWindows().length, 1);
       assert.equal(window.isVisible(), true);
       assert.match(window.webContents.getURL(), /^http:\/\/127\.0\.0\.1:/);
+      const classicLoaded = once(window.webContents, 'did-finish-load');
+      Menu.getApplicationMenu().getMenuItemById('classic-view').click();
+      await classicLoaded;
       assert.equal(await window.webContents.executeJavaScript('!!document.querySelector("#composer")'), true);
       const snapshot = () => window.webContents.executeJavaScript(`({
         initial: JSON.parse(document.querySelector('#initial-chat').textContent),
@@ -42,26 +45,32 @@ app.once('browser-window-created', (_event, window) => {
         choices: document.querySelectorAll('#chat-list .chat-link').length,
         welcome: !!document.querySelector('#welcome')
       })`);
-      const navigate = async script => {
+      const navigate = async selector => {
         const loaded = once(window.webContents, 'did-finish-load');
-        await window.webContents.executeJavaScript(script);
+        const found = await window.webContents.executeJavaScript(`(() => {
+          const button = document.querySelector(${JSON.stringify(selector)});
+          if (!button) return false;
+          setTimeout(() => button.click(), 0);
+          return true;
+        })()`);
+        assert.equal(found, true, `Missing navigation control ${selector}`);
         await loaded;
       };
       let page = await snapshot();
       assert.equal(page.initial.session, latest);
       assert.match(page.text, /Saved conversation 31/);
       assert.equal(page.choices, 32);
-      await navigate(`document.querySelector('#chat-list [data-session=${JSON.stringify(oldest)}]').click(); true`);
+      await navigate(`#chat-list [data-session=${JSON.stringify(oldest)}]`);
       page = await snapshot();
       assert.equal(page.initial.session, oldest);
       assert.match(page.text, /Saved conversation 0/);
-      await navigate("document.querySelector('#new-chat').click(); true");
+      await navigate('#new-chat');
       page = await snapshot();
       assert.equal(page.welcome, true);
       assert.equal(page.initial.session, undefined);
       assert.equal(page.choices, 32);
       const loaded = once(window.webContents, 'did-finish-load');
-      await window.loadURL(new URL('/', window.webContents.getURL()).href);
+      await window.loadURL(new URL('/classic', window.webContents.getURL()).href);
       await loaded;
       assert.equal((await snapshot()).initial.session, oldest);
       const stored = JSON.parse(readFileSync(stateFile, 'utf8'));

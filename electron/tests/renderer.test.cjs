@@ -16,9 +16,15 @@ test('Electron serves its renderer with escaped bootstrap data and strict produc
  assert.equal(calls[0].options.bypassCustomProtocolHandlers,true);
  assert.doesNotMatch(response.headers.get('content-security-policy'),/unsafe-inline/);
  assert.match(response.headers.get('content-security-policy'), /frame-src http:\/\/127\.0\.0\.1:43210\/signet\/result-preview\//);
- assert.match(html,/\/renderer.js/);assert.doesNotMatch(html,/ssh-ui.js/);
- const script=await handler(new Request(origin+'/renderer.js'));
+ assert.match(html,/id="ml-composer"/);
+ assert.deepEqual(JSON.parse(html.match(/<script type="application\/json" id="initial-chat">(.*?)<\/script>/s)[1]), {
+  messages: [{text: '</script><img src=x>'}],
+ });
+ const script=await handler(new Request(origin+'/workspace/workspace.js'));
  assert.equal(script.status,200);assert.match(script.headers.get('content-type'),/javascript/);
+ const classic=await (await handler(new Request(origin+'/classic'))).text();
+ assert.match(classic,/\/renderer.js/);
+ assert.doesNotMatch(classic,/ssh-ui.js/);
 });
 test('only the exported widget path is eligible for result frame navigation',()=>{
  const root='/signet/result-preview/'+'a'.repeat(32);

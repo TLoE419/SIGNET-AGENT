@@ -1,5 +1,6 @@
 'use strict';
 // Actual Electron + unchanged Web UI + real Python service. No model calls or data.
+const {once} = require('node:events');
 const assert = require('node:assert/strict');
 const {mkdtempSync, rmSync, writeFileSync} = require('node:fs');
 const os = require('node:os');
@@ -19,6 +20,9 @@ app.on('will-quit', () => { clearTimeout(deadline); rmSync(temporary, {recursive
   running = await launch({devMode, visible: false, userData: path.join(temporary, 'app'), stateFile: path.join(temporary, 'state', '.chat-state.json')});
   assert.ok(running);
   const {window, backend, origin} = running;
+ const classicLoaded = once(window.webContents, 'did-finish-load');
+ require('electron').Menu.getApplicationMenu().getMenuItemById('classic-view').click();
+ await classicLoaded;
   const prefs = window.webContents.getLastWebPreferences();
   assert.equal(prefs.nodeIntegration, false);
   assert.equal(prefs.contextIsolation, true);
