@@ -194,7 +194,13 @@ class ModelPrivacyTest(unittest.TestCase):
             'workspace': PRIVATE, 'checks': [{'item': 'slurm', 'status': 'missing', 'detail': PRIVATE}]})
         self.assertEqual(setup['checks'], [{'item': 'slurm', 'status': 'missing'}])
         self.assertNotIn(PRIVATE, json.dumps(setup))
-        log = safe_tool_result('read_hpc_setup_log', {'status': 'ok', 'step': 'clinical', 'lines': ['cannot open ' + PRIVATE]})
+        shared = [{'item': item, 'status': 'ok'}
+                  for item in ('connection', 'workspace', 'slurm', 'apptainer', 'signet_source', 'container')]
+        old = safe_tool_result('check_hpc_environment', {'status': 'ok', 'ready': False,
+            'checks': [*shared, {'item': 'reference_clinical', 'status': 'missing', 'detail': PRIVATE}]})
+        self.assertEqual(old['checks'], shared)
+        self.assertTrue(old['ready'])
+        log = safe_tool_result('read_hpc_setup_log', {'status': 'ok', 'step': 'container', 'lines': ['cannot open ' + PRIVATE]})
         self.assertEqual(log['failure']['classifications'], ['missing_or_unreadable_file'])
         self.assertEqual(safe_tool_result('read_hpc_setup_log', log), log)
         for lines in ([], ['Download complete.'], [PRIVATE]):

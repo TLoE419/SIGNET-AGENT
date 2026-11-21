@@ -52,8 +52,20 @@ class ModelController {
     return this.exclusive(async () => {
       await this.store.clear();
       const restarting = this.getProvider() === 'gemini';
-      if (restarting) this.scheduleSwitch('codex', null);
+      if (restarting) this.scheduleSwitch('none', null);
       return {restarting};
+    });
+  }
+  selectProvider(provider) {
+    return this.exclusive(async () => {
+      if (!['none', 'gemini', 'codex'].includes(provider)) {
+        throw new ModelKeyError('PROVIDER_INVALID', 'Choose Codex CLI, Gemini, or no chat model.');
+      }
+      if (this.getProvider() === provider) return {restarting: false};
+      const key = provider === 'gemini' ? await this.store.load() : null;
+      if (provider === 'gemini' && !key) throw new ModelKeyError('KEY_REQUIRED', 'Save a Gemini key before switching to Gemini.');
+      this.scheduleSwitch(provider, key);
+      return {restarting: true};
     });
   }
 }
@@ -68,6 +80,7 @@ function installModelHandlers(ipc, getWindow, controller, getOrigin) {
     getStatus: () => controller.status(),
     saveGeminiKey: key => controller.saveGeminiKey(key),
     clearGeminiKey: () => controller.clearGeminiKey(),
+    selectProvider: provider => controller.selectProvider(provider),
   };
   for (const [name, handler] of Object.entries(operations)) {
     ipc.handle(`model:${name}`, async (event, ...args) => {

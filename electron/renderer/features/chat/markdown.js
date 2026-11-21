@@ -31,6 +31,7 @@ answerMarkdown.inline.ruler.before('emphasis', 'chinese_strong', (state, silent)
 });
 function renderMarkdown(text) {
   let fence = null;
+  let decisionSummary = false;
   const answer = text.split('\n').filter(line => {
     const marker = line.match(/^\s*(`{3,}|~{3,})/);
     if (marker) {
@@ -40,7 +41,13 @@ function renderMarkdown(text) {
     }
     if (fence) return true;
     const plain = line.replace(/^\s*(?:#{1,6}\s+|[-*+]\s+)?/, '').replace(/\*\*/g, '').trim();
+    if (/^Decision summary\s*:?$/i.test(plain)) {
+      decisionSummary = true;
+      return false;
+    }
+    if (decisionSummary && /^(?:Selection reason|Evidence|Missing information)\s*:/i.test(plain)) return false;
+    if (plain) decisionSummary = false;
     return !/^(?:【決策摘要】|決策摘要\s*[:：]?$|(?:選擇原因|資訊依據|尚缺資訊)\s*[:：])/.test(plain);
   }).join('\n').trim();
-  return answerMarkdown.render(answer || '模型未提供其他回答。');
+  return answerMarkdown.render(answer || 'The model did not provide an additional answer.');
 }

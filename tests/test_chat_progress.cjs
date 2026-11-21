@@ -46,7 +46,6 @@ function setup(initial={}) {
   const context=vm.createContext({document:{getElementById:id=>ids.get(id),createElement:tag=>new Element(tag),
     querySelector:selector=>selector.startsWith('meta')?{content:'token'}:find(selector),
     querySelectorAll:selector=>selector==='[data-tab]'?all.filter(e=>e.dataset.tab):[],addEventListener(){}},
-    uiLanguage:'en',uiText(el,text){el.dataset.i18n=text;el.textContent=text;},
     crypto:{randomUUID:()=> 'test-session'},history:{replaceState(){}},location:{pathname:'/classic',assign:path=>navigation.push(path)},performance:{now:()=>1000},TextDecoder,
     Event:class {constructor(type){this.type=type;}},CustomEvent:class {constructor(type,options){this.type=type;this.detail=options.detail;}},
     addEventListener(name,fn){events[name]=fn;},dispatchEvent(event){events[event.type]?.(event);},
@@ -59,9 +58,9 @@ function setup(initial={}) {
       let read=0;
       const chunk=items=>({done:false,value:Buffer.from(items.map(item=>JSON.stringify(item)+'\n').join(''))});
       return {ok:true,body:{getReader:()=>({read:async()=>{
-        if(read++===0)return chunk([{type:'progress',text:'模型請求 1/5：等待回覆。'},
-          {type:'progress',text:'工具 1/1：signet_catalog；驗證參數並呼叫。'},
-          {type:'progress',text:'工具結果：signet_catalog；status=ok；executed=False。'},
+        if(read++===0)return chunk([{type:'progress',text:'Model request 1/5: awaiting response.'},
+          {type:'progress',text:'Tool 1/1: signet_catalog; validating arguments and invoking the tool.'},
+          {type:'progress',text:'Tool result: signet_catalog; status=ok; executed=False.'},
           {type:'workspace',text:structuredClone(workspace)}]);
         if(read===2){await gate;return chunk([{type:'answer',text:'Completed capability lookup.'},{type:'done',text:'Completed'}]);}
         return {done:true};
@@ -91,6 +90,7 @@ function setup(initial={}) {
   const pending=vm.runInContext('send("Describe the tools without running analysis.")',app.context);
   await new Promise(setImmediate);
   assert.equal(app.requests[0].workspace_context.history_id,'archive--same');
+  assert.equal(Object.hasOwn(app.requests[0], 'language'), false);
   const savedLink=app.ids.get('chat-list').children[0];
   assert.equal(savedLink.disabled,true);
   savedLink.events.click();
@@ -109,7 +109,7 @@ function setup(initial={}) {
   app.finish();await pending;
   assert.equal(savedLink.disabled,false);
   assert.equal(app.visible(app.ids.get('activity')),true,'finished tool records remain accessible');
-  assert.equal(app.ids.get('state').textContent,'回合結束');
+  assert.equal(app.ids.get('state').textContent,'Turn finished');
   app.ids.get('chat-progress').open=false;
   assert.equal(app.visible(app.ids.get('state')),true,'collapsed progress keeps its status visible');
   assert.equal(app.visible(app.ids.get('activity')),false);
@@ -121,12 +121,12 @@ function setup(initial={}) {
   await vm.runInContext('send("After changing chats and workspace")',app.context);
   assert.equal(app.requests[1].workspace_context,null,'next send must not reuse prior selection');
 
-  const restored=setup({session:'saved-session',sessions:[{session:'saved-session',title:'Saved question'},{session:'other-session',title:'<script>literal title</script>'}],messages:[{role:'assistant',text:'Saved answer'}],events:[['Saved tool result']]});
+  const restored=setup({session:'saved-session',sessions:[{session:'saved-session',title:'Saved question'},{session:'other-session',title:'<script>literal title</script>'}],messages:[{role:'assistant',text:'Saved answer'}],events:[['Saved tool result', '之前的活動記錄']]});
   await new Promise(setImmediate);
   assert.equal(restored.visible(restored.ids.get('chat-progress')),true,'restored history has an accessible progress control');
   restored.ids.get('chat-progress').open=true;
   assert.equal(restored.visible(restored.ids.get('activity')),true);
-  assert.match(restored.ids.get('activity').textContent,/Saved tool result/);
+  assert.match(restored.ids.get('activity').textContent,/Saved tool result\n之前的活動記錄/);
   const links=restored.ids.get('chat-list').children;
   assert.equal(links.length,2);
   assert.equal(links[0].attributes['aria-current'],'page','the open conversation is marked');
@@ -141,6 +141,6 @@ function setup(initial={}) {
   await vm.runInContext('send("Controlled error")',failed.context);
   assert.equal(failed.visible(failed.ids.get('activity')),true,'failure details remain visible');
   assert.match(failed.ids.get('activity').textContent,/Controlled service failure/);
-  assert.equal(failed.ids.get('state').textContent,'需要確認');
+  assert.equal(failed.ids.get('state').textContent,'Needs attention');
   console.log('Chat progress visibility, status, history, errors and Stage 6 independence passed.');
 })().catch(error=>{console.error(error);process.exitCode=1;});

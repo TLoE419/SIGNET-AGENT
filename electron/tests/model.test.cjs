@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const {mkdtemp, readFile, stat, rm} = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
-const {GeminiKeyStore, ModelController, verifyGeminiKey} = require('../main/model/index.cjs');
+const {GeminiKeyStore, ModelController, installModelHandlers, verifyGeminiKey} = require('../main/model/index.cjs');
 
 const KEY = 'AIza' + 'x'.repeat(35);
 const fakeSafeStorage = (available = true) => ({
@@ -54,7 +54,7 @@ test('controller saves only verified keys, then switches to Gemini after replyin
   const {directory, store} = await tempStore();
   try {
     const switches = [];
-    let provider = 'codex';
+    let provider = 'none';
     const controller = new ModelController({store, getProvider: () => provider,
       switchProvider: (next, key) => { switches.push([next, key]); provider = next; },
       verify: async key => { if (key !== KEY) throw Object.assign(Error('rejected'), {code: 'KEY_REJECTED'}); }});
@@ -67,14 +67,51 @@ test('controller saves only verified keys, then switches to Gemini after replyin
     assert.deepEqual(await controller.status(), {provider: 'gemini', geminiConfigured: true, encryptionAvailable: true});
     assert.deepEqual(await controller.clearGeminiKey(), {restarting: true});
     await tick();
-    assert.deepEqual(switches.at(-1), ['codex', null]);
+    assert.deepEqual(switches.at(-1), ['none', null]);
     assert.equal(await store.has(), false);
+  } finally { await rm(directory, {recursive: true, force: true}); }
+});
+
+test('authenticated provider selection opts in to Codex and reuses the saved Gemini key on return', async () => {
+  const {directory, store} = await tempStore();
+  try {
+    await store.save(KEY);
+    const original = await readFile(store.file);
+    const switches = [], handlers = new Map();
+    let provider = 'gemini';
+    const controller = new ModelController({store, getProvider: () => provider,
+      switchProvider: (next, key) => { switches.push([next, key]); provider = next; },
+      verify: () => assert.fail('Switching must not send a Gemini verification request')});
+    const origin = 'http://127.0.0.1:8080';
+    const mainFrame = {url: origin + '/'};
+    const window = {isDestroyed: () => false, webContents: {mainFrame}};
+    const event = {sender: window.webContents, senderFrame: mainFrame};
+    const remove = installModelHandlers({handle: (name, fn) => handlers.set(name, fn), removeHandler: name => handlers.delete(name)},
+      () => window, controller, () => origin);
+    const select = handlers.get('model:selectProvider');
+
+    await assert.rejects(select({...event, senderFrame: {url: 'https://example.com/'}}, 'codex'), /Unauthorized/);
+    assert.equal((await select(event, 'unrecognized')).error.code, 'PROVIDER_INVALID');
+    assert.deepEqual(await select(event, 'codex'), {ok: true, value: {restarting: true}});
+    assert.deepEqual(switches, [], 'switch waits for the IPC reply');
+    await tick();
+    assert.deepEqual(switches, [['codex', null]]);
+    assert.deepEqual(await handlers.get('model:getStatus')(event), {ok: true, value: {
+      provider: 'codex', geminiConfigured: true, encryptionAvailable: true,
+    }});
+    assert.deepEqual(await select(event, 'codex'), {ok: true, value: {restarting: false}});
+    assert.deepEqual(await select(event, 'gemini'), {ok: true, value: {restarting: true}});
+    await tick();
+    assert.deepEqual(switches, [['codex', null], ['gemini', KEY]]);
+    assert.deepEqual(await readFile(store.file), original);
+    remove();
+    assert.equal(handlers.size, 0);
   } finally { await rm(directory, {recursive: true, force: true}); }
 });
 
  test('model writes remain locked until the scheduled switch settles',async()=>{
   const {directory,store}=await tempStore();let release;
-  const controller=new ModelController({store,getProvider:()=> 'codex',verify:async()=>{},switchProvider:()=>new Promise(resolve=>{release=resolve})});
+  const controller=new ModelController({store,getProvider:()=> 'none',verify:async()=>{},switchProvider:()=>new Promise(resolve=>{release=resolve})});
   try{
    await controller.saveGeminiKey(KEY);
    await assert.rejects(controller.clearGeminiKey(),{code:'BUSY'});
@@ -86,7 +123,7 @@ test('controller saves only verified keys, then switches to Gemini after replyin
  });
  test('rejected asynchronous switches surface a recoverable status error',async()=>{
   const {directory,store}=await tempStore();
-  const controller=new ModelController({store,getProvider:()=> 'codex',verify:async()=>{},switchProvider:async()=>{throw Error('fixture failure')}});
+  const controller=new ModelController({store,getProvider:()=> 'none',verify:async()=>{},switchProvider:async()=>{throw Error('fixture failure')}});
   try{await controller.saveGeminiKey(KEY);await tick();await tick();await assert.rejects(controller.status(),{code:'SWITCH_FAILED'});assert.equal(controller.switching,false)}
   finally{await rm(directory,{recursive:true,force:true})}
  });

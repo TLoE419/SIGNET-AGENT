@@ -30,7 +30,10 @@ const summary = '【決策摘要】\n選擇原因：根據檔案清單整理可�
 assert.equal(render(summary + '\n\n實際回答：有三個資料檔。'), '<p>實際回答：有三個資料檔。</p>\n');
 assert.equal(render('實際回答。\n\n' + summary), '<p>實際回答。</p>\n');
 assert.equal(render('### 決策摘要\n- **選擇原因：**查詢\n- **資訊依據**：檔案\n- 尚缺資訊: 無\n\n**答案**'), '<p><strong>答案</strong></p>\n');
-assert.equal(render(summary), '<p>模型未提供其他回答。</p>\n');
+assert.equal(render(summary), '<p>The model did not provide an additional answer.</p>\n');
+const englishSummary = '### Decision summary\n- **Selection reason:** check\n- **Evidence:** known result\n- **Missing information:** none';
+assert.equal(render(englishSummary), '<p>The model did not provide an additional answer.</p>\n');
+assert.equal(render('**Evidence:** saved results.'), '<p><strong>Evidence:</strong> saved results.</p>\n');
 assert.ok(render('```text\n' + summary + '\n```').includes('資訊依據：專案檔案 목록。'));
 assert.ok(render('這裡說明決策摘要的用途。').includes('這裡說明決策摘要的用途。'));
 console.log('Markdown formatting and unsafe-content checks passed.');

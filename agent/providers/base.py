@@ -8,7 +8,6 @@ from agent.core.model_timing import ModelRequestTiming
 
 class ProviderAdapter(ABC):
     label: str
-    startup_messages: tuple[str, ...] = ()
 
     @abstractmethod
     def create_client(self, timing: ModelRequestTiming) -> AbstractContextManager[Any]:
