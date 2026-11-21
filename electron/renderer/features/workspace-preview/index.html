@@ -1,0 +1,367 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; base-uri 'none'; form-action 'none'">
+  <title>SIGNET · Workspace Preview</title>
+  <link rel="stylesheet" href="./workspace.css">
+  <script defer src="./icons.js"></script>
+  <script defer src="./workspace.js"></script>
+  <script defer src="./interaction.js"></script>
+</head>
+<body>
+<div id="signet-lens-left-preview" lang="zh-Hant">
+  <div class="ml-app" data-nav="analysis">
+    <nav class="ml-rail" aria-label="工作區導覽">
+      <button class="ml-rail-item" type="button" data-nav-target="analysis" aria-current="page" aria-label="分析" data-tooltip="分析" data-tooltip-placement="right"><i data-lucide="flask-conical" aria-hidden="true"></i></button>
+      <button class="ml-rail-item" type="button" data-nav-target="data" aria-label="資料" data-tooltip="資料" data-tooltip-placement="right"><i data-lucide="database" aria-hidden="true"></i></button>
+      <button class="ml-rail-item" type="button" data-nav-target="history" aria-label="歷次執行" data-tooltip="歷次執行" data-tooltip-placement="right"><i data-lucide="history" aria-hidden="true"></i></button>
+      <button class="ml-rail-item ml-rail-settings" type="button" data-nav-target="settings" aria-label="設定" data-tooltip="設定" data-tooltip-placement="right"><i data-lucide="settings" aria-hidden="true"></i></button>
+    </nav>
+    <section class="ml-chat" id="ml-chat-panel" aria-label="工作區側欄">
+      <header class="ml-heading">
+        <div class="ml-segment" role="tablist" aria-label="側欄檢視">
+          <button type="button" id="ml-agent-tab" role="tab" aria-selected="true" aria-controls="ml-agent-view">Agent</button>
+          <button type="button" id="ml-stage-tab" role="tab" aria-selected="false" aria-controls="ml-stage-view" tabindex="-1">Stage</button>
+        </div>
+        <h2 class="ml-nav-heading" data-nav-left="data" hidden>資料</h2>
+        <h2 class="ml-nav-heading" data-nav-left="history" hidden>歷次執行</h2>
+        <h2 class="ml-nav-heading" data-nav-left="settings" hidden>設定</h2>
+        <div class="ml-heading-actions">
+          <button type="button" class="ml-language" id="ml-language" aria-label="Switch to English" lang="en">EN</button>
+          <button type="button" class="ml-icon-button" id="ml-close" aria-label="關閉側欄"><i data-lucide="x" aria-hidden="true"></i></button>
+        </div>
+      </header>
+      <div class="ml-agent-view" id="ml-agent-view" role="tabpanel" aria-labelledby="ml-agent-tab">
+        <div class="ml-toolbar">
+          <div class="ml-chat-toolbar-title">
+            <button type="button" class="ml-icon-button" id="ml-new" aria-label="New conversation"><i data-lucide="plus" aria-hidden="true"></i></button>
+            <strong id="ml-chat-title" data-live-language></strong>
+          </div>
+          <div class="ml-chat-toolbar-actions">
+            <button type="button" id="ml-chat-list-toggle" aria-expanded="false" aria-controls="ml-chat-list">
+              <i data-lucide="history" aria-hidden="true"></i><span data-en-text="Saved chats">對話紀錄</span>
+            </button>
+            <button type="button" id="ml-chat-activity-toggle" aria-expanded="false" aria-controls="ml-chat-activity">
+              <i data-lucide="activity" aria-hidden="true"></i><span data-en-text="Activity">執行活動</span>
+            </button>
+          </div>
+        </div>
+        <div class="ml-thread" id="ml-thread" aria-label="Conversation">
+          <section class="ml-chat-drawer" id="ml-chat-list" aria-labelledby="ml-chat-list-toggle" hidden>
+            <h3 data-en-text="Saved conversations">已存對話</h3>
+            <div class="ml-nav-list" id="ml-chat-records" data-live-language></div>
+          </section>
+          <section class="ml-chat-drawer" id="ml-chat-activity" aria-labelledby="ml-chat-activity-toggle" hidden>
+            <div class="ml-chat-drawer-title">
+              <h3 data-en-text="Execution activity">執行活動</h3>
+              <span data-en-text="Simulated">模擬</span>
+            </div>
+            <div id="ml-chat-events" data-live-language></div>
+          </section>
+          <div id="ml-chat-transcripts" aria-live="polite" data-live-language></div>
+        </div>
+        <div class="ml-run-footer" aria-live="polite">
+          <div class="ml-chat-state">
+            <i data-lucide="circle-check" aria-hidden="true"></i>
+            <span id="ml-chat-status" data-live-language></span>
+          </div>
+        </div>
+        <form class="ml-composer" id="ml-composer" aria-label="Write a message">
+          <textarea id="ml-input" rows="1" maxlength="280" aria-label="Type your message" placeholder="Type your message..."></textarea>
+          <div class="ml-composer-toolbar">
+            <div class="ml-chips" aria-hidden="true">
+              <span class="ml-chip"><i data-lucide="code"></i>Code Mode (beta)<i class="ml-chip-chevron" data-lucide="chevron-down"></i></span>
+              <span class="ml-chip"><i data-lucide="bot"></i><span id="ml-model-chip">Gemini</span><i class="ml-chip-chevron" data-lucide="chevron-down"></i></span>
+              <span class="ml-chip ml-chip-icon"><i data-lucide="sliders-horizontal"></i></span>
+            </div>
+            <div class="ml-composer-actions">
+              <span class="ml-mention" aria-hidden="true"><i data-lucide="at-sign"></i></span>
+              <button id="ml-send" class="ml-icon-button ml-send" type="button" aria-label="Send message"><i data-lucide="send" aria-hidden="true"></i></button>
+            </div>
+          </div>
+        </form>
+      </div>
+      <div class="ml-stage-view" id="ml-stage-view" role="tabpanel" aria-labelledby="ml-stage-tab" hidden>
+        <div class="ml-stage-heading" id="ml-stage-header">
+          <h2 id="ml-stage-dataset-title" data-live-language>第 1 號染色體範例</h2>
+          <span>模擬分析</span>
+        </div>
+        <ol class="ml-timeline" id="ml-timeline"></ol>
+        <p class="ml-stage-empty" id="ml-empty-stage" data-en-text="No stages have been run for this dataset." hidden>這組資料尚未執行任何階段。</p>
+      </div>
+      <div class="ml-nav-pane" data-nav-left="data" hidden>
+        <div class="ml-dataset-control">
+          <label for="ml-dataset-select" data-en-text="Switch datasets">切換資料組</label>
+          <div class="ml-dataset-control-row">
+            <select id="ml-dataset-select"></select>
+            <button class="ml-input-button" type="button" id="ml-dataset-add" aria-controls="ml-dataset-form" aria-expanded="false">
+              <i data-lucide="plus" aria-hidden="true"></i><span data-en-text="Add dataset">新增資料組</span>
+            </button>
+          </div>
+        </div>
+        <form class="ml-dataset-form" id="ml-dataset-form" hidden>
+          <label for="ml-dataset-name" data-en-text="Dataset name">資料組名稱</label>
+          <input type="text" id="ml-dataset-name" maxlength="60" required placeholder="例如：另一組研究資料" data-en-placeholder="For example, another research dataset">
+          <p id="ml-dataset-error" role="alert" data-live-language hidden></p>
+          <div class="ml-input-actions">
+            <button class="ml-input-button ml-input-primary" type="button" id="ml-dataset-create" data-en-text="Create dataset">建立資料組</button>
+            <button class="ml-input-button" type="button" id="ml-dataset-cancel" data-en-text="Cancel">取消</button>
+          </div>
+        </form>
+        <div class="ml-nav-list" aria-label="輸入資料">
+          <button class="ml-nav-list-item" type="button" data-input-target="genotype" aria-controls="ml-input-genotype" aria-pressed="true">
+            <i data-lucide="dna" aria-hidden="true"></i><span><strong>基因型資料</strong><small>example.ped · example.map</small></span>
+          </button>
+          <button class="ml-nav-list-item" type="button" data-input-target="expression" aria-controls="ml-input-expression" aria-pressed="false">
+            <i data-lucide="table-2" aria-hidden="true"></i><span><strong>基因表現量資料</strong><small>example_gexp</small></span>
+          </button>
+          <button class="ml-nav-list-item" type="button" data-input-target="clinical" aria-controls="ml-input-clinical" aria-pressed="false">
+            <i data-lucide="clipboard-list" aria-hidden="true"></i><span><strong>臨床資料</strong><small>official-demo-chr1-restart-clinical.tsv</small></span>
+          </button>
+        </div>
+      </div>
+      <div class="ml-nav-pane" data-nav-left="history" hidden>
+        <div class="ml-nav-pane-title"><h3 id="ml-history-dataset-name" data-live-language>第 1 號染色體範例</h3><span data-en-text="Selected dataset">目前資料組</span></div>
+        <div class="ml-nav-list" id="ml-run-list" aria-label="已保存的執行"></div>
+        <p class="ml-dataset-empty-note" id="ml-empty-run-list" data-en-text="No runs yet" hidden>尚無執行紀錄</p>
+      </div>
+      <div class="ml-nav-pane" data-nav-left="settings" hidden>
+        <div class="ml-nav-pane-title"><h3>工作區設定</h3><span>原型預覽</span></div>
+        <section class="ml-settings-block" aria-labelledby="ml-remote-title">
+          <h4 id="ml-remote-title" data-en-text="Remote compute">遠端運算</h4>
+          <div class="ml-settings-connection">
+            <i data-lucide="server" aria-hidden="true"></i>
+            <strong>HPC3</strong>
+            <span class="ml-settings-status" id="ml-remote-status" data-live-language role="status">未連線</span>
+            <button type="button" class="ml-remote-switch" id="ml-remote-switch" role="switch" aria-checked="false"
+              aria-label="遠端連線" data-en-aria-label="Remote connection">
+              <span aria-hidden="true"></span>
+            </button>
+          </div>
+        </section>
+        <section class="ml-settings-block" aria-labelledby="ml-model-title">
+          <div class="ml-settings-model-row">
+            <label id="ml-model-title" for="ml-model-select" data-en-text="Chat model">聊天模型</label>
+            <select id="ml-model-select">
+              <option value="gemini">Gemini</option>
+              <option value="codex">Codex</option>
+            </select>
+          </div>
+        </section>
+        <section class="ml-settings-block" aria-labelledby="ml-readiness-title">
+          <div class="ml-settings-check-heading">
+            <h4 id="ml-readiness-title" data-en-text="Environment readiness">環境就緒檢查</h4>
+            <button type="button" class="ml-settings-action" id="ml-check-environment" data-en-text="Check again" disabled>重新檢查</button>
+          </div>
+          <p class="ml-settings-note" id="ml-check-summary" data-live-language role="status">開啟模擬連線後可檢查。</p>
+          <ul class="ml-settings-checks" id="ml-environment-checks">
+            <li><span data-en-text="SIGNET source code">SIGNET 程式碼</span><span class="ml-settings-status" data-live-language>未檢查</span></li>
+            <li><span data-en-text="SIGNET container">SIGNET 容器</span><span class="ml-settings-status" data-live-language>未檢查</span></li>
+            <li><span data-en-text="Reference panel">參考面板</span><span class="ml-settings-status" data-live-language>未檢查</span></li>
+            <li><span data-en-text="Genetic map">遺傳圖譜</span><span class="ml-settings-status" data-live-language>未檢查</span></li>
+            <li><span data-en-text="Gene annotation">基因註解</span><span class="ml-settings-status" data-live-language>未檢查</span></li>
+            <li><span data-en-text="Clinical data">臨床資料</span><span class="ml-settings-status" data-live-language>未檢查</span></li>
+            <li><span data-en-text="Imputation reference">補值參考檔</span><span class="ml-settings-status" data-live-language>未檢查</span></li>
+          </ul>
+        </section>
+      </div>
+    </section>
+    <section class="ml-nav-workspace" data-nav-right="data" aria-label="輸入資料明細" hidden>
+      <article class="ml-nav-detail" id="ml-input-genotype">
+        <header class="ml-nav-detail-title"><i data-lucide="dna" aria-hidden="true"></i><h2>基因型資料</h2></header>
+        <div data-archived-input>
+          <h3 class="ml-input-archive-label" data-en-text="Archived run input">已保存執行的輸入</h3>
+          <dl class="ml-key-values">
+            <dt>原始檔案</dt><dd><code>example.ped</code><br><code>example.map</code></dd>
+            <dt>送算時的檔案</dt><dd><code>study.ped</code><br><code>study.map</code></dd>
+            <dt>原始樣本</dt><dd>563</dd>
+            <dt>第 1 階段保留的樣本</dt><dd>560</dd>
+            <dt>第 1 階段輸出的變異</dt><dd>2,983</dd>
+          </dl>
+          <button type="button" class="ml-nav-action" data-open-stage="1">查看第 1 階段</button>
+        </div>
+      </article>
+      <article class="ml-nav-detail" id="ml-input-expression" hidden>
+        <header class="ml-nav-detail-title"><i data-lucide="table-2" aria-hidden="true"></i><h2>基因表現量資料</h2></header>
+        <div data-archived-input>
+          <h3 class="ml-input-archive-label" data-en-text="Archived run input">已保存執行的輸入</h3>
+          <dl class="ml-key-values">
+            <dt>輸入檔案</dt><dd><code>example_gexp</code></dd>
+            <dt>原始樣本</dt><dd>554</dd>
+            <dt>第 2 階段保留的樣本</dt><dd>554</dd>
+            <dt>第 2 階段輸出的基因</dt><dd>95</dd>
+          </dl>
+          <button type="button" class="ml-nav-action" data-open-stage="2">查看第 2 階段</button>
+        </div>
+      </article>
+      <article class="ml-nav-detail" id="ml-input-clinical" hidden>
+        <header class="ml-nav-detail-title"><i data-lucide="clipboard-list" aria-hidden="true"></i><h2>臨床資料</h2></header>
+        <div data-archived-input>
+          <h3 class="ml-input-archive-label" data-en-text="Archived run input">已保存執行的輸入</h3>
+          <dl class="ml-key-values">
+            <dt>輸入檔案</dt><dd><code>official-demo-chr1-restart-clinical.tsv</code></dd>
+            <dt>資料來源</dt><dd>為示範分析整理的公開臨床資料</dd>
+            <dt>原始個體紀錄</dt><dd>522</dd>
+            <dt>初步配對</dt><dd>473</dd>
+            <dt>校正後保留</dt><dd>471</dd>
+          </dl>
+          <button type="button" class="ml-nav-action" data-open-stage="3">查看第 3 階段</button>
+        </div>
+      </article>
+      <template id="ml-current-files-template">
+        <section class="ml-current-input">
+          <div class="ml-input-subheading">
+            <h3 data-en-text="Selected files">目前採用的檔案</h3>
+            <span data-en-text="Simulated selection">模擬選擇</span>
+          </div>
+          <div class="ml-input-paths" data-current-files></div>
+          <div class="ml-input-actions">
+            <button type="button" class="ml-input-button ml-input-primary" data-input-replace data-en-text="Choose remote files">選擇遠端檔案</button>
+            <button type="button" class="ml-input-button" data-input-reset disabled data-en-text="Use default">改用預設</button>
+          </div>
+          <p class="ml-input-status" role="status">
+            <span data-file-status="applied" data-en-text="Selection applied to the preview." hidden>檔案選擇已套用到預覽。</span>
+            <span data-file-status="default" data-en-text="Default files restored." hidden>已改用預設檔案。</span>
+          </p>
+        </section>
+      </template>
+      <section class="ml-file-picker" id="ml-file-picker" aria-labelledby="ml-file-picker-title" hidden>
+        <header class="ml-input-subheading">
+          <h3 id="ml-file-picker-title" data-en-text="Choose remote files">選擇遠端檔案</h3>
+          <span data-en-text="Simulated HPC3 file browser">HPC3 模擬檔案瀏覽器</span>
+        </header>
+        <p class="ml-input-picker-directory"><i data-lucide="folder" aria-hidden="true"></i><code>/demo/signet/chr1</code></p>
+        <fieldset class="ml-input-options">
+          <legend data-en-text="Available files">可用檔案</legend>
+          <label class="ml-input-option">
+            <input type="radio" name="ml-remote-file" value="0" checked>
+            <span><strong data-en-text="Default files">預設檔案</strong><code data-picker-file="0"></code></span>
+          </label>
+          <label class="ml-input-option">
+            <input type="radio" name="ml-remote-file" value="1">
+            <span><strong data-en-text="Alternative demo files">備選示範檔案</strong><code data-picker-file="1"></code></span>
+          </label>
+        </fieldset>
+        <div class="ml-input-actions">
+          <button type="button" class="ml-input-button ml-input-primary" data-input-apply data-en-text="Apply selection">套用檔案選擇</button>
+          <button type="button" class="ml-input-button" data-input-cancel data-en-text="Cancel selection">取消選擇</button>
+        </div>
+      </section>
+    </section>
+    <section class="ml-nav-workspace" id="ml-run-details" aria-label="執行明細" hidden></section>
+    <section class="ml-nav-workspace" id="ml-empty-history" aria-labelledby="ml-empty-history-title" hidden>
+      <div class="ml-nav-detail">
+        <header class="ml-nav-detail-title"><i data-lucide="history" aria-hidden="true"></i><h2 id="ml-empty-history-title" data-en-text="No runs yet">尚無執行紀錄</h2></header>
+        <p class="ml-dataset-empty-note" data-en-text="Runs for the selected dataset will appear here.">這裡會顯示目前資料組的執行紀錄。</p>
+      </div>
+    </section>
+    <section class="ml-nav-workspace" id="ml-empty-analysis" aria-labelledby="ml-empty-analysis-title" hidden>
+      <div class="ml-nav-detail">
+        <header class="ml-nav-detail-title"><i data-lucide="chart-no-axes-combined" aria-hidden="true"></i><h2 id="ml-empty-analysis-title" data-en-text="No analysis results yet">尚無分析結果</h2></header>
+        <p class="ml-dataset-empty-note" data-en-text="Open Data to review the input files for this dataset.">可到「資料」檢查這組資料的輸入檔案。</p>
+      </div>
+    </section>
+    <script type="application/json" id="ml-saved-runs">[{"id":"official-example-chr1-20261111","date":"2026-11-11","jobs":[{"id":"59449045","start":"00:14:08","end":"00:42:32","cpu":8,"ram":32},{"id":"59449927","start":"00:44:40","end":"00:45:42","cpu":3,"ram":16},{"id":"59449940","start":"00:46:24","end":"00:47:26","cpu":3,"ram":16},{"id":"59449957","start":"00:47:57","end":"00:50:28","cpu":8,"ram":32},{"id":"59449990","start":"00:54:53","end":"01:03:56","cpu":2,"ram":16},{"id":"59450960","start":"01:04:38","end":"01:07:11","cpu":2,"ram":16}],"geno":[560,2983],"expression":[554,95],"matched":473,"adjusted":[471,1110],"cis":[156,35,15],"frequency":[394,337],"network":[95,731],"datasetId":"example-chr1","inputs":{"genotype":["study.ped","study.map"],"expression":"example_gexp","clinical":"official-demo-chr1-restart-clinical.tsv"}},{"id":"official-example-chr1-stage-cards-20261111","date":"2026-11-11","jobs":[{"id":"59452732","start":"01:25:30","end":"01:47:28","cpu":16,"ram":64},{"id":"59453869","start":"01:47:55","end":"01:48:56","cpu":3,"ram":16},{"id":"59454088","start":"01:49:41","end":"01:50:43","cpu":3,"ram":16},{"id":"59454201","start":"01:51:31","end":"01:54:03","cpu":8,"ram":32},{"id":"59454236","start":"01:54:45","end":"02:03:48","cpu":2,"ram":16},{"id":"59454368","start":"02:04:15","end":"02:07:23","cpu":2,"ram":16}],"geno":[560,2983],"expression":[554,95],"matched":473,"adjusted":[471,1112],"cis":[159,36,15],"frequency":[391,335],"network":[95,726],"datasetId":"example-chr1","inputs":{"genotype":["study.ped","study.map"],"expression":"example_gexp","clinical":"official-demo-chr1-restart-clinical.tsv"}},{"id":"official-example-chr1-english-20261111","date":"2026-11-11","jobs":[{"id":"59472053","start":"11:13:11","end":"11:28:46","cpu":16,"ram":64},{"id":"59476856","start":"11:30:46","end":"11:31:48","cpu":3,"ram":16},{"id":"59477055","start":"11:32:23","end":"11:33:26","cpu":3,"ram":16},{"id":"59477094","start":"11:33:54","end":"11:35:56","cpu":8,"ram":32},{"id":"59477376","start":"11:36:32","end":"11:45:05","cpu":2,"ram":16},{"id":"59478029","start":"11:45:42","end":"11:48:45","cpu":2,"ram":16}],"geno":[560,2983],"expression":[554,95],"matched":473,"adjusted":[471,1110],"cis":[155,35,14],"frequency":[372,334],"network":[95,706],"datasetId":"example-chr1","inputs":{"genotype":["study.ped","study.map"],"expression":"example_gexp","clinical":"official-demo-chr1-restart-clinical.tsv"}}]</script>
+    <script type="application/json" id="ml-run-edges">{"official-example-chr1-20261111":[["MEGF6","CYP4Z1",0.5,0.0],["MEGF6","LRRC40",0.5,0.0],["MEGF6","HSD17B7",0.5,0.0],["MEGF6","ATP1B1",1.0,0.0],["MEGF6","RABGAP1L",1.0,0.0],["MEGF6","LGALS8",0.5,0.0],["MEGF6","KDM1A",0.5,0.0],["MEGF6","GBP2",0.5,0.0],["MEGF6","C1orf159",1.0,0.373444624539445],["MEGF6","DAP3",0.5,0.0],["CHD5","MYSM1",1.0,-0.126503033055242],["CHD5","ABCD3",1.0,0.174922535752647],["CHD5","PGD",1.0,0.0],["MYSM1","LRRC40",1.0,0.274925935133582],["LRRC40","FRRS1",0.5,0.0],["ABCD3","MEGF6",0.5,-0.146241009080484],["FRRS1","PGD",1.0,0.0],["HSD17B7","MEGF6",1.0,0.129874449180318],["ATP1B1","RABGAP1L",1.0,0.0680704704001198],["PGD","KDM1A",1.0,0.00172745594572803],["C1orf159","MEGF6",1.0,0.292842608754999]],"official-example-chr1-stage-cards-20261111":[["MEGF6","CYP4Z1",0.5,0.0],["MEGF6","LRRC40",0.5,0.0],["MEGF6","HSD17B7",0.5,0.0],["MEGF6","ATP1B1",0.5,0.0],["MEGF6","KDM1A",0.5,0.0],["MEGF6","C1orf159",1.0,0.368443978174951],["MEGF6","DAP3",0.5,0.0],["CHD5","MYSM1",1.0,-0.123160572928125],["CHD5","ABCD3",1.0,0.170953748636747],["CHD5","PGD",1.0,0.0],["MYSM1","LRRC40",1.0,0.219989440171397],["LRRC40","FRRS1",0.5,0.0],["ABCD3","MEGF6",0.5,-0.150660186648427],["FRRS1","PGD",1.0,0.0],["HSD17B7","MEGF6",1.0,0.122773072469747],["ATP1B1","RABGAP1L",1.0,0.0376406556770439],["PGD","KDM1A",1.0,0.107248829004563],["C1orf159","MEGF6",1.0,0.30212624434984]],"official-example-chr1-english-20261111":[["MEGF6","CYP4Z1",0.5,0.0],["MEGF6","HSD17B7",0.5,0.0],["MEGF6","ATP1B1",1.0,0.0],["MEGF6","KDM1A",0.5,0.0],["MEGF6","C1orf159",1.0,0.366401780574142],["MEGF6","DAP3",0.5,0.0],["CHD5","MYSM1",1.0,-0.119056339277202],["CHD5","ABCD3",1.0,0.172441513468537],["CHD5","PGD",1.0,0.0],["MYSM1","LRRC40",1.0,0.211640254126925],["LRRC40","FRRS1",0.5,0.0],["ABCD3","MEGF6",0.5,-0.12986146474623],["FRRS1","PGD",0.5,0.0],["HSD17B7","MEGF6",1.0,0.13896395064525],["ATP1B1","RABGAP1L",1.0,0.0257047227464944],["PGD","KDM1A",0.5,0.130805640207893],["C1orf159","MEGF6",1.0,0.301102088002948]]}</script>
+    <section class="ml-workspace" id="lens-stage6" data-selected-gene="" aria-labelledby="lens-stage6-title">
+
+  <div class="ml-result-main">
+    <div class="s6-zoom" role="group" aria-label="網路圖縮放">
+      <button type="button" id="s6-zoom-out" data-zoom="out" aria-label="縮小網路圖"><i data-lucide="zoom-out" aria-hidden="true"></i></button>
+      <input id="s6-zoom" type="range" min="75" max="140" step="5" value="100" aria-label="網路圖縮放">
+      <button type="button" id="s6-zoom-in" data-zoom="in" aria-label="放大網路圖"><i data-lucide="zoom-in" aria-hidden="true"></i></button>
+    </div>
+  <div id="lens-stage6-graph" class="s6-graph-frame" tabindex="-1">
+    <svg class="s6-graph" viewBox="0 0 620 320" role="group" aria-labelledby="lens-stage6-graph-label">
+      <title id="lens-stage6-graph-label">可選取基因的調控網路</title>
+      <defs>
+        <marker id="lens-s6-arrow" viewBox="0 0 7 7" markerWidth="7" markerHeight="7" markerUnits="userSpaceOnUse" refX="6.7" refY="3.5" orient="auto">
+          <path d="M0 0L7 3.5L0 7Z" fill="#9eafc4"></path>
+        </marker>
+        <marker id="lens-s6-arrow-active" viewBox="0 0 8 8" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" refX="7.7" refY="4" orient="auto">
+          <path d="M0 0L8 4L0 8Z" fill="#3469cc"></path>
+        </marker>
+      </defs>
+      <g class="s6-edges" aria-hidden="true"></g>
+      <g class="s6-genes"></g>
+    </svg>
+  </div>
+  <details id="lens-stage6-table" class="ml-result-dock" tabindex="-1" open>
+    <summary><i data-lucide="table-2" aria-hidden="true"></i>連線資料 <span class="s6-row-count" data-live-language></span><i class="ml-result-chevron" data-lucide="chevron-down" aria-hidden="true"></i></summary>
+    <div class="ml-result-table">
+      <table aria-label="基因調控連線">
+        <thead>
+          <tr><th scope="col">來源基因</th><th scope="col">目標基因</th><th scope="col">重抽樣頻率</th><th scope="col">係數</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </details>
+  </div>
+  <aside class="ml-result-inspector" aria-label="網路圖資訊">
+    <header class="ml-result-inspector-heading">
+      <i data-lucide="network" aria-hidden="true"></i>
+      <h2 id="lens-stage6-title">基因調控網路</h2>
+    </header>
+    <dl class="ml-result-context">
+      <dt>階段</dt><dd>第 6 階段</dd>
+      <dt>資料</dt><dd>第 1 號染色體 · 模擬結果節錄</dd>
+      <dt>圖中範圍</dt><dd class="s6-graph-meta"></dd>
+    </dl>
+  <div class="s6-selection">
+    <div class="s6-summary" aria-live="polite" data-live-language>點選基因查看相連的調控關係。</div>
+    <button class="s6-reset" type="button" hidden>清除選取</button>
+  </div>
+  </aside>
+
+</section>
+    <section class="ml-workspace" id="lens-stage3" aria-labelledby="lens-stage3-title" hidden>
+      <div class="ml-result-main">
+        <figure class="s3-figure">
+          <h3>前兩個主成分的樣本分布</h3>
+          <svg class="s3-chart" viewBox="0 0 660 410" role="img" aria-label="471 位個體的散點圖，橫軸為第 1 主成分，縱軸為第 2 主成分">
+            <g class="s3-axes" aria-hidden="true"></g>
+            <g class="s3-points" aria-hidden="true"></g>
+            <text x="352" y="402" text-anchor="middle" class="s3-axis-title">第 1 主成分</text>
+            <text x="17" y="183" text-anchor="middle" transform="rotate(-90 17 183)" class="s3-axis-title">第 2 主成分</text>
+          </svg>
+          <figcaption>每個點代表 1 位個體。圖中分數由同次分析保留的基因型資料重算並標準化。</figcaption>
+        </figure>
+        <details class="ml-result-dock" open>
+          <summary><i data-lucide="table-2" aria-hidden="true"></i>樣本配對 <i class="ml-result-chevron" data-lucide="chevron-down" aria-hidden="true"></i></summary>
+          <div class="ml-result-table">
+            <table aria-label="樣本配對與校正結果">
+              <thead><tr><th scope="col">處理步驟</th><th scope="col">數量</th></tr></thead>
+              <tbody>
+                <tr><td>基因型輸入</td><td>560 筆樣本</td></tr>
+                <tr><td>基因表現量輸入</td><td>554 筆樣本</td></tr>
+                <tr><td>初步配對</td><td>473 位個體</td></tr>
+                <tr><td>校正後保留</td><td>471 位個體</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </details>
+      </div>
+      <aside class="ml-result-inspector" aria-label="第 3 階段資訊">
+        <header class="ml-result-inspector-heading">
+          <i data-lucide="chart-scatter" aria-hidden="true"></i>
+          <h2 id="lens-stage3-title">樣本配對與校正</h2>
+        </header>
+        <dl class="ml-result-context">
+          <dt>階段</dt><dd>第 3 階段</dd>
+          <dt>資料</dt><dd>第 1 號染色體 · 模擬結果</dd>
+          <dt>主成分數</dt><dd>前 <strong>3</strong> 個</dd>
+          <dt>保留變異</dt><dd>1,110 個</dd>
+          <dt>分析基因</dt><dd>95 個</dd>
+        </dl>
+      </aside>
+
+      <script type="application/json" data-stage3-points>[[-1.23,0.57],[-0.005,0.504],[-0.486,-0.913],[-1.553,-0.343],[-0.275,-0.913],[0.325,-0.321],[0.801,0.086],[-0.363,-1.146],[-0.121,-0.796],[0.068,-0.47],[0.895,-1.427],[-0.432,0.111],[2.606,-1.848],[-1.373,-0.247],[0.417,0.52],[0.267,-1.768],[0.34,0.262],[-0.494,-0.698],[0.036,-0.711],[-0.828,1.808],[-1.178,-0.646],[-0.257,-1.1],[0.69,-1.439],[0.487,0.573],[0.473,0.553],[1.029,-0.467],[0.435,1.419],[-0.723,-0.011],[0.554,0.364],[0.27,-1.365],[-0.458,-0.027],[-0.013,1.205],[-1.067,-1.167],[-0.738,-0.168],[0.834,-0.765],[-0.784,0.225],[-1.023,1.138],[-0.662,-0.297],[-0.436,-1.568],[-0.202,-0.301],[0.127,0.536],[0.568,-0.064],[-0.095,0.584],[0.732,-2.625],[0.824,0.87],[-1.407,0.095],[-0.938,2.579],[1.714,-1.314],[0.45,-0.487],[0.024,-0.732],[-0.221,-1.881],[3.923,4.807],[-0.373,2.987],[0.766,0.663],[0.233,-0.81],[-0.913,-0.311],[-0.394,0.389],[-0.781,-0.531],[-1.222,0.64],[1.63,0.847],[-1.166,0.304],[1.676,-0.251],[-0.819,-0.684],[0.091,0.098],[0.215,1.172],[0.432,-0.866],[-0.944,-0.202],[0.123,-0.345],[-0.853,1.136],[1.974,1.205],[-0.249,-0.339],[0.265,-0.441],[0.362,1.367],[1.214,1.792],[-0.032,-0.584],[0.791,-0.229],[0.744,1.082],[0.237,-0.949],[-0.623,-0.62],[-0.094,0.59],[-1.026,-0.661],[0.003,-0.88],[0.209,-0.072],[-0.259,0.572],[0.011,-2.558],[0.731,0.021],[-0.202,-0.74],[0.953,-0.36],[0.06,0.318],[0.538,-0.73],[-0.163,1.415],[0.086,0.32],[-0.595,-1.048],[0.141,-0.19],[-1.236,0.354],[-0.824,-0.048],[-0.163,0.407],[-0.258,0.136],[-1.242,0.317],[0.165,-1.173],[-0.715,0.478],[0.233,-1.297],[0.355,0.402],[0.921,0.517],[-0.042,-0.802],[0.107,0.112],[0.638,0.09],[-0.544,-0.159],[1.903,-1.116],[-0.44,0.157],[2.295,-3.848],[0.701,2.142],[1.095,-0.515],[1.028,-1.062],[-0.745,1.283],[-0.446,1.487],[-0.557,-0.502],[2.647,-0.155],[0.236,0.146],[0.389,0.414],[-1.366,-0.474],[0.426,-0.189],[0.455,0.975],[0.009,-0.866],[0.741,0.951],[-1.283,1.247],[-0.8,-1.165],[0.9,-1.035],[-0.757,2.155],[0.211,-0.556],[-0.109,0.71],[-0.672,-0.256],[-0.785,-0.24],[0.558,-0.582],[-0.844,0.437],[-1.543,-0.91],[-0.934,-0.548],[-0.661,-0.303],[0.471,-0.593],[0.086,-1.464],[-1.139,0.653],[-0.382,0.378],[-0.082,0.664],[0.556,0.343],[3.048,0.047],[0.142,-1.751],[1.561,-0.211],[-0.386,-0.983],[-0.575,0.207],[2.655,1.301],[-0.587,-0.149],[0.419,-1.11],[-0.295,1.405],[-0.613,0.637],[0.03,0.281],[0.07,1.421],[0.852,-0.676],[-0.173,-1.003],[-0.242,0.719],[-0.395,0.277],[0.974,-1.055],[0.839,0.871],[0.373,-1.221],[-0.003,-2.786],[-0.396,-2.258],[1.688,0.48],[-1.466,-1.502],[-0.684,0.75],[0.388,0.199],[0.1,-0.005],[-0.552,0.618],[1.515,-0.976],[0.36,0.656],[-0.621,-0.479],[0.219,0.338],[-0.029,0.022],[0.329,-0.294],[0.117,-0.727],[0.055,-1.181],[-0.698,0.484],[-0.125,0.685],[-0.392,0.611],[-0.016,-0.531],[0.312,0.042],[-1.228,-0.333],[-1.027,0.414],[-0.518,-1.366],[0.092,-0.203],[-0.652,-0.26],[1.723,0.338],[-0.243,0.091],[-1.071,0.671],[-0.515,0.549],[-0.588,0.729],[0.505,-0.693],[-0.141,-0.122],[0.092,-1.036],[0.515,0.565],[-0.048,1.233],[-1.313,0.119],[0.817,-1.192],[0.353,-1.604],[0.582,0.045],[-0.631,-0.605],[-0.537,0.214],[-0.514,0.05],[0.032,-1.273],[-1.272,0.349],[-0.21,-0.811],[-0.784,-2.074],[-0.279,1.271],[0.798,0.251],[0.248,0.586],[-1.109,-0.572],[0.185,0.355],[0.15,-0.73],[0.765,-0.769],[-0.559,1.189],[1.453,2.302],[-0.685,-1.442],[0.883,-0.134],[0.402,1.76],[2.448,-0.517],[-0.041,-0.283],[-0.921,0.582],[-1.152,-1.522],[-0.466,0.233],[-0.696,0.281],[-0.769,2.268],[-1.09,0.236],[-0.194,0.458],[-0.534,0.635],[-0.139,-0.429],[-0.429,-0.12],[-0.808,-0.017],[-0.045,-1.459],[1.307,-0.592],[-0.569,0.811],[-0.325,0.694],[-1.022,0.993],[-0.045,0.77],[1.567,-0.343],[-0.053,-0.706],[-1.294,-0.457],[-1.441,1.788],[-1.634,-1.539],[-0.366,0.561],[-0.603,-0.416],[4.565,-2.055],[-0.796,0.851],[-0.054,-1.959],[0.656,0.254],[-0.139,-1.842],[-0.478,-0.515],[-0.169,-0.633],[-0.647,0.46],[-0.634,0.823],[0.245,0.928],[0.31,-1.147],[-0.817,1.139],[0.948,1.018],[-0.813,-0.139],[0.021,1.035],[0.405,-0.165],[-0.034,0.194],[0.137,0.123],[1.198,0.377],[-0.086,-0.778],[-0.29,1.418],[-0.486,-0.019],[-0.034,0.236],[-0.939,0.274],[-0.269,1.629],[-1.283,-3.306],[0.252,0.692],[-0.195,0.035],[1.744,2.213],[0.381,0.517],[0.877,0.777],[0.689,1.013],[0.887,-2.039],[0.091,-0.904],[0.624,1.047],[-0.24,-1.31],[-0.737,1.182],[-0.104,-0.86],[-0.297,0.073],[0.086,0.202],[0.096,-0.524],[0.171,1.203],[0.103,1.301],[0.944,0.905],[-1.528,0.359],[-0.032,0.322],[-0.104,-0.165],[0.299,-0.036],[-0.656,-0.59],[1.876,-0.07],[0.099,-0.172],[0.715,-0.897],[-0.04,0.513],[-0.449,0.085],[0.548,-1.117],[-1.025,0.232],[-0.646,0.526],[0.05,0.433],[-0.704,-0.089],[-0.036,0.933],[-0.796,-1.03],[0.652,1.018],[-0.528,-0.653],[0.673,-0.884],[-0.916,0.575],[-0.454,2.027],[-0.592,0.635],[-0.483,-1.15],[-1.027,0.761],[-1.293,0.916],[0.433,-2.286],[0.069,1.088],[0.879,1.739],[-0.378,0.126],[-0.802,-0.656],[-0.607,-0.581],[-0.626,-1.379],[-1.085,0.515],[-0.137,-0.223],[1.06,1.33],[-0.92,0.938],[-0.446,1.305],[0.823,-0.51],[0.136,-1.131],[-1.317,0.006],[-0.614,-0.879],[1.479,1.107],[-0.244,0.166],[0.405,-0.091],[-0.468,-0.296],[-0.211,-0.111],[0.463,0.737],[0.448,-0.058],[0.741,-1.057],[0.748,0.062],[-1.895,0.088],[0.11,0.4],[1.024,0.134],[0.057,-0.61],[-0.151,0.766],[0.831,0.169],[-0.307,-2.007],[0.746,0.95],[1.479,1.312],[1.138,0.759],[-0.491,0.775],[-1.161,-0.064],[-1.72,1.842],[3.047,0.674],[1.677,0.282],[1.198,0.064],[-0.578,-0.256],[-0.24,-0.102],[-0.019,0.283],[-0.797,-0.744],[3.143,0.705],[-0.486,1.503],[-1.316,0.117],[0.071,1.007],[0.358,-0.115],[0.472,0.104],[0.051,0.398],[-0.693,0.285],[0.651,-0.309],[-0.701,0.421],[-1.256,-0.046],[-0.324,0.71],[-0.926,-0.238],[0.399,1.624],[0.319,0.635],[0.238,1.296],[-1.13,-0.012],[0.287,-0.517],[0.275,-0.854],[-0.387,0.212],[-1.717,-0.064],[0.276,0.508],[1.287,-1.063],[-1.401,0.534],[0.336,1.128],[-0.646,-0.687],[0.915,-0.613],[10.794,-0.794],[0.572,1.342],[-0.914,0.874],[0.117,-1.278],[0.084,0.132],[-0.074,-0.707],[-1.368,-0.782],[0.202,0.895],[0.095,-0.046],[0.604,0.108],[-1.094,0.282],[-0.459,0.428],[-0.587,-0.725],[-0.443,1.808],[-1.118,-0.674],[-0.095,0.687],[-0.965,1.734],[-0.676,-1.724],[-0.074,-1.57],[-1.0,0.198],[-0.364,0.111],[0.778,-2.287],[-0.609,0.543],[-0.19,0.028],[-0.931,-0.511],[0.446,1.478],[-0.313,3.065],[0.572,0.493],[-1.332,0.583],[0.861,-0.156],[0.199,-0.66],[0.441,0.897],[0.865,-0.342],[1.679,1.037],[-0.04,0.15],[-0.451,0.412],[1.6,1.845],[-0.829,-2.048],[-1.479,-0.801],[0.056,-0.984],[0.544,1.361],[0.531,0.52],[0.966,-0.731],[-0.204,-2.194],[0.303,-0.01],[0.482,0.061],[-1.061,-0.769],[0.406,0.654],[0.701,0.761],[0.176,0.372],[-0.401,0.547],[0.272,0.111],[-0.521,-1.006],[-0.492,-0.015],[0.63,-0.918],[-1.056,0.069],[1.253,-0.842],[-0.144,-0.859],[1.56,-1.503],[0.333,-0.093],[-1.557,-0.782],[-0.793,0.431],[0.165,-0.966],[0.551,1.968],[-0.603,1.043],[-1.153,-1.073],[-0.222,0.686],[-0.793,-1.149],[-0.75,1.249],[-0.444,-0.474],[-0.255,0.481],[-0.176,-0.582],[0.16,0.647],[-0.575,0.0],[-0.248,-2.746],[-0.087,0.347],[0.241,-0.42],[0.074,0.627],[-0.795,-0.165],[-0.354,-0.018],[0.393,1.563]]</script>
+
+    </section>
+  </div>
+</div>
+</body>
+</html>
