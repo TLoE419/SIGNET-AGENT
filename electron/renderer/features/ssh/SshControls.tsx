@@ -1,7 +1,7 @@
 import {EnvironmentModal} from '../environment/EnvironmentModal';
 import {RemoteFilesHost} from '../remote-files/RemoteFilesModal';
 import type {EnvironmentBridge,EnvironmentSnapshot} from '../../../shared/environment/types';
-import {useEffect,useState} from 'react';
+import {useEffect,useState,type ComponentProps,type ReactNode} from 'react';
 import {ConnectionModal,KeyRegistrationModal,useSshConnection} from './index';
 import {ElectronSshConnectionPort,ElectronSshKeyOnboardingPort,type SshBridge} from './state/ElectronSshConnectionPort';
 import {uciHpc3Preset,type AuthChallenge,type KeyMetadata,type FormInput} from '../../../shared/ssh/types';
@@ -14,7 +14,11 @@ import {SshStatusBlock} from './connection/SshStatusBlock';
 const bridge=(window as unknown as {signetDesktop:{ssh:SshBridge}}).signetDesktop.ssh,port=new ElectronSshConnectionPort(bridge),onboarding=new ElectronSshKeyOnboardingPort(bridge);
 const devTerminal=(window as unknown as {signetDesktop:{devTerminal?:DevTerminalBridge}}).signetDesktop.devTerminal;
 const environmentBridge=(window as unknown as {signetDesktop:{environment:EnvironmentBridge}}).signetDesktop.environment;
-export function SshControls(){
+export type SshControlStatus = ComponentProps<typeof SshStatusBlock> & {
+ environment:EnvironmentSnapshot;
+ onEnvironment:()=>void;
+};
+export function SshControls({renderStatus}:{renderStatus?:(props:SshControlStatus)=>ReactNode}){
  const [environment,setEnvironment]=useState<EnvironmentSnapshot>({phase:'disconnected',message:'Connect SSH first.'}),[environmentOpen,setEnvironmentOpen]=useState(false);
  useEffect(()=>{let active=true,received=false;const off=environmentBridge.subscribe(value=>{received=true;if(active)setEnvironment(value)});void environmentBridge.getSnapshot().then(reply=>{if(active&&!received&&reply.ok&&reply.value)setEnvironment(reply.value)});return()=>{active=false;off()}},[]);
  useEffect(()=>{const open=()=>setEnvironmentOpen(true);window.addEventListener('open-environment',open);return()=>window.removeEventListener('open-environment',open)},[]);
@@ -27,7 +31,8 @@ export function SshControls(){
  async function connect(input:FormInput){setDraft(null);if(input.auth.method==='duo'){await ssh.save(input);setOpen(false);setAccount(true);return}try{await ssh.connect(input)}catch(e){credentialRequest(e)}}
  async function toggle(){if(connection?.phase==='slow'&&liveStatus==='error'){await ssh.connectSaved();return}if(liveStatus==='connected'||liveStatus==='connecting'){await ssh.disconnect();return}if(!p){setOpen(true);return}if(p.auth.method==='duo'){setAccount(true);return}try{await ssh.connectSaved()}catch(e){credentialRequest(e)}}
  const connection=ssh.snapshot.connection,identity=connectionIdentity(p,keys);
- return <>{devTerminal&&<DevTerminalPanel onConnect={()=>setOpen(true)} diagnostics={diagnostics} bridge={devTerminal} connected={liveStatus==='connected'} status={liveStatus}/>}<SshStatusBlock environment={environment} onEnvironment={()=>setEnvironmentOpen(true)} name={identity.name} host={identity.endpoint} status={status} phase={connection?.phase} error={ssh.error||connection?.error} busy={ssh.busy} onEdit={()=>setOpen(true)} onToggle={()=>void toggle().catch(()=>{})}/>
+ const statusProps:SshControlStatus={environment,onEnvironment:()=>setEnvironmentOpen(true),name:identity.name,host:identity.endpoint,status,phase:connection?.phase,error:ssh.error||connection?.error,busy:ssh.busy,onEdit:()=>setOpen(true),onToggle:()=>void toggle().catch(()=>{})};
+ return <>{devTerminal&&!renderStatus&&<DevTerminalPanel onConnect={()=>setOpen(true)} diagnostics={diagnostics} bridge={devTerminal} connected={liveStatus==='connected'} status={liveStatus}/>}{renderStatus ? renderStatus(statusProps) : <SshStatusBlock {...statusProps}/>}
  <RemoteFilesHost/>
  {environmentOpen&&<EnvironmentModal diagnostics={diagnosticView} snapshot={environment} bridge={environmentBridge} onClose={()=>setEnvironmentOpen(false)}/>}
  <UnlockPrompt diagnostics={diagnosticView} open={unlock} name={identity.name} onClose={()=>{setUnlock(false);if(liveStatus==='connecting')void ssh.disconnect()}} onConnect={ssh.connectSaved} pendingHost={ssh.snapshot.pendingHost} onTrust={ssh.trustHost}/>

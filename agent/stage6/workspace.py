@@ -11,6 +11,7 @@ import threading
 import time
 
 import agent.tools.signet as st
+from agent.runtime import workspace_genotype
 from agent.runtime.visualization import validate_inputs
 
 CHAT_CONTEXT = ContextVar('stage6_chat_context', default=None)
@@ -322,6 +323,26 @@ class Workspace:
             except (OSError, ValueError, KeyError, TypeError):
                 continue
         return {'datasets': list(datasets.values()), 'runs': runs}
+
+    def history(self):
+        history = self.archived_history()
+        known = {entry['run_id'] for entry in history['runs']}
+        live = []
+        for snapshot in sorted((st.PROJECT / 'runs').glob(f'*/{workspace_genotype.SNAPSHOT}')):
+            if snapshot.parent.name in known:
+                continue
+            try:
+                live.append(workspace_genotype.run_history(st._run(snapshot.parent.name)))
+            except (OSError, ValueError, KeyError, TypeError):
+                continue
+        if live and not any(entry['id'] == workspace_genotype.DATASET_ID for entry in history['datasets']):
+            history['datasets'].append({
+                'id': workspace_genotype.DATASET_ID,
+                'name': ['第 1 號染色體範例', 'Chromosome 1 example'],
+                'inputs': {'genotype': ['study.ped', 'study.map'], 'expression': [], 'clinical': []},
+            })
+        history['runs'].extend(live)
+        return history
 
     def _archived_history_run(self, run_id):
         run_id = st._name(run_id)
