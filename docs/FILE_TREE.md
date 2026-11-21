@@ -22,17 +22,16 @@ SIGNET-agent/
 │   │   ├── conversation.py       # Conversation flow, public progress, controlled tool calls; terminal chat entry point
 │   │   ├── context_budget.py     # Input length and compression of repeated tool evidence
 │   │   └── model_timing.py       # Model request and transport timing
-│   ├── providers/                # Factory dispatch and isolated Codex, Gemini and Groq adapters
-│   │   ├── codex_client.py       # Uses the downloader's own signed-in model CLI
+│   ├── providers/                # Factory dispatch and isolated model adapters
 │   │   └── groq_client.py        # Groq connection, tool format, and rate-limit waits
 │   ├── tools/
 │   │   ├── general.py            # Restricted file listing and paginated text reading
 │   │   ├── registry.py           # Every model-callable tool; also the dispatch allow-list
-│   │   ├── hpc.py                # HPC3 readiness check, shared environment boundary, reference preparation, setup logs
+│   │   ├── hpc.py                # HPC3 readiness, software setup, and setup diagnostics
 │   │   └── signet.py             # Scientific tools, parameter validation, and isolated job preparation
 │   ├── runtime/
 │   │   ├── hpc.py                # HPC3 workspace layout, read-only checks, background setup steps
-│   │   ├── hpc_files.py          # Desktop file window: browse HPC3 and choose reference files (not a model tool)
+│   │   ├── hpc_files.py          # Desktop file browser and metadata checks for selected files
 │   │   ├── jobs/
 │   │   │   └── prepare_reference.py  # Runs on HPC3: detects ref/gmap formats and converts them for one study
 │   │   ├── remote.py             # Remote connection, packaging, and output collection
@@ -79,7 +78,6 @@ SIGNET-agent/
 │   │   ├── features/             # chat/, stage6/, ssh/, model/, environment/, remote-files/, devtools/
 │   │   ├── components/           # Shared dialogs, actions and icons
 │   │   ├── styles/               # Colors, spacing and interface styles
-│   │   ├── i18n/                 # English / Traditional Chinese
 │   │   └── vendor/               # Third-party assets and licenses
 │   ├── shared/ssh/               # Shared contracts and validation
 │   ├── scripts/                  # Build and native dependency preparation
@@ -99,7 +97,6 @@ SIGNET-agent/
     ├── test_chat.py              # Conversation and tool flow
     ├── test_chat_progress.cjs     # Chat progress visibility, restoration, errors, and visualization isolation
     ├── test_chat_ui.py           # Web request protection, streamed progress, and conversation isolation
-    ├── test_codex_provider.py    # Model CLI, formatting, and credential isolation
     ├── test_context_budget.py   # Input length and evidence compression
     ├── test_decision_summary.py # Public tool-selection summaries
     ├── test_diagnostics.py      # Error reporting and sensitive-content redaction
