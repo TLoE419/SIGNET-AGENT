@@ -4,6 +4,7 @@ import http.client
 import json
 import os
 from pathlib import Path
+import shlex
 import tempfile
 import threading
 from types import SimpleNamespace
@@ -59,6 +60,27 @@ class DatasetValidationTest(unittest.TestCase):
             self.assertTrue(meta['complete'])
             self.assertEqual(meta['sha256'], hashlib.sha256(before[path]).hexdigest())
             self.assertEqual(path.read_bytes(), before[path])
+
+    def test_scoped_review_opens_only_the_selected_input_and_reports_canonical_and_selected_paths(self):
+        alias = self.project / 'linked-clinical.tsv'
+        alias.symlink_to(self.clin)
+        inputs = {**self.inputs, 'clinical': [str(alias)]}
+        for kind, status in zip(parser.KINDS, ('passed', 'warning', 'passed')):
+            with self.subTest(kind=kind), patch.object(parser, 'Reader', wraps=parser.Reader) as reader:
+                report = parser.validate(inputs, kind=kind)
+                self.assertEqual((report['kind'], report['status']), (kind, status))
+                self.assertEqual([call.args[0] for call in reader.call_args_list], inputs[kind])
+                self.assertEqual([check['paths'] for check in report['checks']], [inputs[kind]])
+                self.assertEqual([meta['selected_path'] for meta in report['files']], inputs[kind])
+                self.assertEqual([meta['path'] for meta in report['files']], self.inputs[kind])
+                self.assertTrue(all(meta['complete'] and meta['sha256'] for meta in report['files']))
+                self.assertEqual(report['pairing'], {'status': 'unchecked', 'issues': []})
+                self.assertEqual(report['stage_readiness'], {})
+                self.assertNotIn(self.ids[0], json.dumps(report))
+        self.map.write_text('1 rs1 0 101\n')
+        genotype = parser.validate({'genotype': self.inputs['genotype']}, kind='genotype')
+        self.assertEqual(genotype['status'], 'failed')
+        self.assertEqual(genotype['checks'][0]['issues'][0]['code'], 'ped_map_markers')
 
     def test_malformed_shapes_duplicate_headers_and_missing_covariates_fail_without_echoing_data(self):
         cases = [('ped', self.ped, self.ped.read_text().replace('A G A A C C', 'A G', 1)),
@@ -235,6 +257,49 @@ class DatasetValidationTest(unittest.TestCase):
         self.assertEqual(caught.exception.code, 'conflict')
         self.assertEqual(self.ped.read_bytes(), before)
 
+    def test_scoped_remote_snapshot_accepts_other_changes_and_rejects_changes_to_selected_files(self):
+        inputs = {**self.inputs, 'clinical': ['unresolved.tsv']}
+        record = workspace_datasets.create_dataset(['資料組', 'Dataset'], inputs=inputs)
+        selected = {'expression': inputs['expression']}
+        def remote(script, timeout):
+            self.assertEqual(timeout, 60)
+            code = script('/remote/workspace')
+            args = shlex.split(next(line for line in code.splitlines() if line.startswith('python3 - ')))
+            self.assertEqual(json.loads(args[2]), selected)
+            self.assertEqual(args[3:], ['expression', '<<SIGNET_DATASET_VALIDATION'])
+            workspace_datasets.update_dataset(record['id'], {'clinical': self.inputs['clinical']})
+            return parser.validate(selected, kind='expression')
+        with patch.object(hpc_files, '_call', side_effect=remote) as call:
+            report = workspace_validation.validate(record['id'], inputs, kind='expression')
+        self.assertEqual(report['inputs'], inputs)
+        self.assertEqual(report['resolved_inputs'], selected)
+        self.assertEqual(report['kind'], 'expression')
+        call.assert_called_once()
+        def change_selected(*_):
+            workspace_datasets.update_dataset(record['id'], {'expression': []})
+            return parser.validate(selected, kind='expression')
+        with patch.object(hpc_files, '_call', side_effect=change_selected), self.assertRaises(StepError) as caught:
+            workspace_validation.validate(record['id'], inputs, kind='expression')
+        self.assertEqual(caught.exception.code, 'conflict')
+        with patch.object(hpc_files, '_call') as call, self.assertRaises(StepError) as caught:
+            workspace_validation.validate(record['id'], inputs, kind='expression')
+        self.assertEqual(caught.exception.code, 'conflict')
+        call.assert_not_called()
+
+    def test_scoped_builtin_expression_alias_does_not_probe_genotype_and_keeps_timeout(self):
+        from agent.runtime import signet_jobs, workspace_inputs
+        inputs = workspace_inputs.LEGACY_INPUTS
+        environment = {'root': '/remote/workspace', 'source': '/remote/software'}
+        timeout = {'status': 'failed', 'code': 'remote_timeout', 'reason': 'Request timed out.'}
+        with patch.object(workspace_validation, '_saved', return_value={'inputs': inputs}), \
+                patch.object(signet_jobs, '_environment', return_value=environment), \
+                patch.object(signet_jobs, '_shell', side_effect=AssertionError('Do not probe genotype')), \
+                patch.object(hpc_files, '_call', return_value=timeout):
+            report = workspace_validation.validate('example-chr1', inputs, kind='expression')
+        self.assertEqual(report['resolved_inputs'], {'expression': ['/remote/software/example/gexp/example_gexp']})
+        self.assertEqual((report['kind'], report['status'], report['code']), ('expression', 'failed', 'remote_timeout'))
+        self.assertNotIn('checks', report)
+
     def test_authenticated_route_has_exact_snapshot_body_and_no_execution_side_effect(self):
         record = workspace_datasets.create_dataset(['資料組', 'Dataset'], inputs=self.inputs)
         server = ChatServer(('127.0.0.1', 0), Mock())
@@ -256,16 +321,22 @@ class DatasetValidationTest(unittest.TestCase):
                 return response.status, json.loads(response.read())
             finally:
                 connection.close()
-        with patch.object(hpc_files, '_call', side_effect=lambda *_: parser.validate(self.inputs)) as remote:
+        full_report = parser.validate(self.inputs)
+        clinical_report = parser.validate(self.inputs, kind='clinical')
+        with patch.object(hpc_files, '_call', side_effect=[full_report, clinical_report]) as remote:
             self.assertEqual(post({'inputs': self.inputs}, authenticated=False)[0], 403)
             self.assertEqual(post({'inputs': self.inputs}, origin=False)[0], 403)
             for body in ({}, {'inputs': self.inputs, 'run': True}, {'inputs': {}}, {'inputs': []},
-                         {'inputs': {**self.inputs, 'unknown': []}}):
+                         {'inputs': {**self.inputs, 'unknown': []}}, {'inputs': self.inputs, 'kind': None},
+                         {'inputs': self.inputs, 'kind': []}, {'inputs': self.inputs, 'kind': 'all'}):
                 self.assertEqual(post(body)[0], 400)
             remote.assert_not_called()
             status, result = post({'inputs': self.inputs})
             self.assertEqual((status, result['status'], result['executed'], result['read_only']), (200, 'warning', False, True))
             remote.assert_called_once()
+            status, result = post({'inputs': self.inputs, 'kind': 'clinical'})
+            self.assertEqual((status, result['kind'], result['status']), (200, 'clinical', 'passed'))
+            self.assertEqual(result['resolved_inputs'], {'clinical': self.inputs['clinical']})
 
 
 if __name__ == '__main__':

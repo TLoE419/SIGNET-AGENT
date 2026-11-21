@@ -7,7 +7,7 @@ function subscribe(channel, listener) {
   ipcRenderer.on(channel, receive);
   return () => ipcRenderer.removeListener(channel, receive);
 }
-const devTerminal=process.argv.includes('--signet-dev-terminal')?Object.freeze({
+const devTerminal=process.argv.includes('--signet-dev-mode')&&process.argv.includes('--signet-dev-terminal')?Object.freeze({
   open:(id,cols,rows)=>ipcRenderer.invoke('ssh-dev:open',id,cols,rows),
   input:(id,data)=>ipcRenderer.invoke('ssh-dev:input',id,data),
   resize:(id,cols,rows)=>ipcRenderer.invoke('ssh-dev:resize',id,cols,rows),
@@ -20,11 +20,16 @@ const devTerminal=process.argv.includes('--signet-dev-terminal')?Object.freeze({
   raw:listener=>subscribe('ssh-dev:raw',listener),
   rawHistory:()=>ipcRenderer.invoke('ssh-dev:rawHistory'),
 }):undefined;
-if (process.isMainFrame) contextBridge.exposeInMainWorld('signetDesktop', Object.freeze({isDesktop:true,isDevMode:process.argv.includes('--signet-dev-mode'),model:Object.freeze({getStatus:()=>ipcRenderer.invoke('model:getStatus'),saveGeminiKey:key=>ipcRenderer.invoke('model:saveGeminiKey',key),clearGeminiKey:()=>ipcRenderer.invoke('model:clearGeminiKey')}),environment:Object.freeze({
+if (process.isMainFrame) contextBridge.exposeInMainWorld('signetDesktop', Object.freeze({isDesktop:true,isDevMode:process.argv.includes('--signet-dev-mode'),model:Object.freeze({
+  getStatus:()=>ipcRenderer.invoke('model:getStatus'),
+  saveGeminiKey:key=>ipcRenderer.invoke('model:saveGeminiKey',key),
+  clearGeminiKey:()=>ipcRenderer.invoke('model:clearGeminiKey'),
+  selectProvider:provider=>ipcRenderer.invoke('model:selectProvider',provider),
+}),environment:Object.freeze({
   getSnapshot:()=>ipcRenderer.invoke('environment:getSnapshot'),
   check:(root='',partition='')=>ipcRenderer.invoke('environment:check',root,partition),
   subscribe:listener=>subscribe('environment:snapshot',listener),
-}),...(devTerminal?{devTerminal}:{}), ssh:Object.freeze({
+}),copyFilePath:path=>ipcRenderer.invoke('workspace:copy-path',path),...(devTerminal?{devTerminal}:{}), ssh:Object.freeze({
   cancelRegistration: () => call('cancelRegistration'),
   initialize: () => call('initialize'),
   getSnapshot: () => call('getSnapshot'),

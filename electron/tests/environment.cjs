@@ -14,13 +14,12 @@ const directory=mkdtempSync(path.join(os.tmpdir(),'signet-environment-local-'));
 let running,server,source=false,image=false,failVerification=true,connections=0;
 let readinessMode='normal',readinessDelay=80;
 const commands=[],readinessCommands=[];
-const setupActionCalls=[],setupSubmissions=[],setupLogReads=[];
-const remoteFiles={ref:true,gmap:true,gtf:true,clinical:true,prepare:true},remoteJobs={};
-const present=step=>step==='container'?image:remoteFiles[step];
-const complete=step=>{if(step==='container')image=true;else remoteFiles[step]=true;remoteJobs[step].state='COMPLETED'};
+const setupActionCalls=[],setupSubmissions=[];
+let containerJob;
+const setupCursor=()=>createHash('sha256').update(JSON.stringify({source,image,containerJob})).digest('hex');
 const setupCommands=()=>commands.filter(script=>!script.includes('say workspace_path "$W"'));
-const checkIds=['connection','workspace','slurm','apptainer','signet_source','container','reference_ref',
- 'reference_gmap','reference_gtf','reference_clinical','imputation_reference'];
+const checkIds=['connection','workspace','slurm','apptainer','signet_source','container'];
+const checkCount=checkIds.length;
 const deadline=setTimeout(()=>{console.error('Local environment smoke timeout');app.exit(1)},90000);
 app.on('will-quit',()=>{clearTimeout(deadline);server?.close();rmSync(directory,{recursive:true,force:true})});
 async function until(check,description='Local environment condition timed out',timeoutMs=5000){const end=Date.now()+timeoutMs;do{if(await check())return;await new Promise(r=>setTimeout(r,25))}while(Date.now()<end);throw Error(description)}
@@ -43,37 +42,45 @@ async function until(check,description='Local environment condition timed out',t
       const values={user:'testuser',host:'login-mock',workspace_path:'/home/testuser/mock-signet',
        workspace:'yes',workspace_writable:'yes',sbatch:'yes',apptainer:'apptainer version 1.3.2',
        signet:source?'yes':'no',signet_integrity:'verified',signet_revision:inventory.revision,
-       signet_example:'verified',file_container:image?'4096':'no',file_ref:remoteFiles.ref?'8192':'no',file_gmap:remoteFiles.gmap?'2048':'no',
-       file_gtf:remoteFiles.gtf?'16384':'no',file_clinical:remoteFiles.clinical?'1024':'no',file_prepare:remoteFiles.prepare?'512':'no'};
-      for(const [step,job] of Object.entries(remoteJobs)){
-       values['job_'+step]=job.id;
-       if(['PENDING','RUNNING'].includes(job.state))values['job_'+step+'_state']=job.state;
+       setup_cursor:setupCursor(),signet_example:'verified',file_container:image?'4096':'no'};
+      if(containerJob){
+       values.job_container=containerJob.id;
+       if(['PENDING','RUNNING'].includes(containerJob.state))values.job_container_state=containerJob.state;
+       else {
+        values.job_container_terminal=containerJob.state==='FAILED'?'failed':'done';
+        values.job_container_terminal_job=containerJob.id;
+       }
       }
       if(['infra-failed','workspace'].includes(readinessMode))values.workspace_writable='no';
       if(['infra-failed','slurm'].includes(readinessMode))values.sbatch='no';
       if(['infra-failed','apptainer'].includes(readinessMode))values.apptainer='no';
-      if(readinessMode==='missing-file')values.file_gtf='no';
       out=Object.entries(values).map(([key,value])=>`@@${key}\t${value}\n`).join('');
      }
-     else if(script.includes('say log_exists')){
-      const step=script.match(/\$D\/(container|ref|gmap|gtf|clinical|prepare)\.log/)?.[1];
-      if(!step)throw Error('Unexpected fixture setup log command');
-      setupLogReads.push(step);
-      out='@@workspace_path\t/home/testuser/mock-signet\n@@log_exists\tyes\n'
-       +'@@line\tMOCK '+step+' download failed: checksum mismatch\n';
+     else if(script.includes("<<'SIGNET_SETUP_WATCH'")){
+      const cursor=script.match(/([a-f0-9]{64}) 45 <<'SIGNET_SETUP_WATCH'/)?.[1];
+      if(!cursor)throw Error('Unexpected setup notification request');
+      const started=Date.now();
+      const timer=setInterval(()=>{
+       if(stream.destroyed){clearInterval(timer);return}
+       const current=setupCursor();
+       if(current===cursor&&Date.now()-started<1000)return;
+       clearInterval(timer);
+       stream.write('@@workspace_path\t/home/testuser/mock-signet\n@@setup_cursor\t'+current+'\n@@setup_changed\t'+(current!==cursor?'yes':'no')+'\n');
+       stream.exit(0);stream.end();
+      },25);
+      return;
      }
      else if(script.includes('--job-name=signet-')){
-      const step=script.match(/--job-name=signet-(container|ref|gmap|gtf|clinical|prepare)\b/)?.[1];
-      if(!step)throw Error('Unexpected fixture setup submission');
-      setupActionCalls.push(step);
+      assert.match(script,/--job-name=signet-container\b/,'Only container setup may submit a scheduled job');
+      setupActionCalls.push('container');
       let outcome='existing';
-      if(['PENDING','RUNNING'].includes(remoteJobs[step]?.state))outcome='in_progress';
-      else if(!present(step)){
-       outcome='started';setupSubmissions.push(step);
-       remoteJobs[step]={id:String(9000+setupSubmissions.length),state:'PENDING'};
+      if(['PENDING','RUNNING'].includes(containerJob?.state))outcome='in_progress';
+      else if(!image){
+       outcome='started';setupSubmissions.push('container');
+       containerJob={id:String(9000+setupSubmissions.length),state:'PENDING'};
       }
-      out='@@workspace_path\t/home/testuser/mock-signet\n@@'+step+'\t'+outcome+'\n'
-       +(remoteJobs[step]?'@@'+step+'_job\t'+remoteJobs[step].id+'\n':'');
+      out='@@workspace_path\t/home/testuser/mock-signet\n@@container\t'+outcome+'\n'
+       +(containerJob?'@@container_job\t'+containerJob.id+'\n':'');
      }
      else if(script.includes('SIGNET_INSTALL')){source=true;out='@@workspace_path\t/home/testuser/mock-signet\n@@signet\tstarted\n'}
      else if(script.includes('Rscript -e')&&failVerification){err='MOCK: SIGNET settings verification failed: config.ini unreadable\n';code=1}
@@ -99,30 +106,30 @@ async function until(check,description='Local environment condition timed out',t
    id:row.dataset.checkId,status:row.dataset.status,ready:row.querySelector('[data-ready]')?.dataset.ready,
    detail:row.querySelector('.ml-settings-check-detail')?.textContent||'',
    visibleDetail:!!row.querySelector('.ml-settings-check-detail')?.getClientRects().length}))}})()`);
- const settled=async(ready,statuses={},allReady=ready===11)=>{
-  await until(async()=>{const state=await readiness();return !state.disabled&&state.summary.includes(ready+'/11')&&
+ const settled=async(ready,statuses={},allReady=ready===checkCount)=>{
+  await until(async()=>{const state=await readiness();return !state.disabled&&state.summary.includes(ready+'/'+checkCount)&&
    Object.entries(statuses).every(([id,status])=>state.rows.find(row=>row.id===id)?.status===status)},
-  'Full readiness results did not settle: '+ready+'/11 '+JSON.stringify(statuses));
+  'Full readiness results did not settle: '+ready+'/'+checkCount+' '+JSON.stringify(statuses));
   const result=await readiness();
   assert.deepEqual(result.rows.map(row=>row.id),checkIds,'Every readiness prerequisite has its own row');
   assert.equal(result.rows.filter(row=>row.ready==='true').length,ready);
-  assert.equal(result.overall,allReady?'true':'false','Overall readiness must include all eleven prerequisites and verified runtime');
-  assert.equal(result.summary.includes('7/7'),false,'The old seven-file summary must not imply full readiness');
+  assert.equal(result.overall,allReady?'true':'false','Overall readiness requires all six checks and verified runtime');
   return result;
  };
- const checkAgain=async(mode,ready,statuses,allReady=ready===11)=>{
+ const checkAgain=async(mode,ready,statuses,allReady=ready===checkCount)=>{
   readinessMode=mode;
   const before=readinessCommands.length;
   await clickSelector('#ml-check-environment');
+  await until(()=>readinessCommands.length>before,'A manual recheck was ignored during background validation');
   const result=await settled(ready,statuses,allReady);
-  assert.equal(readinessCommands.length,before+1,'A manual recheck issues one read-only inspection');
+  assert.ok(readinessCommands.length<=before+2,'Manual and completion checks should be coalesced, not loop');
   return result;
  };
  const connectionSwitch=()=>js(`document.querySelector('#ml-remote-switch')?.getAttribute('aria-checked')`);
  const connectionState=async()=> (await js('window.signetDesktop.ssh.getSnapshot()')).value.connection?.status;
  const observeEnvironment=phases=>js(`window.envPhases=${JSON.stringify(phases)};window.signetDesktop.environment.subscribe(s=>window.envPhases.push(s.phase));true;`);
  const originalGeometry=await geometry();
- assert.deepEqual(originalGeometry,[1650,894,53,542]);
+ assert.deepEqual(originalGeometry,[1650,894,68,542]);
  await clickSelector('[data-nav-target="settings"]');
  await observeEnvironment([]);
  const saved=await js(`window.signetDesktop.ssh.saveProfile(${JSON.stringify({name:'Local mock',host:'127.0.0.1',port,username:'testuser',auth:{method:'private-key',privateKeyPath:keyPath}})})`);assert.ok(saved.ok);
@@ -141,13 +148,13 @@ async function until(check,description='Local environment condition timed out',t
  await until(async()=>await connectionSwitch()==='true');
  await until(()=>js(`document.querySelector('.ml-remote-readiness')?.dataset.phase==='needs-install'`));
  assert.equal(await connectionState(),'connected');
- await settled(9,{connection:'ok',workspace:'ok',slurm:'ok',apptainer:'ok',signet_source:'missing',container:'missing'});
+ await settled(4,{connection:'ok',workspace:'ok',slurm:'ok',apptainer:'ok',signet_source:'missing',container:'missing'});
  assert.ok(readinessCommands.length>=1,'Connecting while Settings is open automatically inspects readiness');
  assert.equal(setupCommands().length,1,'Automatic inspection does not install source code');
  assert.deepEqual(setupActionCalls,[],'Automatic inspection does not submit download jobs');
  await until(()=>js(`!!document.querySelector('[data-setup-action="signet"]:not(:disabled)')`));
  await js(`(()=>{const button=document.querySelector('[data-setup-action="signet"]');button.click();button.click()})()`);
- await settled(10,{signet_source:'ok',container:'missing'});
+ await settled(5,{signet_source:'ok',container:'missing'});
  assert.equal(commands.filter(script=>script.includes('SIGNET_INSTALL')).length,1,'Double-clicking source installation calls the shared Python installer once');
  assert.equal(await js(`'install' in window.signetDesktop.environment`),false,'the desktop bridge has no second installer');
  await until(async()=>!(await js('window.signetDesktop.environment.getSnapshot()')).value.missing?.includes('SIGNET source'));
@@ -198,27 +205,27 @@ async function until(check,description='Local environment condition timed out',t
  await switchView('workspace-view');
  await clickSelector('[data-nav-target="settings"]');
  await until(async()=>await connectionSwitch()==='true');
- const status=()=>js(`document.querySelector('#ml-remote-status').textContent.trim()`);
- const currentStatus=await status();
- await clickSelector('#ml-language');
- await until(async()=>await status()!==currentStatus);
+ assert.equal(await js(`document.querySelector('#ml-remote-status').dataset.status`),'connected');
  assert.equal(await connectionSwitch(),'true');
  assert.equal(connections,1,'switching interfaces keeps the original SSH connection');
  await until(()=>js(`document.querySelector('.ml-remote-readiness')?.dataset.phase==='ready'`));
- await settled(11);
+ await settled(checkCount);
  assert.equal(readinessCommands.length,beforeSettings+1,'Opening Settings on an existing connection automatically inspects all prerequisites');
  assert.deepEqual(await geometry(),originalGeometry,'Full readiness leaves workspace width and sidebar dimensions unchanged');
- await checkAgain('normal',11);
+ const beforeReadOnlyCheck=commands.filter(script=>script.includes('Rscript -e')).length;
+ await checkAgain('normal',checkCount);
+ assert.equal(commands.filter(script=>script.includes('Rscript -e')).length,beforeReadOnlyCheck,
+  'Checking an already verified environment only refreshes readiness');
 
- const blocked=await checkAgain('infra-failed',8,{workspace:'problem',slurm:'problem',apptainer:'problem'});
+ const blocked=await checkAgain('infra-failed',3,{workspace:'problem',slurm:'problem',apptainer:'problem'});
  const detail=(state,id)=>state.rows.find(row=>row.id===id);
  for(const id of ['workspace','slurm','apptainer'])assert.equal(detail(blocked,id).visibleDetail,true,id+' failure details must be visible');
  assert.match(detail(blocked,'workspace').detail,/\/home\/testuser\/mock-signet.*not writable/);
  assert.match(detail(blocked,'slurm').detail,/sbatch.*unavailable/);
  assert.match(detail(blocked,'apptainer').detail,/Singularity or Apptainer.*not found/);
  for(const [mode,id,expected] of [['workspace','workspace',/not writable/],['slurm','slurm',/sbatch.*unavailable/],
-  ['apptainer','apptainer',/not found/],['missing-file','reference_gtf',/refdata\/gencode\.v22\.genes\.gtf.*missing/]]){
-  const result=await checkAgain(mode,10,{[id]:mode==='missing-file'?'missing':'problem'});
+  ['apptainer','apptainer',/not found/]]){
+  const result=await checkAgain(mode,5,{[id]:'problem'});
   assert.equal(detail(result,id).visibleDetail,true,'The affected readiness explanation is visible without hovering');
   assert.match(detail(result,id).detail,expected);
  }
@@ -232,44 +239,39 @@ async function until(check,description='Local environment condition timed out',t
    return new Response(JSON.stringify({...result,ready:true,checks:result.checks.filter(check=>check.item!==id)}),
     {status:reply.status,headers:reply.headers});
   }return reply};true`);
- await checkAgain('normal',10,{apptainer:'unknown'});
+ await checkAgain('normal',5,{apptainer:'unknown'});
  await js(`window.fetch=window.readinessOriginalFetch;delete window.readinessOriginalFetch;true`);
- await checkAgain('normal',11);
+ await checkAgain('normal',checkCount);
  assert.deepEqual(await geometry(),originalGeometry,'Error and missing rows do not change the original layout widths');
 
  const beforeReopen=readinessCommands.length;
  await clickSelector('[data-nav-target="data"]');
  await clickSelector('[data-nav-target="settings"]');
- await settled(11);
+ await settled(checkCount);
  assert.equal(readinessCommands.length,beforeReopen+1,'Re-entering Settings refreshes the existing connection’s readiness');
 
  // Every setup command below is handled by this localhost SSH fixture. No shell
  // script, download, scheduler job, or scientific analysis actually executes.
  image=false;
- for(const step of Object.keys(remoteFiles))remoteFiles[step]=false;
  assert.ok((await js('window.signetDesktop.environment.check()')).ok);
  await until(()=>js(`document.querySelector('.ml-remote-readiness')?.dataset.phase==='needs-install'`));
- await settled(5,{container:'missing',reference_ref:'missing',reference_gmap:'missing',reference_gtf:'missing',
-  reference_clinical:'missing',imputation_reference:'missing'});
- assert.deepEqual(setupActionCalls,[],'Finding missing setup resources must not submit jobs');
- const rowFor={container:'container',ref:'reference_ref',gmap:'reference_gmap',gtf:'reference_gtf',
-  clinical:'reference_clinical',prepare:'imputation_reference'};
- const rowSelector=step=>`#ml-environment-checks [data-check-id="${rowFor[step]}"]`;
- const setupStatus=step=>js(`document.querySelector(${JSON.stringify(rowSelector(step))})?.dataset.status`);
- async function submitSetup(step){
-  const selector=`button[data-setup-action="${step}"]`;
+ await settled(5,{container:'missing'});
+ assert.deepEqual(setupActionCalls,[],'Finding a missing container must not submit a job');
+ const containerRow='#ml-environment-checks [data-check-id="container"]';
+ const containerStatus=()=>js(`document.querySelector(${JSON.stringify(containerRow)})?.dataset.status`);
+ async function submitContainer(){
+  const selector='button[data-setup-action="container"]';
   await until(()=>js(`!!document.querySelector(${JSON.stringify(selector+':not(:disabled)')})`),
-   'The manual setup action was not enabled: '+step);
-  const before=setupActionCalls.filter(value=>value===step).length;
+   'The manual container download was not enabled');
+  const before=setupActionCalls.length;
   await js(`(()=>{const button=document.querySelector(${JSON.stringify(selector)});button.click();button.click()})()`);
-  await until(async()=>await setupStatus(step)==='in_progress','The setup job did not show its queued state: '+step,15000);
-  assert.equal(setupActionCalls.filter(value=>value===step).length,before+1,
-   'Double-clicking a setup action must issue only one submission request: '+step);
-  assert.equal(remoteJobs[step].state,'PENDING');
-  assert.ok(await js(`document.querySelector(${JSON.stringify(rowSelector(step)+' .ml-settings-check-detail')})?.textContent.includes(${JSON.stringify(remoteJobs[step].id)})`),
-   'The queued setup job ID must be visible: '+step);
+  await until(async()=>await containerStatus()==='in_progress','The container download did not show its queued state',15000);
+  assert.equal(setupActionCalls.length,before+1,'Double-clicking download must issue one submission request');
+  assert.equal(containerJob.state,'PENDING');
+  assert.ok(await js(`document.querySelector(${JSON.stringify(containerRow+' .ml-settings-check-detail')})?.textContent.includes(${JSON.stringify(containerJob.id)})`),
+   'The queued container job ID must be visible');
  }
- await submitSetup('container');
+ await submitContainer();
  const beforeReload=setupActionCalls.length;
  const reload=once(window.webContents,'did-finish-load');
  window.webContents.reload();
@@ -279,54 +281,43 @@ async function until(check,description='Local environment condition timed out',t
  assert.equal(setupActionCalls.length,beforeReload,'Reload resumes inspection without resubmitting setup');
  assert.equal(connections,1,'Reload keeps the existing localhost SSH connection');
  const beforePoll=readinessCommands.length;
- remoteJobs.container.state='RUNNING';
+ containerJob.state='RUNNING';
  await until(()=>js(`document.querySelector('[data-check-id="container"] .ml-settings-check-detail')?.textContent.includes('running')`),
-  'Automatic read-only polling did not show the running container job',15000);
- assert.ok(readinessCommands.length>beforePoll,'Running setup progress is refreshed by /hpc/check');
- complete('container');
- await until(async()=>await setupStatus('container')==='ok','Automatic polling did not detect the completed download',15000);
- await settled(6,{container:'ok'});
- assert.deepEqual(setupActionCalls,['container'],'Polling and reload never resubmit an accepted setup job');
-
- let readyItems=6;
- for(const step of ['ref','gmap','clinical']){
-  await submitSetup(step);
-  complete(step);
-  await checkAgain('normal',++readyItems,{[rowFor[step]]:'ok'});
- }
- await submitSetup('gtf');
- remoteJobs.gtf.state='FAILED';
- await until(async()=>await setupStatus('gtf')==='problem','The failed annotation download was not reported',15000);
+  'Setup notification did not show the running container job',15000);
+ assert.ok(readinessCommands.length>beforePoll,'A changed setup notification triggers a read-only inspection');
+ containerJob.state='FAILED';
+ await until(async()=>await containerStatus()==='problem','The failed container download was not reported',15000);
  const failed=await readiness();
- await until(()=>js(`!!document.querySelector('[data-check-id="reference_gtf"] [data-setup-status][data-state="failed"]')?.getClientRects().length`),
-  'The failed download did not show a visible failure status');
- assert.equal(detail(failed,'reference_gtf').visibleDetail,true);
- assert.match(detail(failed,'reference_gtf').detail,/ended without producing.*gencode\.v22\.genes\.gtf/);
- const beforeLog=setupActionCalls.length;
- await clickSelector('[data-setup-log="gtf"]');
- await until(()=>js(`!!document.querySelector('pre[data-setup-log-output="gtf"]')?.textContent.includes('MOCK gtf download failed: checksum mismatch')`),
-  'The failed download log was not displayed');
- assert.deepEqual(setupLogReads,['gtf']);
- assert.equal(await js(`!!document.querySelector('pre[data-setup-log-output="gtf"]')?.getClientRects().length`),true);
- assert.equal(setupActionCalls.length,beforeLog,'Viewing a setup log must not submit a job');
- await submitSetup('gtf');
- complete('gtf');
- await checkAgain('normal',++readyItems,{reference_gtf:'ok'});
- await submitSetup('prepare');
- complete('prepare');
- await checkAgain('normal',++readyItems,{imputation_reference:'ok'},false);
- assert.equal(readyItems,11);
+ assert.equal(detail(failed,'container').visibleDetail,true);
+ assert.match(detail(failed,'container').detail,/Setup job \d+ failed\./);
+ assert.equal(await js(`document.querySelectorAll('[data-setup-log], [data-setup-log-output]').length`),0);
+ assert.ok(!commands.some(script=>script.includes('say log_exists')),'Readiness must not fetch setup logs');
+ await submitContainer();
+ await js(`window.readinessBlanked=false;window.readinessObserver=new MutationObserver(()=>{
+  if([...document.querySelectorAll('#ml-environment-checks li')].some(row=>row.dataset.status==='unknown'))window.readinessBlanked=true;
+ });window.readinessObserver.observe(document.querySelector('#ml-environment-checks'),{subtree:true,attributes:true,childList:true});true`);
+ readinessDelay=500;
+ image=true;
+ containerJob.state='COMPLETED';
+ await until(async()=>await containerStatus()==='ok','Setup notification did not detect the completed container download',15000);
+ assert.equal(await js('window.readinessBlanked'),false,'A completion notification must retain readiness rows during validation');
+ await js('window.readinessObserver.disconnect();true');readinessDelay=80;
+ await settled(checkCount,{container:'ok'},false);
+ assert.deepEqual(setupActionCalls,['container','container'],'Notifications and reload must not resubmit a download');
  assert.equal((await js('window.signetDesktop.environment.getSnapshot()')).value.phase,'needs-install',
-  'Downloaded files do not silently run runtime verification');
+  'The downloaded container does not silently run runtime verification');
  const beforeVerification=commands.filter(script=>script.includes('Rscript -e')).length;
- await until(()=>js(`!!document.querySelector('button[data-setup-verify]:not(:disabled)')`));
- await clickSelector('[data-setup-verify]');
+ await until(()=>js(`!!document.querySelector('#ml-check-environment:not(:disabled)')`));
+ assert.match(await js(`document.querySelector('#ml-check-environment').textContent`),/Check environment/);
+ await clickSelector('#ml-check-environment');
  await until(()=>js(`document.querySelector('.ml-remote-readiness')?.dataset.phase==='ready'`));
- await settled(11);
+ await settled(checkCount);
  assert.equal(commands.filter(script=>script.includes('Rscript -e')).length,beforeVerification+1,
-  'The explicit Verify action calls the original runtime verification once');
- assert.deepEqual(setupSubmissions,['container','ref','gmap','clinical','gtf','gtf','prepare']);
- assert.deepEqual(await geometry(),originalGeometry,'Setup progress, failure logs, and verification preserve the original geometry');
+  'The manual environment check calls runtime verification once after the download');
+ assert.deepEqual(setupSubmissions,['container','container']);
+ for(const script of readinessCommands)assert.doesNotMatch(script,/refdata\/|clinical_columns|prepared_state/,
+  'Environment checks must not inspect dataset files');
+ assert.deepEqual(await geometry(),originalGeometry,'Setup progress, failure reporting, and verification preserve the original geometry');
 
  readinessDelay=500;
  const beforeDisconnect=readinessCommands.length;
@@ -337,7 +328,7 @@ async function until(check,description='Local environment condition timed out',t
  await until(()=>js(`document.querySelector('#ml-check-environment').disabled&&document.querySelectorAll('#ml-environment-checks [data-ready="true"]').length===0`));
  const disconnected=await readiness();
  assert.equal(disconnected.overall,'false');
- assert.equal(disconnected.rows.length,11);
+ assert.equal(disconnected.rows.length,checkCount);
  assert.ok(disconnected.rows.every(row=>row.status==='unknown'&&!row.detail),'Disconnect clears all old readiness states and details');
  await new Promise(resolve=>setTimeout(resolve,650));
  const afterLateReply=await readiness();
@@ -345,5 +336,5 @@ async function until(check,description='Local environment condition timed out',t
   'A late inspection reply must not restore readiness after disconnect');
  assert.equal(afterLateReply.overall,'false');
  assert.deepEqual(await geometry(),originalGeometry);
- await running.quit();console.log('PASS: workspace manual source installation, explicit container/reference/preparation actions with queued/running/completed states, reload without resubmission, failure logs and manual retry, explicit runtime verification, full eleven-item readiness, disconnect clearing, unchanged layout, and legacy localhost connection parity');
+ await running.quit();console.log('PASS: six infrastructure checks, manual source installation, container queued/running/completed states, reload without resubmission, failure reporting and manual retry, explicit runtime verification, disconnect clearing, unchanged layout, and classic localhost connection parity');
 })().catch(async error=>{console.error(error);await running?.backend.forceStop();app.exit(1)});

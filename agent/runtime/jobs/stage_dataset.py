@@ -39,18 +39,21 @@ def stage(plan):
     frozen.mkdir(parents=True, mode=0o700)
     records = []
     paths = {}
+    reference_identities = []
     for item in plan['source_files']:
         source = Path(item['path'])
-        before = source.stat()
-        if identity(before) != item['identity']:
+        before = identity(source.stat())
+        # The login and compute nodes can report different device IDs for shared files.
+        if before[1:] != item['identity'][1:]:
             raise StagingError('A reviewed source file changed before execution.')
         if item['role'] in ('reference', 'genetic_map'):
             paths[item['role']] = str(source)
+            reference_identities.append((source, before))
             continue
         target = frozen / item['role']
         with source.open('rb') as reader, target.open('xb') as writer:
             shutil.copyfileobj(reader, writer, 1024 * 1024)
-        if identity(source.stat()) != item['identity']:
+        if identity(source.stat()) != before:
             raise StagingError('A source file changed while freezing it.')
         fingerprint = digest(target)
         if item['sha256'] is not None and fingerprint != item['sha256']:
@@ -66,8 +69,8 @@ def stage(plan):
     except namespace['PreparationError'] as error:
         # This trusted helper reports fixed problems or the already reviewed chromosome names.
         raise StagingError(str(error))
-    for item in plan['source_files']:
-        if item['role'] in ('reference', 'genetic_map') and identity(os.stat(item['path'])) != item['identity']:
+    for source, before in reference_identities:
+        if identity(source.stat()) != before:
             raise StagingError('A raw reference resource changed during preparation.')
     destination = directory / 'work/res/resg'
     destination.mkdir(parents=True, exist_ok=True)

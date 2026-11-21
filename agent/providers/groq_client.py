@@ -40,16 +40,16 @@ class RequestPacer:
         with self.lock:
             self.next_send = max(self.next_send, self.clock() + seconds)
 
-    def wait(self, report=None):
+    def wait(self, report=None, cancel_requested=None):
         with self.lock:
             while True:
-                if self.stopped.is_set():
+                if self.stopped.is_set() or (cancel_requested is not None and cancel_requested()):
                     raise KeyboardInterrupt()
                 remaining = self.next_send - self.clock()
                 if remaining <= 0:
                     return
                 if report is not None:
-                    report(f'額度等待：收到 429，剩餘 {math.ceil(remaining)} 秒後重送；已完成工具不重跑。')
+                    report(f'Quota wait: received HTTP 429. Retrying in {math.ceil(remaining)} s. Completed tools will not rerun.')
                 self.sleep(min(1, remaining))
 
 
@@ -170,20 +170,21 @@ class GroqClient:
             body['messages'].append(answer_instruction)
             count = check_budget(body, self.model)
             if self.timing is not None and self.timing.report is not None:
-                self.timing.report('輸入精簡：保留全部對話與工具證據，本輪改為文字整理，不啟動新工具。')
+                self.timing.report('Input compaction: kept the conversation and tool evidence. This request asks for text only and cannot call new tools.')
         if self.timing is not None and self.timing.report is not None:
-            self.timing.report(f'輸入大小檢查：精簡後估算 {count} 詞元；安全預算 5200。完整紀錄保留於本機。')
+            self.timing.report(f'Input size check: estimated {count} tokens after compaction. Safety budget: 5200. The full record remains local.')
         # A rejected model request has no tool execution; resend that request only.
+        cancel_requested = self.timing.cancel_requested if self.timing is not None else None
         while True:
             report = self.timing.report if self.timing is not None else None
-            self.pacer.wait(report)
+            self.pacer.wait(report, cancel_requested)
             response = self.http.post('chat/completions', json=body)
             delay = rate_limit_delay(response)
             if delay is None:
                 break
             response.close()
             if report is not None:
-                report('額度等待：額度仍不足，30 秒後重送同一份模型請求；已完成工具不重跑。')
+                report('Quota wait: retrying the same model request in 30 s. Completed tools will not rerun.')
             self.pacer.defer(delay)
         if response.is_error:
             try:
@@ -207,7 +208,7 @@ class GroqClient:
             raise ValueError('Incomplete model response; no tools were executed.')
         text = message.get('content') or ''
         if partial_text:
-            text += '\n\n> 本次回答已達長度上限，以上僅為部分說明。可指定想了解的階段繼續詢問。'
+            text += '\n\n> This answer reached the length limit. Ask about a specific stage to continue.'
         parts = [types.Part.from_text(text=text)] if text else []
         identifiers = set()
         for call in message.get('tool_calls') or []:

@@ -54,7 +54,7 @@ function fingerprints(project, inputs) {
 }
 
 async function verify() {
-  running = await launch({provider: 'codex', visible: false, userData: path.join(temporary, 'app'),
+  running = await launch({provider: 'none', visible: false, userData: path.join(temporary, 'app'),
     stateFile: path.join(temporary, 'chat.json')});
   const {window} = running;
   const fixturePath = path.join(temporary, 'fixture.json');
@@ -105,7 +105,8 @@ async function verify() {
     const key = 'workspace--' + run;
     await until(() => js(`!!document.querySelector('[data-run-target="${key}"]')?.getClientRects().length`), 'Cancellation run is missing: ' + run);
     await click(`[data-run-target="${key}"]`);
-    await click(`[data-history-id="${key}"][data-run-stage="${stage}"]`);
+    await click(`#ml-run-${key} [data-history-select-stage="${stage}"]`);
+    await click(`#ml-run-${key} [data-run-stage="${stage}"]`);
   };
   const selector = (stage, prefix, action) => `#lens-stage${stage} [data-${prefix}-${action}]`;
   const state = (stage, prefix) => js(`document.querySelector('#lens-stage${stage}').dataset.${prefix}State`);
@@ -130,10 +131,9 @@ async function verify() {
   };
   const [datasetA, datasetB] = fixture.datasets;
 
-  await until(() => js(`!!document.querySelector('#ml-language')`), 'Workspace did not mount');
-  await click('#ml-language');
+  await until(() => js(`!!document.querySelector('#ml-stage-tab')`), 'Workspace did not mount');
   await context(true);
-  assert.deepEqual(await geometry(), [1650, 894, 53, 542]);
+  assert.deepEqual(await geometry(), [1650, 894, 68, 542]);
   await openStage(datasetA.id, fixture.pending, 2);
   await until(async () => await state(2, 'expression') === 'pending', 'Seeded pending expression job did not restore');
   await click(selector(2, 'expression', 'cancel'));
@@ -247,7 +247,7 @@ async function verify() {
   assert.deepEqual([...new Set(cancelled())].sort(), ['12345', '23456', '34567', '777']);
   assert.equal(existsSync(path.join(temporary, 'forbidden.ndjson')), false, 'Unexpected command, job, submission or remote operation was attempted');
   assert.deepEqual(fingerprints(fixture.project, fixture.inputs), original, 'Cancellation changed source files, reviews, old attempts or run configuration');
-  assert.deepEqual(await geometry(), [1650, 894, 53, 542]);
+  assert.deepEqual(await geometry(), [1650, 894, 68, 542]);
   await replacement.stop(); replacement = undefined;
   await running.quit();
   console.log('PASS: manual pending/running cancellation confirmation with exact job+attempt guards, dismiss/double-click/stale-target safety, disconnect and visible transport failure, only owned parent/children cancelled, child-drain state across Python restart, immutable originals and fixed geometry; controlled scheduler only, no actual SSH/submission/analysis');

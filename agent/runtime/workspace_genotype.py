@@ -9,6 +9,7 @@ import shlex
 from statistics import median
 
 from agent.runtime import signet_jobs as jobs
+from agent.runtime import ssh_transport, workspace_datasets
 from agent.runtime.hpc import PREPARED, REFERENCE_FILES
 import agent.tools.signet as signet
 
@@ -33,6 +34,7 @@ def _example_inputs(config):
 
 def review_example():
     """Review the exact prepared example files without creating a run or a job."""
+    workspace_datasets.ensure_not_deleted(DATASET_ID)
     try:
         signet._verify_source()
     except (ValueError, OSError) as error:
@@ -51,8 +53,9 @@ def review_example():
         raise jobs.StepError('remote_failed', 'Could not verify the prepared example files on HPC3.') from error
     if 'missing_input' in markers:
         raise jobs.StepError(
-            'not_ready', f'Prepare the chromosome 1 example in the remote environment. '
-            f'{markers["missing_input"]} is unavailable ({markers["missing_file"]}).')
+            'not_ready', f'The prepared chromosome 1 example is missing {markers["missing_input"]} '
+                         f'({markers["missing_file"]}). Choose your genotype and reference files in Data, '
+                         'then review Stage 1 again.')
     if 'not_ready' in markers:
         raise jobs.StepError('not_ready', 'The remote environment is missing ' + markers['not_ready'] + '.')
     if code:
@@ -71,6 +74,7 @@ def submit_example(run_id, inputs, settings, resources):
 
 @jobs._one_at_a_time
 def _submit_example(run_id, inputs, settings, resources):
+    workspace_datasets.ensure_not_deleted(DATASET_ID)
     existing = signet.PROJECT / 'runs' / run_id
     archived = signet.PROJECT / 'data/stage6-results' / run_id
     if existing.exists() or archived.exists() or existing.is_symlink() or archived.is_symlink():
@@ -103,12 +107,14 @@ def _submit_example(run_id, inputs, settings, resources):
     return jobs.submit(run_id, 'genotype', accepted_inputs, resources)
 
 
-def _workspace_run(run_id):
+def _workspace_run(run_id, *, continuation=False):
     try:
         root = signet._run(run_id)
         history = run_history(root)
     except (ValueError, OSError, KeyError, TypeError) as error:
         raise jobs.StepError('not_found', 'Select the workspace run created in Stage 1.') from error
+    if continuation:
+        workspace_datasets.ensure_not_deleted(history['dataset_id'])
     return root, history
 
 
@@ -119,6 +125,21 @@ def _initial(root):
 
 def _dataset_id(root):
     return signet._name(_initial(root)['dataset_id'])
+
+
+def guard_run_dataset(root):
+    from agent.runtime.workspace_history import _json
+    try:
+        path = signet._no_links(root / SNAPSHOT)
+        if not path.is_file():
+            return
+        snapshot, _ = _json(path)
+        if snapshot['run_id'] != root.name:
+            raise ValueError('The snapshot identifies another run.')
+        dataset_id = signet._name(snapshot['dataset_id'])
+    except (OSError, KeyError, TypeError, ValueError) as error:
+        raise jobs.StepError('conflict', "Could not verify the run's saved dataset.") from error
+    workspace_datasets.ensure_not_deleted(dataset_id)
 
 
 def _retry_context(run_id, expected_job_id, expected_attempt):
@@ -137,6 +158,7 @@ def _retry_context(run_id, expected_job_id, expected_attempt):
         signet._name(initial['dataset_id'])
     except (OSError, ValueError, KeyError, TypeError) as error:
         raise jobs.StepError('not_found', 'Select a workspace run with its original Stage 1 snapshot and job record.') from error
+    workspace_datasets.ensure_not_deleted(initial['dataset_id'])
     if ((previous.get('job_id') or 'none') != expected_job_id or previous.get('attempt', 1) != expected_attempt):
         raise jobs.StepError('conflict', 'The Stage 1 job or attempt changed. Refresh its status before reviewing a retry.')
     if previous['state'] not in jobs.RETRYABLE:
@@ -208,7 +230,7 @@ def _review_genotype_retry(run_id, expected_job_id, expected_attempt):
         raise jobs.StepError('conflict', 'The original dataset preparation mode was not recorded; a safe same-run retry is unavailable.')
     source_inputs = initial.get('source_inputs', {'genotype': [item['path'] for item in files], 'expression': [], 'clinical': []})
     result = {'run_id': run_id, 'dataset_id': initial['dataset_id'],
-              'dataset_name': initial.get('dataset_name', ['第 1 號染色體範例', 'Chromosome 1 example']),
+              'dataset_name': workspace_datasets.display_name(initial.get('dataset_name', 'Chromosome 1 example')),
               'mode': mode, 'inputs': inputs, 'source_inputs': source_inputs,
               'settings': settings, 'resources': resources, 'limits': step.limits.copy(),
               'expected_job_id': previous.get('job_id'), 'expected_attempt': expected_attempt,
@@ -218,6 +240,8 @@ def _review_genotype_retry(run_id, expected_job_id, expected_attempt):
     try:
         jobs._ensure_stopped(previous)
     except jobs.StepError as error:
+        if ssh_transport.is_timeout(error):
+            raise
         result['issues'].append(str(error))
         return result
     script = ('python3 - ' + shlex.quote(json.dumps(files)) + " <<'SIGNET_RETRY_SOURCES'\n"
@@ -334,9 +358,12 @@ def _submit_dataset(run_id, dataset_id, inputs, settings, resources, review_toke
     jobs.update_settings(run_id, settings)
     snapshot = {'run_id': run_id, 'dataset_id': dataset_id, 'dataset_name': source['name'], 'mode': 'dataset',
                 'submitted_at': jobs._now(), 'inputs': step_inputs, 'settings': checked,
-                'resources': accepted_resources, 'remote_dir': directory, 'source_inputs': source['inputs'],
+                'resources': accepted_resources, 'remote_dir': directory,
+                'source_inputs': review.get('resolved_inputs', source['inputs']), 'selected_inputs': source['inputs'],
                 'frozen_inputs': frozen, 'source_files': review['source_files'],
-                'reference_sources': review['reference_sources'], 'environment': config,
+                'reference_sources': review['reference_sources'], 'reference_choices': review['reference_choices'],
+                'reference_compatibility': review.get('reference_compatibility', {}),
+                'environment': config,
                 'review_token': review_token, 'acknowledge_warnings': acknowledge_warnings}
     temporary = root / (SNAPSHOT + '.tmp')
     temporary.write_text(json.dumps(snapshot, indent=2) + '\n')
@@ -345,7 +372,7 @@ def _submit_dataset(run_id, dataset_id, inputs, settings, resources, review_toke
 
 
 def _expression_run(run_id):
-    root, history = _workspace_run(run_id)
+    root, history = _workspace_run(run_id, continuation=True)
     genotype = history['jobs']['genotype']
     if genotype['state'] != 'completed':
         raise jobs.StepError('not_ready', 'Wait for Stage 1 of this run to complete before submitting Stage 2.')
@@ -490,6 +517,7 @@ def _adjust_review_token(run_id, inputs, choices, clinical, history, config):
             or any(not isinstance(value, str) or not re.fullmatch(r'[a-f0-9]{64}', value) for value in digests.values())):
         raise jobs.StepError('review_required', 'The clinical source fingerprints are unavailable. Check the clinical file again.')
     return fingerprint({'version': 1, 'run_id': run_id, 'source': inputs['cli.file'], 'choices': choices,
+        'gender_column': clinical.get('gender_column'),
         'source_digest': clinical['source_digest'], 'upstream_digests': digests,
         'upstream': {name: {key: history['jobs'][name].get(key) for key in
             ('run_id', 'step', 'job_id', 'attempt', 'remote_dir', 'image', 'partition')}
@@ -499,9 +527,12 @@ def _adjust_review_token(run_id, inputs, choices, clinical, history, config):
         'reviewer': _CLINICAL_REVIEW})
 
 
-def _review_adjust(run_id, clinical=None, choices=None, out=None):
+def _review_adjust(run_id, clinical=None, choices=None, out=None, *, gender_column=None):
     choices = _clinical_choices(choices)
-    root, history = _workspace_run(run_id)
+    if gender_column is not None and (not isinstance(gender_column, str) or
+                                      not 1 <= len(gender_column) <= 128 or not gender_column.isprintable()):
+        raise jobs.StepError('invalid_request', 'Choose an available gender column.')
+    root, history = _workspace_run(run_id, continuation=True)
     config = jobs._environment()
     step = jobs.STEPS['adjust']
     initial = _initial(root)
@@ -534,8 +565,14 @@ def _review_adjust(run_id, clinical=None, choices=None, out=None):
         return result
     q = shlex.quote
     script = jobs._say()
+    destination = q('')
     if out:
+        relative = Path(out).relative_to(directory)
+        if '..' in relative.parts or relative == Path('.'):
+            raise jobs.StepError('conflict', 'The clinical copy must stay in the owned run folder.')
         script += jobs._output_guard(root, history['jobs']['expression'])
+        # The guard resolves the configured mount alias and verifies ownership.
+        destination = '"${C:?}"/' + q(str(relative))
     script += jobs._input_checks(jobs._files(step, checked, {}))
     if frozen:
         from agent.runtime.workspace_inputs import frozen_checks
@@ -547,7 +584,8 @@ def _review_adjust(run_id, clinical=None, choices=None, out=None):
                + 'if ! command -v sbatch >/dev/null 2>&1; then say not_ready sbatch; exit 5; fi\n')
     script += ('python3 - ' + ' '.join(q(path) for path in (
         inputs['cli.file'], directory + '/work/res/resg/signet_Genotype.sampleID',
-        directory + '/work/res/rest/signet_gexpID', json.dumps(choices), *([out] if out else []))) + " <<'SIGNET_CLINICAL_REVIEW'\n"
+        directory + '/work/res/rest/signet_gexpID', json.dumps(choices)))
+        + f" {destination} {q(gender_column or '')} <<'SIGNET_CLINICAL_REVIEW'\n"
         + _CLINICAL_REVIEW + '\nSIGNET_CLINICAL_REVIEW\n')
     try:
         code, values, _ = jobs._shell(script)
@@ -559,6 +597,8 @@ def _review_adjust(run_id, clinical=None, choices=None, out=None):
         issues.append('This run is missing an earlier-stage intermediate: ' + values['missing_prior'])
     elif 'not_ready' in values:
         issues.append('The remote environment is missing ' + values['not_ready'] + '.')
+    elif 'output_source_mismatch' in values:
+        issues.append('The earlier-stage files no longer match this run. Check the saved Stage 2 result before submitting.')
     elif code or not values.get('clinical'):
         issues.append('The clinical compatibility check could not finish on HPC3.')
     else:
@@ -576,14 +616,14 @@ def _review_adjust(run_id, clinical=None, choices=None, out=None):
 
 
 @jobs._one_at_a_time
-def review_adjust(run_id, clinical=None, choices=None):
+def review_adjust(run_id, clinical=None, choices=None, *, gender_column=None):
     """Return the review form and readiness without changing this run or its files."""
-    return _review_adjust(run_id, clinical, choices)
+    return _review_adjust(run_id, clinical, choices, gender_column=gender_column)
 
 
 @jobs._one_at_a_time
-def submit_adjust(run_id, inputs, options, resources, choices=None, review_token=None):
-    root, _ = _workspace_run(run_id)
+def submit_adjust(run_id, inputs, options, resources, choices=None, review_token=None, *, gender_column=None):
+    root, _ = _workspace_run(run_id, continuation=True)
     path = jobs._record_path(root, 'adjust')
     previous = jobs._load(root, 'adjust') if path.exists() else None
     if previous and previous.get('state') not in jobs.RETRYABLE:
@@ -595,7 +635,7 @@ def submit_adjust(run_id, inputs, options, resources, choices=None, review_token
     answers = jobs._options(jobs.STEPS['adjust'], options)
     accepted_resources = jobs._resources(jobs.STEPS['adjust'], resources)
     choices = _clinical_choices(choices)
-    review = _review_adjust(run_id, inputs['cli.file'], choices)
+    review = _review_adjust(run_id, inputs['cli.file'], choices, gender_column=gender_column)
     if not review['ready']:
         raise jobs.StepError('not_ready', review['reason'])
     if review_token is not None and (not isinstance(review_token, str)
@@ -618,7 +658,7 @@ def submit_adjust(run_id, inputs, options, resources, choices=None, review_token
     suffix = '-' + token if token else ''
     prepared = directory + f'/inputs/clinical/review{attempt}{suffix}/clinical.tsv'
     source = review['inputs']['cli.file']
-    prepared_review = _review_adjust(run_id, source, choices, prepared)
+    prepared_review = _review_adjust(run_id, source, choices, prepared, gender_column=gender_column)
     if not prepared_review['ready']:
         raise jobs.StepError('not_ready', prepared_review['reason'])
     if (prepared_review.get('review_token') != review.get('review_token')
@@ -630,6 +670,8 @@ def submit_adjust(run_id, inputs, options, resources, choices=None, review_token
             stream.write(json.dumps(saved, indent=2) + '\n')
     accepted_inputs = {'cli.file': prepared}
     clinical = {'source': source, 'choices': choices, 'review': prepared_review['clinical']}
+    if gender_column is not None:
+        clinical['gender_column'] = gender_column
     snapshot = {'run_id': run_id, 'dataset_id': _dataset_id(root), 'review_attempt': attempt,
                 'submitted_at': jobs._now(), 'inputs': accepted_inputs, 'clinical': clinical,
                 'options': answers, 'resources': accepted_resources}
@@ -650,7 +692,7 @@ def submit_adjust(run_id, inputs, options, resources, choices=None, review_token
 
 
 def _review_cis(run_id):
-    root, history = _workspace_run(run_id)
+    root, history = _workspace_run(run_id, continuation=True)
     config = jobs._environment()
     step = jobs.STEPS['cis']
     current = signet._settings(root)
@@ -699,7 +741,7 @@ def review_cis(run_id):
 
 @jobs._one_at_a_time
 def submit_cis(run_id, inputs, settings, resources):
-    root, _ = _workspace_run(run_id)
+    root, _ = _workspace_run(run_id, continuation=True)
     record_path = jobs._record_path(root, 'cis')
     previous = jobs._load(root, 'cis') if record_path.exists() else None
     if previous and previous.get('state') not in jobs.RETRYABLE:
@@ -739,7 +781,7 @@ def submit_cis(run_id, inputs, settings, resources):
 
 
 def _review_network(run_id):
-    root, history = _workspace_run(run_id)
+    root, history = _workspace_run(run_id, continuation=True)
     config = jobs._environment()
     step = jobs.STEPS['network']
     current = signet._settings(root)
@@ -806,7 +848,7 @@ def review_network(run_id):
 
 @jobs._one_at_a_time
 def submit_network(run_id, inputs, settings, resources):
-    root, _ = _workspace_run(run_id)
+    root, _ = _workspace_run(run_id, continuation=True)
     record_path = jobs._record_path(root, 'network')
     previous = jobs._load(root, 'network') if record_path.exists() else None
     if previous and previous.get('state') not in jobs.RETRYABLE:
@@ -851,7 +893,7 @@ def submit_network(run_id, inputs, settings, resources):
 def _review_visualize(run_id, settings):
     from agent.runtime.visualization import validate_inputs
 
-    root, history = _workspace_run(run_id)
+    root, history = _workspace_run(run_id, continuation=True)
     config = jobs._environment()
     step = jobs.STEPS['visualize']
     checked = {key: jobs._setting(key, rule, settings[key]) for key, rule in step.settings.items()}
@@ -899,7 +941,7 @@ def _review_visualize(run_id, settings):
 @jobs._one_at_a_time
 def review_visualize(run_id, freq=None, ntop=None):
     """Check the reviewed threshold against this run's completed network without creating work."""
-    root, _ = _workspace_run(run_id)
+    root, _ = _workspace_run(run_id, continuation=True)
     current = signet._settings(root)
     try:
         settings = {'freq': float(current['freq'] if freq is None else freq),
@@ -911,7 +953,7 @@ def review_visualize(run_id, freq=None, ntop=None):
 
 @jobs._one_at_a_time
 def submit_visualize(run_id, inputs, settings, resources):
-    root, _ = _workspace_run(run_id)
+    root, _ = _workspace_run(run_id, continuation=True)
     record_path = jobs._record_path(root, 'visualize')
     previous = jobs._load(root, 'visualize') if record_path.exists() else None
     if previous and previous.get('state') not in jobs.RETRYABLE:
@@ -970,7 +1012,7 @@ def run_history(root):
     chromosome = job['settings']['restrict.tcga.geno']
     result = {
         'run_id': run_id, 'dataset_id': dataset_id, 'source': 'live',
-        'name': ['第 1 號染色體 · 基因型準備', 'Chromosome 1 · Genotype preparation'],
+        'name': 'Chromosome 1 · Genotype preparation',
         'inputs': {'genotype': [inputs['ped.file'], inputs['map.file'],
                                 inputs['ref'] + chromosome + '.gen', inputs['gmap'] + chromosome + '.map'],
                    'expression': [], 'clinical': []},
@@ -993,7 +1035,7 @@ def run_history(root):
         result['jobs']['expression'] = expression_job
         result['inputs']['expression'] = [expression_job['inputs'][key] for key in ('gexp.file', 'pmap.file')]
         result['status'] = expression_job['state']
-        result['name'] = ['第 1 號染色體 · 分析', 'Chromosome 1 · Analysis']
+        result['name'] = 'Chromosome 1 · Analysis'
     adjust_path = signet._no_links(root / ADJUST_SNAPSHOT)
     if adjust_path.is_file():
         adjustment = json.loads(adjust_path.read_text(encoding='utf-8'))
@@ -1011,7 +1053,7 @@ def run_history(root):
         result['jobs']['adjust'] = adjustment_job
         result['inputs']['clinical'] = [adjustment_job['inputs']['cli.file']]
         result['status'] = adjustment_job['state']
-        result['name'] = ['第 1 號染色體 · 分析', 'Chromosome 1 · Analysis']
+        result['name'] = 'Chromosome 1 · Analysis'
     cis_path = signet._no_links(root / CIS_SNAPSHOT)
     if cis_path.is_file():
         association = json.loads(cis_path.read_text(encoding='utf-8'))
@@ -1026,7 +1068,7 @@ def run_history(root):
             association_job.update(record)
         result['jobs']['cis'] = association_job
         result['status'] = association_job['state']
-        result['name'] = ['第 1 號染色體 · 分析', 'Chromosome 1 · Analysis']
+        result['name'] = 'Chromosome 1 · Analysis'
     network_path = signet._no_links(root / NETWORK_SNAPSHOT)
     if network_path.is_file():
         network = json.loads(network_path.read_text(encoding='utf-8'))
@@ -1042,7 +1084,7 @@ def run_history(root):
             network_job.update(record)
         result['jobs']['network'] = network_job
         result['status'] = network_job['state']
-        result['name'] = ['第 1 號染色體 · 分析', 'Chromosome 1 · Analysis']
+        result['name'] = 'Chromosome 1 · Analysis'
     visualize_path = signet._no_links(root / VISUALIZE_SNAPSHOT)
     if visualize_path.is_file():
         visualization = json.loads(visualize_path.read_text(encoding='utf-8'))
@@ -1059,7 +1101,7 @@ def run_history(root):
             visualize_job.update(record)
         result['jobs']['visualize'] = visualize_job
         result['status'] = visualize_job['state']
-        result['name'] = ['第 1 號染色體 · 分析', 'Chromosome 1 · Analysis']
+        result['name'] = 'Chromosome 1 · Analysis'
         if visualize_job['state'] == 'completed':
             from agent.stage6.workspace import live_completed_result
             try:
@@ -1067,9 +1109,12 @@ def run_history(root):
             except (OSError, ValueError, KeyError, TypeError, OverflowError):
                 result['result_error'] = 'The saved Stage 6 graph could not be read.'
     if snapshot.get('mode') == 'dataset':
-        result.update(input_mode='dataset', dataset_name=snapshot['dataset_name'],
+        name = workspace_datasets.display_name(snapshot['dataset_name'])
+        result.update(input_mode='dataset', dataset_name=name,
                       frozen_inputs=snapshot['frozen_inputs'], inputs=snapshot['source_inputs'],
-                      name=snapshot['dataset_name'])
+                      name=name)
+        result['reference_sources'] = dict(snapshot.get('reference_sources', {}))
+        result['reference_compatibility'] = dict(snapshot.get('reference_compatibility', {}))
         summary = signet._no_links(root / 'work/res/resg/workspace-reference-preparation.json')
         if summary.is_file():
             try:

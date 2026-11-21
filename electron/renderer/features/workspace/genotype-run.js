@@ -9,18 +9,18 @@
   const terminalStates = new Set(["completed", "failed", "cancelled"]);
   const pollInterval = 15_000;
   const workLabels = {
-    imputation: ["補值分段", "Imputation chunks"], expression_outputs: ["表現量前處理", "Expression preparation"],
-    variant_filter: ["變異篩選", "Variant filtering"], low_frequency: ["低頻變異工作", "Low-frequency jobs"],
-    rare_variants: ["罕見變異工作", "Rare-variant jobs"], stage1: ["建網第一部分", "Network phase 1"],
-    stage2: ["建網第二部分", "Network phase 2"], subnetworks: ["子網路輸出", "Subnetwork exports"],
+    imputation: "Imputation chunks", expression_outputs: "Expression preparation",
+    variant_filter: "Variant filtering", low_frequency: "Low-frequency jobs",
+    rare_variants: "Rare-variant jobs", stage1: "Network phase 1",
+    stage2: "Network phase 2", subnetworks: "Subnetwork exports",
   };
-  function renderWorkProgress(container, progress, english) {
+  function renderWorkProgress(container, progress) {
     container.replaceChildren();
     for (const [key, label] of Object.entries(workLabels)) {
       const match = typeof progress?.[key] === "string" ? progress[key].match(/^(\d+)\s+(\d+)$/) : null;
       if (!match || !Number.isSafeInteger(Number(match[2])) || Number(match[2]) <= 0 || Number(match[1]) > Number(match[2])) continue;
       const term = document.createElement("dt"), count = document.createElement("dd"), bar = document.createElement("progress");
-      term.textContent = label[english ? 1 : 0];count.textContent = `${match[1]} / ${match[2]} `;
+      term.textContent = label;count.textContent = `${match[1]} / ${match[2]} `;
       bar.max = Number(match[2]);bar.value = Number(match[1]);bar.setAttribute("aria-label", term.textContent);
       count.append(bar);container.append(term, count);
     }
@@ -33,87 +33,100 @@
   ];
   const resources = ["cpus", "mem_gb", "hours"];
   const labels = {
-    title: ["基因型準備", "Genotype preparation"],
-    stage: ["第 1 階段", "Stage 1"],
-    example: ["第 1 號染色體範例", "Chromosome 1 example"],
-    review: ["檢查範例檔案", "Check example files"],
-    checking: ["正在核對範例檔案…", "Checking example files…"],
-    ready: ["可以核對並送出", "Ready to review and submit"],
-    unavailable: ["範例尚未就緒", "The example is not ready"],
-    readyPrompt: ["確認檔案與設定後，按「送出第 1 階段」。", "Review the files and settings, then select Submit Stage 1."],
-    connect: ["請先到「設定 → 遠端運算」連線並確認環境就緒，再回來核對輸入檔案。", "Connect and verify the environment in Settings → Remote compute, then review the input files again."],
-    inputs: ["範例輸入檔案", "Example inputs"],
-    sourceInputs: ["這筆執行會保存的資料組檔案", "Dataset files saved with this run"],
-    genotype: ["基因型資料", "Genotype data"], expression: ["基因表現量資料", "Expression data"], clinical: ["臨床資料", "Clinical data"],
-    warnings: ["執行前需要確認", "Review before running"],
-    acknowledge: ["我已核對以上檔案與警示，並確認表現量尺度及最後五列的處理方式。", "I reviewed these files and warnings, including the expression scale and treatment of its final five rows."],
-    customReview: ["核對資料組檔案", "Review dataset files"],
-    customChecking: ["正在核對資料組檔案…", "Reviewing dataset files…"],
-    customUnavailable: ["資料組尚未就緒", "The dataset is not ready"],
-    customInputs: ["第 1 階段輸入檔案", "Stage 1 input files"],
-    stale: ["檔案或遠端環境已變更，請重新核對後再送出。", "The files or remote context changed. Review again before submitting."],
-    settings: ["設定", "Settings"],
-    resources: ["運算資源", "Resources"],
-    submit: ["送出第 1 階段", "Submit Stage 1"],
-    refresh: ["重新查詢狀態", "Refresh status"],
-    history: ["查看歷次執行", "View run history"],
-    newRun: ["準備新的執行", "Prepare a new run"],
-    runID: ["執行編號", "Run ID"],
-    jobID: ["排程工作編號", "Scheduler job ID"],
-    progress: ["執行進度", "Run progress"],
-    "ped.file": ["基因型檔案", "Genotype file"],
-    "map.file": ["變異位置檔案", "Variant map"],
-    ref: ["補值參考檔", "Imputation reference"],
-    gmap: ["遺傳圖譜", "Genetic map"],
-    "restrict.tcga.geno": ["染色體", "Chromosome"],
-    mind: ["樣本缺失率上限", "Max. sample missingness"],
-    geno: ["變異缺失率上限", "Max. variant missingness"],
-    hwe: ["哈溫平衡門檻", "HWE cutoff"],
-    int: ["補值區塊長度（鹼基對）", "Imputation chunk length (bp)"],
-    cpus: ["核心數", "CPU cores"],
-    mem_gb: ["記憶體（GB）", "Memory (GB)"],
-    hours: ["時間上限（小時）", "Time limit (hours)"],
-    idle: ["尚未送出", "Not submitted"],
-    submitting: ["正在送出", "Submitting"],
-    submitted: ["已送出，等待排程狀態", "Submitted, waiting for scheduler status"],
-    pending: ["排隊中", "Queued"],
-    running: ["執行中", "Running"],
-    validating: ["正在檢查並收取結果", "Checking and collecting results"],
-    completed: ["已完成", "Completed"],
-    cancelling: ["等待取消", "Cancelling"],
-    cancelled: ["已取消", "Cancelled"],
-    failed: ["執行失敗", "Failed"],
-    unknown: ["待確認", "Status unconfirmed"],
-    interrupted: ["連線中斷，顯示上次確認的狀態。", "Connection interrupted. Showing the last confirmed status."],
-    uncertain: ["送出結果待確認。請查詢這筆執行的狀態。", "Submission outcome is unconfirmed. Check this run’s status."],
-    serviceError: ["無法讀取本機服務。", "Could not read the local service."],
-    cancel: ["取消工作", "Cancel job"],
-    cancelConfirm: ["確認取消這個工作", "Confirm cancellation"],
-    cancelDismiss: ["保留工作", "Keep job"],
-    cancelSending: ["正在送出取消要求…", "Requesting cancellation…"],
-    cancelWaiting: ["等待遠端確認本階段與相關子工作都已停止。", "Waiting for the remote scheduler to confirm this stage and its child jobs have stopped."],
-    cancelUnconfirmed: ["取消結果待確認。請重新查詢狀態，不代表工作已停止。", "Cancellation outcome is unconfirmed. Refresh status; the job has not been confirmed stopped."],
-    cancelDisconnected: ["請先連線，才能取消這個工作。", "Connect before cancelling this job."],
-    cancelChanged: ["工作或遠端連線已變更，請重新查詢後再核對取消對象。", "The job or remote connection changed. Refresh status and review the cancellation target again."],
-    cancelAttempt: ["嘗試次數", "Attempt"],
-    retry: ["核對新的嘗試", "Review a new attempt"],
-    retryReview: ["重新核對重試檔案", "Recheck retry files"],
-    retryChecking: ["正在核對這筆執行的原始檔案…", "Checking this run’s original files…"],
-    retrySubmit: ["送出第 1 階段重試", "Submit Stage 1 again"],
-    retryDismiss: ["保留目前嘗試", "Keep current attempt"],
-    retryInputs: ["本次重試的輸入檔案", "Inputs for this retry"],
-    retryReady: ["核對原檔案、設定與警示後，手動送出同一筆執行的新嘗試。", "Review the original files, settings and warnings, then manually submit a new attempt in this same run."],
-    retryAcknowledge: ["我已核對原始檔案、本次設定與重試警示。", "I reviewed the original files, these settings and the retry warnings."],
-    retryStale: ["重試核對已失效，請重新核對這筆執行。", "The retry review is no longer valid. Review this run again."],
-    revalidate: ["重新核對輸出", "Recheck outputs"],
-    revalidating: ["正在重新核對現有輸出…", "Checking existing outputs…"],
-    revalidatePrompt: ["只核對這次嘗試的現有輸出，不會重新送算。", "Checks this attempt’s existing outputs without submitting another analysis."],
-    revalidateConnect: ["請先連線，再重新核對這次嘗試的輸出。", "Connect before rechecking this attempt’s outputs."],
-    revalidateFailed: ["無法完成輸出核對，保留上次確認的狀態。", "Could not complete the output check. Showing the last confirmed state."],
-    revalidateCompleted: ["現有輸出已通過技術檢查，沒有重新執行分析。", "Existing outputs passed the technical checks; no analysis was rerun."],
-    revalidateWaiting: ["正在檢查或收取輸出，尚未確認完成。", "Checking or collecting outputs; completion is not yet confirmed."],
-    revalidateMissing: ["已重新核對，輸出仍未通過檢查。", "Outputs were rechecked and still did not pass the checks."],
+    title: "Genotype preparation",
+    stage: "Stage 1",
+    example: "Chromosome 1 example",
+    review: "Check example files",
+    checking: "Checking example files…",
+    reviewAgain: "Recheck files",
+    reviewTimeout: "Checking the remote files timed out. Select Recheck files to try again.",
+    ready: "Ready to review and submit",
+    unavailable: "The example is not ready",
+    readyPrompt: "Review the files and settings, then select Submit Stage 1.",
+    connect: "Connect and verify the environment in Settings → Remote compute, then review the input files again.",
+    inputs: "Example inputs",
+    sourceInputs: "Dataset files saved with this run",
+    genotype: "Genotype data", expression: "Expression data", clinical: "Clinical data",
+    reference: "Imputation reference panel", genetic_map: "Genetic map",
+    annotation: "Gene annotation",
+    warnings: "Review before running",
+    acknowledge: "I reviewed these files and warnings, including the expression scale and treatment of its final five rows.",
+    customReview: "Review dataset files",
+    customChecking: "Reviewing dataset files…",
+    customUnavailable: "The dataset is not ready",
+    customInputs: "Stage 1 input files",
+    stale: "The files or remote context changed. Review again before submitting.",
+    settings: "Settings",
+    resources: "Resources",
+    submit: "Submit Stage 1",
+    refresh: "Refresh status",
+    history: "View run history",
+    newRun: "Prepare a new run",
+    runID: "Run ID",
+    jobID: "Scheduler job ID",
+    progress: "Run progress",
+    "ped.file": "Genotype file",
+    "map.file": "Variant map",
+    ref: "Imputation reference",
+    gmap: "Genetic map",
+    "restrict.tcga.geno": "Chromosome",
+    mind: "Max. sample missingness",
+    geno: "Max. variant missingness",
+    hwe: "HWE cutoff",
+    int: "Imputation chunk length (bp)",
+    cpus: "CPU cores",
+    mem_gb: "Memory (GB)",
+    hours: "Time limit (hours)",
+    idle: "Not submitted",
+    submitting: "Submitting",
+    submitted: "Submitted, waiting for scheduler status",
+    pending: "Queued",
+    running: "Running",
+    validating: "Checking and collecting results",
+    completed: "Completed",
+    cancelling: "Cancelling",
+    cancelled: "Cancelled",
+    failed: "Failed",
+    unknown: "Status unconfirmed",
+    interrupted: "Connection interrupted. Showing the last confirmed status.",
+    output_source_mismatch: "The remote job folder or files do not match the saved run. Showing the last confirmed status.",
+    output_check_timeout: "Reading remote job files timed out. Showing the last confirmed analysis status.",
+    schedulerState: "Scheduler state",
+    uncertain: "Submission outcome is unconfirmed. Check this run’s status.",
+    serviceError: "Could not read the local service.",
+    cancel: "Cancel job",
+    cancelConfirm: "Confirm cancellation",
+    cancelDismiss: "Keep job",
+    cancelSending: "Requesting cancellation…",
+    cancelWaiting: "Waiting for the remote scheduler to confirm this stage and its child jobs have stopped.",
+    cancelUnconfirmed: "Cancellation outcome is unconfirmed. Refresh status; the job has not been confirmed stopped.",
+    cancelDisconnected: "Connect before cancelling this job.",
+    cancelChanged: "The job or remote connection changed. Refresh status and review the cancellation target again.",
+    cancelAttempt: "Attempt",
+    retry: "Review a new attempt",
+    retryReview: "Recheck retry files",
+    retryChecking: "Checking this run’s original files…",
+    retrySubmit: "Submit Stage 1 again",
+    retryDismiss: "Keep current attempt",
+    retryInputs: "Inputs for this retry",
+    retryReady: "Review the original files, settings and warnings, then manually submit a new attempt in this same run.",
+    retryAcknowledge: "I reviewed the original files, these settings and the retry warnings.",
+    retryStale: "The retry review is no longer valid. Review this run again.",
+    revalidate: "Recheck outputs",
+    revalidating: "Checking existing outputs…",
+    revalidatePrompt: "Checks this attempt’s existing outputs without submitting another analysis.",
+    revalidateConnect: "Connect before rechecking this attempt’s outputs.",
+    revalidateFailed: "Could not complete the output check. Showing the last confirmed state.",
+    revalidateCompleted: "Existing outputs passed the technical checks; no analysis was rerun.",
+    revalidateWaiting: "Checking or collecting outputs; completion is not yet confirmed.",
+    revalidateMissing: "Outputs were rechecked and still did not pass the checks.",
   };
+
+  function statusIssue(record, labelFor) {
+    const message = labelFor(record.status_check_issue);
+    return record.status_check_issue === "output_check_timeout" && record.slurm_state
+      ? `${message} ${labelFor("schedulerState")}: ${record.slurm_state}.` : message;
+  }
 
   const cancellationBusy = item => Boolean(item?.cancellation?.sending || item?.cancellation?.awaiting || item?.record?.state === "cancelling");
   const revalidationBusy = item => Boolean(item?.revalidation?.pending || item?.outputRevalidationActive);
@@ -130,7 +143,7 @@
   const revalidationMarkup = prefix => `<button type="button" class="ml-nav-action" data-${prefix}-revalidate hidden></button>
     <p class="ml-genotype-notice" data-${prefix}-revalidate-notice role="status" hidden></p>`;
 
-  function mountOutputRevalidation({panel, prefix, local, target, request, receive, before, render, schedule, onChanged}) {
+  function mountOutputRevalidation({panel, prefix, labelFor, target, request, receive, before, render, schedule, onChanged}) {
     const part = name => panel.querySelector(`[data-${prefix}-${name}]`);
     let remote = {connected: false, identity: "", environmentKey: ""};
     const scope = () => JSON.stringify(remote);
@@ -142,11 +155,11 @@
       const value = target(), state = value?.item?.revalidation, info = outputRevalidationInfo(value);
       part("revalidate").hidden = !eligible(value);
       part("revalidate").disabled = !remote.connected || revalidationBusy(value?.item);
-      part("revalidate").textContent = local(state?.pending ? "revalidating" : "revalidate");
-      const message = state?.pending ? local("revalidating") : state?.error ? `${local("revalidateFailed")} ${state.error}`
-        : state?.outcome === "completed" ? local("revalidateCompleted") : info?.active ? local("revalidateWaiting")
-          : state?.outcome === "failed" ? `${local("revalidateMissing")} ${value.item.record.reason ?? ""}`
-            : eligible(value) ? local(remote.connected ? "revalidatePrompt" : "revalidateConnect")
+      part("revalidate").textContent = labelFor(state?.pending ? "revalidating" : "revalidate");
+      const message = state?.pending ? labelFor("revalidating") : state?.error ? `${labelFor("revalidateFailed")} ${state.error}`
+        : state?.outcome === "completed" ? labelFor("revalidateCompleted") : info?.active ? labelFor("revalidateWaiting")
+          : state?.outcome === "failed" ? `${labelFor("revalidateMissing")} ${value.item.record.reason ?? ""}`
+            : eligible(value) ? labelFor(remote.connected ? "revalidatePrompt" : "revalidateConnect")
               : workspace(value) && value.item?.record?.state === "failed" ? info?.reason ?? "" : "";
       part("revalidate-notice").textContent = message;part("revalidate-notice").hidden = !message;
       panel.dataset[`${prefix}RevalidationState`] = state?.pending ? "checking" : state?.error ? "error" : info?.active ? "validating" : state?.outcome ? "checked" : "idle";
@@ -163,12 +176,13 @@
           {expected_job_id: captured.jobId, expected_attempt: captured.attempt});
         if (scope() !== captured.scope || item.cancelEpoch !== epoch || item.revalidation !== state ||
             item.runId && item.runId !== captured.runId || String(item.record?.job_id) !== captured.jobId ||
-            (item.record?.attempt ?? 1) !== captured.attempt) throw Error(local("cancelChanged"));
+            (item.record?.attempt ?? 1) !== captured.attempt) throw Error(labelFor("cancelChanged"));
         if (next.run_id !== captured.runId || next.step !== prefix || String(next.job_id) !== captured.jobId ||
             (next.attempt ?? 1) !== captured.attempt || !["failed", "validating", "completed"].includes(next.state) ||
             next.dataset_id != null && next.dataset_id !== captured.datasetId ||
-            typeof next.output_revalidation?.eligible !== "boolean" || typeof next.output_revalidation?.active !== "boolean") throw Error(local("serviceError"));
-        if (next.connection === "interrupted") throw Error(next.reason || local("interrupted"));
+            typeof next.output_revalidation?.eligible !== "boolean" || typeof next.output_revalidation?.active !== "boolean") throw Error(labelFor("serviceError"));
+        if (next.status_check_issue) throw Error(statusIssue(next, labelFor));
+        if (next.connection === "interrupted") throw Error(next.reason || labelFor("interrupted"));
         receive(value, next);state.outcome = item.record.state;
       } catch (error) {
         if (item.revalidation === state) {state.error = error.message;onChanged?.(value);}
@@ -191,7 +205,7 @@
       <button type="button" class="ml-nav-action" data-${prefix}-cancel-dismiss></button>
     </div><p class="ml-genotype-notice" data-${prefix}-cancel-notice role="status" hidden></p>`;
 
-  function mountCancellation({panel, prefix, stage, local, target, request, receive, render, schedule}) {
+  function mountCancellation({panel, prefix, stage, labelFor, target, request, receive, render, schedule}) {
     const part = name => panel.querySelector(`[data-${prefix}-${name}]`);
     let remote = {connected: false, identity: "", environmentKey: ""};
     let previousItem;
@@ -208,17 +222,17 @@
       previousItem = item;
       const state = item?.cancellation;
       if (state?.confirmation && (!eligible(value) || !matches(value, state.confirmation) || state.confirmation.scope !== scope())) state.confirmation = null;
-      part("cancel").textContent = local("cancel");
+      part("cancel").textContent = labelFor("cancel");
       part("cancel").hidden = !eligible(value);
       part("cancel").disabled = !remote.connected || cancellationBusy(item) || Boolean(state?.confirmation);
       part("cancel-confirmation").hidden = !state?.confirmation;
-      part("cancel-confirm").textContent = local("cancelConfirm");
+      part("cancel-confirm").textContent = labelFor("cancelConfirm");
       part("cancel-confirm").disabled = !remote.connected || Boolean(state?.sending);
-      part("cancel-dismiss").textContent = local("cancelDismiss");
+      part("cancel-dismiss").textContent = labelFor("cancelDismiss");
       const confirmed = state?.confirmation;
-      part("cancel-target").textContent = confirmed ? `${local("runID")}: ${confirmed.runId} · ${local("stage") || stage} · ${local("jobID")}: ${confirmed.jobId} · ${local("cancelAttempt")}: ${confirmed.attempt}` : "";
-      const message = state?.sending ? local("cancelSending") : state?.uncertain ? local("cancelUnconfirmed")
-        : item?.record?.state === "cancelling" || state?.awaiting ? local("cancelWaiting") : !remote.connected && eligible(value) ? local("cancelDisconnected") : "";
+      part("cancel-target").textContent = confirmed ? `${labelFor("runID")}: ${confirmed.runId} · ${labelFor("stage") || stage} · ${labelFor("jobID")}: ${confirmed.jobId} · ${labelFor("cancelAttempt")}: ${confirmed.attempt}` : "";
+      const message = state?.sending ? labelFor("cancelSending") : state?.uncertain ? labelFor("cancelUnconfirmed")
+        : item?.record?.state === "cancelling" || state?.awaiting ? labelFor("cancelWaiting") : !remote.connected && eligible(value) ? labelFor("cancelDisconnected") : "";
       part("cancel-notice").textContent = [message, state?.error].filter(Boolean).join(" ");
       part("cancel-notice").hidden = !part("cancel-notice").textContent;
     }
@@ -237,7 +251,7 @@
       const value = target(), item = value?.item, state = item?.cancellation, confirmed = state?.confirmation;
       if (!confirmed || state.sending) return;
       if (!eligible(value) || !remote.connected || confirmed.scope !== scope() || !matches(value, confirmed)) {
-        state.confirmation = null;state.error = local("cancelChanged");render();return;
+        state.confirmation = null;state.error = labelFor("cancelChanged");render();return;
       }
       state.confirmation = null;state.sending = true;state.error = "";
       item.cancelEpoch = (item.cancelEpoch ?? 0) + 1;
@@ -245,9 +259,9 @@
       try {
         const next = await request(`/signet/runs/${encodeURIComponent(confirmed.runId)}/steps/${prefix}/cancel`,
           {expected_job_id: confirmed.jobId, expected_attempt: confirmed.attempt});
-        if (!matches(value, confirmed) || item.cancellation !== state || confirmed.scope !== scope()) throw Error(local("cancelChanged"));
+        if (!matches(value, confirmed) || item.cancellation !== state || confirmed.scope !== scope()) throw Error(labelFor("cancelChanged"));
         if (next.run_id !== confirmed.runId || next.step !== prefix || String(next.job_id) !== confirmed.jobId ||
-            (next.attempt ?? 1) !== confirmed.attempt) throw Error(local("serviceError"));
+            (next.attempt ?? 1) !== confirmed.attempt) throw Error(labelFor("serviceError"));
         receive(value, next);
         const saved = item.record;
         state.awaiting = !terminalStates.has(saved.state) && (saved.state === "cancelling" || Boolean(saved.cancel_requested_at) || saved.connection === "interrupted");
@@ -270,7 +284,7 @@
     window.dispatchEvent(new Event("workspace-request-remote-context"));
     return {sync, observe(item, record) {
       const state = item.cancellation;
-      if (!state || state.sending || record.connection === "interrupted") return;
+      if (!state || state.sending || record.connection === "interrupted" || record.status_check_issue) return;
       if (terminalStates.has(record.state) || !record.cancel_requested_at && record.state !== "cancelling") {
         state.awaiting = state.uncertain = false;state.error = "";
       }
@@ -279,7 +293,7 @@
 
   window.mountGenotypeRun = function mountGenotypeRun({panel, token, onHistoryChanged, onOpenHistory, onBack}) {
     panel.innerHTML = `
-      <div class="ml-result-main ml-genotype-main" data-live-language>
+      <div class="ml-result-main ml-genotype-main">
         <header>
           <p class="ml-genotype-eyebrow" data-genotype-copy="stage"></p>
           <h2 id="lens-stage1-title" data-genotype-copy="title"></h2>
@@ -323,7 +337,7 @@
           <button type="button" class="ml-nav-action ml-genotype-submit" data-genotype-submit data-genotype-copy="submit"></button>
         </form>
       </div>
-      <aside class="ml-result-inspector ml-genotype-progress" data-live-language>
+      <aside class="ml-result-inspector ml-genotype-progress">
         <header class="ml-result-inspector-heading">
           <i data-lucide="activity" aria-hidden="true"></i>
           <h3 data-genotype-copy="progress"></h3>
@@ -369,7 +383,7 @@
     const resourceInputs = new Map(resources.map(key => [key, panel.querySelector(`[data-genotype-resource="${key}"]`)]));
     const fields = [...panel.querySelectorAll("[data-genotype-fields]")];
 
-    let context = {visible: false, datasetId: "", language: "zh-Hant", runs: []};
+    let context = {visible: false, datasetId: "", runs: []};
     const datasets = new Map();
     let selectedDataset = "";
     let pollTimer;
@@ -380,15 +394,17 @@
     const stateKey = (id, runId = context.runId) => runId ? `run:${id}:${runId}` : `dataset:${id}`;
     const current = () => datasets.get(stateKey(selectedDataset));
     const runFor = item => context.runs?.find(run => run.run_id === item?.runId);
-    const localized = (key) => labels[key]?.[context.language === "en" ? 1 : 0] ?? key;
+    const labelFor = key => Object.hasOwn(labels, key) ? labels[key] : key;
     const authToken = () => typeof token === "function" ? token() : token;
     const cloneInputs = value => Object.fromEntries(sourceKinds.map(kind => [kind, [...(value?.[kind] ?? [])]]));
-    const isLegacy = dataset => dataset.id === exampleDataset && (
+    const referenceKey = dataset => ["ref", "gmap", "gtf"].map(role => dataset.references?.[role] ?? null);
+    const isLegacy = dataset => dataset.id === exampleDataset && !referenceKey(dataset).some(Boolean) && (
       sourceKey(dataset.inputs) === sourceKey(exampleInputs) || !dataset.persisted &&
       sourceKey(dataset.inputs) === sourceKey({genotype: exampleInputs.genotype, expression: [], clinical: []}));
     const datasetValue = () => context.dataset ?? {id: context.datasetId, name: labels.example,
       inputs: cloneInputs(exampleInputs), persisted: false, ready: true};
-    const scopeFor = dataset => JSON.stringify([dataset.id, sourceKey(dataset.inputs), remote.connected, remote.identity, remote.environmentKey]);
+    const inputsFor = dataset => JSON.stringify([sourceKey(dataset.inputs), referenceKey(dataset)]);
+    const scopeFor = dataset => JSON.stringify([dataset.id, inputsFor(dataset), remote.connected, remote.identity, remote.environmentKey]);
     const retryScopeFor = (item, datasetId = selectedDataset) => JSON.stringify([datasetId, item.runId, item.record?.job_id ?? null, item.record?.attempt ?? 1, remote]);
     function retryable(item) {
       const run = runFor(item);
@@ -398,7 +414,7 @@
     }
     function clearRetry(item) {
       if (!item?.retry || item.submitting) return;
-      invalidate(item, true);item.retry = false;item.retryTarget = null;item.reviewError = localized("retryStale");
+      invalidate(item, true);item.retry = false;item.retryTarget = null;item.reviewError = labelFor("retryStale");
     }
     function stateFor(id) {
       const key = stateKey(id);
@@ -415,7 +431,8 @@
     function invalidate(item, clearDraft = false) {
       item.reviewRequest?.abort();item.reviewRequest = null;
       item.review = null;item.reviewing = false;item.attempted = false;item.acknowledged = false;
-      item.reviewError = localized("stale");
+      item.reviewError = labelFor("stale");
+      item.reviewTimedOut = false;
       if (clearDraft) item.draft = null;
     }
     async function request(path, body, signal) {
@@ -424,7 +441,7 @@
       if (body) {headers["Content-Type"] = "application/json";Object.assign(options, {method: "POST", body: JSON.stringify(body)});}
       const response = await fetch(path, options);
       const value = await response.json().catch(() => null);
-      if (!response.ok || !value) throw Object.assign(new Error(value?.error || value?.reason || localized("serviceError")), {status: response.status, code: value?.code});
+      if (!response.ok || !value) throw Object.assign(new Error(value?.error || value?.reason || labelFor("serviceError")), {status: response.status, code: value?.code});
       return value;
     }
     function fillReview(value, item, keepDraft = false) {
@@ -448,14 +465,14 @@
       const item = current();
       dropStaleRevalidation(item);
       if (item) item.outputRevalidationActive = outputRevalidationInfo({item, run: runFor(item), step: "genotype"})?.active === true;
-      for (const element of panel.querySelectorAll("[data-genotype-copy]")) element.textContent = localized(element.dataset.genotypeCopy);
+      for (const element of panel.querySelectorAll("[data-genotype-copy]")) element.textContent = labelFor(element.dataset.genotypeCopy);
       const dataset = datasetValue();
-      part("dataset").textContent = dataset.name?.[context.language === "en" ? 1 : 0] ?? selectedDataset;
+      part("dataset").textContent = (Array.isArray(dataset.name) ? dataset.name[1] : dataset.name) ?? selectedDataset;
       const legacy = item?.runId ? item.runLegacy : isLegacy(dataset);
       const retry = Boolean(item?.retry);
-      reviewButton.textContent = localized(retry ? "retryReview" : legacy ? "review" : "customReview");
-      submitButton.textContent = localized(retry ? "retrySubmit" : "submit");
-      form.querySelector('h3[data-genotype-copy="inputs"]').textContent = localized(retry ? "retryInputs" : legacy ? "inputs" : "customInputs");
+      reviewButton.textContent = labelFor(item?.reviewTimedOut ? "reviewAgain" : retry ? "retryReview" : legacy ? "review" : "customReview");
+      submitButton.textContent = labelFor(retry ? "retrySubmit" : "submit");
+      form.querySelector('h3[data-genotype-copy="inputs"]').textContent = labelFor(retry ? "retryInputs" : legacy ? "inputs" : "customInputs");
       panel.dataset.genotypeRetryState = retry ? item.reviewing ? "reviewing" : item.submitting ? "submitting" : item.review?.ready ? "ready" : "review" : "idle";
       const state = item?.submitting ? "submitting" : item?.uncertain ? "unknown" : item?.record?.state ?? (item?.runId ? "unknown" : "idle");
       panel.dataset.genotypeState = state;
@@ -466,14 +483,15 @@
       const terminal = terminalStates.has(state);
       const validReview = Boolean(item?.review) && item.review.ready !== false &&
         (!retry && legacy || item.review.ready === true && typeof item.review.review_token === "string" && item.review.review_token.length > 0);
-      statusLine.textContent = localized(state);
-      if (item?.cancellation?.sending) statusLine.textContent = localized("cancelSending");
+      statusLine.textContent = labelFor(state);
+      if (item?.cancellation?.sending) statusLine.textContent = labelFor("cancelSending");
       reviewButton.hidden = !eligible || Boolean(item?.runId && !retry);
       reviewButton.disabled = !connected || Boolean(item?.reviewing || item?.submitting);
       readiness.hidden = !eligible || Boolean(item?.runId && !retry);
-      readiness.textContent = localized(item?.reviewing ? retry ? "retryChecking" : legacy ? "checking" : "customChecking" : validReview ? "ready" : item?.attempted ? legacy ? "unavailable" : "customUnavailable" : legacy ? "review" : "customReview");
+      readiness.textContent = labelFor(item?.reviewing ? retry ? "retryChecking" : legacy ? "checking" : "customChecking" : validReview ? "ready" : item?.attempted ? legacy ? "unavailable" : "customUnavailable" : legacy ? "review" : "customReview");
+      if (item?.reviewTimedOut) readiness.textContent = labelFor("reviewTimeout");
       guidance.hidden = !eligible || Boolean(item?.runId && !retry);
-      guidance.textContent = validReview ? localized(retry ? "retryReady" : "readyPrompt") : !connected ? localized("connect") : "";
+      guidance.textContent = validReview ? labelFor(retry ? "retryReady" : "readyPrompt") : !connected ? labelFor("connect") : "";
       form.hidden = !eligible || !Boolean(item?.review || item?.record?.inputs);
       for (const field of fields) field.disabled = Boolean(item?.runId && !retry || item?.reviewing || item?.submitting || revalidationBusy(item) || retry && !validReview);
       submitButton.hidden = Boolean(item?.runId && !retry);
@@ -487,20 +505,23 @@
       part("retry-dismiss").disabled = Boolean(item?.submitting);
       part("retry-context").hidden = !retry;
       const nextAttempt = item?.review?.next_attempt ?? (item?.record?.attempt ?? 1) + 1;
-      part("retry-context").textContent = !retry ? "" : context.language === "en"
-        ? `Same run: ${item.runId} · Previous attempt: ${item.record?.attempt ?? 1} · Next attempt: ${nextAttempt}. Original files and chromosome stay fixed.`
-        : `沿用執行：${item.runId} · 前次嘗試：${item.record?.attempt ?? 1} · 下次嘗試：${nextAttempt}。原檔案與染色體固定。`;
+      part("retry-context").textContent = !retry ? "" : `Same run: ${item.runId} · Previous attempt: ${item.record?.attempt ?? 1} · Next attempt: ${nextAttempt}. Original files and chromosome stay fixed.`;
       part("back").hidden = !context.runId;
-      part("back").textContent = context.language === "en" ? "Back to run timeline" : "回到執行時間線";
+      part("back").textContent = "Back to run timeline";
       identifiers.hidden = !item?.runId;runLabel.textContent = item?.runId ?? "";jobLabel.textContent = item?.record?.job_id ?? "—";
-      notice.textContent = [item?.uncertain ? localized("uncertain") : "", item?.error || item?.reviewError].filter(Boolean).join(" ");notice.hidden = !notice.textContent;
+      notice.textContent = [item?.uncertain ? labelFor("uncertain") : "", item?.error || item?.reviewError].filter(Boolean).join(" ");notice.hidden = !notice.textContent;
       const sourceInputs = item?.sourceInputs ?? item?.review?.source_inputs;
-      part("source-section").hidden = !sourceInputs;
+      const referenceSources = item?.review?.reference_sources ?? runFor(item)?.reference_sources;
+      const sourceRows = sourceInputs ? sourceKinds.map(kind => [kind, sourceInputs[kind] ?? []]) : [];
+      for (const role of ["reference", "genetic_map", "annotation"]) {
+        if (typeof referenceSources?.[role] === "string" && referenceSources[role]) sourceRows.push([role, [referenceSources[role]]]);
+      }
+      part("source-section").hidden = !sourceRows.length;
       const sourceList = part("source-inputs");sourceList.replaceChildren();
-      if (sourceInputs) for (const kind of sourceKinds) {
+      for (const [kind, files] of sourceRows) {
         const title = document.createElement("dt"), paths = document.createElement("dd");
-        title.textContent = localized(kind);paths.dataset.genotypeSourceInput = kind;
-        for (const path of sourceInputs[kind] ?? []) {const code = document.createElement("code");code.textContent = path;paths.append(code, document.createElement("br"));}
+        title.textContent = labelFor(kind);paths.dataset.genotypeSourceInput = kind;
+        for (const path of files) {const code = document.createElement("code");code.textContent = path;paths.append(code, document.createElement("br"));}
         if (!paths.childElementCount) paths.textContent = "—";
         sourceList.append(title, paths);
       }
@@ -509,20 +530,20 @@
         const row = document.createElement("li");row.dataset.genotypeWarning = "";row.textContent = message;warningList.append(row);
       }
       part("warning-section").hidden = !item?.review || !retry && (legacy || Boolean(item?.runId));
-      form.querySelector('[data-genotype-copy="acknowledge"]').textContent = localized(retry ? "retryAcknowledge" : "acknowledge");
+      form.querySelector('[data-genotype-copy="acknowledge"]').textContent = labelFor(retry ? "retryAcknowledge" : "acknowledge");
       const acknowledge = part("acknowledge");acknowledge.checked = Boolean(item?.acknowledged);acknowledge.disabled = Boolean(item?.runId && !retry || item?.reviewing || item?.submitting || retry && !validReview);
       events.replaceChildren(...(item?.record?.history ?? []).map(({state: eventState, at}) => {
-        const row = document.createElement("li");row.dataset.state = eventState;row.textContent = localized(eventState);
-        if (at) {const time = document.createElement("time");time.dateTime = at;const date = new Date(at);time.textContent = Number.isNaN(date.valueOf()) ? at : date.toLocaleString(context.language);row.append(time);}
+        const row = document.createElement("li");row.dataset.state = eventState;row.textContent = labelFor(eventState);
+        if (at) {const time = document.createElement("time");time.dateTime = at;const date = new Date(at);time.textContent = Number.isNaN(date.valueOf()) ? at : date.toLocaleString("en");row.append(time);}
         return row;
       }));events.hidden = !events.children.length;
-      renderWorkProgress(part("work-progress"), item?.record?.progress, context.language === "en");
+      renderWorkProgress(part("work-progress"), item?.record?.progress);
       cancellation?.sync();
       revalidation?.sync();
       const run = context.runs?.find(run => run.run_id === item?.runId);
       logs?.setContext({historyId: run?.history_id, runId: item?.runId, source: run?.source, datasetId: selectedDataset,
         step: "genotype", number: item?.record?.attempt ?? 1, current: true, recordFile: "steps/genotype.json",
-        recordIdentity: run?.record_identity, record: item?.record, language: context.language, visible: context.visible});
+        recordIdentity: run?.record_identity, record: item?.record, visible: context.visible});
     }
     function matchesRetryRecord(record, target) {
       return record.run_id === target.runId && String(record.job_id ?? "none") === target.jobId && (record.attempt ?? 1) === target.attempt &&
@@ -535,18 +556,21 @@
       const target = {runId: item.runId, datasetId, jobId: String(item.record.job_id ?? "none"), attempt: item.record.attempt ?? 1,
         scope: retryScopeFor(item)};
       const controller = new AbortController();item.reviewRequest = controller;item.retryTarget = target;
-      item.reviewing = item.attempted = true;item.review = null;item.acknowledged = false;item.reviewError = "";item.error = "";render();
+      item.reviewTimedOut = false;item.reviewing = item.attempted = true;item.review = null;item.acknowledged = false;item.reviewError = "";item.error = "";render();
       const query = new URLSearchParams({expected_job_id: target.jobId, expected_attempt: String(target.attempt)});
       try {
         const next = await request(`/signet/runs/${encodeURIComponent(target.runId)}/genotype/retry?${query}`, undefined, controller.signal);
         if (controller.signal.aborted || item.reviewRequest !== controller || !item.retry || target.scope !== retryScopeFor(item, datasetId)) return;
         if (next.run_id !== target.runId || next.dataset_id !== datasetId || next.expected_attempt !== target.attempt ||
-            String(next.expected_job_id ?? "none") !== target.jobId || next.next_attempt !== target.attempt + 1) throw Error(localized("serviceError"));
+            String(next.expected_job_id ?? "none") !== target.jobId || next.next_attempt !== target.attempt + 1) throw Error(labelFor("serviceError"));
         item.review = next;item.sourceInputs = next.source_inputs ?? item.sourceInputs;
         item.reviewError = next.issues?.join(" ") || next.reason || "";
         if (item === current()) fillReview(next, item, Boolean(item.draft));
       } catch (error) {
-        if (!controller.signal.aborted && item.reviewRequest === controller) {item.review = null;item.reviewError = error.message;}
+        if (!controller.signal.aborted && item.reviewRequest === controller) {
+          item.review = null;item.reviewTimedOut = error.code === "read_timeout";
+          item.reviewError = item.reviewTimedOut ? "" : error.message;
+        }
       } finally {
         if (item.reviewRequest === controller) {item.reviewRequest = null;item.reviewing = false;if (item === current()) render();}
       }
@@ -559,17 +583,21 @@
       saveDraft(item);
       const captured = {id, inputs: cloneInputs(dataset.inputs), scope: scopeFor(dataset)};
       const controller = new AbortController();item.reviewRequest = controller;
-      item.reviewing = item.attempted = true;item.reviewError = "";item.review = null;item.acknowledged = false;render();
+      item.reviewTimedOut = false;item.reviewing = item.attempted = true;item.reviewError = "";item.review = null;item.acknowledged = false;render();
       try {
         const next = legacy ? await request(examplePath, undefined, controller.signal)
           : await request(`/signet/datasets/${encodeURIComponent(id)}/genotype/review`, {inputs: captured.inputs}, controller.signal);
         if (controller.signal.aborted || item.reviewRequest !== controller || item.scope !== captured.scope || item.runId) return;
-        if (!legacy && (next.dataset_id !== id || sourceKey(next.source_inputs) !== sourceKey(captured.inputs))) throw Error(localized("stale"));
-        item.review = next;item.legacy = legacy;item.sourceInputs = next.source_inputs ?? (legacy ? null : captured.inputs);
+        if (!legacy && (next.dataset_id !== id || sourceKey(next.source_inputs) !== sourceKey(captured.inputs) ||
+            JSON.stringify(referenceKey({references: next.reference_choices})) !== JSON.stringify(referenceKey(dataset)))) throw Error(labelFor("stale"));
+        item.review = next;item.legacy = legacy;item.sourceInputs = next.resolved_inputs ?? next.source_inputs ?? (legacy ? null : captured.inputs);
         item.reviewError = next.issues?.join(" ") || next.reason || "";
         if (item === current()) fillReview(next, item, Boolean(item.draft));
       } catch (error) {
-        if (!controller.signal.aborted && item.reviewRequest === controller) {item.review = null;item.reviewError = error.message;}
+        if (!controller.signal.aborted && item.reviewRequest === controller) {
+          item.review = null;item.reviewTimedOut = error.code === "read_timeout";
+          item.reviewError = item.reviewTimedOut ? "" : error.message;
+        }
       } finally {
         if (item.reviewRequest === controller) {item.reviewRequest = null;item.reviewing = false;if (item === current()) render();}
       }
@@ -590,14 +618,16 @@
         terminalStates.has(previous.state) && !terminalStates.has(next.state) && next.job_id === previous.job_id;
     }
     function receiveRecord(item, next, id, datasetId, revalidated = false) {
-      if (next.run_id !== id || next.step && next.step !== "genotype" || next.dataset_id && next.dataset_id !== datasetId || !Object.hasOwn(labels, next.state)) throw Error(localized("serviceError"));
+      if (next.run_id !== id || next.step && next.step !== "genotype" || next.dataset_id && next.dataset_id !== datasetId || !Object.hasOwn(labels, next.state)) throw Error(labelFor("serviceError"));
       const manualTransition = revalidated && item.record?.state === "failed" && next.job_id === item.record.job_id && (next.attempt ?? 1) === (item.record.attempt ?? 1);
       if (olderRecord(next, item.record) && !manualTransition) return;
       if (item.retry && item.retryTarget && !matchesRetryRecord(next, item.retryTarget)) clearRetry(item);
-      const changed = !item.record || next.state !== item.record.state || next.job_id !== item.record.job_id;
+      const changed = !item.record || next.state !== item.record.state || next.job_id !== item.record.job_id ||
+        JSON.stringify(next.progress) !== JSON.stringify(item.record.progress);
       item.record = next;item.uncertain = false;
       cancellation?.observe(item, next);
-      item.error = next.connection === "interrupted" ? localized("interrupted") : ["unknown", "validating", "failed"].includes(next.state) ? next.reason || "" : "";
+      item.error = next.status_check_issue ? statusIssue(next, labelFor)
+        : next.connection === "interrupted" ? labelFor("interrupted") : ["unknown", "validating", "failed"].includes(next.state) ? next.reason || "" : "";
       if (next.source_inputs) item.sourceInputs = next.source_inputs;
       if (item === current() && next.inputs && !item.retry) fillReview(next, item);
       if (changed || revalidated) onHistoryChanged?.(id, datasetId);
@@ -641,7 +671,7 @@
       const item = current(), datasetId = selectedDataset, target = item?.retryTarget;
       if (!item?.retry || !retryable(item) || submitButton.disabled || !form.reportValidity()) return;
       if (!target || target.scope !== retryScopeFor(item) || !matchesRetryRecord(item.record, target)) {
-        invalidate(item);item.reviewError = localized("retryStale");render();return;
+        invalidate(item);item.reviewError = labelFor("retryStale");render();return;
       }
       const body = {inputs: item.review.inputs, settings: {...readNumbers(settingsInputs), "restrict.tcga.geno": Number(item.review.settings["restrict.tcga.geno"])}, resources: readNumbers(resourceInputs),
         review_token: item.review.review_token, expected_job_id: target.jobId, expected_attempt: target.attempt,
@@ -649,8 +679,8 @@
       item.submitting = true;item.error = "";item.cancelEpoch = (item.cancelEpoch ?? 0) + 1;render();
       try {
         const next = await request(`/signet/runs/${encodeURIComponent(target.runId)}/genotype/retry`, body);
-        if (target.scope !== retryScopeFor(item, datasetId)) throw Error(localized("retryStale"));
-        if (next.run_id !== target.runId || next.step !== "genotype" || next.attempt !== target.attempt + 1) throw Error(localized("serviceError"));
+        if (target.scope !== retryScopeFor(item, datasetId)) throw Error(labelFor("retryStale"));
+        if (next.run_id !== target.runId || next.step !== "genotype" || next.attempt !== target.attempt + 1) throw Error(labelFor("serviceError"));
         item.retry = false;item.retryTarget = null;item.review = null;item.draft = null;item.acknowledged = false;item.reviewError = "";
         receiveRecord(item, next, target.runId, datasetId);
       } catch (error) {
@@ -699,12 +729,12 @@
     part("back").addEventListener("click", () => onBack?.());
     part("acknowledge").addEventListener("change", () => {if (current()) current().acknowledged = part("acknowledge").checked;render();});
     for (const input of [...settingsInputs.values(), ...resourceInputs.values()]) input.addEventListener("input", () => {input.setCustomValidity("");saveDraft();});
-    cancellation = mountCancellation({panel, prefix: "genotype", stage: 1, local: localized, request, render,
+    cancellation = mountCancellation({panel, prefix: "genotype", stage: 1, labelFor, request, render,
       target: () => ({item: current(), runId: current()?.runId, datasetId: selectedDataset, visible: context.visible,
         run: context.runs?.find(run => run.run_id === current()?.runId)}),
       receive: (value, next) => receiveRecord(value.item, next, value.runId, value.datasetId), schedule: () => schedulePoll()});
     logs = window.SignetJobLogs?.mount({host: part("logs"), token});
-    revalidation = mountOutputRevalidation({panel, prefix: "genotype", local: localized, request, render,
+    revalidation = mountOutputRevalidation({panel, prefix: "genotype", labelFor, request, render,
       target: () => ({item: current(), runId: current()?.runId, datasetId: selectedDataset, visible: context.visible, step: "genotype", run: runFor(current())}),
       before: item => {clearRetry(item);item.reviewError = "";},
       receive: (value, next) => receiveRecord(value.item, next, value.runId, value.datasetId, true), schedule: () => schedulePoll(),
@@ -719,7 +749,7 @@
       }
       context = next;selectedDataset = id;
       const item = stateFor(id), dataset = datasetValue();
-      const inputKey = sourceKey(dataset.inputs), scope = scopeFor(dataset);
+      const inputKey = inputsFor(dataset), scope = scopeFor(dataset);
       if (!item.runId && item.scope && item.scope !== scope) invalidate(item, item.inputKey !== inputKey);
       item.scope = scope;item.inputKey = inputKey;
       if (!item.runId && !item.preparedNew) {
@@ -757,106 +787,106 @@
     });
     window.dispatchEvent(new Event("workspace-request-remote-context"));
     render();
-    return {setContext, restore};
+    return {setContext, restore, getRunId: () => current()?.preparedNew ? "" : current()?.runId || null};
   };
 
   const expressionCopy = {
-    title: ["基因表現量準備", "Expression preparation"],
-    stage: ["第 2 階段", "Stage 2"],
-    run: ["接續執行", "Continue run"],
-    empty: ["先選擇已完成第 1 階段的執行。", "Choose a run with completed Stage 1."],
-    prerequisite: ["這筆執行的第 1 階段完成後，即可核對第 2 階段。", "Review Stage 2 after Stage 1 completes in this run."],
-    readyPrompt: ["核對檔案與設定後，按「送出第 2 階段」。", "Review the files and settings, then select Submit Stage 2."],
-    submit: ["送出第 2 階段", "Submit Stage 2"],
-    retry: ["重新核對並準備送出", "Review a new attempt"],
-    back: ["回到執行時間線", "Back to run timeline"],
-    chromosome: ["染色體", "Chromosome"],
-    "gexp.file": ["基因表現量檔案", "Expression file"],
-    "pmap.file": ["基因註解檔案", "Gene annotation file"],
+    title: "Expression preparation",
+    stage: "Stage 2",
+    run: "Continue run",
+    empty: "Choose a run with completed Stage 1.",
+    prerequisite: "Review Stage 2 after Stage 1 completes in this run.",
+    readyPrompt: "Review the files and settings, then select Submit Stage 2.",
+    submit: "Submit Stage 2",
+    retry: "Review a new attempt",
+    back: "Back to run timeline",
+    chromosome: "Chromosome",
+    "gexp.file": "Expression file",
+    "pmap.file": "Gene annotation file",
   };
 
   const adjustmentCopy = {
-    title: ["樣本配對與校正", "Sample matching and adjustment"],
-    stage: ["第 3 階段", "Stage 3"],
-    run: ["接續執行", "Continue run"],
-    empty: ["先選擇第 1、2 階段已完成的執行。", "Choose a run with completed Stages 1 and 2."],
-    prerequisite: ["這筆執行的第 1、2 階段完成後，即可送出第 3 階段。", "Submit Stage 3 after Stages 1 and 2 complete in this run."],
-    readyPrompt: ["核對臨床資料、主成分數與運算資源後，按「送出第 3 階段」。", "Review the clinical file, principal components and resources, then select Submit Stage 3."],
-    submit: ["送出第 3 階段", "Submit Stage 3"],
-    review: ["檢查臨床資料", "Check clinical file"],
-    checking: ["正在核對臨床資料…", "Checking clinical data…"],
-    inputs: ["臨床資料", "Clinical data"],
+    title: "Sample matching and adjustment",
+    stage: "Stage 3",
+    run: "Continue run",
+    empty: "Choose a run with completed Stages 1 and 2.",
+    prerequisite: "Submit Stage 3 after Stages 1 and 2 complete in this run.",
+    readyPrompt: "Review the clinical file, principal components and resources, then select Submit Stage 3.",
+    submit: "Submit Stage 3",
+    review: "Check clinical file",
+    checking: "Checking clinical data…",
+    inputs: "Clinical data",
     retry: expressionCopy.retry,
     back: expressionCopy.back,
-    npc: ["校正使用的主成分數（0–10）", "Principal components for adjustment (0–10)"],
-    "cli.file": ["臨床資料檔案", "Clinical data file"],
+    npc: "Principal components for adjustment (0–10)",
+    "cli.file": "Clinical data file",
   };
 
   const cisCopy = {
-    title: ["基因與變異關聯分析", "Gene–variant associations"],
-    stage: ["第 4 階段", "Stage 4"],
+    title: "Gene–variant associations",
+    stage: "Stage 4",
     run: expressionCopy.run,
-    empty: ["先選擇前 3 階段已完成的執行。", "Choose a run with completed Stages 1–3."],
-    prerequisite: ["這筆執行的前 3 階段完成後，即可送出第 4 階段。", "Submit Stage 4 after Stages 1–3 complete in this run."],
-    readyPrompt: ["核對顯著門檻、分析範圍與置換次數後，按「送出第 4 階段」。", "Review the significance threshold, analysis range and permutations, then select Submit Stage 4."],
-    submit: ["送出第 4 階段", "Submit Stage 4"],
-    review: ["檢查前階段結果", "Check prior results"],
-    checking: ["正在核對前階段結果…", "Checking prior results…"],
-    inputs: ["沿用這筆執行的檔案", "Files from this run"],
+    empty: "Choose a run with completed Stages 1–3.",
+    prerequisite: "Submit Stage 4 after Stages 1–3 complete in this run.",
+    readyPrompt: "Review the significance threshold, analysis range and permutations, then select Submit Stage 4.",
+    submit: "Submit Stage 4",
+    review: "Check prior results",
+    checking: "Checking prior results…",
+    inputs: "Files from this run",
     retry: expressionCopy.retry,
     back: expressionCopy.back,
-    "alpha.cis": ["顯著門檻", "Significance threshold"],
-    upstream: ["基因終點後的範圍（鹼基對）", "After gene end (base pairs)"],
-    downstream: ["基因起點前的範圍（鹼基對）", "Before gene start (base pairs)"],
-    nperms: ["置換次數", "Permutations"],
-    positiveAlpha: ["顯著門檻必須大於 0。", "The significance threshold must be above 0."],
+    "alpha.cis": "Significance threshold",
+    upstream: "After gene end (base pairs)",
+    downstream: "Before gene start (base pairs)",
+    nperms: "Permutations",
+    positiveAlpha: "The significance threshold must be above 0.",
   };
 
   const networkCopy = {
-    title: ["候選網路推論", "Candidate network inference"],
-    stage: ["第 5 階段", "Stage 5"],
+    title: "Candidate network inference",
+    stage: "Stage 5",
     run: expressionCopy.run,
-    empty: ["先選擇前 4 階段已完成的執行。", "Choose a run with completed Stages 1–4."],
-    prerequisite: ["這筆執行的前 4 階段完成後，即可送出第 5 階段。", "Submit Stage 5 after Stages 1–4 complete in this run."],
-    readyPrompt: ["核對重抽樣次數、相關性門檻及運算資源後，按「送出第 5 階段」。", "Review bootstrap runs, the correlation threshold and resources, then select Submit Stage 5."],
-    submit: ["送出第 5 階段", "Submit Stage 5"],
+    empty: "Choose a run with completed Stages 1–4.",
+    prerequisite: "Submit Stage 5 after Stages 1–4 complete in this run.",
+    readyPrompt: "Review bootstrap runs, the correlation threshold and resources, then select Submit Stage 5.",
+    submit: "Submit Stage 5",
     review: cisCopy.review,
     checking: cisCopy.checking,
     inputs: cisCopy.inputs,
     retry: expressionCopy.retry,
     back: expressionCopy.back,
-    nboots: ["重抽樣次數", "Bootstrap runs"],
-    cor: ["工具變異相關性上限", "Instrument correlation limit"],
-    correlationNote: ["相關性門檻用於挑選各基因的工具變異。", "The correlation limit selects each gene’s instrumental variants."],
-    childResources: ["每個計算工作", "Each compute job"],
-    resources: ["流程監控工作", "Workflow controller"],
-    jobID: ["監控工作編號", "Controller job ID"],
-    controllerNote: ["監控工作會持續等待遠端計算工作完成，請保留足夠的執行時間。", "The controller waits for the compute jobs to finish, so allow enough time for the full workflow."],
-    ncores: ["核心數", "CPU cores"],
-    memory: ["記憶體（GB）", "Memory (GB)"],
-    walltime: ["時間上限（時:分:秒）", "Time limit (H:MM:SS)"],
-    positiveCorrelation: ["相關性門檻必須大於 0。", "The correlation threshold must be above 0."],
-    defaultsApplied: ["部分既有資源預設值超出支援範圍，請核對目前預填的資源後送出。", "Some saved resource defaults exceed supported ranges. Review the replacement values before submission."],
-    phase1: ["第一批模型工作", "First batch of model work items"],
-    phase2: ["第二批模型工作", "Second batch of model work items"],
+    nboots: "Bootstrap runs",
+    cor: "Instrument correlation limit",
+    correlationNote: "The correlation limit selects each gene’s instrumental variants.",
+    childResources: "Each compute job",
+    resources: "Workflow controller",
+    jobID: "Controller job ID",
+    controllerNote: "The controller waits for the compute jobs to finish, so allow enough time for the full workflow.",
+    ncores: "CPU cores",
+    memory: "Memory (GB)",
+    walltime: "Time limit (H:MM:SS)",
+    positiveCorrelation: "The correlation threshold must be above 0.",
+    defaultsApplied: "Some saved resource defaults exceed supported ranges. Review the replacement values before submission.",
+    phase1: "First batch of model work items",
+    phase2: "Second batch of model work items",
   };
 
   const visualizationCopy = {
-    title: ["網路圖與連線匯出", "Network visualization and export"],
-    stage: ["第 6 階段", "Stage 6"],
+    title: "Network visualization and export",
+    stage: "Stage 6",
     run: expressionCopy.run,
-    empty: ["先選擇前 5 階段已完成的執行。", "Choose a run with completed Stages 1–5."],
-    prerequisite: ["這筆執行的前 5 階段完成後，即可送出第 6 階段。", "Submit Stage 6 after Stages 1–5 complete in this run."],
-    readyPrompt: ["核對出現頻率門檻與子網路數後，按「送出第 6 階段」。", "Review the frequency threshold and subnetwork count, then select Submit Stage 6."],
-    submit: ["送出第 6 階段", "Submit Stage 6"],
-    review: ["檢查網路與門檻", "Check network and thresholds"],
-    checking: ["正在核對網路與門檻…", "Checking network and thresholds…"],
+    empty: "Choose a run with completed Stages 1–5.",
+    prerequisite: "Submit Stage 6 after Stages 1–5 complete in this run.",
+    readyPrompt: "Review the frequency threshold and subnetwork count, then select Submit Stage 6.",
+    submit: "Submit Stage 6",
+    review: "Check network and thresholds",
+    checking: "Checking network and thresholds…",
     inputs: cisCopy.inputs,
     retry: expressionCopy.retry,
     back: expressionCopy.back,
-    freq: ["連線出現頻率門檻", "Edge frequency threshold"],
-    ntop: ["顯示的子網路數", "Subnetworks to display"],
-    savedResults: ["已儲存網路圖", "Saved networks"],
+    freq: "Edge frequency threshold",
+    ntop: "Subnetworks to display",
+    savedResults: "Saved networks",
   };
 
   function mountContinuationRun({panel, token, onHistoryChanged, onOpenHistory, onBack, onShowResults}, step = "expression") {
@@ -899,7 +929,7 @@
     panel.classList.add("ml-expression-panel");
     if (adjustment) panel.classList.add("ml-adjust-panel");
     panel.innerHTML = `
-      <div class="ml-result-main ml-genotype-main" data-live-language>
+      <div class="ml-result-main ml-genotype-main">
         <header><p class="ml-genotype-eyebrow" data-${prefix}-copy="stage"></p>
           <h2 id="${visualization ? 'lens-stage6-run-title' : `lens-stage${stage}-title`}" data-${prefix}-copy="title"></h2></header>
         <label class="ml-expression-run-label"><span data-${prefix}-copy="run"></span>
@@ -914,7 +944,7 @@
             <dd>${adjustment
               ? `<input class="ml-clinical-input" type="text" data-${prefix}-input="${key}" maxlength="2048" required>`
               : `<code data-${prefix}-input="${key}"></code>`}</dd>`).join("")}</dl>
-          ${adjustment ? '<p class="ml-settings-note" data-adjust-clinical-replacement hidden></p><div class="ml-settings-note" data-adjust-clinical-summary></div><div data-adjust-clinical-choices></div>' : ''}
+          ${adjustment ? '<p class="ml-settings-note" data-adjust-clinical-replacement hidden></p><div data-adjust-clinical-schema hidden></div><div class="ml-settings-note" data-adjust-clinical-summary></div><div data-adjust-clinical-choices></div>' : ''}
           <fieldset data-${prefix}-fields><legend data-${prefix}-copy="settings"></legend>
             <div class="ml-genotype-controls">${parameterMarkup(network ? parameterDefinitions.slice(0, 2) : parameterDefinitions)}</div>
             ${network ? '<input type="number" data-network-setting="ncis" value="3" readonly hidden><p class="ml-settings-note" data-network-copy="correlationNote"></p>' : ''}
@@ -932,7 +962,7 @@
           <button type="button" class="ml-nav-action ml-genotype-submit" data-${prefix}-submit data-${prefix}-copy="submit"></button>
         </form>
       </div>
-      <aside class="ml-result-inspector ml-genotype-progress" data-live-language>
+      <aside class="ml-result-inspector ml-genotype-progress">
         <header class="ml-result-inspector-heading"><h3 data-${prefix}-copy="progress"></h3></header>
         <p class="ml-genotype-status" data-${prefix}-status role="status"></p>
         <dl class="ml-key-values" data-${prefix}-identifiers hidden>
@@ -961,13 +991,13 @@
     const parameterInputs = new Map(parameterDefinitions.map(({key}) => [key, panel.querySelector(`[data-${prefix}-${parameterAttribute}="${key}"]`)]));
     const fields = [...panel.querySelectorAll(`[data-${prefix}-fields]`)];
     const runStates = new Map();
-    let context = {datasetId: "", language: "zh-Hant", visible: false, runs: [], runId: null};
+    let context = {datasetId: "", visible: false, runs: [], runId: null};
     let selectedRun = "";
     let pollTimer;
     let cancellation;
     let logs;
     let revalidation;
-    const local = key => (copy[key] ?? labels[key])?.[context.language === "en" ? 1 : 0] ?? key;
+    const labelFor = key => Object.hasOwn(copy, key) ? copy[key] : Object.hasOwn(labels, key) ? labels[key] : key;
     const current = () => runStates.get(selectedRun);
     const source = () => context.runs.find(run => run.run_id === selectedRun);
 
@@ -986,12 +1016,15 @@
       }
       const reply = await fetch(path, options);
       const result = await reply.json().catch(() => null);
-      if (!reply.ok || !result) throw Object.assign(new Error(result?.error || local("serviceError")), {status: reply.status, code: result?.code});
+      if (!reply.ok || !result) throw Object.assign(new Error(result?.error || labelFor("serviceError")), {status: reply.status, code: result?.code});
       return result;
     }
 
     function fillReview(value, keepDraft = false) {
-      if (adjustment && !keepDraft && current()) current().clinicalChoices = {...(value.clinical?.choices ?? value.choices ?? {})};
+      if (adjustment && !keepDraft && current()) {
+        current().clinicalChoices = {...(value.clinical?.choices ?? value.choices ?? {})};
+        current().genderColumn = value.clinical?.gender_column ?? "";
+      }
       for (const key of fileKeys) {
         const element = panel.querySelector(`[data-${prefix}-input="${key}"]`);
         if (adjustment) element.value = value.inputs?.[key] ?? "";
@@ -1015,13 +1048,24 @@
       item.draft = {
         clinical: adjustment ? panel.querySelector('[data-adjust-input="cli.file"]').value : "",
         choices: adjustment ? {...(item.clinicalChoices ?? {})} : {},
+        genderColumn: adjustment ? item.genderColumn : undefined,
         parameters: Object.fromEntries([...parameterInputs].map(([key, input]) => [key, input.value])),
         resources: Object.fromEntries([...resourceInputs].map(([key, input]) => [key, input.value])),
       };
     }
 
+    function invalidateClinicalReview(item) {
+      item.review.ready = false;
+      delete item.review.review_token;
+      item.error = "Check the clinical file again to confirm these choices before submission.";
+      saveDraft();
+      part("submit").disabled = true;
+      part("notice").textContent = item.error;
+      part("notice").hidden = false;
+    }
+
     function render() {
-      for (const element of panel.querySelectorAll(`[data-${prefix}-copy]`)) element.textContent = local(element.getAttribute(`data-${prefix}-copy`));
+      for (const element of panel.querySelectorAll(`[data-${prefix}-copy]`)) element.textContent = labelFor(element.getAttribute(`data-${prefix}-copy`));
       const item = current();
       dropStaleRevalidation(item);
       const saved = item?.record;
@@ -1045,15 +1089,20 @@
       }));
       picker.value = selection;
       picker.disabled = Boolean(context.runId) || !context.runs.length || Boolean(item?.submitting);
-      part("readiness").textContent = !selectedRun ? local("empty") : !allowed ? local("prerequisite")
-        : item.checking ? local("checking") : item.review && !hasAttempt ? local(item.review.ready === false ? "unavailable" : "ready") : "";
-      part("guidance").textContent = allowed && item?.review && !hasAttempt && item.review.ready !== false ? local("readyPrompt") : "";
+      part("readiness").textContent = !selectedRun ? labelFor("empty") : !allowed ? labelFor("prerequisite")
+        : item.checking ? labelFor("checking") : item.review && !hasAttempt ? labelFor(item.review.ready === false ? "unavailable" : "ready") : "";
+      if (!hasAttempt && item?.reviewTimedOut) {
+        part("readiness").textContent = labelFor("reviewTimeout");
+        part("review").textContent = labelFor("reviewAgain");
+      }
+      part("guidance").textContent = allowed && item?.review && !hasAttempt && item.review.ready !== false ? labelFor("readyPrompt") : "";
       part("review").hidden = !(alwaysVisible ? selectedRun : allowed) || hasAttempt;
       part("review").disabled = Boolean(item?.checking || revalidationBusy(item));
       form.hidden = !alwaysVisible && (!allowed || !(hasAttempt ? saved?.inputs : item?.review));
       for (const field of fields) field.disabled = hasAttempt || cancellationBusy(item) || revalidationBusy(item) || !selectedRun || visualization && Boolean(item?.checking);
       if (adjustment) {
         const clinicalInput = panel.querySelector('[data-adjust-input="cli.file"]');
+        clinicalInput.setAttribute("aria-label", labelFor("cli.file"));
         clinicalInput.disabled = hasAttempt || Boolean(item?.checking || revalidationBusy(item)) || !selectedRun;
         const frozenClinical = source()?.frozen_inputs?.clinical?.[0];
         const frozen = Boolean(item?.review?.frozen || item?.review?.frozen_inputs || source()?.input_mode === "dataset" || source()?.frozen_inputs);
@@ -1061,42 +1110,85 @@
         clinicalInput.readOnly = hasAttempt || frozen && !replacementAllowed;
         const replacement = part("clinical-replacement");
         replacement.hidden = !frozen || !replacementAllowed || hasAttempt;
-        replacement.textContent = context.language === "en"
-          ? "You can select a corrected clinical file for Stage 3. The original frozen file is preserved, and completed Stages 1 and 2 are reused. Check the selected file again before submitting."
-          : "可為第 3 階段選用修正後的臨床檔。原本保存的檔案仍保留，第 1、2 階段沿用已完成結果；送出前請重新檢查選定檔案。";
+        replacement.textContent = "You can select a corrected clinical file for Stage 3. The original frozen file is preserved, and completed Stages 1 and 2 are reused. Check the selected file again before submitting.";
         if (frozenClinical && !replacement.hidden) {
           const path = document.createElement("code");path.textContent = frozenClinical;
-          replacement.append(document.createTextNode(context.language === "en" ? " Original frozen file: " : " 原本保存的檔案："), path);
+          replacement.append(document.createTextNode(" Original frozen file: "), path);
         }
         const clinical = hasAttempt ? saved?.clinical?.review : item?.review?.clinical;
-        const english = context.language === "en";
+        const missingColumns = clinical?.missing_columns ?? [];
+        const candidates = clinical?.gender_column_candidates ?? [];
+        const schema = part("clinical-schema");
+        schema.replaceChildren();
+        schema.hidden = !missingColumns.includes("gender") && !candidates.length;
+        if (!schema.hidden) {
+          const group = document.createElement("fieldset");
+          const legend = document.createElement("legend");
+          legend.textContent = "Gender column";
+          group.append(legend);
+          if (missingColumns.includes("gender")) {
+            const explanation = document.createElement("p");
+            explanation.textContent = "Stage 3 needs exactly one gender column. Select the column that contains the correct values, or use a corrected clinical file.";
+            group.append(explanation);
+          }
+          if (candidates.length) {
+            const label = document.createElement("label");
+            label.textContent = "Use this column as gender";
+            const select = document.createElement("select");
+            select.dataset.adjustGenderColumn = "";
+            select.append(new Option("Choose a column", ""),
+              ...candidates.map(column => new Option(column, column)));
+            select.value = (hasAttempt ? clinical.gender_column : item.genderColumn) ?? "";
+            select.disabled = hasAttempt || clinicalInput.disabled;
+            select.addEventListener("change", () => {
+              item.genderColumn = select.value;
+              invalidateClinicalReview(item);
+            });
+            label.append(select);
+            group.append(label);
+          } else if (missingColumns.includes("gender")) {
+            const unavailable = document.createElement("p");
+            unavailable.textContent = "No matching column name was found. Provide a clinical file with one gender column.";
+            group.append(unavailable);
+          }
+          if (!clinicalInput.readOnly && !hasAttempt) {
+            const replace = document.createElement("button");
+            replace.type = "button";
+            replace.className = "ml-nav-action";
+            replace.dataset.adjustUseCorrectedClinical = "";
+            replace.textContent = "Use a corrected clinical file";
+            replace.disabled = clinicalInput.disabled;
+            replace.addEventListener("click", () => {
+              clinicalInput.focus();
+              clinicalInput.select();
+            });
+            group.append(replace);
+          }
+          schema.append(group);
+        }
         const summary = part("clinical-summary");
         summary.replaceChildren();
-        if (clinical) {
+        if (clinical && clinical.schema_valid !== false && !missingColumns.length) {
           const count = key => Number.isSafeInteger(clinical[key]) && clinical[key] >= 0 ? clinical[key] : "—";
           const totals = document.createElement("p");
-          totals.textContent = english
-            ? `${count("rows")} clinical rows · ${count("matched")} matched · ${count("retained")} retained · ${count("excluded")} excluded`
-            : `${count("rows")} 筆臨床資料 · 配對 ${count("matched")} · 保留 ${count("retained")} · 排除 ${count("excluded")}`;
+          totals.textContent = `${count("rows")} clinical rows · ${count("matched")} matched · ${count("retained")} retained · ${count("excluded")} excluded`;
           const scope = document.createElement("p");
-          scope.textContent = english
-            ? "This review uses the completed Stage 1 and Stage 2 outputs. These counts can differ from the Data page’s preliminary pairing. Retained and excluded counts reflect the current clinical choices."
-            : "此處使用第 1、2 階段已完成的實際輸出重新核對，可能與資料頁的初步配對不同。保留與排除數依目前的臨床處理選擇計算。";
+          scope.textContent = "This review uses the completed Stage 1 and Stage 2 outputs. These counts can differ from the Data page’s preliminary pairing. Retained and excluded counts reflect the current clinical choices.";
           const missing = document.createElement("dl");missing.className = "ml-key-values";
-          for (const [key, zh, en] of [["clinical_matched", "配對個體中具臨床資料者", "Matched patients with clinical data"],
-            ["missing_race", "處理後仍缺族群資料者", "Missing race after current choices"],
-            ["missing_gender", "處理後仍缺性別資料者", "Missing gender after current choices"]]) {
+          for (const [key, label] of [["clinical_matched", "Matched patients with clinical data"],
+            ["missing_race", "Missing race after current choices"],
+            ["missing_gender", "Missing gender after current choices"]]) {
             const title = document.createElement("dt"), value = document.createElement("dd");
-            title.textContent = english ? en : zh;value.textContent = String(count(key));
+            title.textContent = label;value.textContent = String(count(key));
             value.dataset.clinicalReviewCount = key;missing.append(title, value);
           }
           summary.append(totals, scope, missing);
         }
         const choices = part("clinical-choices");
         choices.replaceChildren();
-        if (clinical) {
+        if (Object.keys(clinical?.race ?? {}).length) {
           const counts = document.createElement("p");
-          counts.textContent = Object.entries(clinical.race ?? {}).map(([name, count]) => `${name}: ${count}`).join(" · ");
+          counts.textContent = Object.entries(clinical.race).map(([name, count]) => `${name}: ${count}`).join(" · ");
           choices.append(counts);
         }
         for (const [value, count] of Object.entries(clinical?.unrecognized_race ?? {})) {
@@ -1105,22 +1197,17 @@
           legend.textContent = `${value} (${count})`;
           group.append(legend);
           group.disabled = hasAttempt || Boolean(item?.checking || item?.submitting);
-          for (const [answer, zh, en] of [["not_reported", "依原流程視為未回報（再歸入白人組）", "Treat as not reported (SIGNET groups as white)"],
-            ["exclude", "排除這些樣本", "Exclude these samples"]]) {
+          for (const [answer, text] of [["not_reported", "Treat as not reported (SIGNET groups as white)"],
+            ["exclude", "Exclude these samples"]]) {
             const label = document.createElement("label");
             const input = document.createElement("input");
             input.type = "radio";input.name = `clinical-${value}`;input.value = answer;input.required = true;
             input.checked = item?.clinicalChoices?.[value] === answer;
             input.addEventListener("change", () => {
               item.clinicalChoices = {...(item.clinicalChoices ?? {}), [value]: answer};
-              item.review.ready = false;
-              delete item.review.review_token;
-              item.error = english ? "Check the clinical file again to confirm these choices before submission." : "請再次檢查臨床資料，確認選擇後再送出。";
-              saveDraft();
-              part("submit").disabled = true;
-              part("notice").textContent = item.error;part("notice").hidden = false;
+              invalidateClinicalReview(item);
             });
-            label.append(input, document.createTextNode(english ? en : zh));group.append(label);
+            label.append(input, document.createTextNode(text));group.append(label);
           }
           choices.append(group);
         }
@@ -1144,14 +1231,14 @@
       if (network) {
         const defaults = item?.review?.defaults_applied ?? [];
         part("defaults").hidden = !defaults.length || hasAttempt;
-        part("defaults").textContent = defaults.length ? local("defaultsApplied") : "";
+        part("defaults").textContent = defaults.length ? labelFor("defaultsApplied") : "";
         part("defaults").title = defaults.join("\n");
       }
-      renderWorkProgress(part("work-progress"), saved?.progress, context.language === "en");
+      renderWorkProgress(part("work-progress"), saved?.progress);
       part("submit").hidden = hasAttempt;
       part("submit").disabled = !allowed || !item?.review || item.review.ready === false || adjustment && !item.review.review_token || item.checking || item.submitting || hasAttempt || cancellationBusy(item) || revalidationBusy(item);
-      part("status").textContent = local(state);
-      if (item?.cancellation?.sending) part("status").textContent = local("cancelSending");
+      part("status").textContent = labelFor(state);
+      if (item?.cancellation?.sending) part("status").textContent = labelFor("cancelSending");
       part("identifiers").hidden = !selectedRun;
       part("run-id").textContent = selectedRun;
       part("job-id").textContent = saved?.job_id ?? "—";
@@ -1161,18 +1248,18 @@
       part("retry").hidden = !saved || !["failed", "cancelled"].includes(state) || Boolean(item?.retry || item?.uncertain || cancellationBusy(item) || revalidationBusy(item));
       part("back").hidden = !context.runId;
       if (visualization) part("results").disabled = !context.resultsAvailable;
-      const message = [item?.uncertain ? local("uncertain") : "", item?.error].filter(Boolean).join(" ");
+      const message = [item?.uncertain ? labelFor("uncertain") : "", item?.error].filter(Boolean).join(" ");
       part("notice").textContent = message;
       part("notice").hidden = !message;
       part("events").replaceChildren(...(saved?.history ?? []).map(event => {
         const row = document.createElement("li");
         row.dataset.state = event.state;
-        row.textContent = local(event.state);
+        row.textContent = labelFor(event.state);
         if (event.at) {
           const time = document.createElement("time");
           time.dateTime = event.at;
           const date = new Date(event.at);
-          time.textContent = Number.isNaN(date.valueOf()) ? event.at : date.toLocaleString(context.language);
+          time.textContent = Number.isNaN(date.valueOf()) ? event.at : date.toLocaleString("en");
           row.append(time);
         }
         return row;
@@ -1183,22 +1270,24 @@
       const run = source();
       logs?.setContext({historyId: run?.history_id, runId: selectedRun, source: run?.source, datasetId: context.datasetId,
         step, number: saved?.attempt ?? 1, current: true, recordFile: `steps/${step}.json`, recordIdentity: run?.record_identity,
-        record: saved, language: context.language, visible: context.visible});
+        record: saved, visible: context.visible});
     }
 
     function accept(item, value, id, revalidated = false) {
-      if (value.run_id !== id || value.step !== step || !Object.hasOwn(labels, value.state)) throw Error(local("serviceError"));
+      if (value.run_id !== id || value.step !== step || !Object.hasOwn(labels, value.state)) throw Error(labelFor("serviceError"));
       const sameAttempt = (value.attempt ?? 1) === (item.record?.attempt ?? 1);
       const manualTransition = revalidated && sameAttempt && item.record?.state === "failed" && item.record.job_id === value.job_id;
       if (item.record && !manualTransition && ((value.attempt ?? 1) < (item.record.attempt ?? 1) ||
           sameAttempt && item.record.job_id === value.job_id && (item.record.state === "completed" && value.state !== "completed" || terminalStates.has(item.record.state) && !terminalStates.has(value.state) ||
             item.record.state === "cancelling" && !terminalStates.has(value.state) && value.state !== "cancelling"))) return;
-      const changed = !item.record || value.state !== item.record.state || value.job_id !== item.record.job_id;
+      const changed = !item.record || value.state !== item.record.state || value.job_id !== item.record.job_id ||
+        JSON.stringify(value.progress) !== JSON.stringify(item.record.progress);
       item.record = value;
       cancellation?.observe(item, value);
       item.uncertain = false;
       item.retry = false;
-      item.error = value.connection === "interrupted" ? local("interrupted") : value.reason ?? "";
+      item.error = value.status_check_issue ? statusIssue(value, labelFor)
+        : value.connection === "interrupted" ? labelFor("interrupted") : value.reason ?? "";
       if (id === selectedRun && value.inputs) fillReview(value);
       if (changed || revalidated) onHistoryChanged?.(id);
     }
@@ -1235,6 +1324,7 @@
       if (!id || !item || !source() || item.checking || item.submitting || item.uncertain || cancellationBusy(item) || revalidationBusy(item) || item.record && !item.retry || !alwaysVisible && source()?.jobs.genotype?.state !== "completed") return;
       const epoch = item.cancelEpoch;
       item.checking = item.attempted = true;
+      item.reviewTimedOut = false;
       item.error = "";
       render();
       try {
@@ -1244,6 +1334,7 @@
         const params = new URLSearchParams();
         if (clinicalPath && (!frozen || clinicalPath !== source()?.frozen_inputs?.clinical?.[0])) params.set("clinical", clinicalPath);
         if (adjustment && item.clinicalChoices && Object.keys(item.clinicalChoices).length) params.set("choices", JSON.stringify(item.clinicalChoices));
+        if (adjustment && item.genderColumn) params.set("gender_column", item.genderColumn);
         if (visualization && item.draft) {
           for (const [key, input] of parameterInputs) params.set(key,
             Number.isFinite(input.valueAsNumber) ? String(input.valueAsNumber) : input.value);
@@ -1253,8 +1344,11 @@
         if (epoch !== item.cancelEpoch) return;
         const preserve = adjustment || (linkedInputs ? Boolean(item.draft) : item.review && fileKeys.every(key => item.review.inputs[key] === next.inputs[key]));
         item.review = next;
-        if (adjustment) item.clinicalChoices = Object.fromEntries(Object.entries(item.clinicalChoices ?? {})
-          .filter(([key]) => Object.hasOwn(next.clinical?.unrecognized_race ?? {}, key)));
+        if (adjustment && next.clinical) {
+          item.genderColumn = next.clinical.gender_column ?? "";
+          item.clinicalChoices = Object.fromEntries(Object.entries(item.clinicalChoices ?? {})
+            .filter(([key]) => Object.hasOwn(next.clinical.unrecognized_race ?? {}, key)));
+        }
         item.error = next.issues?.join(" ") || next.reason || "";
         if (id === selectedRun) {
           fillReview(next, Boolean(preserve));
@@ -1264,7 +1358,8 @@
         if (epoch === item.cancelEpoch) {
           item.review = adjustment && item.review?.clinical_replacement_allowed === true ? {...item.review, ready: false, clinical: null} : null;
           if (item.review) delete item.review.review_token;
-          item.error = error.message;
+          item.reviewTimedOut = error.code === "read_timeout";
+          item.error = item.reviewTimedOut ? "" : error.message;
         }
       } finally {
         if (epoch === item.cancelEpoch) {item.checking = false;render();}
@@ -1290,7 +1385,10 @@
       else if (changed && alwaysVisible) fillReview({[parameterGroup]: Object.fromEntries(parameterDefinitions.map(({key, value}) => [key, value])), resources: initialResources});
       if (changed && alwaysVisible && item?.draft && (!item.record || item.retry)) {
         if (adjustment) panel.querySelector('[data-adjust-input="cli.file"]').value = item.draft.clinical;
-        if (adjustment) item.clinicalChoices = {...(item.draft.choices ?? {})};
+        if (adjustment) {
+          item.clinicalChoices = {...(item.draft.choices ?? {})};
+          item.genderColumn = item.draft.genderColumn ?? "";
+        }
         for (const [key, input] of parameterInputs) input.value = item.draft.parameters[key];
         for (const [key, input] of resourceInputs) input.value = item.draft.resources[key];
       }
@@ -1306,11 +1404,11 @@
       if (!item || part("submit").disabled) return;
       if (cis) {
         const alpha = parameterInputs.get("alpha.cis");
-        alpha.setCustomValidity(alpha.valueAsNumber > 0 ? "" : local("positiveAlpha"));
+        alpha.setCustomValidity(alpha.valueAsNumber > 0 ? "" : labelFor("positiveAlpha"));
       }
       if (network) {
         const correlation = parameterInputs.get("cor");
-        correlation.setCustomValidity(correlation.valueAsNumber > 0 ? "" : local("positiveCorrelation"));
+        correlation.setCustomValidity(correlation.valueAsNumber > 0 ? "" : labelFor("positiveCorrelation"));
       }
       if (!form.reportValidity()) return;
       const values = inputs => Object.fromEntries([...inputs].map(([key, element]) =>
@@ -1318,6 +1416,7 @@
       const body = {inputs: item.review.inputs, [parameterGroup]: values(parameterInputs), resources: values(resourceInputs)};
       if (adjustment) body.choices = {...(item.clinicalChoices ?? {})};
       if (adjustment) body.review_token = item.review.review_token;
+      if (adjustment && item.genderColumn) body.gender_column = item.genderColumn;
       item.submitting = true;
       item.retry = false;
       item.error = "";
@@ -1327,8 +1426,13 @@
       } catch (error) {
         item.error = error.message;
         if (error.status === 400 || error.status === 412 || error.code === "review_required" || error.status === 502 && error.code === "remote_failed") {
-          item.review = null;
-          item.attempted = false;
+          if (adjustment) {
+            item.review.ready = false;
+            delete item.review.review_token;
+          } else {
+            item.review = null;
+            item.attempted = false;
+          }
           item.retry = Boolean(item.record);
           onHistoryChanged?.(id);
         } else {
@@ -1351,8 +1455,9 @@
         item.review = item.review?.clinical_replacement_allowed === true ? {...item.review, ready: false, clinical: null} : null;
         if (item.review) delete item.review.review_token;
         item.clinicalChoices = {};
+        item.genderColumn = "";
         item.attempted = true;
-        item.error = context.language === "en" ? "The clinical file changed. Check it again before submission." : "臨床檔案已變更，送出前請重新檢查。";
+        item.error = "The clinical file changed. Check it again before submission.";
         saveDraft();
         render();
       });
@@ -1373,11 +1478,11 @@
       });
     }
     picker.addEventListener("change", () => selectRun(picker.value));
-    cancellation = mountCancellation({panel, prefix, stage, local, request, render, schedule,
+    cancellation = mountCancellation({panel, prefix, stage, labelFor, request, render, schedule,
       target: () => ({item: current(), runId: selectedRun, datasetId: context.datasetId, visible: context.visible, run: source()}),
       receive: (value, next) => accept(value.item, next, value.runId)});
     logs = window.SignetJobLogs?.mount({host: part("logs"), token});
-    revalidation = mountOutputRevalidation({panel, prefix, local, request, render, schedule,
+    revalidation = mountOutputRevalidation({panel, prefix, labelFor, request, render, schedule,
       target: () => ({item: current(), runId: selectedRun, datasetId: context.datasetId, visible: context.visible, step, run: source()}),
       before: item => {item.retry = false;item.review = null;item.draft = null;item.checking = false;},
       receive: (value, next) => accept(value.item, next, value.runId, true), onChanged: value => onHistoryChanged?.(value.runId)});
@@ -1395,6 +1500,7 @@
       void review();
     });
     return {
+      getRunId: () => selectedRun || null,
       setContext(next) {
         context = next;
         const id = context.runId ?? (context.runs.some(run => run.run_id === selectedRun) ? selectedRun : context.runs[0]?.run_id ?? "");

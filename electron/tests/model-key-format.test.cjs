@@ -29,7 +29,7 @@ test('authorization keys are verified before saving and round-trip through encry
     decryptString: data => Buffer.from(data.toString().slice('fixture-encrypted:'.length), 'base64').toString(),
   });
   let accepted = false, calls = 0;
-  const controller = new ModelController({store, getProvider: () => 'codex', switchProvider: async () => {},
+  const controller = new ModelController({store, getProvider: () => 'none', switchProvider: async () => {},
     verify: async key => {calls++; assert.equal(key, AUTH_KEY); if (!accepted) throw Error('fixture Google rejection');}});
   try {
     await assert.rejects(controller.saveGeminiKey(AUTH_KEY), /fixture Google rejection/);

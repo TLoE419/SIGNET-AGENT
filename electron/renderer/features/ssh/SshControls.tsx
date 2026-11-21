@@ -20,7 +20,7 @@ export type SshControlStatus = ComponentProps<typeof SshStatusBlock> & {
  onEnvironment:()=>void;
  onVerifyEnvironment:()=>ReturnType<EnvironmentBridge['check']>;
 };
-export function SshControls({renderStatus,terminalActive=true,english=true}:{renderStatus?:(props:SshControlStatus)=>ReactNode;terminalActive?:boolean;english?:boolean}){
+export function SshControls({renderStatus,terminalActive=true}:{renderStatus?:(props:SshControlStatus)=>ReactNode;terminalActive?:boolean}){
  const [environment,setEnvironment]=useState<EnvironmentSnapshot>({phase:'disconnected',message:'Connect SSH first.'}),[environmentOpen,setEnvironmentOpen]=useState(false);
  useEffect(()=>{let active=true,received=false;const off=environmentBridge.subscribe(value=>{received=true;if(active)setEnvironment(value)});void environmentBridge.getSnapshot().then(reply=>{if(active&&!received&&reply.ok&&reply.value)setEnvironment(reply.value)});return()=>{active=false;off()}},[]);
  useEffect(()=>{const open=()=>setEnvironmentOpen(true);window.addEventListener('open-environment',open);return()=>window.removeEventListener('open-environment',open)},[]);
@@ -45,7 +45,7 @@ export function SshControls({renderStatus,terminalActive=true,english=true}:{ren
  const statusProps:SshControlStatus={environment,onEnvironment:()=>setEnvironmentOpen(true),
   onVerifyEnvironment:()=>environmentBridge.check(environment.config?.root||'',environment.config?.partition||''),
   name:identity.name,host:identity.endpoint,status,phase:connection?.phase,error:ssh.error||connection?.error,busy:ssh.busy,onEdit:()=>setOpen(true),onToggle:()=>void toggle().catch(()=>{})};
- return <>{(renderStatus||desktop.isDevMode===true)&&devTerminal&&terminalActive&&<DevTerminalPanel english={english} advanced={!!renderStatus} onConnect={()=>setOpen(true)} diagnostics={diagnostics} bridge={devTerminal} connected={liveStatus==='connected'} status={liveStatus}/>}{renderStatus ? renderStatus(statusProps) : <SshStatusBlock {...statusProps}/>}
+ return <>{desktop.isDevMode===true&&devTerminal&&terminalActive&&<DevTerminalPanel advanced={!!renderStatus} onConnect={()=>setOpen(true)} diagnostics={diagnostics} bridge={devTerminal} connected={liveStatus==='connected'} status={liveStatus}/>}{renderStatus ? renderStatus(statusProps) : <SshStatusBlock {...statusProps}/>}
  <RemoteFilesHost connected={liveStatus==='connected'} connectionIdentity={`${identity.endpoint}|${connection?.connectedAt||''}`}/>
  {environmentOpen&&<EnvironmentModal diagnostics={diagnosticView} snapshot={environment} bridge={environmentBridge} onClose={()=>setEnvironmentOpen(false)}/>}
  <UnlockPrompt diagnostics={diagnosticView} open={unlock} name={identity.name} onClose={()=>{setUnlock(false);if(liveStatus==='connecting')void ssh.disconnect()}} onConnect={ssh.connectSaved} pendingHost={ssh.snapshot.pendingHost} onTrust={ssh.trustHost}/>

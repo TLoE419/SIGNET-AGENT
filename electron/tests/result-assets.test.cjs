@@ -43,7 +43,7 @@ test('original controls load lazily, switch original subnetworks and isolate the
   assert.equal(h.calls[0].options.headers['X-Chat-Token'], 'page-secret');
   assert.match(h.calls[0].url, /revision=b{64}/);
   const select = h.q('.s6-original-select select'); select.value = '2'; select.dispatchEvent(new h.window.Event('change'));
-  [...h.q('.s6-original-content').querySelectorAll('button')].find(button => button.textContent === '檢視原始網路').click();
+  [...h.q('.s6-original-content').querySelectorAll('button')].find(button => button.textContent === 'View original network').click();
   const frame = h.q('iframe'); assert.ok(frame);
   assert.equal(frame.getAttribute('sandbox'), 'allow-scripts');
   assert.equal(frame.referrerPolicy, 'no-referrer');
@@ -64,7 +64,7 @@ test('a late live metadata response cannot replace an archive context with the s
   await until(() => h.q('.s6-original-select'));
   assert.equal(oldSignal.aborted, true);
   finishLive(metadata(context())); await flush();
-  const pdf = [...h.q('.s6-original-content').querySelectorAll('button')].find(button => button.textContent === '下載原始 PDF');
+  const pdf = [...h.q('.s6-original-content').querySelectorAll('button')].find(button => button.textContent === 'Download original PDF');
   // Switch again while the download is pending; no stale anchor may be clicked.
   let finishDownload;
   h.window.fetch = async (url, options) => ({ok: true, json: async () => new Promise(resolve => finishDownload = resolve)});
@@ -86,7 +86,7 @@ test('original PDF download is explicit and keeps source, identity, revision and
   assert.equal(h.q('iframe'), null);
 });
 
-test('search and sort apply to gene-selected rows, survive replacement and translate without changing selection', async t => {
+test('search and sort apply to gene-selected rows without changing selection when rows are replaced', async t => {
   const h = harness(t); h.controller.setContext(context());
   const search = h.q('.s6-table-tools input'), sort = h.q('.s6-table-tools select');
   search.value = 'megf6'; search.dispatchEvent(new h.window.Event('input'));
@@ -96,7 +96,6 @@ test('search and sort apply to gene-selected rows, survive replacement and trans
   assert.equal(h.q('td[data-focused=true]').textContent, 'MEGF6');
   h.tbody.innerHTML = '<tr><td data-focused="true">MEGF6</td><td>NEW</td><td>0.99</td><td>0.1</td></tr><tr><td>X</td><td>Y</td><td>1</td><td>0.2</td></tr>';
   await flush(); assert.equal([...h.tbody.rows].filter(row => !row.hidden).length, 1);
-  h.stage.closest('[lang]').lang = 'en'; await flush();
   assert.equal(search.placeholder, 'Search connections');
   assert.equal(h.q('.s6-original-results summary').textContent, 'Original analysis results');
   assert.equal(h.q('td[data-focused=true]').textContent, 'MEGF6');
@@ -106,23 +105,20 @@ test('search and sort apply to gene-selected rows, survive replacement and trans
 test('missing exports and matrix stay explicit, and foreign preview URLs are never opened', async t => {
   const value = metadata(context()); value.previews[0].url = 'https://example.invalid/widget.html'; value.plots = []; value.thresholds = null;
   const h = harness(t, () => value); h.controller.setContext(context()); h.open(); await until(() => h.q('.s6-original-select'));
-  [...h.q('.s6-original-content').querySelectorAll('button')].find(button => button.textContent === '檢視原始網路').click();
+  [...h.q('.s6-original-content').querySelectorAll('button')].find(button => button.textContent === 'View original network').click();
   assert.equal(h.q('iframe'), null);
-  assert.match(h.q('.s6-original-content').textContent, /未保留原始頻率矩陣/);
+  assert.match(h.q('.s6-original-content').textContent, /The original frequency matrix was not retained/);
   assert.equal(h.q('.s6-cutoff-counts'), null);
   assert.equal(h.q('.s6-cutoff-chart'), null);
 });
 
-test('cutoff chart uses only complete real count pairs and keeps readable bilingual axes and legend', async t => {
+test('cutoff chart uses only complete real count pairs and keeps accessible English axes and legend', async t => {
   const value = metadata(context()), h = harness(t, () => value);
   h.controller.setContext(context()); h.open(); await until(() => h.q('.s6-cutoff-chart'));
   const points = () => [...h.q('.s6-cutoff-chart').querySelectorAll('circle')].map(point => [point.dataset.series, Number(point.dataset.cutoff), Number(point.dataset.count)]);
   assert.deepEqual(points(), [['genes', .8, 3], ['genes', 1, 2], ['connections', .8, 2], ['connections', 1, 1]]);
   assert.equal(h.q('.s6-cutoff-chart svg').getAttribute('role'), 'img');
-  assert.match(h.q('.s6-cutoff-chart').textContent, /重抽樣頻率門檻/);
-  assert.match(h.q('.s6-cutoff-legend').textContent, /基因.*連線/);
   assert.equal(h.q('.s6-cutoff-counts tbody').rows.length, 2);
-  h.stage.closest('[lang]').lang = 'en'; await flush();
   assert.match(h.q('.s6-cutoff-chart').textContent, /Bootstrap frequency cutoff/);
   assert.match(h.q('.s6-cutoff-legend').textContent, /Genes.*Connections/);
   assert.equal(points().length, 4);

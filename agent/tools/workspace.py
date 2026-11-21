@@ -1,7 +1,7 @@
 """Model tools share the manual workspace reviews; submission is never exposed."""
 from agent.runtime import signet_jobs as jobs, workspace_genotype as workspace
 from agent.tools import signet
-from agent.runtime import step_report
+from agent.runtime import step_report, workspace_datasets
 
 STAGES = ('genotype', 'expression', 'adjust', 'cis', 'network', 'visualize')
 
@@ -96,6 +96,7 @@ def _proposal(result):
 def propose_workspace_stage(run_id: str, stage: int, source: str = 'live') -> dict:
     """Review the SAME six-stage services as manual controls and propose opening manual review. Never submit, change settings, retry or cancel. Use explicit live run and stage; Stage 1 initial dataset selection stays in the manual form."""
     before = get_workspace_stage(run_id, stage, source)
+    workspace_datasets.ensure_not_deleted(before.get('dataset_id'))
     record = before['job']
     if stage == 1:
         if not record.get('attempt'):

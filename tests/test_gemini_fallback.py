@@ -8,7 +8,9 @@ from google import genai
 from google.genai import errors, types
 
 import agent.core.conversation as main
+from agent.app.chat_outcome import ChatOutcome
 from agent.core.model_timing import ModelRequestTiming
+from agent.providers.gemini import GeminiProviderAdapter
 from test_chat import response
 
 
@@ -25,6 +27,37 @@ def client_for(*outcomes, **attributes):
 
 
 class GeminiFallbackTest(unittest.TestCase):
+    def test_primary_times_out_sooner_than_backup_and_explains_terminal_read_timeout(self):
+        requests = []
+
+        def handler(request):
+            requests.append(request)
+            raise httpx.ReadTimeout('private transport detail', request=request)
+
+        timing = ModelRequestTiming()
+        client_args = {**timing.client_args(), 'transport': httpx.MockTransport(handler)}
+        events, history = [], []
+        with patch('agent.providers.gemini.required_key', return_value='fixture-api-key'), \
+                patch.object(timing, 'client_args', return_value=client_args), \
+                patch.object(main, 'dispatch_tool') as dispatch:
+            with GeminiProviderAdapter(main.MODEL).create_client(timing) as client:
+                answer = main.run_conversation(client, 'Explain which step is waiting.', history,
+                                               progress=events.append, http_timing=timing)
+        self.assertEqual([request.url.path.split('/')[-1] for request in requests],
+                         [main.MODEL + ':generateContent', FALLBACK + ':generateContent'])
+        self.assertEqual([request.extensions.get('timeout', {}).get('read') for request in requests],
+                         [15.0, 45.0])
+        final_error = answer.partition('\n\n')[2]
+        self.assertIn('timed out', final_error.lower())
+        self.assertTrue(any(event.startswith('Model request ') and 'timed out' in event.lower() for event in events))
+        self.assertIn(FALLBACK, answer)
+        self.assertNotIn('private transport detail', answer + '\n'.join(events))
+        self.assertEqual(len(history), 1)
+        dispatch.assert_not_called()
+        outcome = ChatOutcome()
+        outcome.observe('answer', answer)
+        self.assertEqual(outcome.status, 'failed')
+
     def test_actual_sdk_reuses_request_and_reports_both_model_attempts(self):
         requests = []
 
@@ -49,7 +82,7 @@ class GeminiFallbackTest(unittest.TestCase):
         self.assertIn('完成。', answer)
         self.assertIn(FALLBACK, answer)
         self.assertEqual(len(history), 2)
-        self.assertEqual(sum('觀測到 1 次 HTTP 嘗試' in e for e in events), 2)
+        self.assertEqual(sum('observed 1 HTTP attempt.' in e for e in events), 2)
         self.assertFalse(timing.active)
         for private in ('private-key', 'private-question'):
             self.assertNotIn(private, answer + '\n'.join(events))
@@ -99,11 +132,10 @@ class GeminiFallbackTest(unittest.TestCase):
                 self.assertNotIn(FALLBACK, answer)
                 self.assertNotIn('private', answer)
 
-    def test_other_providers_and_models_are_unchanged(self):
-        for attributes in ({'model': 'other-model'}, {'model': main.MODEL, 'transport': 'cli'}):
-            client, generate = client_for(unavailable(), **attributes)
-            main.run_conversation(client, '需求', [])
-            self.assertEqual(generate.call_count, 1)
+    def test_other_models_do_not_switch_to_gemini(self):
+        client, generate = client_for(unavailable(), model='other-model')
+        main.run_conversation(client, '需求', [])
+        self.assertEqual(generate.call_count, 1)
 
     def test_primary_success_has_no_notice_and_next_turn_retries_primary(self):
         client, generate = client_for(unavailable(), response('第一次。'), response('第二次。'))
@@ -115,7 +147,7 @@ class GeminiFallbackTest(unittest.TestCase):
 
     def test_english_ui_gets_english_notice(self):
         client, _ = client_for(unavailable(), response('Done.'))
-        answer = main.run_conversation(client, 'request', [], language='en')
+        answer = main.run_conversation(client, 'request', [])
         self.assertIn(FALLBACK, answer)
         self.assertIn('fallback', answer.lower())
         self.assertNotIn('切換', answer)
@@ -128,7 +160,7 @@ class GeminiFallbackTest(unittest.TestCase):
             answer = main.run_conversation(client, '需求', [])
         self.assertEqual(dispatch.call_count, main.MAX_TOOL_ROUNDS)
         self.assertEqual(generate.call_count, main.MAX_TOOL_ROUNDS + 2)
-        self.assertIn('上限', answer)
+        self.assertIn('Tool-round limit reached', answer)
         self.assertIn(FALLBACK, answer)
 
 

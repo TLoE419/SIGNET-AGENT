@@ -24,11 +24,12 @@ app.on('will-quit', () => { clearTimeout(deadline); rmSync(temporary, {recursive
     const until=async check=>{for(let i=0;i<200;i++){if(check())return;await new Promise(resolve=>setTimeout(resolve,25))}throw Error('Advanced Settings did not mount')};
     await until(()=>document.querySelector('#ml-remote-switch'));
     document.querySelector('[data-nav-target="settings"]').click();
-    await until(()=>document.querySelector('.ssh-dev-launch')?.getClientRects().length);
-    return {label:document.querySelector('.ssh-dev-launch').textContent,development:window.signetDesktop.isDevMode};
+    if (window.signetDesktop.isDevMode) await until(()=>document.querySelector('.ssh-dev-launch')?.getClientRects().length);
+    return {label:document.querySelector('.ssh-dev-launch')?.textContent ?? null,development:window.signetDesktop.isDevMode};
   })()`);
-  assert.match(advanced.label,/Advanced: remote terminal|進階：遠端終端機/);
   assert.equal(advanced.development,devMode);
+  if (devMode) assert.match(advanced.label,/Advanced: remote terminal/);
+  else assert.equal(advanced.label,null);
  const classicLoaded = once(window.webContents, 'did-finish-load');
  require('electron').Menu.getApplicationMenu().getMenuItemById('classic-view').click();
  await classicLoaded;
@@ -41,7 +42,8 @@ app.on('will-quit', () => { clearTimeout(deadline); rmSync(temporary, {recursive
   })`);
   const value = await window.webContents.executeJavaScript(`(async()=>({
     composer:!!document.querySelector('#composer'), stage6:!!document.querySelector('#stage6-pane'),
-    language:!!document.querySelector('#language-toggle'), node:typeof window.require,
+    language:document.documentElement.lang, languageToggle:!!document.querySelector('#language-toggle'),
+    node:typeof window.require,
     chatStatus:(await fetch('/chat',{method:'POST',body:'{}'})).status,
     workspace:(await fetch('/stage6?session=12345678-1234-1234-1234-123456789abc',
       {headers:{'X-Chat-Token':document.querySelector('meta[name="chat-token"]').content}})).status,
@@ -50,15 +52,15 @@ app.on('will-quit', () => { clearTimeout(deadline); rmSync(temporary, {recursive
     sshBridge:Object.keys(window.signetDesktop?.ssh||{}).sort(),
     resources:performance.getEntriesByType('resource').filter(x=>x.name.startsWith(location.origin)).length
   }))()`);
-  assert.equal(value.composer, true); assert.equal(value.stage6, true); assert.equal(value.language, true);
+  assert.equal(value.composer, true); assert.equal(value.stage6, true);
+  assert.equal(value.language, 'en'); assert.equal(value.languageToggle, false);
   assert.equal(value.node, 'undefined'); assert.equal(value.chatStatus, 403); assert.equal(value.workspace, 200);
-  // Advanced Settings use the trusted bridge in production; the classic launcher stays dev-only.
-  assert.equal(value.devBridge,true);assert.equal(value.devButton,devMode);
-  const terminalHistory=await window.webContents.executeJavaScript(`window.signetDesktop.devTerminal.history()`);
-  assert.equal(terminalHistory.ok,true);
-  assert.equal(terminalHistory.value.some(event=>event.message==='Persistent PTY login shell opened.'),false,
-    'Loading either interface must not automatically open a terminal shell');
+  assert.equal(value.devBridge,devMode);assert.equal(value.devButton,devMode);
   if(devMode){
+    const terminalHistory=await window.webContents.executeJavaScript(`window.signetDesktop.devTerminal.history()`);
+    assert.equal(terminalHistory.ok,true);
+    assert.equal(terminalHistory.value.some(event=>event.message==='Persistent PTY login shell opened.'),false,
+      'Loading either interface must not automatically open a terminal shell');
     const panel=await window.webContents.executeJavaScript(`(async()=>{document.querySelector('.ssh-dev-launch').click();await new Promise(r=>setTimeout(r,100));const root=document.querySelector('.ssh-dev-panel');[...root.querySelectorAll('button')].find(b=>b.textContent==='Interactive shell').click();await new Promise(r=>setTimeout(r,100));const canEnable=!!root.querySelector('.ssh-dev-switch'),setupOffered=[...root.querySelectorAll('button')].some(b=>b.textContent==='Set up connection');const canvas=!!root.querySelector('.xterm');[...root.querySelectorAll('button')].find(b=>b.textContent==='Close panel').click();return {canEnable,setupOffered,canvas}})()`);
     assert.equal(panel.canEnable,false);assert.equal(panel.setupOffered,true);assert.equal(panel.canvas,true);
   }
@@ -66,8 +68,6 @@ app.on('will-quit', () => { clearTimeout(deadline); rmSync(temporary, {recursive
   assert.deepEqual(value.sshBridge, ['addExternalKey', 'answerAuthChallenge', 'cancelRegistration', 'connect', 'disconnect', 'generateKey', 'getSnapshot', 'healthCheck', 'initialize', 'inspectPrivateKey', 'listKeys', 'listProfiles', 'pickPrivateKey', 'registerGenerated', 'removeKey', 'saveProfile', 'selectProfile', 'subscribe', 'subscribeAuthChallenge', 'trustHost', 'updateKey']);
   assert.equal(value.sshBridge.some(name => /exec|shell|readFile|writeFile/.test(name)), false);
   assert.ok(value.resources >= 5);
-  await window.webContents.executeJavaScript(`document.querySelector('#language-toggle').click()`);
-  assert.equal(await window.webContents.executeJavaScript('document.documentElement.lang'), 'zh-Hant');
   const external = await window.webContents.executeJavaScript(`fetch('http://127.0.0.1:1/').then(()=>false,()=>true)`);
   assert.equal(external, true);
   const currentURL = window.webContents.getURL();

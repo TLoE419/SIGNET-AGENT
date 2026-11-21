@@ -13,9 +13,9 @@ function pythonExecutable() {
 }
 
 class Backend extends EventEmitter {
-  constructor({stateFile, provider = 'codex', python = pythonExecutable(), startupMs = 30000, sshBroker, env = {}} = {}) {
+  constructor({stateFile, provider = 'none', python = pythonExecutable(), startupMs = 30000, sshBroker, env = {}} = {}) {
     super();
-    if (!['codex', 'gemini', 'groq'].includes(provider)) throw Error('Unsupported model provider.');
+    if (!['none', 'gemini', 'groq', 'codex'].includes(provider)) throw Error('Unsupported model provider.');
     if (!stateFile || !path.isAbsolute(stateFile)) throw Error('An absolute state path is required.');
     this.options = {stateFile, provider, python, startupMs, sshBroker, env};
     this.stopping = false;

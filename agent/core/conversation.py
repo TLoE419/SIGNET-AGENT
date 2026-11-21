@@ -4,11 +4,9 @@ import os
 import re
 import time
 import uuid
-from pathlib import Path
 
 import httpx
 from dotenv import load_dotenv
-from google import genai
 from google.genai import errors, types
 
 from agent.tools.general import list_files
@@ -17,11 +15,14 @@ from agent.core.model_timing import ModelRequestTiming
 from agent.core.context_budget import ContextBudgetError
 from agent.core.tool_status import activity_status
 from agent.paths import PROJECT_ROOT
+from agent.providers import PROVIDERS, create_provider_adapter
+from agent.providers.codex_client import CodexCLIError
 from agent.tools.registry import ALL_TOOLS
 from agent.tools.signet import dispatch_tool
 
 MODEL = "gemini-3.8-flash"
 FALLBACK_MODEL = "gemini-3.5-flash-lite"
+PRIMARY_MODEL_TIMEOUT_MS = 15_000
 MAX_TOOL_ROUNDS = 4
 MAX_CALLS_PER_ROUND = 8
 
@@ -30,18 +31,19 @@ config = types.GenerateContentConfig(
     tools=ALL_TOOLS,
     automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
     system_instruction=(
-        "You are a Traditional Chinese assistant for this local SIGNET project. "
+        "You are a research assistant for this local SIGNET project. "
+        "Write answers and public tool-selection notes in English, regardless of the language used in the conversation. "
         "Answer ONLY the user's current question, using concise, readable Markdown. "
         "When listing analyses, capabilities or input requirements, give each distinct analysis "
-        "its OWN numbered bold title, followed by separate bullets labeled **用途：** and "
-        "**需要資料：**. Put each bullet on its own line and a blank line between analyses. "
+        "its OWN numbered bold title, followed by separate bullets labeled **Purpose:** and "
+        "**Required data:**. Put each bullet on its own line and a blank line between analyses. "
         "Use short sentences and short input lists; never merge multiple analyses into one "
         "long bullet or paragraph. List all requested analyses without a fixed item-count "
         "or character limit. State unknown inputs explicitly rather than inventing them. "
         "For simple questions, answer briefly without forcing the analysis template. "
         "Do not add background, other stages, "
         "examples, recommendations, next steps or follow-up invitations unless asked. "
-        "Use plain language; explain unavoidable English terms inline, without a separate glossary. "
+        "Use plain language and explain necessary scientific terms inline. "
         "Ask only the essential clarification that blocks the requested work. "
         "Use history and actual tool results; do not repeat completed lookups. Select provided "
         "tools only when needed. For SIGNET capabilities or input requirements, consult "
@@ -64,8 +66,7 @@ config = types.GenerateContentConfig(
         "Raw legacy settings and run records are not model tools; use the structured workspace reports. "
         "For HPC3 readiness or setup progress, call check_hpc_environment. read_hpc_setup_log returns fixed "
         "diagnostic classifications, never original log lines. Each HPC3 setup tool "
-        "(create_hpc_workspace, install_signet_source, download_signet_container, download_reference_file, "
-        "prepare_imputation_reference) "
+        "(create_hpc_workspace, install_signet_source, download_signet_container) "
         "does one step; call only "
         "the steps the user's own message asks for or agrees to. An assistant suggestion is not approval. "
         "Discover available context before requesting exact paths or run IDs. "
@@ -82,9 +83,9 @@ config = types.GenerateContentConfig(
         "Do not repeatedly poll in one turn. "
         "The current workspace has source/dataset, canonical run history, six stage results and a linked gene/connection table. Use navigate_workspace for requested view or gene changes with a known source-prefixed history_id; do not use legacy panel controls for workspace navigation. Navigation never executes analysis or confirms a proposal. Do not claim navigation succeeded when unavailable or rejected by the page. "
         "Never replay interrupted, failed or unknown-state tool operations. "
-        "Before each tool batch, emit public text headed 【決策摘要】 with 選擇原因：, "
-        "資訊依據： and 尚缺資訊：, followed by native function calls in the SAME response. "
-        "Keep the summary under 100 Chinese characters, based only on user facts and PRIOR "
+        "Before each tool batch, emit public text headed Decision summary with Selection reason:, "
+        "Evidence: and Missing information:, followed by native function calls in the SAME response. "
+        "Keep the summary under 60 words, based only on user facts and PRIOR "
         "tool results; never claim the proposed calls already ran. This is a public explanation, "
         "not hidden reasoning. Do not include this summary in tool-free or final answers. "
         "After tool results arrive, answer the original user question using those results; "
@@ -95,21 +96,21 @@ config = types.GenerateContentConfig(
 
 
 def _progress(message):
-    print(f"[過程] {message}", flush=True)
+    print(f"[Progress] {message}", flush=True)
 
 
 def _safe_service_message(message, contents):
     if not isinstance(message, str):
-        return "服務未提供可顯示的訊息。"
+        return "The service did not provide a displayable message."
     # Never print request bodies, credential fields or echoed conversation text.
     for key in ('GEMINI_API_KEY', 'GOOGLE_API_KEY', 'GOOGLE_OAUTH_ACCESS_TOKEN', 'GROQ_API_KEY'):
         secret = os.environ.get(key)
         if secret:
-            message = message.replace(secret, '[已遮蔽]')
+            message = message.replace(secret, '[redacted]')
     def redact_values(value):
         nonlocal message
         if isinstance(value, str) and len(value) >= 8:
-            message = message.replace(value, '[對話資料已遮蔽]')
+            message = message.replace(value, '[conversation data redacted]')
         elif isinstance(value, dict):
             for nested in value.values():
                 redact_values(nested)
@@ -120,14 +121,14 @@ def _safe_service_message(message, contents):
     for content in contents:
         for part in content.parts or []:
             if part.text:
-                message = message.replace(part.text, '[對話內容已遮蔽]')
+                message = message.replace(part.text, '[conversation text redacted]')
             if part.function_call:
                 redact_values(part.function_call.args)
             if part.function_response:
                 redact_values(part.function_response.response)
-    message = re.sub(r"(?i)(?:authorization[\"']?\s*[:=]\s*[\"']?\s*bearer\s+|bearer\s+)[^\s,;\"'<>]+", '[憑證已遮蔽]', message)
-    message = re.sub(r"(?i)(api[_-]?key|key|token|password|secret|authorization|cookie)[\"']?\s*[:=]\s*[\"']?[^\s,;&\"'<>]+", r'\1=[已遮蔽]', message)
-    message = re.sub(r'AIza[A-Za-z0-9_-]{20,}', '[金鑰已遮蔽]', message)
+    message = re.sub(r"(?i)(?:authorization[\"']?\s*[:=]\s*[\"']?\s*bearer\s+|bearer\s+)[^\s,;\"'<>]+", '[credential redacted]', message)
+    message = re.sub(r"(?i)(api[_-]?key|key|token|password|secret|authorization|cookie)[\"']?\s*[:=]\s*[\"']?[^\s,;&\"'<>]+", r'\1=[redacted]', message)
+    message = re.sub(r'AIza[A-Za-z0-9_-]{20,}', '[key redacted]', message)
     message = re.sub(r'[\x00-\x1f\x7f-\x9f]', ' ', message)
     return ' '.join(message.split())[:800]
 
@@ -143,30 +144,31 @@ def _model_error(exc, contents, request_number, elapsed, completed_tools, model_
         if isinstance(exc.status, str) and re.fullmatch(r'[A-Z_]{1,64}', exc.status):
             details.append(exc.status)
         message = _safe_service_message(exc.message, contents)
-    state = (f'本次需求已有 {completed_tools} 個工具結果；失敗發生在後續模型請求。'
-             if completed_tools else '本次需求尚未呼叫任何工具。')
-    if code in (401, 403):
-        hint = '請檢查金鑰權限與模型存取資格；不會自動重試。'
+    state = (f'{completed_tools} tool results are retained. A later model request failed.'
+             if completed_tools else 'No tools have been called for this request.')
+    if isinstance(exc, CodexCLIError):
+        hint = str(exc)
+    elif isinstance(exc, httpx.TimeoutException):
+        hint = 'The model service timed out. Try again later.'
+    elif code in (401, 403):
+        hint = 'Check key permissions and model access. No automatic retry.'
     elif code == 404:
-        hint = '請核對模型名稱及此帳號可使用的模型；不會自動切換模型。'
+        hint = 'Check the model name and account access. The model will not be switched automatically.'
     elif code == 400:
-        hint = '請核對服務訊息中的請求格式、工具宣告或參數限制。'
+        hint = 'Check request format, tool declarations and parameter limits in the service message.'
     elif code == 413:
-        hint = '單次輸入內容超過服務上限；等待不會縮短內容，請減少輸入或開始新對話。'
+        hint = 'The input exceeds the service limit. Waiting does not reduce it; reduce the input or start a new conversation.'
     elif code == 429:
-        hint = '請檢查請求速率與配額，依服務提示等待後再繼續；已完成的工具結果仍保留。'
+        hint = 'Check request rate and quota. Wait as advised by the service. Completed tool results are retained.'
     elif code is not None and 500 <= code <= 599:
-        hint = '服務端回報錯誤，可稍後重試；確切原因以服務訊息為準。'
+        hint = 'The service reported an error. Try later; see the service message for details.'
     else:
-        hint = '未取得可判讀的服務狀態碼；請檢查連線或錯誤類別，不會自動重試。'
-    if isinstance(getattr(exc, 'public_message', None), str):
-        message = _safe_service_message(exc.public_message, contents)
-        hint = '請確認 Codex 命令列登入與用量；對話與已完成工具結果保留，不會重跑工具。'
-    lines = [f"模型請求失敗（{'，'.join(details)}）。",
-             f'模型：{model_name}；模型請求 {request_number}/{MAX_TOOL_ROUNDS+1}；耗時 {elapsed:.2f} 秒。']
+        hint = 'No interpretable service status code. Check the connection or error type. No automatic retry.'
+    lines = [f"Model request failed ({', '.join(details)}).",
+             f'Model: {model_name}. Request {request_number}/{MAX_TOOL_ROUNDS+1}. Duration: {elapsed:.2f} s.']
     if message:
-        lines.append('服務訊息：' + message)
-    lines.extend(['目前進度：' + state, '判讀提示：' + hint])
+        lines.append('Service message: ' + message)
+    lines.extend(['Progress: ' + state, 'Guidance: ' + hint])
     return '\n'.join(lines) + '\n'
 
 
@@ -175,22 +177,29 @@ def _report_decision_summary(content, report):
     public_text = '\n'.join(part.text for part in content.parts or []
                             if part.text and not part.thought).strip()
     if not public_text:
-        report('決策摘要：模型未提供公開說明；以下僅顯示實際工具紀錄，不推測選擇原因。')
+        report('No public tool-selection note was provided. Only actual tool events are shown.')
         return
-    report('決策摘要（模型提供的說明；本輪工具尚未執行，依據仍須對照實際紀錄）：')
+    report('Public tool-selection note (proposed tools have not run yet; check against actual records):')
     safe_text = _safe_service_message(public_text, [])
-    for label in ('【決策摘要】', '選擇原因：', '資訊依據：', '尚缺資訊：'):
-        safe_text = safe_text.replace(label, '\n' + label)
+    headings = ('Decision summary', '【決策摘要】')
+    english_fields = ('Selection reason:', 'Evidence:', 'Missing information:')
+    legacy_fields = ('選擇原因：', '資訊依據：', '尚缺資訊：')
+    for heading in headings:
+        safe_text = safe_text.replace(heading, '\n' + heading)
+    for english, legacy in zip(english_fields, legacy_fields):
+        safe_text = safe_text.replace(english, '\n' + english)
+        safe_text = safe_text.replace(legacy, '\n' + english + ' ')
     for line in safe_text.splitlines():
-        if line.strip() and line.strip() != '【決策摘要】':
-            report('模型說明：' + line.strip())
-    if any(label not in safe_text for label in ('選擇原因：', '資訊依據：', '尚缺資訊：')):
-        report('摘要欄位不完整：模型未明確提供全部三項，不自行補寫。')
+        if line.strip() and line.strip().rstrip(':') not in headings:
+            report('Model note: ' + line.strip())
+    if any(field not in safe_text for field in english_fields):
+        report('Incomplete public note. Missing fields are not inferred.')
 
 
 def _answer_without_summary(text):
     lines = []
     fence = None
+    decision_summary = False
     for line in (text or '').splitlines():
         marker = re.match(r'^\s*(`{3,}|~{3,})', line)
         if marker:
@@ -204,33 +213,32 @@ def _answer_without_summary(text):
         plain = re.sub(r'^\s*(?:#{1,6}\s+|[-*+]\s+)?', '', line).replace('**', '').strip()
         if not fence and re.match(r'^<(?:tool_call>|function[=>]|parameter[=>])', plain):
             return ''
+        if not fence and re.fullmatch(r'Decision summary\s*:?', plain, re.IGNORECASE):
+            decision_summary = True
+            continue
+        if not fence and decision_summary and re.match(r'^(?:Selection reason|Evidence|Missing information)\s*:', plain, re.IGNORECASE):
+            continue
+        if plain:
+            decision_summary = False
         if fence or not re.match(r'^(?:【決策摘要】|決策摘要\s*[:：]?$|(?:選擇原因|資訊依據|尚缺資訊)\s*[:：])', plain):
             lines.append(line)
     return '\n'.join(lines).strip()
 
 
-def run_conversation(client, text: str, history=None, progress=None, http_timing=None, language=None, workspace_context=None):
+def run_conversation(client, text: str, history=None, progress=None, http_timing=None, workspace_context=None,
+                     *, on_model_fallback=None, cancel_requested=None):
     model_name = getattr(client, 'model', MODEL)
     contents = history if history is not None else []
-    recovery = ("對話與已完成的工具結果仍保留；稍後可輸入「繼續」。" if history is not None
-                else "單次模式不保留聊天紀錄；請先核對工作狀態後再重新執行。")
+    recovery = ("The conversation and completed tool results are retained. Send “continue” when ready." if history is not None
+                else "One-shot mode does not retain chat history. Check the run status before trying again.")
     contents.append(types.Content(role="user", parts=[types.Part.from_text(text=text)]))
+    is_cancelled = cancel_requested or (lambda: False)
     completed_tools = 0
     repairing_answer = False
     fallback_notice = ""
-    conversation_config = config
-    if language in ('en', 'zh-Hant'):
-        instruction = config.system_instruction.replace('Traditional Chinese assistant', 'research assistant')
-        instruction += (' UI language for this turn is English. Write the answer and public tool-selection '
-                        'explanations in English, even when the user or previous messages use Chinese. '
-                        'Use **Purpose:** and **Required data:** for analysis lists. Keep the required '
-                        'Chinese decision-summary protocol headings for parsing, but write their values in English.'
-                        if language == 'en' else
-                        ' UI language for this turn is Traditional Chinese. Answer in Traditional Chinese.')
-        conversation_config = config.model_copy(update={'system_instruction': instruction})
     # Per-request system metadata is never appended to saved conversation history.
-    conversation_config = conversation_config.model_copy(update={'system_instruction':
-        conversation_config.system_instruction +
+    conversation_config = config.model_copy(update={'system_instruction':
+        config.system_instruction +
         '\nCurrent workspace selection (validated identifiers, not evidence of execution or biological validity). '
         'This replaces all earlier workspace selections, including other chats. Null means no current selection. '
         'Do not infer missing run/source or execute analysis from selection alone: ' +
@@ -246,90 +254,114 @@ def run_conversation(client, text: str, history=None, progress=None, http_timing
                 'tools': [],
                 'system_instruction': conversation_config.system_instruction +
                 ' Your previous response contained only decision metadata. Now answer the original '
-                'user question directly using the available tool results. Do not output 決策摘要, '
-                '選擇原因, 資訊依據 or 尚缺資訊. No tool calls; no repeated operations.'})
-        cli_transport = getattr(client, 'transport', None) == 'cli'
+                'user question directly using the available tool results. Omit decision-summary headings and fields. '
+                'Do not call tools or repeat operations.'})
         # Retry only the failed model request; the outer tool loop and history stay intact.
         for model_attempt in range(2):
-            report(f"模型請求 {round_number+1}/{MAX_TOOL_ROUNDS+1}：模型={model_name}；訊息數={len(contents)}；可用工具={len(request_config.tools)}；等待回覆。")
+            if is_cancelled():
+                return ''
+            attempt_config = request_config
+            if model_name == MODEL:
+                options = request_config.http_options or types.HttpOptions()
+                attempt_config = request_config.model_copy(update={
+                    'http_options': options.model_copy(update={'timeout': PRIMARY_MODEL_TIMEOUT_MS})})
+            report(f"Model request {round_number+1}/{MAX_TOOL_ROUNDS+1}: model={model_name}; messages={len(contents)}; tools={len(request_config.tools)}; awaiting response.")
             started = time.monotonic()
             response = None
             if http_timing is not None:
-                if cli_transport:
-                    http_timing.report = report
-                else:
-                    http_timing.begin(report)
+                http_timing.begin(report)
             try:
-                response = client.models.generate_content(model=model_name, contents=model_contents(contents), config=request_config)
+                request_contents = model_contents(contents)
+                if is_cancelled():
+                    return ''
+                response = client.models.generate_content(model=model_name, contents=request_contents, config=attempt_config)
             except KeyboardInterrupt:
-                report("已中斷等待模型；此回合未收到可執行的工具呼叫。")
-                return fallback_notice + "已中斷等待模型；" + recovery
+                if is_cancelled():
+                    return ''
+                report("Stopped waiting for the model. No executable tool call was received.")
+                return fallback_notice + "Stopped waiting for the model. " + recovery
             except ContextBudgetError as exc:
-                report('輸入超過安全預算；未送出模型請求，未刪除使用者條件或工具證據。')
+                if is_cancelled():
+                    return ''
+                report('Input exceeds the safety budget. No model request was sent; user requirements and tool evidence were retained.')
                 return fallback_notice + str(exc)
             except Exception as exc:
+                if is_cancelled():
+                    return ''
                 elapsed = time.monotonic() - started
-                report(f"模型請求 {round_number+1} 失敗（{elapsed:.2f} 秒）；尚未執行此回合提出的任何工具。")
+                timed_out = isinstance(exc, httpx.TimeoutException)
+                failure = "timed out" if timed_out else "failed"
+                report(f"Model request {round_number+1} {failure} ({elapsed:.2f} s). No tools proposed in this round were executed.")
                 service_failure = (isinstance(exc, errors.APIError) and
                                    type(exc.code) is int and exc.code in (500, 502, 503, 504))
-                if (model_attempt == 0 and model_name == MODEL and not cli_transport and
-                        (service_failure or isinstance(exc, httpx.TimeoutException))):
-                    reason = f'HTTP {exc.code}' if service_failure else type(exc).__name__
+                if (model_attempt == 0 and model_name == MODEL and
+                        (service_failure or timed_out)):
+                    reason = f'HTTP {exc.code}' if service_failure else 'request timed out'
                     fallback_notice = (
                         f'**Model fallback:** `{MODEL}` is unavailable ({reason}); this turn uses '
-                        f'`{FALLBACK_MODEL}`. Completed tools will not be rerun.\n\n'
-                        if language == 'en' else
-                        f'**模型降級：** `{MODEL}` 暫時無法使用（{reason}），本次需求改用 '
-                        f'`{FALLBACK_MODEL}`。已完成的工具不會重跑。\n\n')
+                        f'`{FALLBACK_MODEL}`. Completed tools will not be rerun.\n\n')
                     report(fallback_notice.strip())
                     model_name = FALLBACK_MODEL
+                    if on_model_fallback is not None and not is_cancelled():
+                        on_model_fallback(model_name)
                     continue
                 next_step = recovery
                 if isinstance(exc, errors.APIError) and exc.code == 413:
-                    next_step = '完整對話與工具結果仍保留；請縮小問題範圍或開啟新對話，原樣輸入「繼續」無法縮短請求。'
+                    next_step = 'The full conversation and tool results are retained. Narrow the question or start a new conversation; “continue” does not reduce input size.'
                 return fallback_notice + _model_error(exc, contents, round_number+1, elapsed, completed_tools, model_name) + next_step
             finally:
-                if http_timing is not None and not cli_transport:
+                if http_timing is not None:
                     http_timing.finish(response)
             break
+        if is_cancelled():
+            return ''
         calls = response.function_calls or []
-        report(f"模型已回覆（{time.monotonic()-started:.2f} 秒）；提出 {len(calls)} 個工具呼叫。")
+        report(f"Model responded ({time.monotonic()-started:.2f} s). Proposed {len(calls)} tool calls.")
         content = response.candidates[0].content if response.candidates else None
         if not content:
-            return fallback_notice + "模型未回傳完整內容；這一輪的操作未執行。" + recovery
+            return fallback_notice + "The model did not return complete content. No operations from this turn were executed. " + recovery
         if not calls:
             answer = _answer_without_summary(response.text)
             if not answer:
                 if not repairing_answer and round_number < MAX_TOOL_ROUNDS:
-                    report('模型只提供摘要、工具標記或空白內容；要求補答一次，已完成工具不重跑。')
+                    report('The response contained only metadata or no answer. Requesting one answer repair; completed tools will not rerun.')
                     repairing_answer = True
                     continue
-                report('模型補答後仍未產生有效回答。')
-                return fallback_notice + '模型未產生有效回答；已完成的工具結果仍保留。'
-            report("模型完成文字回答。")
+                report('Answer repair did not produce a valid answer.')
+                return fallback_notice + 'The model did not produce a valid answer. Completed tool results are retained.'
+            report("The model finished its answer.")
             contents.append(content)
             return fallback_notice + answer
         if repairing_answer:
-            return fallback_notice + '模型補答時未遵守純文字要求；此次提出的工具未執行。'
+            return fallback_notice + 'The answer repair returned tool calls. Those calls were not executed.'
         if round_number == MAX_TOOL_ROUNDS:
-            return fallback_notice + "已達工具呼叫輪數上限；最後一輪提出的操作未執行。" + recovery
+            return fallback_notice + "Tool-round limit reached. Operations proposed in the final round were not executed. " + recovery
         if len(calls) > MAX_CALLS_PER_ROUND:
-            return fallback_notice + "單輪工具呼叫超過上限；這一輪的操作未執行。" + recovery
+            return fallback_notice + "Too many tool calls in one round. No operations from that round were executed. " + recovery
         _report_decision_summary(content, report)
         tool_results = []
         interrupted = False
+        skipped = {"status": "skipped", "executed": False, "reason": "The user stopped the chat response."}
         for index, call in enumerate(calls, 1):
-            tool_name = call.name if call.name in {fn.__name__ for fn in ALL_TOOLS} else '未知工具'
+            if is_cancelled():
+                if not tool_results:
+                    return ''
+                # A model tool-call message needs a matching result for every call.
+                tool_results.extend(types.Part(function_response=types.FunctionResponse(
+                    id=pending.id, name=pending.name, response=skipped,
+                )) for pending in calls[index - 1:])
+                break
+            tool_name = call.name if call.name in {fn.__name__ for fn in ALL_TOOLS} else 'unknown_tool'
             operation_id = uuid.uuid4().hex
             report("SIGNET_TOOL " + json.dumps(dict(operation_id=operation_id, tool_name=tool_name, status="running", result_summary="", public_summary="Validate parameters and invoke tool; parameter values are hidden.")))
             tool_started = None
             if interrupted:
                 result = {"status": "skipped", "executed": False, "reason": "Earlier tool was interrupted or raised an unexpected error."}
             else:
-                report(f"工具 {index}/{len(calls)}：{tool_name}；驗證參數並呼叫（參數值不顯示）。")
+                report(f"Tool {index}/{len(calls)}: {tool_name}; validating arguments and invoking the tool (values hidden).")
                 tool_started = time.monotonic()
                 try:
-                    result = dispatch_tool(call.name, call.args or {})
+                    result = skipped if is_cancelled() else dispatch_tool(call.name, call.args or {})
                     if result.get("status") == "interrupted":
                         interrupted = True
                 except (KeyboardInterrupt, Exception) as exc:
@@ -339,32 +371,34 @@ def run_conversation(client, text: str, history=None, progress=None, http_timing
                               "reason": "Inspect actual run state before retrying; do not assume this operation was not executed."}
             status = result.get('status', 'ok' if 'files' in result else 'unknown')
             report("SIGNET_TOOL " + json.dumps(dict(operation_id=operation_id, tool_name=tool_name, status=activity_status(status), elapsed_ms=round((time.monotonic()-tool_started)*1000) if tool_started is not None else 0, public_summary="Validate parameters and invoke tool; parameter values are hidden.", result_summary=f"status={status}")))
-            executed = result.get('executed', '未標示；依狀態判讀')
-            report(f"工具結果：{tool_name}；status={status}；executed={executed}。")
+            executed = result.get('executed', 'not recorded')
+            report(f"Tool result: {tool_name}; status={status}; executed={executed}.")
             if tool_started is not None:
-                report(f"工具耗時：{time.monotonic()-tool_started:.2f} 秒。")
+                report(f"Tool duration: {time.monotonic()-tool_started:.2f} s.")
             if isinstance(result.get('missing_dependencies'), list) and result['missing_dependencies']:
-                report('缺少依賴：' + _safe_service_message(', '.join(str(x) for x in result['missing_dependencies']), contents))
+                report('Missing dependencies: ' + _safe_service_message(', '.join(str(x) for x in result['missing_dependencies']), contents))
             if isinstance(result.get('reason'), str):
-                report('原因：' + _safe_service_message(result['reason'], contents))
+                report('Reason: ' + _safe_service_message(result['reason'], contents))
             if isinstance(result.get('output_files'), list):
-                report(f"新增或變動輸出檔案數：{len(result['output_files'])}（清單截斷={result.get('output_list_truncated', False)}）。")
+                report(f"New or changed output files: {len(result['output_files'])} (list truncated={result.get('output_list_truncated', False)}).")
             for key in ('stdout_log', 'stderr_log'):
                 if isinstance(result.get(key), str):
-                    report(f"{key}：" + _safe_service_message(result[key], contents))
+                    report(f"{key}: " + _safe_service_message(result[key], contents))
             if isinstance(result.get('error_type'), str) and re.fullmatch(r'[A-Za-z0-9_]{1,80}', result['error_type']):
-                report('工具錯誤類別：' + result['error_type'])
+                report('Tool error type: ' + result['error_type'])
             if isinstance(result.get('error'), str):
-                report('工具錯誤：' + _safe_service_message(result['error'], [*contents, content]))
+                report('Tool error: ' + _safe_service_message(result['error'], [*contents, content]))
             tool_results.append(types.Part(function_response=types.FunctionResponse(
                 id=call.id, name=call.name, response=result,
             )))
         # Preserve the complete model turn, including any thought signatures.
         contents.extend([content, types.Content(role="user", parts=tool_results)])
+        if is_cancelled():
+            return ''
         completed_tools += len(tool_results)
-        report(f"已將 {len(tool_results)} 個工具結果加入對話，接著請求模型整理或選擇工具。")
+        report(f"Added {len(tool_results)} tool results. Requesting an answer or further tool selection.")
         if interrupted:
-            return fallback_notice + "工具已中斷或發生非預期錯誤；目前操作是否執行完成仍未知，後續操作未執行。請先核對工作狀態。" + recovery
+            return fallback_notice + "A tool was interrupted or encountered an unexpected error. Completion is unknown. Later operations were not executed. Check the run status first. " + recovery
     raise AssertionError("Unreachable tool loop state")
 
 
@@ -374,62 +408,49 @@ def interactive_chat(client, initial_prompt=None, http_timing=None):
     except ImportError:
         pass
     history = []
-    print("SIGNET 助手：直接描述你的研究目的，我會查詢可用工具、依需要追問並選擇工具。")
-    print("輸入 /exit 或 /quit 離開，/help 查看說明；對話只保留在本次程式記憶體中。")
-    print("[過程] 每輪模型回覆後，先顯示模型提供的決策摘要，再呼叫工具；不顯示模型內部推理、完整參數或金鑰。")
+    print("SIGNET assistant: Describe your research goal. I can identify relevant tools and ask for missing details.")
+    print("Enter /help for instructions or /exit to leave. The conversation stays in memory for this session.")
+    print("[Progress] Public tool-selection notes appear before tool calls. Internal reasoning, full argument values and credentials stay hidden.")
     pending = initial_prompt
     while True:
         try:
-            text = pending if pending is not None else input("你 > ")
+            text = pending if pending is not None else input("You > ")
             pending = None
         except EOFError:
-            print("\n已離開 SIGNET 助手。")
+            print("\nExited SIGNET assistant.")
             return
         except KeyboardInterrupt:
-            print("\n已取消這次輸入；對話仍保留。輸入 /exit 離開。")
+            print("\nInput cancelled. The conversation is retained. Enter /exit to leave.")
             continue
         text = text.strip()
         if not text:
             continue
         if text.lower() in ('/exit', '/quit', 'exit', 'quit') or text == '離開':
-            print("已離開 SIGNET 助手。")
+            print("Exited SIGNET assistant.")
             return
         if text == '/help':
-            print("直接描述需求，例如：我想分析基因型與表現量的關係，先幫我了解需要哪些資料。")
-            print("工具執行前會顯示選擇原因、資訊依據與尚缺資訊；模型若未提供會明確標示。")
-            print("可接續回答問題；暫時服務錯誤後輸入「繼續」。/exit 或 /quit 離開。")
+            print("Describe your request. For example, ask what data you need to study genotype and expression together.")
+            print("Before tools run, review their selection reason, evidence and missing information. If the model provides no note, the activity says so.")
+            print("For a temporary service error, send “continue” when ready. Enter /exit or /quit to leave.")
             continue
-        print("助手 > " + run_conversation(client, text, history, progress=_progress, http_timing=http_timing))
+        print("Assistant > " + run_conversation(client, text, history, progress=_progress, http_timing=http_timing))
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="SIGNET 自然語言助手；無參數時進入互動對話。")
-    parser.add_argument('--chat', action='store_true', help='進入互動對話，也可附上第一句需求。')
-    parser.add_argument('--provider', choices=('codex', 'gemini', 'groq'), default='codex', help='模型來源，預設使用已登入的 Codex 命令列。')
-    parser.add_argument('prompt', nargs='*', help='單次自然語言需求；不必指定工具名。')
+    parser = argparse.ArgumentParser(description="SIGNET research assistant. Starts interactive chat when no prompt is supplied.")
+    parser.add_argument('--chat', action='store_true', help='Start interactive chat. An initial prompt is optional.')
+    parser.add_argument('--provider', choices=PROVIDERS, default='gemini', help='Model provider. Defaults to Gemini.')
+    parser.add_argument('prompt', nargs='*', help='A one-time prompt in natural language.')
     args = parser.parse_args()
     load_dotenv(PROJECT_ROOT / ".env")
-    # Read credentials from the environment rather than storing them in source.
-    api_key = None
-    if args.provider != 'codex':
-        key_name = 'GROQ_API_KEY' if args.provider == 'groq' else 'GEMINI_API_KEY'
-        api_key = os.environ.get(key_name)
-        if not api_key:
-            raise SystemExit(f"Set {key_name} in .env or the environment before running this script.")
+    adapter = create_provider_adapter(args.provider, gemini_model=MODEL)
     prompt = " ".join(args.prompt).strip()
     http_timing = ModelRequestTiming()
-    if args.provider == 'codex':
-        from agent.providers.codex_client import CodexClient
-        client_context = CodexClient(timing=http_timing)
-        _progress('Codex 命令列：使用既有登入與模型設定；SIGNET 操作仍由受控工具執行。')
-    elif args.provider == 'groq':
-        from agent.providers.groq_client import GroqClient
-        client_context = GroqClient(api_key, timing=http_timing)
-        _progress('Groq：正常請求立即送出；只有收到 429 才等待 30 秒重送，不重跑已完成工具。Ctrl+C 可中斷等待。')
+    if args.provider == 'groq':
+        _progress('Groq: requests are sent immediately. HTTP 429 triggers a 30-second wait before retrying the model. Press Ctrl+C to stop waiting.')
     else:
-        client_context = genai.Client(api_key=api_key, http_options=types.HttpOptions(client_args=http_timing.client_args()))
-        _progress('已啟用底層傳輸計時；沿用原模型及套件的重試與逾時設定，未自動調整。')
-    with client_context as client:
+        _progress('Transport timing enabled. Model, retry and timeout settings are unchanged.')
+    with adapter.create_client(http_timing) as client:
         if args.chat or not prompt:
             interactive_chat(client, prompt or None, http_timing=http_timing)
         else:

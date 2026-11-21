@@ -7,7 +7,9 @@ from pathlib import Path
 import unittest
 from unittest.mock import patch
 
+import httpx
 import agent.app.chat_ui as chat_ui
+from agent.core.conversation import FALLBACK_MODEL, MODEL
 from test_chat import client_for, response
 from google.genai import errors, types
 
@@ -31,11 +33,11 @@ class ChatUITest(unittest.TestCase):
         self.server.server_close()
         self.thread.join()
 
-    def request(self, path='/bootstrap', payload=None, headers=None):
+    def request(self, path='/bootstrap', payload=None, headers=None, *, method=None):
         conn = http.client.HTTPConnection('127.0.0.1', self.server.server_port, timeout=3)
         try:
             body = json.dumps(payload) if payload is not None else None
-            conn.request('POST' if body is not None else 'GET', path, body=body, headers=headers or {})
+            conn.request(method or ('POST' if body is not None else 'GET'), path, body=body, headers=headers or {})
             result = conn.getresponse()
             return result.status, result.read().decode()
         finally:
@@ -44,6 +46,11 @@ class ChatUITest(unittest.TestCase):
     def post(self, text='你好', session=None, headers=None):
         return self.request('/chat', {'text': text, 'session': session or self.session}, headers or {
             'Origin': self.origin, 'X-Chat-Token': self.server.token})
+
+    def delete(self, session=None, headers=None):
+        if headers is None:
+            headers = {'Origin': self.origin, 'X-Chat-Token': self.server.token}
+        return self.request('/chat/' + (self.session if session is None else session), headers=headers, method='DELETE')
 
     def test_workspace_context_validated_before_agent(self):
         catalog = {'datasets': [{'id': 'cohort-a'}], 'runs': [
@@ -85,27 +92,283 @@ class ChatUITest(unittest.TestCase):
         self.post('繼續')
         self.assertEqual(len(self.requests[1]), 3)
 
-    def test_gemini_fallback_is_visible_in_stream_and_saved_activity(self):
-        error = errors.ServerError(503, {'error': {'status': 'UNAVAILABLE', 'message': 'busy'}})
-        self.client, self.requests = client_for(error, response('降級回答。'))
-        with patch('agent.core.conversation.dispatch_tool') as dispatch:
-            status, body = self.post()
-            dispatch.assert_not_called()
+    def test_chat_can_stop_before_the_model_is_called_and_restore_the_notice(self):
+        turn_id = 'a2345678-1234-1234-1234-123456789abc'
+        headers = {'Origin': self.origin, 'X-Chat-Token': self.server.token}
+        key = {'session': self.session, 'turn_id': turn_id}
+        client_preparing, release_client = threading.Event(), threading.Event()
+        next_client, model_requests = client_for(response('Next answer.'))
+
+        @contextmanager
+        def factory(timing):
+            client_preparing.set()
+            if not release_client.wait(5):
+                raise RuntimeError('Test did not release the client.')
+            yield next_client
+
+        self.server.client_factory = factory
+        with tempfile.TemporaryDirectory() as directory:
+            self.server.state_file = Path(directory) / 'chat.json'
+            connection = http.client.HTTPConnection('127.0.0.1', self.server.server_port, timeout=5)
+            try:
+                connection.request('POST', '/chat', json.dumps({**key, 'text': 'Stop here.'}), headers)
+                stream = connection.getresponse()
+                self.assertEqual(stream.status, 200)
+                self.assertEqual(json.loads(stream.readline()), {'type': 'turn_started', 'text': {'turn_id': turn_id}})
+                self.assertTrue(client_preparing.wait(3))
+                self.assertEqual(self.request('/chat/cancel', key, {'Origin': self.origin})[0], 403)
+                self.assertEqual(self.request('/chat/cancel', {**key, 'turn_id': 'bad'}, headers)[0], 400)
+                self.assertEqual(self.request('/chat/cancel', {**key, 'session': turn_id}, headers)[0], 404)
+                self.assertEqual(self.request('/chat/cancel', {**key, 'turn_id': self.session}, headers)[0], 404)
+                for _ in range(2):
+                    status, body = self.request('/chat/cancel', key, headers)
+                    self.assertEqual((status, json.loads(body)),
+                                     (200, {'status': 'cancellation_requested', 'turn_id': turn_id}))
+                self.assertEqual(self.post('Still stopping.')[0], 409)
+                release_client.set()
+                self.assertEqual([json.loads(line) for line in stream], [
+                    {'type': 'done', 'status': 'cancelled', 'text': 'Response stopped.'},
+                ])
+            finally:
+                release_client.set()
+                connection.close()
+            self.assertEqual(self.request('/chat/cancel', key, headers)[0], 404)
+            self.assertFalse(model_requests)
+            self.assertEqual(self.post('Next question.')[0], 200)
+            self.assertEqual([content.parts[0].text for content in model_requests[0]], ['Stop here.', 'Next question.'])
+            restored = chat_ui.ChatServer(('127.0.0.1', 0), factory, state_file=self.server.state_file)
+            try:
+                self.assertEqual(restored.visible_messages(self.session), [
+                    {'role': 'user', 'text': 'Stop here.'}, {'role': 'notice', 'text': 'Response stopped.'},
+                    {'role': 'user', 'text': 'Next question.'}, {'role': 'assistant', 'text': 'Next answer.'},
+                ])
+            finally:
+                restored.server_close()
+
+    def test_stopping_while_waiting_on_the_model_prevents_fallback_or_tool_dispatch(self):
+        turn_id = 'a2345678-1234-1234-1234-123456789abc'
+        opened, release_model = threading.Event(), threading.Event()
+        headers = {'Origin': self.origin, 'X-Chat-Token': self.server.token}
+        key = {'session': self.session, 'turn_id': turn_id}
+
+        def fail_after_cancellation(*args, **kwargs):
+            opened.set()
+            if not release_model.wait(5):
+                raise RuntimeError('Test did not release the model.')
+            raise httpx.ReadTimeout('test-only timeout')
+
+        connection = http.client.HTTPConnection('127.0.0.1', self.server.server_port, timeout=5)
+        with patch.object(self.client.models, 'generate_content', side_effect=fail_after_cancellation) as generate:
+            try:
+                connection.request('POST', '/chat', json.dumps({**key, 'text': 'Question'}), headers)
+                stream = connection.getresponse()
+                self.assertTrue(opened.wait(3))
+                self.assertEqual(self.request('/chat/cancel', key, headers)[0], 200)
+                release_model.set()
+                events = [json.loads(line) for line in stream]
+            finally:
+                release_model.set()
+                connection.close()
+        generate.assert_called_once()
+        self.assertFalse(any(event['type'] in ('model_fallback', 'answer') for event in events))
+        self.assertEqual(events[-1]['status'], 'cancelled')
+
+    def test_stopping_waits_for_current_tool_and_keeps_a_complete_tool_record(self):
+        turn_id = 'a2345678-1234-1234-1234-123456789abc'
+        headers = {'Origin': self.origin, 'X-Chat-Token': self.server.token}
+        key = {'session': self.session, 'turn_id': turn_id}
+        started, release_tool = threading.Event(), threading.Event()
+        tool_calls = [
+            types.FunctionCall(id='started-tool', name='signet_catalog', args={}),
+            types.FunctionCall(id='later-tool', name='show_panel', args={}),
+        ]
+        self.client, model_requests = client_for(response(calls=tool_calls), response('Next answer.'))
+        retained = {'status': 'ok', 'executed': True}
+
+        def dispatch(*args):
+            started.set()
+            if not release_tool.wait(5):
+                raise RuntimeError('Test did not release the tool.')
+            return retained
+
+        connection = http.client.HTTPConnection('127.0.0.1', self.server.server_port, timeout=5)
+        with patch('agent.core.conversation.dispatch_tool', side_effect=dispatch) as run_tool:
+            try:
+                connection.request('POST', '/chat', json.dumps({**key, 'text': 'Question'}), headers)
+                stream = connection.getresponse()
+                self.assertTrue(started.wait(3))
+                self.assertEqual(self.request('/chat/cancel', key, headers)[0], 200)
+                self.assertEqual(self.post('Still stopping.')[0], 409)
+                release_tool.set()
+                events = [json.loads(line) for line in stream]
+            finally:
+                release_tool.set()
+                connection.close()
+        run_tool.assert_called_once_with('signet_catalog', {})
+        self.assertEqual(len(model_requests), 1)
+        self.assertEqual(events[-1]['status'], 'cancelled')
+        results = [part.function_response for part in self.server.histories[self.session][-1].parts]
+        self.assertEqual([part.id for part in results], ['started-tool', 'later-tool'])
+        self.assertEqual(results[0].response, retained)
+        self.assertEqual((results[1].response['status'], results[1].response['executed']), ('skipped', False))
+        self.assertEqual(self.server.visible_messages(self.session), [
+            {'role': 'user', 'text': 'Question'}, {'role': 'notice', 'text': 'Response stopped.'},
+        ])
+        self.assertEqual(self.post('Next question.')[0], 200)
+        self.assertEqual(len(model_requests), 2)
+        self.assertEqual([part.function_response.id for part in model_requests[-1][-2].parts],
+                         ['started-tool', 'later-tool'])
+        self.assertEqual(self.server.visible_messages(self.session)[-2:], [
+            {'role': 'user', 'text': 'Next question.'}, {'role': 'assistant', 'text': 'Next answer.'},
+        ])
+
+    def test_without_model_history_and_analysis_remain_available_but_chat_is_blocked(self):
+        previous = types.Content(role='user', parts=[types.Part.from_text(text='Saved question')])
+        self.server.histories[self.session] = [previous]
+        self.server.client_factory = None
+        headers = {'Origin': self.origin, 'X-Chat-Token': self.server.token}
+        self.assertEqual(self.request('/signet/catalog', headers=headers)[0], 200)
+        status, body = self.request(f'/bootstrap?session={self.session}')
         self.assertEqual(status, 200)
-        events = [json.loads(line) for line in body.splitlines()]
-        answer = next(event['text'] for event in events if event['type'] == 'answer')
-        self.assertIn('gemini-3.5-flash-lite', answer)
-        self.assertIn('降級回答。', answer)
-        self.assertTrue(any(event['type'] == 'progress' and 'Model fallback' in event['text'] for event in events))
-        self.assertTrue(any('Model fallback' in event for event in self.server.events[self.session][0]))
-        self.assertEqual(len(self.requests), 2)
-        self.assertEqual(len(self.server.histories[self.session]), 2)
+        self.assertEqual(json.loads(body)['initial']['messages'], [
+            {'role': 'user', 'text': 'Saved question'},
+        ])
+        status, body = self.post('No configured model')
+        self.assertEqual(status, 503)
+        self.assertIn('Set up a model in Settings', body)
+        self.assertEqual(self.server.histories[self.session], [previous])
+        self.assertFalse(self.server.events)
+        self.assertFalse(self.requests)
+
+    def test_gemini_fallback_streams_metadata_and_saves_it_on_only_the_matching_answer(self):
+        tool = types.FunctionCall(id='catalog', name='signet_catalog', args={})
+        error = errors.ServerError(503, {'error': {'status': 'UNAVAILABLE', 'message': 'busy'}})
+        self.client, self.requests = client_for(response('Earlier answer.'), response(calls=[tool]), error,
+                                                response('Fallback answer.'), response('Next answer.'))
+        with tempfile.TemporaryDirectory() as directory:
+            self.server.state_file = Path(directory) / 'chat.json'
+            with patch('agent.core.conversation.dispatch_tool', return_value={'status': 'ok', 'executed': False}) as dispatch:
+                first_status, first_body = self.post('Earlier question')
+                status, body = self.post('Query the catalog')
+                next_status, next_body = self.post('Next question')
+                dispatch.assert_called_once_with('signet_catalog', {})
+            self.assertEqual((first_status, status, next_status), (200, 200, 200))
+            events = [json.loads(line) for line in body.splitlines()]
+            fallback = {'type': 'model_fallback', 'text': {'model': FALLBACK_MODEL}}
+            self.assertEqual([event for event in events if event['type'] == 'model_fallback'], [fallback])
+            index = events.index(fallback)
+            self.assertIn('Model fallback', events[index - 1]['text'])
+            fallback_request = next(i for i, event in enumerate(events) if event['type'] == 'progress'
+                                    and event['text'].startswith('Model request ')
+                                    and f'model={FALLBACK_MODEL}' in event['text'])
+            self.assertLess(index, fallback_request)
+            answer = next(event['text'] for event in events if event['type'] == 'answer')
+            self.assertEqual(answer,
+                             f'**Model fallback:** `{MODEL}` is unavailable (HTTP 503); this turn uses '
+                             f'`{FALLBACK_MODEL}`. Completed tools will not be rerun.\n\nFallback answer.')
+            self.assertNotIn('"type": "model_fallback"', first_body + next_body)
+            self.assertEqual(len(self.requests), 5)
+            self.assertNotIn(FALLBACK_MODEL, str(self.requests[-1]))
+
+            with chat_ui.ChatServer(('127.0.0.1', 0), self.server.client_factory,
+                                    state_file=self.server.state_file) as restored:
+                turns = restored.events[self.session]
+                self.assertTrue(any('Model fallback' in event for event in turns[1]))
+                marker = next(event for event in turns[1] if event.startswith(chat_ui.TURN_MARKER))
+                self.assertEqual(json.loads(marker[len(chat_ui.TURN_MARKER):]),
+                                 {'status': 'completed', 'assistant_index': 5, 'model_fallback': FALLBACK_MODEL})
+                self.assertEqual(restored.visible_messages(self.session), [
+                    {'role': 'user', 'text': 'Earlier question'},
+                    {'role': 'assistant', 'text': 'Earlier answer.'},
+                    {'role': 'user', 'text': 'Query the catalog'},
+                    {'role': 'assistant', 'text': 'Fallback answer.', 'model_fallback': FALLBACK_MODEL},
+                    {'role': 'user', 'text': 'Next question'},
+                    {'role': 'assistant', 'text': 'Next answer.'},
+                ])
 
     def test_sessions_are_isolated(self):
         self.post('第一個研究')
         self.post('另一個研究', 'abcdefab-1234-1234-1234-123456789abc')
         self.assertEqual(len(self.requests[1]), 1)
         self.assertEqual(self.requests[1][0].parts[0].text, '另一個研究')
+
+    def test_delete_one_saved_conversation_persists_and_blocks_stale_requests(self):
+        with tempfile.TemporaryDirectory() as folder:
+            self.server.state_file = Path(folder) / 'state.json'
+            self.server.stage6.path = Path(folder) / '.stage6-workspace.json'
+            other = 'abcdefab-1234-1234-1234-123456789abc'
+            self.server.active_session = other
+            self.server.histories = {self.session: [types.Content(role='user', parts=[types.Part.from_text(text='Delete me')])], other: []}
+            self.server.events = {self.session: [['Delete this event']], other: [['Keep this event']]}
+            self.server.pending_history = [types.Content(role='user', parts=[types.Part.from_text(text='Unclaimed legacy conversation')])]
+            self.server.stage6.sessions = {
+                self.session: {'baseline': None, 'comparison': None, 'proposals': [{'status': 'pending'}]},
+                other: {'baseline': None, 'comparison': None, 'proposals': []},
+            }
+            self.server.save_state()
+            self.server.stage6.save()
+
+            status, body = self.delete()
+            self.assertEqual((status, json.loads(body)), (200, {'deleted': self.session}))
+            self.assertEqual(self.request('/bootstrap?session=' + self.session)[0], 404)
+            self.assertEqual(self.post('Stale follow-up')[0], 404)
+            headers = {'Origin': self.origin, 'X-Chat-Token': self.server.token}
+            self.assertEqual(self.request('/stage6?session=' + self.session, headers=headers)[0], 404)
+            self.assertEqual(self.request('/stage6/select', {'session': self.session}, headers)[0], 404)
+            status, body = self.delete()
+            self.assertEqual((status, json.loads(body)), (200, {'deleted': self.session}))
+            self.assertNotIn('Delete me', self.server.state_file.read_text())
+            self.assertNotIn('Delete this event', self.server.state_file.read_text())
+            self.assertNotIn(self.session, self.server.stage6.path.read_text())
+            self.assertEqual(self.requests, [])
+            with chat_ui.ChatServer(('127.0.0.1', 0), self.server.client_factory,
+                                    state_file=self.server.state_file) as restored:
+                self.assertEqual(restored.active_session, other)
+                self.assertEqual(restored.histories, {other: []})
+                self.assertEqual(restored.events, {other: [['Keep this event']]})
+                self.assertEqual(restored.pending_history, self.server.pending_history)
+                self.assertEqual(restored.stage6.sessions, {other: self.server.stage6.sessions[other]})
+                self.assertEqual(restored.deleted_sessions, {self.session})
+
+    def test_delete_requires_local_auth_and_rejects_busy_or_unknown_sessions(self):
+        self.server.histories[self.session] = []
+        for headers in [{'Origin': 'https://example.com', 'X-Chat-Token': self.server.token},
+                        {'Origin': self.origin},
+                        {'Origin': self.origin, 'X-Chat-Token': self.server.token, 'Host': 'evil.example'}]:
+            self.assertEqual(self.delete(headers=headers)[0], 403)
+        self.assertEqual(self.delete('invalid')[0], 404)
+        self.assertEqual(self.delete('abcdefab-1234-1234-1234-123456789abc')[0], 404)
+        with self.server.turn_lock:
+            self.assertEqual(self.delete()[0], 409)
+        with self.server.stage6.lock:
+            self.assertEqual(self.delete()[0], 409)
+        self.assertIn(self.session, self.server.histories)
+        self.assertEqual(self.server.deleted_sessions, set())
+
+    def test_delete_legacy_stage_only_session_and_roll_back_on_save_failure(self):
+        with tempfile.TemporaryDirectory() as folder:
+            self.server.state_file = Path(folder) / 'state.json'
+            self.server.stage6.path = Path(folder) / '.stage6-workspace.json'
+            self.server.active_session = self.session
+            workspace = {'baseline': None, 'comparison': None, 'proposals': []}
+            self.server.stage6.sessions[self.session] = workspace
+            self.server.save_state()
+            self.server.stage6.save()
+            before = [path.read_bytes() for path in (self.server.state_file, self.server.stage6.path)]
+
+            for target, method in ((self.server, 'save_state'), (self.server.stage6, 'save')):
+                with self.subTest(method=method), patch.object(target, method, side_effect=OSError('private state path')):
+                    status, body = self.delete()
+                    self.assertEqual(status, 500)
+                    self.assertNotIn('private state path', body)
+                    self.assertEqual(self.server.active_session, self.session)
+                    self.assertEqual(self.server.stage6.sessions, {self.session: workspace})
+                    self.assertEqual(self.server.deleted_sessions, set())
+                    self.assertEqual([path.read_bytes() for path in (self.server.state_file, self.server.stage6.path)], before)
+            self.assertEqual(self.delete()[0], 200)
+            self.assertIsNone(self.server.active_session)
+            self.assertEqual(self.server.stage6.sessions, {})
+            self.assertEqual(self.initial_chat(self.request('/bootstrap')[1])['sessions'], [])
 
     def test_public_failure_answer_and_outcome_survive_saved_reload(self):
         self.client, _ = client_for(RuntimeError('PRIVATE-FAILURE'))
@@ -116,7 +379,7 @@ class ChatUITest(unittest.TestCase):
             events = [json.loads(line) for line in body.splitlines()]
             answer = next(event['text'] for event in events if event['type'] == 'answer')
             self.assertEqual(events[-1]['status'], 'failed')
-            self.assertIn('模型請求失敗', answer)
+            self.assertIn('Model request failed', answer)
             restored = chat_ui.ChatServer(('127.0.0.1', 0), self.server.client_factory, state_file=self.server.state_file)
             try:
                 self.assertEqual(restored.visible_messages(self.session)[-1], {'role': 'assistant', 'text': answer})
@@ -141,15 +404,13 @@ class ChatUITest(unittest.TestCase):
         self.assertEqual(events[-1]['status'], 'needs_review')
         submit.assert_not_called()
 
-    def test_language_selection_is_validated_and_forwarded_without_changing_history(self):
+    def test_legacy_language_is_accepted_without_changing_english_or_user_text(self):
         payload = {'text': '原本的問題', 'session': self.session, 'language': 'zh-Hant'}
         headers = {'Origin': self.origin, 'X-Chat-Token': self.server.token}
         with patch.object(chat_ui, 'run_conversation', return_value='回答') as run:
             self.assertEqual(self.request('/chat', payload, headers)[0], 200)
-        self.assertEqual(run.call_args.kwargs['language'], 'zh-Hant')
+        self.assertNotIn('language', run.call_args.kwargs)
         self.assertEqual(run.call_args.args[1], '原本的問題')
-        payload['language'] = 'invalid'
-        self.assertEqual(self.request('/chat', payload, headers)[0], 400)
 
     def test_resume_page_restores_only_visible_messages_and_escapes_script_data(self):
         unsafe = '</script><img src=x onerror=alert(1)>'
@@ -290,7 +551,7 @@ class ChatUITest(unittest.TestCase):
             status, body = self.post('有哪些分析？')
         self.assertEqual(status, 200)
         events = [json.loads(line) for line in body.splitlines()]
-        self.assertTrue(any('status=prepared；executed=False' in event['text'] for event in events))
+        self.assertTrue(any('status=prepared; executed=False' in event['text'] for event in events))
         self.assertEqual(events[-2]['text'], '已查詢能力，尚未執行分析。')
         self.assertEqual(len(self.requests), 2)
 
@@ -306,8 +567,7 @@ class ChatUITest(unittest.TestCase):
         release = threading.Event()
         finished = threading.Event()
 
-        def run(client, text, history, progress, http_timing, language, workspace_context=None):
-            self.assertEqual(language, 'en')
+        def run(client, text, history, progress, http_timing, workspace_context=None, *, on_model_fallback=None):
             progress('工具正在執行')
             release.wait(3)
             history.append('已記錄工具結果')

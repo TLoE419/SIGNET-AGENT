@@ -14,6 +14,7 @@ const review=d=>({dataset_id:d.id,dataset_name:d.name,mode:'dataset',source_inpu
 const legacyReview=()=>({...review(example),inputs:{'ped.file':'/pub/prepared/study.ped','map.file':'/pub/prepared/study.map',ref:'/pub/prepared/ref/chr',gmap:'/pub/prepared/gmap/chr'},settings:{...settings,'restrict.tcga.geno':1}});
 const job=(id,state='pending',inputs=review(dataset()).inputs)=>({run_id:id,step:'genotype',state,job_id:'123',inputs,settings,resources,history:[{state}],submitted_at:'2026-11-17T12:00:00Z'});
 const response=value=>({ok:true,status:200,json:async()=>clone(value)});
+const timeoutResponse=()=>({ok:false,status:504,json:async()=>({code:'read_timeout'})});
 const settle=()=>new Promise(resolve=>setTimeout(resolve,0));
 async function until(check){for(let i=0;i<50;i++){if(check())return;await settle()}assert.fail('Controller did not settle')}
 function harness(t,handler){
@@ -21,7 +22,7 @@ function harness(t,handler){
  const {window}=dom,calls=[],changed=[];window.eval(source);const panel=window.document.querySelector('#panel');
  window.fetch=async(url,options={})=>{const call={url,options,body:options.body?JSON.parse(options.body):undefined};calls.push(call);return handler?handler(call):response(review(dataset()))};
  const controller=window.mountGenotypeRun({panel,token:'test-token',onHistoryChanged:(...args)=>changed.push(args)});
- const context=(d,runs=[])=>controller.setContext({datasetId:d.id,dataset:d,runs,language:'en',visible:true});
+ const context=(d,runs=[])=>controller.setContext({datasetId:d.id,dataset:d,runs,visible:true});
  const remote=overrides=>window.dispatchEvent(new window.CustomEvent('workspace-remote-context',{detail:{connected:true,identity:'account@host|session',environmentKey:'root-a',...overrides}}));
  const q=selector=>panel.querySelector(selector),click=part=>q(`[data-genotype-${part}]`).click();
  const edit=(selector,value)=>{const field=q(selector);field.value=value;field.dispatchEvent(new window.Event('input',{bubbles:true}))};
@@ -29,9 +30,42 @@ function harness(t,handler){
  return {window,panel,calls,changed,controller,context,remote,q,click,edit,acknowledge};
 }
 
+test('Stage 1 can recheck the same dataset files after a timeout',async t=>{
+ const d=dataset();let checks=0;
+ const h=harness(t,()=>++checks===1?timeoutResponse():response(review(d)));
+ h.remote();h.context(d);h.click('review');
+ await until(()=>h.q('[data-genotype-review]').textContent==='Recheck files');
+ assert.match(h.q('[data-genotype-readiness]').textContent,/Checking the remote files timed out/);
+ assert.equal(h.q('[data-genotype-submit]').disabled,true);
+ h.click('review');await until(()=>h.q('[data-genotype-form]').hidden===false);
+ assert.equal(h.calls.length,2);assert.equal(h.calls[0].url,h.calls[1].url);
+ assert.deepEqual(h.calls[0].body,h.calls[1].body);
+ assert.ok(h.calls.every(call=>call.url.endsWith('/genotype/review')));
+});
+
+for (const [index,[step,mount]] of [
+ ['expression','Expression'],['adjust','Adjustment'],['cis','Cis'],['network','Network'],['visualize','Visualization'],
+].entries()) {
+ test(`Stage ${index+2} can recheck files without submitting`,async t=>{
+  let checks=0;
+  const h=harness(t,()=>++checks===1?timeoutResponse():response({run_id:'same-run',ready:true,inputs:{},settings:{'restrict.tcga':1},options:{npc:2},resources,review_token:'a'.repeat(64)}));
+  const controller=h.window[`mount${mount}Run`]({panel:h.panel,token:'test-token'});
+  const jobs=Object.fromEntries(['genotype','expression','adjust','cis','network'].slice(0,index+1).map(name=>[name,{state:'completed'}]));
+  controller.setContext({datasetId:'example-chr1',visible:true,runId:'same-run',runs:[{run_id:'same-run',jobs}]});
+  const button=h.q(`[data-${step}-review]`);
+  await until(()=>button.textContent==='Recheck files');
+  assert.match(h.q(`[data-${step}-readiness]`).textContent,/Checking the remote files timed out/);
+  assert.equal(h.q(`[data-${step}-submit]`).disabled,true);
+  button.click();await until(()=>!button.disabled&&!h.q(`[data-${step}-submit]`).disabled);
+  assert.equal(h.calls.length,2);
+  assert.ok(h.calls.every(call=>call.url===`/signet/runs/same-run/${step}/example`&&!call.options.method));
+ });
+}
+
 test('custom Stage 1 is manual and submits one acknowledged reviewed dataset snapshot',async t=>{
- const d=dataset();const h=harness(t,call=>response(call.url.endsWith('/review')?review(d):job(call.body.run_id)));
- h.remote();h.context(d);assert.equal(h.calls.length,0);h.click('review');await until(()=>!h.q('[data-genotype-review]').disabled);
+ const d={...dataset(),name:'Study cohort'};const h=harness(t,call=>response(call.url.endsWith('/review')?review(d):job(call.body.run_id)));
+ h.remote();h.context(d);assert.equal(h.q('[data-genotype-dataset]').textContent,'Study cohort');
+ assert.equal(h.calls.length,0);h.click('review');await until(()=>!h.q('[data-genotype-review]').disabled);
  assert.equal(h.calls[0].url,'/signet/datasets/dataset-a/genotype/review');assert.deepEqual(h.calls[0].body,{inputs:d.inputs});
  assert.equal(h.q('[data-genotype-input="ref"]').textContent,'/pub/ref.vcf');assert.equal(h.q('[data-genotype-setting="restrict.tcga.geno"]').value,'2');
  assert.match(h.q('[data-genotype-source-input="clinical"]').textContent,/dataset-a\/clinical/);assert.equal(h.q('[data-genotype-submit]').disabled,true);
@@ -44,10 +78,26 @@ test('custom Stage 1 is manual and submits one acknowledged reviewed dataset sna
 
 test('only the exact original example and explicit nonpersisted fallback auto-use legacy review',async t=>{
  const h=harness(t,()=>response(legacyReview()));h.context(example);await until(()=>h.calls.length===1&&!h.q('[data-genotype-submit]').disabled);
+ assert.equal(h.q('[data-genotype-dataset]').textContent,'Example');
  assert.equal(h.calls[0].url,'/signet/genotype/example');assert.equal(h.calls[0].options.method,undefined);assert.match(h.q('[data-genotype-input="ref"]').textContent,/chr1\.gen$/);
  const changed=clone(example);changed.inputs.clinical=['/pub/new.tsv'];h.context(changed);assert.equal(h.calls.length,1);assert.equal(h.q('[data-genotype-submit]').disabled,true);
  const fallback={...clone(example),persisted:false,inputs:{genotype:['study.ped','study.map'],expression:[],clinical:[]}};
  h.context(fallback);await until(()=>h.calls.length===2&&!h.q('[data-genotype-review]').disabled);assert.equal(h.calls[1].url,'/signet/genotype/example');
+});
+
+test('reference overrides route the example to manual dataset review and invalidate a stale review',async t=>{
+ const selected={...clone(example),references:{gtf:'/pub/first.gtf'}};
+ const result=review(selected);result.reference_sources.annotation='/pub/first.gtf';result.reference_choices=selected.references;
+ const h=harness(t,()=>response(result));
+ h.remote();h.context(selected);assert.equal(h.calls.length,0);
+ h.click('review');await until(()=>!h.q('[data-genotype-form]').hidden);
+ assert.equal(h.calls[0].url,'/signet/datasets/example-chr1/genotype/review');
+ assert.match(h.q('[data-genotype-source-input="annotation"]').textContent,/first\.gtf/);
+ h.acknowledge();assert.equal(h.q('[data-genotype-submit]').disabled,false);
+ h.context({...selected,references:{gtf:'/pub/replaced.gtf'}});
+ assert.equal(h.q('[data-genotype-submit]').disabled,true);
+ assert.equal(h.q('[data-genotype-form]').hidden,true);
+ assert.equal(h.calls.length,1,'changing a reference must not run or recheck by itself');
 });
 
 test('an unavailable dataset catalog blocks new legacy review and submission',async t=>{
@@ -132,7 +182,7 @@ test('a not-ready review or stale token refusal cannot enable a custom submissio
 test('custom Stage 3 confirms its frozen clinical path without sending an inline override',async t=>{
  const h=harness(t);const calls=[];h.window.fetch=async(url,options={})=>{calls.push({url,body:options.body?JSON.parse(options.body):null});return response({ready:true,frozen:true,inputs:{'cli.file':'/run/frozen/clinical.tsv'},options:{npc:3},resources,limits:{}})};
  const adjust=h.window.mountAdjustmentRun({panel:h.panel,token:'test-token'});
- adjust.setContext({datasetId:'dataset-a',language:'en',visible:true,runs:[{run_id:'custom-run',input_mode:'dataset',frozen_inputs:{clinical:['/run/frozen/clinical.tsv']},jobs:{genotype:{state:'completed'},expression:{state:'completed'}}}]});
+ adjust.setContext({datasetId:'dataset-a',visible:true,runs:[{run_id:'custom-run',input_mode:'dataset',frozen_inputs:{clinical:['/run/frozen/clinical.tsv']},jobs:{genotype:{state:'completed'},expression:{state:'completed'}}}]});
  await until(()=>calls.length===1&&!h.q('[data-adjust-review]').disabled);
  const clinical=h.q('[data-adjust-input="cli.file"]');assert.equal(clinical.readOnly,true);assert.equal(clinical.value,'/run/frozen/clinical.tsv');
  clinical.value='/pub/unrelated.tsv';clinical.dispatchEvent(new h.window.Event('input',{bubbles:true}));h.q('[data-adjust-review]').click();await until(()=>calls.length===2&&!h.q('[data-adjust-review]').disabled);
@@ -143,7 +193,7 @@ test('Stage 2 chromosome bounds follow each reviewed run while remaining readonl
  const h=harness(t);h.window.fetch=async url=>response({ready:true,inputs:{'gexp.file':'/run/expression.txt','pmap.file':'/run/genes.gtf'},settings:{'restrict.tcga':url.includes('run-two')?2:1},resources,limits:{}});
  const expression=h.window.mountExpressionRun({panel:h.panel,token:'test-token'});
  const run=id=>({run_id:id,input_mode:'dataset',jobs:{genotype:{state:'completed'}}});
- const context=id=>expression.setContext({datasetId:'dataset-a',language:'en',visible:true,runId:id,runs:[run('run-two'),run('run-one')]});
+ const context=id=>expression.setContext({datasetId:'dataset-a',visible:true,runId:id,runs:[run('run-two'),run('run-one')]});
  context('run-two');await until(()=>!h.q('[data-expression-review]').disabled);
  const chromosome=h.q('[data-expression-setting="restrict.tcga"]');assert.equal(chromosome.value,'2');assert.equal(chromosome.min,'2');assert.equal(chromosome.max,'2');assert.equal(chromosome.readOnly,true);
  context('run-one');await until(()=>!h.q('[data-expression-review]').disabled);assert.equal(chromosome.value,'1');assert.equal(chromosome.min,'1');assert.equal(chromosome.max,'1');
