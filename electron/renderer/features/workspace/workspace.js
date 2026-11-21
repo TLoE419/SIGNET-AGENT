@@ -999,15 +999,38 @@
     : run.dataset_id ? ["已記錄資料組", "Recorded dataset"] : ["未分類", "Unclassified"];
   const historyStateLabel = (state, savedOnly = false) => (savedOnly ? historyText("最後保存的狀態：", "Last recorded state: ") : "") + historyText(...genotypeHistoryState(state));
   const assignmentStates = new Map();
+  const submissionReviews = new Map();
+  let recoveryRemote = "";
+  window.addEventListener("workspace-remote-context", event => {
+    const next = JSON.stringify({connected: event.detail?.connected === true, identity: event.detail?.identity ?? "", environmentKey: event.detail?.environmentKey ?? ""});
+    if (next !== recoveryRemote) submissionReviews.clear();
+    recoveryRemote = next;
+  });
+  function submissionRecovery(run, step, job) {
+    if (!canContinue(run) || !["unknown", "submitting"].includes(job?.state)) return "";
+    const key = `${historyKey(run)}:${step}:${job.attempt ?? 1}`;
+    const review = submissionReviews.get(key);
+    return `<form data-submission-recovery="${escapeHistory(key)}" data-step="${escapeHistory(step)}">
+      <p>${historyText("送出結果不明。核對只讀取本次嘗試的憑證與排程器證據，不會送算或取消工作。", "Submission is unconfirmed. Reconciliation only reads this attempt’s receipt and scheduler evidence; it never submits or cancels jobs.")}</p>
+      <button class="ml-nav-action" type="submit" value="review" ${review?.pending ? "disabled" : ""}>${historyText("人工核對送出狀態", "Review submission evidence")}</button>
+      <p role="status">${escapeHistory(review?.error ?? review?.result?.recovery?.detail ?? "")}</p>
+      ${review?.result ? `<dl class="ml-key-values">${savedDefinitions(review.result.recovery.evidence)}</dl>` : ""}
+      ${review?.result && ["adopt", "unsubmitted"].includes(review.result.recovery.outcome) ? `<p>${historyText("請核對來源、工作與嘗試次數；確認後僅更新紀錄。若確認未送出，仍須另行審閱一般重試表單。", "Review the source, job and attempt. Confirmation updates the record only; an unsubmitted attempt still requires the normal retry review.")}</p><button class="ml-nav-action" type="submit" value="${review.result.recovery.outcome}" ${review.pending ? "disabled" : ""}>${historyText("確認採用以上核對結果", "Confirm this recovery result")}</button>` : ""}
+      <p>${escapeHistory(run.run_id)} · ${escapeHistory(step)} · ${job.attempt ?? 1} · ${escapeHistory(job.job_id ?? "—")}</p>
+    </form>`;
+  }
+
   const historyDatasetName = id => datasets.find(dataset => dataset.id === id)?.name ?? (id ? [id, id] : ["未分類", "Unclassified"]);
   const recordedValue = value => value == null ? notRecorded() : escapeHistory(typeof value === "object" ? JSON.stringify(value) : value);
+  const submissionAudit = job => Array.isArray(job.submission_checks) && job.submission_checks.length ?
+    `<details><summary>${historyText("送出狀態核對紀錄", "Submission reconciliation audit")}</summary>${job.submission_checks.slice(-25).map(check => `<p>${recordedValue(check.at)} · ${recordedValue(check.action)} · ${recordedValue(check.outcome)}<br>${recordedValue(check.detail)}<br>${recordedValue(check.evidence)}</p>`).join("")}</details>` : "";
   const savedDefinitions = value => Object.entries(value ?? {}).map(([key, item]) =>
     `<dt>${escapeHistory(key)}</dt><dd>${recordedValue(item)}</dd>`).join("") || `<dt>${historyText("內容", "Contents")}</dt><dd>${notRecorded()}</dd>`;
   function savedJobContent(job, operation = false) {
     const evidence = job.settings_evidence ?? (Object.keys(job.settings ?? {}).length || Object.keys(job.options ?? {}).length ? "recorded" : "not_recorded");
     const evidenceCopy = ({recorded: ["實際保存的設定", "Recorded settings"], prepared_snapshot: ["準備時的設定；不代表已執行", "Prepared settings; execution not implied"],
       not_recorded: ["設定未記錄", "Settings not recorded"]})[evidence] ?? [evidence, evidence];
-    return `<p data-settings-evidence="${escapeHistory(evidence)}">${historyText(...evidenceCopy)}</p>
+    return `${submissionAudit(job)}<p data-settings-evidence="${escapeHistory(evidence)}">${historyText(...evidenceCopy)}</p>
         <dl class="ml-key-values"><dt>${historyText("工作編號", "Job ID")}</dt><dd>${recordedValue(job.job_id)}</dd>
           <dt>${historyText("送出時間", "Submitted at")}</dt><dd>${recordedValue(job.submitted_at)}</dd>
           <dt>${historyText("開始時間", "Started at")}</dt><dd>${recordedValue(job.started_at)}</dd>
@@ -1026,6 +1049,29 @@
     pending: ["尚未記錄最終結果", "Final result not recorded"],
     not_recorded: ["結果未記錄", "Result not recorded"],
   };
+  function outputCheckSnapshot(snapshot) {
+    if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) return "";
+    return `<dl class="ml-key-values">${[["state", ["狀態", "State"]], ["reason", ["說明", "Reason"]],
+      ["slurm_state", ["排程器狀態", "Scheduler state"]], ["exit_code", ["結束代碼", "Exit code"]],
+      ["missing_outputs", ["當時缺少的檔案", "Missing outputs at the time"]], ["failure_hints", ["失敗提示", "Failure hints"]]]
+      .filter(([field]) => snapshot[field] != null)
+      .map(([field, label]) => `<dt>${historyText(...label)}</dt><dd>${field === "state" ? historyStateLabel(snapshot[field]) : recordedValue(snapshot[field])}</dd>`).join("")}</dl>
+      ${["missing_outputs", "failure_hints"].filter(field => Array.isArray(snapshot[field]) && Number.isSafeInteger(snapshot[field + "_total"]) && snapshot[field + "_total"] > snapshot[field].length)
+        .map(field => `<p data-history-output-check-truncated>${historyText(`這份核對摘要顯示前 ${snapshot[field].length} 項，共 ${snapshot[field + "_total"]} 項。`, `This check summary shows the first ${snapshot[field].length} of ${snapshot[field + "_total"]} items.`)}</p>`).join("")}`;
+  }
+  function savedOutputChecks(record) {
+    const checks = Array.isArray(record.output_checks) ? record.output_checks.filter(check => check && typeof check === "object").slice(-25) : [];
+    if (!checks.length && !record.original_failure) return "";
+    const total = Number.isSafeInteger(record.output_checks_total) && record.output_checks_total >= checks.length ? record.output_checks_total : checks.length;
+    return `<details data-history-output-checks data-output-check-detail="all"><summary>${historyText("輸出重新核對紀錄", "Output recheck history")} · ${total}</summary>
+      <p>${historyText("這些是同一個工作、同一次嘗試的結果核對，沒有重新送算。", "These checks belong to the same job and attempt; no new analysis was submitted.")}</p>
+      ${record.original_failure ? `<h4>${historyText("最初保存的失敗紀錄", "Original recorded failure")}</h4><div data-history-original-failure>${outputCheckSnapshot(record.original_failure)}</div>` : ""}
+      <ol>${checks.map((check, index) => `<li data-history-output-check><time>${recordedValue(check.at)}</time>
+        <details data-output-check-detail="${total - checks.length + index}-before"><summary>${historyText("核對前", "Before the check")}</summary>${outputCheckSnapshot(check.before)}</details>
+        <details data-output-check-detail="${total - checks.length + index}-after"><summary>${historyText("核對後", "After the check")}</summary>${outputCheckSnapshot(check.after)}</details></li>`).join("")}</ol>
+      ${total > checks.length ? `<p>${historyText(`顯示最近 ${checks.length} 次核對，最初失敗紀錄仍保留。`, `Showing the latest ${checks.length} checks; the original failure remains preserved.`)}</p>` : ""}
+    </details>`;
+  }
   function savedAttemptResult(attempt) {
     const result = attempt.result ?? {};
     const record = attempt.record ?? {};
@@ -1056,7 +1102,7 @@
       return `<details class="ml-history-attempt" data-history-attempt="${escapeHistory(number)}" data-attempt-record="${escapeHistory(attempt.record_file)}" data-attempt-current="${attempt.current === true}" data-attempt-available="${available}">
         <summary>${title}${attempt.current ? ` · ${historyText("目前紀錄", "Current record")}` : ""}<span class="ml-history-attempt-state">${state}</span></summary>
         <div class="ml-history-job-content">
-          ${available ? savedJobContent({...attempt.record, record_file: attempt.record_file}) + savedAttemptResult(attempt) : `<p>${historyText("這次嘗試的檔案、設定與結果無法從現有紀錄確認。", "The inputs, settings and results of this attempt cannot be confirmed from the saved records.")}</p><p>${historyText("紀錄來源", "Record source")} · <code>${recordedValue(attempt.record_file)}</code></p>`}
+          ${available ? savedJobContent({...attempt.record, record_file: attempt.record_file}) + savedAttemptResult(attempt) + savedOutputChecks(attempt.record) : `<p>${historyText("這次嘗試的檔案、設定與結果無法從現有紀錄確認。", "The inputs, settings and results of this attempt cannot be confirmed from the saved records.")}</p><p>${historyText("紀錄來源", "Record source")} · <code>${recordedValue(attempt.record_file)}</code></p>`}
           ${(attempt.issues ?? []).length ? `<p class="ml-history-record-note">${attempt.issues.map(escapeHistory).join(" ")}</p>` : ""}
           ${events.length ? `<h4>${historyText("保存的狀態時間線", "Recorded state timeline")}</h4><ol class="ml-history-attempt-events" data-history-attempt-events>${events.map(event => `<li>${historyText(...genotypeHistoryState(event.state))} · <time>${recordedValue(event.at)}</time>${event.reason ? ` · ${recordedValue(event.reason)}` : ""}</li>`).join("")}</ol>` : ""}
           ${unreadableEvents ? `<p data-history-attempt-event-warning>${historyText("部分保存的時間線無法讀取。", "Part of the recorded timeline is unreadable.")}</p>` : ""}
@@ -1076,7 +1122,9 @@
   function historyDisclosureKey(details) {
     const job = details.closest("[data-history-job], [data-history-operation]");
     const scope = job?.dataset.historyJob ?? (job?.dataset.historyOperation ? `${job.dataset.historyOperation}:${job.dataset.historyOperationRecord}` : details.hasAttribute("data-history-provenance") ? "provenance" : "inputs");
-    return `${details.closest("[data-history-id]")?.dataset.historyId}|${scope}|${details.dataset.attemptRecord ?? details.dataset.historyAttempt ?? ""}`;
+    const outputCheck = details.dataset.outputCheckDetail;
+    const record = outputCheck ? details.closest("[data-attempt-record]")?.dataset.attemptRecord : "";
+    return `${details.closest("[data-history-id]")?.dataset.historyId}|${scope}|${details.dataset.attemptRecord ?? details.dataset.historyAttempt ?? record ?? ""}${outputCheck ? `|output-check:${outputCheck}` : ""}`;
   }
   function renderHistoryRecords() {
     const expanded = new Set([...runDetails.querySelectorAll("details[open]:not([data-job-logs])")].map(details =>
@@ -1115,7 +1163,9 @@
           : number === 3 ? "lens-history-stage3" : number === 6 ? "lens-stage6" : "lens-history-stage";
         const link = linked ? `<button type="button" class="ml-run-step-link" data-run-stage="${number}" data-run-id="${id}" data-history-id="${key}" aria-controls="${panel}">
           ${title}<i data-lucide="arrow-right" aria-hidden="true"></i></button>` : "";
-        return `<li>${link}${job || attempts.length ? savedJobDetails(job ?? {}, step, false, run.source === "recorded", attempts) : ""}</li>`;
+        const rerun = run.source === "live" && job?.state === "completed" ? `<details data-rerun-form><summary>${historyText("核對參數並建立新執行", "Review parameters and create linked run")}</summary>
+          <button type="button" data-rerun-review="${step}" data-rerun-source="${id}">${historyText("讀取原始參數與影響", "Load original parameters and impact")}</button><div data-rerun-content></div><p role="status" data-rerun-status></p></details>` : "";
+        return `<li>${link}${rerun}${job || attempts.length ? savedJobDetails(job ?? {}, step, false, run.source === "recorded", attempts) : ""}${submissionRecovery(run, step, job)}</li>`;
       }).join("");
       const genericJobs = [...new Set([...Object.keys(run.jobs ?? {}), ...Object.keys(run.attempts ?? {})])].filter(step => !historySteps.includes(step))
         .map(step => savedJobDetails(run.jobs?.[step] ?? {}, step, false, run.source === "recorded", run.attempts?.[step])).join("");
@@ -1137,6 +1187,8 @@
         <header class="ml-nav-detail-title"><i data-lucide="history" aria-hidden="true"></i><h2>${historyText(...run.name)}</h2></header>
         <p class="ml-run-overview">${id}<br>${escapeHistory(fullTime(run.submitted_at ?? initialJob?.submitted_at))}${finished ? " – " + escapeHistory(finished) : ""}<br>
           <span data-history-source>${historyText(...historySourceName(run))}</span> · <span data-history-state>${historyStateLabel(state, run.source === "recorded")}</span>${summary ? `<br>${summary}` : ""}</p>
+        ${run.rerun && run.source === "live" && (!run.jobs?.[run.rerun.step] || run.jobs[run.rerun.step].state === "not_submitted") ? `<div data-rerun-form><p>${historyText("已建立關聯執行，尚未送出。確認後將檢查遠端上游檔案並排程。", "Linked run created; not submitted. Confirmation checks remote upstream files and submits the stage.")}</p><button type="button" data-rerun-submit data-rerun-run-id="${id}">${historyText("確認送出", "Confirm submission")}: ${id}</button><div data-rerun-content></div><p role="status" data-rerun-status></p></div>` : ""}
+        ${run.rerun ? `<p data-rerun-link>${historyText("關聯來源", "Linked source")}: ${escapeHistory(run.rerun.source_run_id)} · ${escapeHistory(run.rerun.step)}</p>` : ""}
         <p data-history-association>${association} · ${historyText(...historyDatasetName(run.dataset_id))}${associationNote ? `<br>${associationNote}` : ""}</p>
         ${run.provenance ? `<details class="ml-run-inputs" data-history-provenance><summary>${historyText("保存的執行來源", "Recorded run provenance")}</summary><dl class="ml-key-values">${savedDefinitions(run.provenance)}</dl></details>` : ""}
         ${(run.issues ?? []).length ? `<p class="ml-history-record-note">${run.issues.map(escapeHistory).join(" ")}</p>` : ""}
@@ -2307,6 +2359,32 @@
     }
   });
   runDetails.addEventListener("submit", async event => {
+    const form = event.target.closest("[data-submission-recovery]");
+    if (!form) return;
+    event.preventDefault();
+    const run = findHistoryRun(form.closest("[data-history-id]").dataset.historyId);
+    const step = form.dataset.step, job = run?.jobs?.[step], key = form.dataset.submissionRecovery;
+    if (!canContinue(run) || !["unknown", "submitting"].includes(job?.state)) return;
+    const action = event.submitter?.value ?? "review", prior = submissionReviews.get(key);
+    if (prior?.pending || action !== "review" && action !== prior?.result?.recovery?.outcome) return;
+    const scope = recoveryRemote, attempt = job.attempt ?? 1, jobId = job.job_id ?? null;
+    const state = {...prior, pending: true};submissionReviews.set(key, state);renderHistoryRecords();
+    try {
+      const result = await requestDataset(`/signet/runs/${encodeURIComponent(run.run_id)}/steps/${encodeURIComponent(step)}/reconcile`,
+        {expected_attempt: attempt, expected_job_id: jobId, action, confirmed: action !== "review"}, "POST");
+      if (scope !== recoveryRemote || submissionReviews.get(key) !== state || result.record?.run_id !== run.run_id ||
+          result.record?.step !== step || (result.record?.attempt ?? 1) !== attempt) return;
+      state.result = result;state.error = null;
+      if (action !== "review" && !result.applied) {
+        state.result = null;state.error = historyText("證據已變更或尚未完成審閱，請重新核對。", "Evidence changed or review is incomplete. Review the evidence again.");
+      }
+      if (result.applied) {submissionReviews.delete(key);await loadWorkspaceHistory();}
+    } catch (error) {state.error = error.message;}
+    finally {state.pending = false;renderHistoryRecords();}
+  });
+  runDetails.addEventListener("submit", async event => {
+    const editor = event.target.closest("[data-rerun-editor]");
+    if (editor) {event.preventDefault();editor.querySelector("[data-rerun-create]")?.click();return;}
     const form = event.target.closest("[data-history-assignment]");
     if (!form) return;
     event.preventDefault();
@@ -2330,6 +2408,46 @@
       }
     } catch (error) {assignmentStates.set(id, {datasetId, error: error.message});}
     renderHistoryRecords();renderDatasetLabels();updateHistoryView();syncStage6Picker(true);
+  });
+  runDetails.addEventListener("click", async event => {
+    const button = event.target.closest("[data-rerun-review], [data-rerun-create], [data-rerun-submit]");
+    if (!button) return;
+    const container = button.closest("[data-rerun-form]");
+    const content = container.querySelector("[data-rerun-content]");
+    const status = container.querySelector("[data-rerun-status]");
+    button.disabled = true;
+    try {
+      if (button.hasAttribute("data-rerun-review")) {
+        const source = button.dataset.rerunSource, step = button.dataset.rerunReview;
+        const review = await requestDataset(`/signet/runs/${encodeURIComponent(source)}/steps/${step}/rerun`);
+        container.rerunReview = review;container.rerunPlan = null;
+        content.innerHTML = `<p>${historyText("沿用上游", "Reuse upstream")}: ${escapeHistory(review.reuse.join(", ") || "—")}<br>${historyText("必須重新執行", "Recompute")}: ${escapeHistory(review.invalidated.join(", "))}</p>
+          <p>${historyText("舊結果保留。建立後仍須另外確認送出；送出時核對遠端檔案。原始輸入固定，可編輯設定、資源及選項。", "Old results are preserved. Submission requires a separate confirmation and remote file checks. Keep original inputs; edit settings, resources and options.")}</p>
+          <form data-rerun-editor aria-label="${historyText("關聯執行參數", "Linked run parameters")}"><label>${historyText("新執行名稱", "New run name")}<input name="run-name" data-rerun-name required maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9_-]*" spellcheck="false" value="${escapeHistory(source.slice(0, 58))}-rerun"></label>
+          <label>${historyText("執行參數", "Run parameters")}<textarea name="parameters" spellcheck="false" data-rerun-parameters rows="12" style="width:100%;box-sizing:border-box">${escapeHistory(JSON.stringify(review.parameters, null, 2))}</textarea></label>
+          <button type="button" data-rerun-create>${historyText("建立關聯執行（尚不送出）", "Create linked run (no submission)")}</button></form>`;
+      } else if (button.hasAttribute("data-rerun-create")) {
+        if (!content.querySelector("[data-rerun-editor]").reportValidity()) return;
+        const review = container.rerunReview;
+        const plan = await requestDataset(`/signet/runs/${encodeURIComponent(review.source_run_id)}/steps/${review.step}/rerun`, {
+          new_run_id: content.querySelector("[data-rerun-name]").value,
+          revision: review.revision, parameters: JSON.parse(content.querySelector("[data-rerun-parameters]").value),
+        }, "POST");
+        container.rerunPlan = plan;
+        content.querySelectorAll("input, textarea, button").forEach(control => {control.disabled = true;});
+        const confirm = document.createElement("button");
+        confirm.type = "button";confirm.dataset.rerunSubmit = "";
+        confirm.textContent = root.lang === "en" ? `Confirm submission: ${plan.new_run_id}` : `確認送出：${plan.new_run_id}`;
+        content.append(confirm);
+        status.textContent = root.lang === "en" ? "Linked run created locally; nothing submitted." : "已建立本機關聯執行，尚未送出。";
+      } else {
+        await requestDataset(`/signet/runs/${encodeURIComponent(button.dataset.rerunRunId ?? container.rerunPlan.new_run_id)}/rerun/submit`, {confirmed: true}, "POST");
+        button.dataset.rerunSubmitted = "true";
+        status.textContent = root.lang === "en" ? "Submission recorded. Reload history to inspect the new run." : "已記錄送出，請重新讀取歷史查看新執行。";
+        return;
+      }
+    } catch (error) { status.textContent = error.message; }
+    finally { if (!button.dataset.rerunSubmitted && (!button.hasAttribute("data-rerun-create") || !container.rerunPlan)) button.disabled = false; }
   });
   runDetails.addEventListener("click", event => {
     const button = event.target.closest("[data-run-stage]");

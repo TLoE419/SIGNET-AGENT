@@ -522,6 +522,15 @@ def merge(history):
             if conflict or invalid_claim:
                 row['capabilities']['stage_results'] = []
             row['attempts'] = _attempts(row, records, digests, issues)
+            row['output_revalidation'] = {}
+            for step, entries in row['attempts'].items():
+                current = next((entry for entry in entries if entry['current'] and entry['availability'] == 'recorded'), None)
+                if row['capabilities']['continue_analysis'] and current:
+                    row['output_revalidation'][step] = jobs.output_revalidation(current['record'])
+                else:
+                    row['output_revalidation'][step] = {
+                        'eligible': False, 'active': False,
+                        'reason': 'Only the current readable live workspace attempt can be rechecked.'}
             row['issues'] = list(dict.fromkeys([*row.get('issues', []), *issues]))
             result.append(row)
         return {'datasets': list(datasets.values()), 'runs': result}

@@ -136,6 +136,28 @@ class WorkspaceHistoryTest(unittest.TestCase):
         self.assertEqual(prepared['status'], 'prepared')
         self.assertIs(prepared['executed'], False)
 
+    def test_output_revalidation_uses_only_the_current_live_attempt_without_remote_reads(self):
+        root = self.run_root('shared-check')
+        job = self.generic(root, state='failed', job_id='12345', attempt=2, exit_code='0',
+                           slurm_state='COMPLETED', reason='Required outputs are missing.',
+                           missing_outputs=['res/resg/signet_Geno'], failure_hints=[])
+        self.write(root / 'workspace-genotype.json', {'run_id': root.name, 'dataset_id': 'cohort-a'})
+        common = {'run_id': root.name, 'name': ['分析', 'Analysis'], 'inputs': {}, 'jobs': {'genotype': job},
+                  'status': 'failed', 'graph': None, 'dataset_id': 'cohort-a'}
+        self.base['runs'] = [{**common, 'source': 'live'}, {**common, 'source': 'archive'}]
+        self.write(self.project / 'data/stage6-results' / root.name / 'history.json',
+                   {'run_id': root.name, 'dataset_id': 'cohort-a'})
+        before = {path: path.read_bytes() for path in self.project.rglob('*') if path.is_file()}
+        rows = {row['source']: row for row in self.load()['runs']}
+        self.assertTrue(rows['live']['output_revalidation']['genotype']['eligible'])
+        self.assertFalse(rows['archive']['output_revalidation']['genotype']['eligible'])
+        self.assertEqual(rows['live']['jobs']['genotype'], job)
+        self.assertEqual(before, {path: path.read_bytes() for path in before})
+        # A stale summary cannot enable a check after the canonical job records a real error.
+        self.write(root / 'steps/genotype.json', {**job, 'failure_hints': ['Execution halted']})
+        live = next(row for row in self.load()['runs'] if row['source'] == 'live')
+        self.assertFalse(live['output_revalidation']['genotype']['eligible'])
+
     def test_generic_top_state_does_not_treat_catalog_order_as_freshness(self):
         root = self.run_root('multiple-steps')
         genotype = self.generic(root, state='completed', submitted_at='2026-11-16T10:00:00-0800')
