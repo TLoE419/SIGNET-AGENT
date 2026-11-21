@@ -21,12 +21,15 @@ def main():
     fixture = StepsTest()
     try:
         fixture.setUp()
+        # Exercise production privacy behavior, not the transfer-test override.
+        from agent.runtime import signet_jobs
+        signet_jobs.DOWNLOADED_STEPS = ('network', 'visualize')
         inputs = fixture.genotype_inputs()
         expression = fixture.hpc / 'ws/signet' / EXAMPLE_EXPRESSION_PATH
         expression.parent.mkdir(parents=True, exist_ok=True)
         expression.write_text('gene_id\tS1\tS2\tS3\tS4\nENSG1\t1\t3\t5\t7\nENSG2\t2\t4\t6\t8\n')
         annotation = fixture.hpc / 'ws/refdata/gencode.v22.genes.gtf'
-        annotation.write_text('chr1\tGENCODE\tgene\t100\t200\t.\t+\t.\tgene_id "ENSG1";\n')
+        annotation.write_text('chr1\tGENCODE\tgene\t100\t200\t.\t+\t.\tgene_id "ENSG1"; transcript_type "protein_coding";\n')
         expression_inputs = {'gexp.file': str(expression), 'pmap.file': str(annotation)}
         clinical = fixture.hpc / 'ws/refdata/official-demo-chr1-restart-clinical.tsv'
         clinical.write_text('submitter_id\trace\tgender\n'

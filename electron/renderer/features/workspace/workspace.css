@@ -831,3 +831,6 @@ code:not(pre code) {
 #signet-lens-left-preview .ml-expression-run-label select { width: 100%; padding: 6px; border: 1px solid var(--ml-rule); border-radius: 4px; background: #fff; color: var(--ml-ink); font: inherit; }
 
 #signet-lens-left-preview .ml-clinical-input { box-sizing: border-box; width: 100%; min-width: 0; padding: 6px; border: 1px solid var(--ml-rule); border-radius: 4px; background: #fff; color: var(--ml-ink); font: inherit; }
+
+.s3-remote-plot { display: block; width: 100%; height: auto; }
+.s3-remote-plot[hidden] { display: none; }

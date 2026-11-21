@@ -1,1 +1,1 @@
-"""Remote execution: SSH transport, scientific runtime, network jobs and visualization."""
+"""HPC3 execution: SSH transport, setup checks, SIGNET step jobs and their results."""
