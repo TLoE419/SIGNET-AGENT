@@ -135,6 +135,50 @@ Inside the API:
 | 7 | `GET /signet/runs/{run_id}/steps/{step}` | yes | Step state; on completion, validate and download |
 | 8 | `POST /signet/runs/{run_id}/steps/{step}/cancel` | yes | Cancel the step's own job |
 | 9 | `GET /signet/runs/{run_id}/steps/{step}/log` | yes | Last lines of the job's stdout or stderr |
+| 10 | `GET /signet/datasets` | no | Saved workspace dataset catalog and file selections |
+| 11 | `POST /signet/datasets` | no | Save a new workspace dataset |
+| 12 | `PATCH /signet/datasets/{dataset_id}` | no | Save current file selections for one dataset |
+
+### Workspace dataset metadata
+
+These routes require the same page token and, for writes, local Origin as the
+step routes. They store metadata locally and never read the named input files,
+contact HPC3, change a run's configuration, or submit work.
+
+`GET /signet/datasets` returns `{"datasets": [...]}`. Each record has a stable
+`id`, a two-label Chinese/English `name`, a `folder`, and `inputs` grouped into
+`genotype`, `expression`, and `clinical` filename arrays. `default_inputs`,
+`alternative_inputs`, and `selections` retain the stored defaults and legacy
+alternative choices across application restarts. The workspace remote browser
+updates `inputs` directly; new datasets start with empty inputs.
+
+`POST /signet/datasets` accepts `name` and optional `folder`, `inputs`, and
+`alternative_inputs`. The server creates a unique dataset ID and returns the
+saved record. `PATCH /signet/datasets/{dataset_id}` accepts `{"inputs": {...}}`;
+only the supplied input types change, and original defaults remain available.
+Both writes return the canonical saved dataset record.
+
+Initial definitions remain in `data/datasets/*.json`. Additions and overrides
+are written atomically to `data/workspace-datasets.json`, separately from all
+run snapshots. A malformed or linked state file is reported as a conflict and
+is never silently replaced. The trusted process environment variable
+`SIGNET_DATASETS_STATE_FILE` can isolate this state in tests.
+
+`/stage6/history` includes the saved datasets while keeping each run's input,
+settings, and dataset ID from its original snapshots. Changing current dataset
+files cannot alter an existing run. The chromosome 1-only execution controls
+retain their existing scope.
+
+The workspace browser reuses `POST /hpc/files/shortcuts` and
+`POST /hpc/files/list`. Before saving a selection, `POST /hpc/files/inspect`
+accepts only `{"paths": ["/absolute/input/path"]}` (1–128 paths; 32 KiB body
+limit). It returns canonical paths and byte sizes for readable, nonempty
+regular files. It checks shared-path restrictions without reading contents,
+writing remote selection state, converting references, or scheduling jobs.
+The UI then saves those paths through the dataset PATCH route. This is a
+metadata check; scientific format validation and use of custom dataset inputs
+in analysis remain separate integration steps. The legacy reference-specific
+`/hpc/files/select` route keeps its own validation and preparation behavior.
 
 ### Workspace chromosome 1 review and submission
 

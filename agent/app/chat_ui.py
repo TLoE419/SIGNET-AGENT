@@ -19,7 +19,7 @@ from agent.core.conversation import MODEL, run_conversation
 from agent.core.model_timing import ModelRequestTiming
 from agent.paths import PROJECT_ROOT
 from agent.providers import PROVIDERS, create_provider_adapter
-from agent.runtime import workspace_genotype
+from agent.runtime import signet_jobs, workspace_genotype
 from agent.stage6.workspace import ARCHIVED_STEP_JOBS, CHAT_CONTEXT, Workspace
 from agent.tools.ui import UI_CHANNEL
 
@@ -166,7 +166,7 @@ class ChatHandler(BaseHTTPRequestHandler):
                 and secrets.compare_digest(self.headers.get('X-Chat-Token', ''), self.server.token))
 
     def do_PATCH(self):
-        # Only the SIGNET API uses PATCH (changing a run's settings).
+        # Run settings and current dataset selections use the authenticated SIGNET API.
         if not self._app_request():
             return self._error(403, '請從本機聊天頁面送出。')
         url = urlsplit(self.path)
@@ -262,13 +262,16 @@ class ChatHandler(BaseHTTPRequestHandler):
         if self.path.startswith('/hpc/files/'):
             return self.hpc_files_post()
         from agent.tools import hpc as hpc_tools
+        from agent.runtime.hpc import STEPS
+        log_actions = {f'/hpc/log/{step}': (lambda step=step: hpc_tools.read_hpc_setup_log(step))
+                       for step in STEPS}
         actions = {'/hpc/check': hpc_tools.check_hpc_environment,
                    '/hpc/workspace': hpc_tools.create_hpc_workspace,
                    '/hpc/signet': hpc_tools.install_signet_source,
                    '/hpc/container': hpc_tools.download_signet_container,
                    '/hpc/prepare': hpc_tools.prepare_imputation_reference,
                    **{f'/hpc/reference/{key}': (lambda key=key: hpc_tools.download_reference_file(key))
-                      for key in ('ref', 'gmap', 'gtf', 'clinical')}}
+                      for key in ('ref', 'gmap', 'gtf', 'clinical')}, **log_actions}
         action = actions.get(self.path)
         if action is None:
             return self._error(404, '找不到此操作。')
@@ -279,7 +282,14 @@ class ChatHandler(BaseHTTPRequestHandler):
         if not 0 <= size <= 1024:
             return self._error(400, 'Invalid request length.')
         self.connection.settimeout(10)
-        self.rfile.read(size)  # The body carries no parameters; each path is one fixed action.
+        raw = self.rfile.read(size)  # Each path is one fixed action, without user-supplied log paths.
+        if self.path in log_actions:
+            try:
+                body = json.loads(raw or b'{}')
+            except ValueError:
+                return self._error(400, 'The log request must be an empty JSON object.')
+            if body != {}:
+                return self._error(400, 'The log request must be an empty JSON object.')
         return self.json_response(action())
 
     def hpc_files_post(self):
@@ -289,7 +299,8 @@ class ChatHandler(BaseHTTPRequestHandler):
             size = int(self.headers.get('Content-Length', '0') or 0)
         except ValueError:
             size = -1
-        if not 0 <= size <= 4096:
+        inspection = self.path == '/hpc/files/inspect'
+        if not 0 <= size <= (hpc_files.MAX_INSPECT_BODY if inspection else 4096):
             return self._error(400, 'Invalid request length.')
         self.connection.settimeout(10)
         try:
@@ -298,6 +309,11 @@ class ChatHandler(BaseHTTPRequestHandler):
             body = None
         if not isinstance(body, dict):
             return self._error(400, 'Invalid request.')
+        if inspection:
+            if (set(body) != {'paths'} or not isinstance(body['paths'], list)
+                    or not 1 <= len(body['paths']) <= hpc_files.MAX_INSPECT_PATHS):
+                return self._error(400, 'Provide only a paths list containing between 1 and 128 files.')
+            return self.json_response(hpc_files.inspect(body['paths']))
         actions = {'/hpc/files/shortcuts': hpc_files.shortcuts, '/hpc/files/selected': hpc_files.selected,
                    '/hpc/files/list': lambda: hpc_files.list_folder(body.get('path')),
                    '/hpc/files/select': lambda: hpc_files.select(body.get('key'), body.get('path')),
@@ -361,7 +377,11 @@ class ChatHandler(BaseHTTPRequestHandler):
             return self._error(403, 'Workspace token required.')
         if url.query:
             return self._error(400, 'The Stage 6 history does not accept query parameters.')
-        return self.json_response(self.server.stage6.history())
+        try:
+            result = self.server.stage6.history()
+        except signet_jobs.StepError as error:
+            return self._error(signet_api.STATUS.get(error.code, 500), str(error))
+        return self.json_response(result)
 
     def stage6_get(self, url):
         query = parse_qs(url.query)

@@ -46,11 +46,45 @@ Each stage uses the settings preserved with its job. The Stage 6 selector in
 **Analysis** also follows the selected dataset. Stages 1–6 can be submitted
 manually for the chromosome 1 example.
 
+**Add dataset** saves the dataset immediately. Applying a file selection or
+restoring its defaults also saves that dataset's current file configuration;
+reopening the application reads it back. Save failures remain visible and do
+not replace the last saved configuration. **Choose remote files** opens the
+existing HPC3 browser after connecting, with locations, folder navigation,
+typed paths, and file sizes. Genotype files can be selected across folders;
+expression and clinical inputs each select one file. Applying checks canonical
+paths, readability, regular-file type, and nonempty size before saving. Cancel
+does not save, and **Use default** restores the dataset's saved defaults.
+This metadata selection does not validate scientific formats or change the
+inputs of the chromosome 1 execution controls.
+
 ### Submit the chromosome 1 example
 
 Connect to HPC3 from **Settings → Remote compute**. The same panel can check
-the remote resources and open the existing environment settings. Use **View →
-Classic Interface** when installing missing resources from its Workflow panel.
+the remote resources and open the existing environment settings.
+While Settings is open, connecting automatically checks the remote connection,
+writable work directory, scheduler, container runtime, audited SIGNET source,
+container image, reference panel, genetic map, gene annotation, clinical file,
+and prepared imputation reference. Each row shows its status and the returned
+reason directly; **Check again** refreshes the read-only report. Incomplete or
+contradictory replies and existing environment-verification errors cannot mark
+the environment ready. Disconnecting or changing the account or installation
+clears the previous report. These checks do not install resources or start an
+analysis; the individual stage input reviews still apply.
+
+Missing resources have separate manual actions beside their checks: **Install
+SIGNET**, **Download** for the container and each reference, and **Prepare** for
+the imputation reference. No setup action runs on connection, navigation,
+refresh, or application restart. A click starts only that resource's existing
+setup workflow. Its accepted job, queued/running state, completion, or failure
+appears with the resource. Download and reference-preparation rows also expose
+**View setup log** to read that step's own log.
+The panel refreshes read-only checks while setup work is pending and resumes
+observing recorded work when reopened. It never resubmits jobs automatically.
+After downloads finish, **Verify environment** explicitly runs the original
+runtime verification before analysis is marked ready. Existing files and all
+scientific run results remain untouched by setup retries.
+
 In **Analysis → Stage → Stage 1**
 of the chromosome 1 example, check the four prepared input files. Review the
 fixed chromosome, thresholds, and resource settings, then select **Submit Stage 1**.
@@ -153,8 +187,16 @@ uniquely and in order to the matched genotype matrix. The other columns use
 the two archived expression outputs, adjusted for sex and race and then for
 those covariates plus the original genotype components.
 
-Creating a dataset in the workspace adds a draft for the current session. An
-archive is a read-only result and remains tied to its saved input snapshot.
+Dataset additions and current file selections are saved atomically in
+`data/workspace-datasets.json`. The existing `data/datasets/*.json` files supply
+the initial definitions and defaults; edits are stored separately. The dataset
+catalog includes both these definitions and saved additions. Run history stays
+scoped to each dataset's stable ID and reads its files and settings from the
+run's original snapshots, so changing a dataset cannot rewrite an old run.
+
+The authenticated `/signet/datasets` routes manage this metadata only; saving a
+file path neither opens that file nor submits a scientific job. For an isolated
+test profile, `SIGNET_DATASETS_STATE_FILE` overrides the state-file location.
 
 Use **View → Classic Interface** for model setup, existing Stage 6 tools, and
 the development terminal. **View → Workspace** returns to the new interface.
