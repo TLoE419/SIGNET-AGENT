@@ -32,7 +32,7 @@ function startBackend() {
   writeFileSync(path.join(build, 'renderer.js'), components);
   await app.whenReady();
   const disconnected = {selectedProfile: null, connection: {status: 'disconnected'}};
-  for (const [channel, value] of [['ssh:initialize', disconnected], ['ssh:getSnapshot', disconnected], ['ssh:listProfiles', []], ['ssh:listKeys', []], ['environment:getSnapshot', {phase: 'disconnected', message: 'Isolated fixture'}], ['model:getStatus', {provider: 'codex', geminiConfigured: false, encryptionAvailable: true}]]) ipcMain.handle(channel, () => ({ok: true, value}));
+  for (const [channel, value] of [['ssh:initialize', disconnected], ['ssh:getSnapshot', disconnected], ['ssh:listProfiles', []], ['ssh:listKeys', []], ['environment:getSnapshot', {phase: 'disconnected', message: 'Isolated fixture'}], ['model:getStatus', {provider: 'none', geminiConfigured: false, encryptionAvailable: true}]]) ipcMain.handle(channel, () => ({ok: true, value}));
   window = new BrowserWindow({show: false, width: 1650, height: 894, useContentSize: true, webPreferences: {preload: path.join(root, 'electron/preload/index.cjs'), nodeIntegration: false, contextIsolation: true, sandbox: true, backgroundThrottling: false, partition: 'signet-result-assets-fixture'}});
   const isolated = window.webContents.session, denied = [], downloads = [], errors = [];
   isolated.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
@@ -51,11 +51,14 @@ function startBackend() {
   });
   const js = value => window.webContents.executeJavaScript(value);
   await window.loadURL(origin + '/');
-  await until(() => js(`document.getElementById('ml-stage6-run')?.options.length>1`), 'Workspace did not initialize with actual scripts');
-  await js(`document.querySelector('[data-nav-target="history"]').click();document.querySelector('[data-run-target="workspace--${runId}"]').click();document.querySelector('#ml-run-workspace--${runId} [data-run-stage="6"]').click();void 0`);
+  await js(`document.querySelector('[data-nav-target="history"]').click();
+    const scope=document.querySelector('#ml-history-scope');scope.value='all';scope.dispatchEvent(new Event('change',{bubbles:true}));void 0`);
+  const runRow = `[data-run-target="workspace--${runId}"]`;
+  await until(() => js(`document.querySelector(${JSON.stringify(runRow)})?.getClientRects().length`), 'The completed fixture run did not appear in History');
+  await js(`document.querySelector(${JSON.stringify(runRow)}).click();document.querySelector('#ml-run-workspace--${runId} [data-history-select-stage="6"]').click();document.querySelector('#ml-run-workspace--${runId} [data-run-stage="6"]').click();void 0`);
   await until(() => js(`document.getElementById('lens-stage6').dataset.runState==='ready'`), 'Completed graph did not load');
   const geometry = () => js(`(()=>{const app=document.querySelector('.ml-app'),stage=document.getElementById('lens-stage6');return [app.offsetWidth,app.offsetHeight,app.querySelector('.ml-rail').offsetWidth,app.querySelector('.ml-chat').offsetWidth,stage.querySelector('.s6-graph-frame').getBoundingClientRect().width,stage.querySelector('.ml-result-dock').getBoundingClientRect().width]})()`);
-  const before = await geometry(); assert.deepEqual(before.slice(0, 4), [1650, 894, 53, 542]);
+  const before = await geometry(); assert.deepEqual(before.slice(0, 4), [1650, 894, 68, 542]);
   const nativeClick = async selector => {
     const point = await js(`(()=>{const e=document.querySelector(${JSON.stringify(selector)});e.scrollIntoView({block:'nearest'});const b=e.getBoundingClientRect();return {x:Math.round(b.x+b.width/2),y:Math.round(b.y+b.height/2)}})()`);
     for (const type of ['mouseMove', 'mouseDown', 'mouseUp']) window.webContents.sendInputEvent({type, ...point, ...(type==='mouseMove'?{}:{button:'left',clickCount:1})});
@@ -66,7 +69,7 @@ function startBackend() {
   await nativeClick('.s6-original-results > summary');
   await until(() => js(`!!document.querySelector('.s6-original-select select')`), 'Original result metadata did not load');
   assert.deepEqual(await geometry(), before);
-  await js(`document.querySelector('.s6-original-select select').value='2';document.querySelector('.s6-original-select select').dispatchEvent(new Event('change'));[...document.querySelectorAll('.s6-original-content button')].find(e=>e.textContent==='檢視原始網路').click();void 0`);
+  await js(`document.querySelector('.s6-original-select select').value='2';document.querySelector('.s6-original-select select').dispatchEvent(new Event('change'));[...document.querySelectorAll('.s6-original-content button')].find(e=>e.textContent==='View original network').click();void 0`);
   await until(() => window.webContents.mainFrame.frames.some(frame => frame.url.includes('signet_top2_')), 'Original frame was blocked');
   const frame = window.webContents.mainFrame.frames.find(frame => frame.url.includes('signet_top2_'));
   await until(() => frame.executeJavaScript(`document.body?.dataset.ready==='yes'`), 'Original HTML dependency script did not execute under CSP');
@@ -84,7 +87,7 @@ function startBackend() {
   const screenshot = path.join(temporary, 'original-network.png'); writeFileSync(screenshot, (await window.webContents.capturePage()).toPNG());
   await js(`document.querySelector('.s6-original-dialog').close();void 0`);
   await until(() => js(`!document.querySelector('.s6-original-dialog iframe')`), 'Original frame kept running after close');
-  await js(`const search=document.querySelector('.s6-table-tools input');search.value='megf6';search.dispatchEvent(new Event('input'));document.getElementById('ml-language').click();void 0`);
+  await js(`const search=document.querySelector('.s6-table-tools input');search.value='megf6';search.dispatchEvent(new Event('input'));void 0`);
   assert.equal(await js(`document.getElementById('lens-stage6').dataset.selectedGene`), 'MEGF6');
   assert.equal(await js(`document.querySelector('.s6-table-tools input').placeholder`), 'Search connections');
   assert.equal(await js(`document.querySelectorAll('.s6-cutoff-chart circle').length`), 10);
@@ -102,6 +105,6 @@ function startBackend() {
   assert.equal(await js(`document.body.dataset.escaped`), undefined);
   const unexpectedErrors = errors.filter(message => !message.includes("connect-src 'none'") && !message.includes('Fetch API cannot load'));
   assert.deepEqual(unexpectedErrors, [], 'Actual renderer startup or original result script failed');
-  console.log(JSON.stringify({passed: true, geometry: before, sandbox, trustedOriginalInteraction: true, preservedGene: 'MEGF6', bilingual: true, cutoffPoints: 10, downloads, screenshot, chartScreenshot, blockedExternalRequests: denied.length, expectedCSPRejections: errors.length, unexpectedErrors}, null, 2));
+  console.log(JSON.stringify({passed: true, geometry: before, sandbox, trustedOriginalInteraction: true, preservedGene: 'MEGF6', cutoffPoints: 10, downloads, screenshot, chartScreenshot, blockedExternalRequests: denied.length, expectedCSPRejections: errors.length, unexpectedErrors}, null, 2));
   window.destroy(); app.quit();
 })().catch(async error => {console.error(error); if (window) {const file=path.join(temporary,'failure.png');writeFileSync(file,(await window.webContents.capturePage()).toPNG());console.error('Native failure screenshot:',file);window.destroy();} app.exit(1);});

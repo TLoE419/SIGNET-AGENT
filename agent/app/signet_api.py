@@ -22,6 +22,7 @@ Every error reply is {"error": "<message for the user>", "code": "<machine code>
   412 not_ready         HPC3 not connected or not prepared
   500 internal_error    an unexpected error in this app (details go to the backend log only)
   502 remote_failed     an SSH or Slurm command on HPC3 failed
+  504 read_timeout      reading saved remote results timed out
 """
 import json
 import re
@@ -30,8 +31,10 @@ import traceback
 from urllib.parse import parse_qs
 
 from agent.runtime import signet_jobs as jobs
+from agent.runtime import ssh_transport
 from agent.runtime import workspace_genotype
 from agent.runtime import workspace_datasets
+from agent.runtime import workspace_inputs
 from agent.runtime import workspace_validation
 from agent.runtime import workspace_history
 from agent.runtime import workspace_logs
@@ -39,7 +42,8 @@ from agent.stage6 import result_assets
 import agent.tools.signet as signet
 
 MAX_BODY = 32768
-STATUS = {'invalid_request': 400, 'not_found': 404, 'conflict': 409, 'review_required': 409, 'not_ready': 412, 'remote_failed': 502}
+STATUS = {'invalid_request': 400, 'not_found': 404, 'conflict': 409, 'review_required': 409, 'not_ready': 412,
+          'remote_failed': 502, 'read_timeout': 504}
 _RUN_NAME = r'[A-Za-z0-9][A-Za-z0-9_-]{0,63}'  # same rule as agent.tools.signet._name
 _RUN = rf'(?P<run_id>{_RUN_NAME})'
 _STEP = r'(?P<step>[a-z_]{1,32})'
@@ -107,6 +111,25 @@ def get_catalog(handler, url):
     return 200, jobs.catalog()
 
 
+def get_reference_defaults(handler, url):
+    _query(url, ())
+    if not ssh_transport.available():
+        raise jobs.StepError('not_ready', 'Connect to HPC3 to view the environment reference paths.')
+    try:
+        config = ssh_transport.setup_environment()
+    except (ValueError, OSError) as error:
+        if ssh_transport.is_timeout(error):
+            raise jobs.StepError('read_timeout', 'Reading the environment reference paths on HPC3 timed out.') from error
+        raise jobs.StepError('not_ready', 'Check the connected HPC3 environment to view its reference paths.') from error
+    try:
+        paths = workspace_inputs._references(config)
+    except (jobs.StepError, ValueError, OSError) as error:
+        if ssh_transport.is_timeout(error):
+            raise jobs.StepError('read_timeout', 'Reading the environment reference paths on HPC3 timed out.') from error
+        raise jobs.StepError('remote_failed', 'Could not read the environment reference paths on HPC3.') from error
+    return 200, {'references': {'ref': paths['reference'], 'gmap': paths['genetic_map'], 'gtf': paths['annotation']}}
+
+
 def list_datasets(handler, url):
     _query(url, ())
     return 200, {'datasets': workspace_datasets.list_datasets()}
@@ -127,17 +150,31 @@ def create_dataset(handler, url):
 
 def update_dataset(handler, url, dataset_id):
     _query(url, ())
-    return 200, workspace_datasets.update_dataset(dataset_id, **_body(handler, ('inputs',), required=('inputs',)))
+    return 200, workspace_datasets.update_dataset(dataset_id, **_body(handler, ('inputs', 'references')))
+
+
+def delete_dataset(handler, url, dataset_id):
+    _query(url, ())
+    return 200, workspace_datasets.delete_dataset(dataset_id)
 
 
 def validate_dataset(handler, url, dataset_id):
     _query(url, ())
-    return 200, workspace_validation.validate(dataset_id, **_body(handler, ('inputs',), required=('inputs',)))
+    return 200, workspace_validation.validate(dataset_id, **_body(handler, ('inputs', 'kind'), required=('inputs',)))
+
+
+def _input_review(review, *args, **kwargs):
+    try:
+        return 200, review(*args, **kwargs)
+    except (jobs.StepError, OSError) as error:
+        if ssh_transport.is_timeout(error):
+            raise jobs.StepError('read_timeout', 'Checking the input files on HPC3 timed out.') from error
+        raise
 
 
 def review_dataset_genotype(handler, url, dataset_id):
     _query(url, ())
-    return 200, workspace_genotype.review_dataset(dataset_id, **_body(handler, ('inputs',), required=('inputs',)))
+    return _input_review(workspace_genotype.review_dataset, dataset_id, **_body(handler, ('inputs',), required=('inputs',)))
 
 
 def submit_dataset_genotype(handler, url, dataset_id):
@@ -148,7 +185,7 @@ def submit_dataset_genotype(handler, url, dataset_id):
 
 def review_genotype_example(handler, url):
     _query(url, ())
-    return 200, workspace_genotype.review_example()
+    return _input_review(workspace_genotype.review_example)
 
 
 def submit_genotype_example(handler, url):
@@ -162,7 +199,7 @@ def review_genotype_retry(handler, url, run_id):
     attempt = query.get('expected_attempt', '')
     if set(query) != {'expected_job_id', 'expected_attempt'} or not re.fullmatch(r'[0-9]{1,4}', attempt):
         raise ApiError(400, 'invalid_request', 'Provide the displayed Stage 1 job ID and attempt number.')
-    return 200, workspace_genotype.review_genotype_retry(run_id, query['expected_job_id'], int(attempt))
+    return _input_review(workspace_genotype.review_genotype_retry, run_id, query['expected_job_id'], int(attempt))
 
 
 def submit_genotype_retry(handler, url, run_id):
@@ -173,7 +210,7 @@ def submit_genotype_retry(handler, url, run_id):
 
 def review_expression_example(handler, url, run_id):
     _query(url, ())
-    return 200, workspace_genotype.review_expression(run_id)
+    return _input_review(workspace_genotype.review_expression, run_id)
 
 
 def submit_expression_example(handler, url, run_id):
@@ -183,18 +220,19 @@ def submit_expression_example(handler, url, run_id):
 
 
 def review_adjust_example(handler, url, run_id):
-    query = _query(url, ('clinical', 'choices'))
+    query = _query(url, ('clinical', 'choices', 'gender_column'))
     try:
         choices = json.loads(query['choices']) if 'choices' in query else None
     except ValueError as error:
         raise ApiError(400, 'invalid_request', 'Clinical choices must be a JSON object.') from error
-    return 200, workspace_genotype.review_adjust(run_id, query.get('clinical'), choices)
+    return _input_review(workspace_genotype.review_adjust, run_id, query.get('clinical'), choices,
+                         gender_column=query.get('gender_column'))
 
 
 def submit_adjust_example(handler, url, run_id):
     _query(url, ())
     fields = ('inputs', 'options', 'resources', 'review_token')
-    body = _body(handler, (*fields, 'choices'), required=fields)
+    body = _body(handler, (*fields, 'choices', 'gender_column'), required=fields)
     if not isinstance(body['review_token'], str) or not re.fullmatch(r'[a-f0-9]{64}', body['review_token']):
         raise ApiError(400, 'invalid_request', 'Check the clinical file and confirm the current review before submitting.')
     return 202, workspace_genotype.submit_adjust(run_id, **body)
@@ -202,7 +240,7 @@ def submit_adjust_example(handler, url, run_id):
 
 def review_cis_example(handler, url, run_id):
     _query(url, ())
-    return 200, workspace_genotype.review_cis(run_id)
+    return _input_review(workspace_genotype.review_cis, run_id)
 
 
 def submit_cis_example(handler, url, run_id):
@@ -213,7 +251,7 @@ def submit_cis_example(handler, url, run_id):
 
 def review_network_example(handler, url, run_id):
     _query(url, ())
-    return 200, workspace_genotype.review_network(run_id)
+    return _input_review(workspace_genotype.review_network, run_id)
 
 
 def submit_network_example(handler, url, run_id):
@@ -224,7 +262,7 @@ def submit_network_example(handler, url, run_id):
 
 def review_visualize_example(handler, url, run_id):
     query = _query(url, ('freq', 'ntop'))
-    return 200, workspace_genotype.review_visualize(run_id, query.get('freq'), query.get('ntop'))
+    return _input_review(workspace_genotype.review_visualize, run_id, query.get('freq'), query.get('ntop'))
 
 
 def submit_visualize_example(handler, url, run_id):
@@ -529,8 +567,9 @@ ROUTES = [
      {'GET': get_history_log}),
     (re.compile(rf'/signet/history/(?P<history_id>{workspace_history.HISTORY_ID})/operations/(?P<operation>{_RUN_NAME})/log'),
      {'GET': get_operation_log}),
+    (re.compile(r'/signet/references'), {'GET': get_reference_defaults}),
     (re.compile(r'/signet/datasets'), {'GET': list_datasets, 'POST': create_dataset}),
-    (re.compile(rf'/signet/datasets/(?P<dataset_id>{_RUN_NAME})'), {'PATCH': update_dataset}),
+    (re.compile(rf'/signet/datasets/(?P<dataset_id>{_RUN_NAME})'), {'PATCH': update_dataset, 'DELETE': delete_dataset}),
     (re.compile(rf'/signet/datasets/(?P<dataset_id>{_RUN_NAME})/validate'), {'POST': validate_dataset}),
     (re.compile(rf'/signet/datasets/(?P<dataset_id>{_RUN_NAME})/genotype/review'), {'POST': review_dataset_genotype}),
     (re.compile(rf'/signet/datasets/(?P<dataset_id>{_RUN_NAME})/genotype'), {'POST': submit_dataset_genotype}),

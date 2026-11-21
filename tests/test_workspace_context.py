@@ -40,6 +40,13 @@ class WorkspaceContextTests(unittest.TestCase):
         self.catalog['runs'][0]['dataset_id'] = 'cohort-b'
         with self.assertRaises(ValueError): self.resolve(self.value)
 
+    def test_deleted_dataset_remains_valid_only_as_existing_history_context(self):
+        self.catalog['datasets'] = self.catalog['datasets'][1:]
+        self.catalog['runs'][0]['dataset_deleted'] = True
+        self.assertEqual(self.resolve(self.value)['run_id'], 'same')
+        with self.assertRaises(ValueError):
+            self.resolve(dict(self.value, history_id=None, selected_genes=[]))
+
     def test_no_scientific_payload_leaks(self):
         self.catalog['runs'][0].update(inputs={'clinical': 'private'}, secret='key')
         result = self.resolve(self.value)

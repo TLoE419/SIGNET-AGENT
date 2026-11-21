@@ -7,6 +7,7 @@ import shlex
 import shutil
 
 from agent.runtime import signet_jobs as jobs
+from agent.runtime.workspace_genotype import guard_run_dataset
 import agent.tools.signet as signet
 
 ORDER = ('genotype', 'expression', 'adjust', 'cis', 'network', 'visualize')
@@ -37,6 +38,7 @@ def ancestors(name):
 def review(run_id, name):
     step = jobs._step(name)
     root = jobs._root(run_id)
+    guard_run_dataset(root)
     record = jobs._load(root, name)
     if record.get('state') != 'completed' or record.get('run_id') != run_id:
         raise jobs.StepError('conflict', 'Select a completed stage of this live run.')
@@ -148,7 +150,8 @@ def create(run_id, name, new_run_id, revision, parameters):
                 snapshot = remap(original_snapshot)
                 if key == 'genotype':
                     # Raw-source fingerprints belong to their original paths, not copied run inputs.
-                    for field in ('source_files', 'source_inputs', 'reference_sources'):
+                    for field in ('source_files', 'source_inputs', 'reference_sources', 'reference_choices',
+                                  'selected_inputs', 'reference_compatibility'):
                         if field in original_snapshot:
                             snapshot[field] = original_snapshot[field]
                 snapshot['run_id'] = new_run_id
@@ -328,6 +331,7 @@ def _stage_remote_source(source_run_id, root, directory, token, plan):
 
 
 def guard_submission(root, name):
+    guard_run_dataset(root)
     path = root / 'rerun.json'
     if not path.exists():
         return
@@ -342,6 +346,7 @@ def submit(run_id, confirmed):
     if confirmed is not True:
         raise jobs.StepError('invalid_request', 'Explicit manual confirmation is required.')
     root = jobs._root(run_id)
+    guard_run_dataset(root)
     try:
         plan = json.loads(signet._no_links(root / 'rerun.json').read_text())
         if plan.get('new_run_id') != run_id or plan.get('step') not in jobs.STEPS:

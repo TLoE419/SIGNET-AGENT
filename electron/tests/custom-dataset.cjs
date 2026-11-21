@@ -44,7 +44,7 @@ function fingerprints(files) {
 }
 
 async function verify() {
-  running = await launch({provider: 'codex', visible: false, userData: path.join(temporary, 'app'),
+  running = await launch({provider: 'none', visible: false, userData: path.join(temporary, 'app'),
     stateFile: path.join(temporary, 'chat.json')});
   const {window} = running;
   const fixture = JSON.parse(readFileSync(metadata, 'utf8'));
@@ -92,7 +92,9 @@ async function verify() {
     const row = `[data-run-target][data-run-id="${runId}"]`;
     await until(() => js(`!!document.querySelector(${JSON.stringify(row)})?.getClientRects().length`), 'The run is missing from its dataset history');
     await click(row);
-    const stageLink = `[data-run-stage="${stage}"][data-run-id="${runId}"]`;
+    const historyId = await js(`document.querySelector(${JSON.stringify(row)}).dataset.runTarget`);
+    await click(`#ml-run-${historyId} [data-history-select-stage="${stage}"]`);
+    const stageLink = `#ml-run-${historyId} [data-run-stage="${stage}"]`;
     await until(() => js(`!!document.querySelector(${JSON.stringify(stageLink)})?.getClientRects().length`),
       async () => 'The saved run did not expose Stage ' + stage + ': ' + await js(`document.querySelector('#ml-run-details')?.textContent`));
     await click(stageLink);
@@ -124,7 +126,7 @@ async function verify() {
     await until(async () => await stageState(step) === 'completed', step + ' did not collect its verified outputs');
   }
 
-  assert.deepEqual(await geometry(), [1650, 894, 53, 542]);
+  assert.deepEqual(await geometry(), [1650, 894, 68, 542]);
   await controlledConnection();
   await selectDataset(datasetA.id);
   await click('[data-nav-target="analysis"]');
@@ -274,7 +276,7 @@ async function verify() {
   assert.equal(await js(`document.querySelector('#lens-history-stage [data-stage-setting="restrict.tcga.geno"]').textContent`), '2');
   assert.deepEqual(fingerprints(originalFiles), originalFingerprints, 'Custom execution modified the selected original input/reference files');
   assert.deepEqual(calls(), ['submitted', 'submitted', 'submitted'], 'History inspection resubmitted a step');
-  assert.deepEqual(await geometry(), [1650, 894, 53, 542]);
+  assert.deepEqual(await geometry(), [1650, 894, 68, 542]);
   await running.quit();
   console.log('PASS: custom chr2 Stage 1 with explicit deferred-clinical warning, real input freezing/reference preparation, frozen Stage 2 after catalog edits, manual Stage 3 clinical replacement and fresh review without upstream reruns, reviewed-copy provenance, remote-rendered PCA without individual scores, immutable originals and snapshots, six-stage dataset history isolation and fixed geometry; controlled connection context and local-only scheduler, no real SSH/Slurm/container/SIGNET analysis');
 }

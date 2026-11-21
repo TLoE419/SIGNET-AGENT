@@ -12,7 +12,7 @@ if 'clinical_covariates' not in globals():
     from agent.runtime.jobs.clinical_rules import clinical_covariates, SIGNET_RACES
 
 
-def review(clinical, genotype_ids, expression_ids, choices=None, out=None):
+def review(clinical, genotype_ids, expression_ids, choices=None, out=None, gender_column=None):
     choices = {} if choices is None else choices
     if (not isinstance(choices, dict) or len(choices) > 64 or
             any(not isinstance(key, str) or not 1 <= len(key) <= 240 or value not in ('not_reported', 'exclude')
@@ -34,16 +34,38 @@ def review(clinical, genotype_ids, expression_ids, choices=None, out=None):
     reader = csv.DictReader(io.StringIO(original.decode('utf-8-sig'), newline=''), delimiter='\t')
     columns = reader.fieldnames or []
     records = list(reader)
+    candidates = []
+    if 'gender' not in columns:
+        for column in columns:
+            if (len(column) <= 128 and column.isprintable()
+                    and column.strip().lower() in {
+                        'gender', 'demographic.gender', 'demographics.gender', 'sex',
+                        'demographic.sex', 'demographics.sex', 'biological_sex',
+                        'sex_at_birth', 'sex_assigned_at_birth',
+                    } and columns.count(column) == 1):
+                candidates.append(column)
+    mapped = gender_column is not None and gender_column in candidates
+    if mapped:
+        columns = ['gender' if column == gender_column else column for column in columns]
+    missing = [key for key in ('submitter_id', 'race', 'gender') if columns.count(key) != 1]
     result = {'columns': columns, 'rows': len(records), 'matched': len(matched),
+              'missing_columns': missing, 'gender_column_candidates': candidates,
+              'gender_column': gender_column if mapped else None,
+              'schema_valid': not missing and (gender_column is None or mapped),
               'clinical_matched': 0, 'missing_gender': 0, 'missing_race': 0,
               'unsupported_races': [], 'issues': [], 'race': {}, 'gender': {},
               'unrecognized_race': {}, 'needs_choice': [], 'choices': choices,
               'races_after': {}, 'retained': 0, 'excluded': 0, 'source_digest': hashlib.sha256(original).hexdigest(),
               'upstream_digests': upstream_digests}
-    missing = [key for key in ('submitter_id', 'race', 'gender') if columns.count(key) != 1]
+    if gender_column is not None and not mapped:
+        result['issues'].append('The selected gender column is unavailable. Choose an available column or use a corrected clinical file.')
     if missing:
         result['issues'].append('The clinical file needs one column named ' + ', '.join(missing) + '.')
+    if result['issues']:
         return result
+    if mapped:
+        for row in records:
+            row['gender'] = row.pop(gender_column)
     # adj_adjust.R keeps the first clinical record for each TCGA patient identifier.
     by_patient = {}
     for row in records:
@@ -104,7 +126,8 @@ def review(clinical, genotype_ids, expression_ids, choices=None, out=None):
 if __name__ == '__main__':
     try:
         result = review(*sys.argv[1:4], json.loads(sys.argv[4]) if len(sys.argv) > 4 else {},
-                        sys.argv[5] if len(sys.argv) > 5 else None)
+                        (sys.argv[5] or None) if len(sys.argv) > 5 else None,
+                        (sys.argv[6] or None) if len(sys.argv) > 6 else None)
     except (OSError, ValueError, csv.Error, TypeError) as error:
         result = {'issues': ['Could not read the clinical data: ' + str(error)]}
     print('@@clinical\t' + json.dumps(result))

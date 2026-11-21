@@ -268,14 +268,14 @@ class WorkspaceTest(unittest.TestCase):
                 self.assertEqual(request('/stage6/history?dataset=chromosome-one')[0], 400)
                 status, history = request('/stage6/history')
                 self.assertEqual(status, 200)
-                self.assertEqual(history['datasets'], [dataset, {
-                    **empty, 'inputs': {'genotype': [], 'expression': [], 'clinical': []},
+                self.assertEqual(history['datasets'], [{**dataset, 'name': 'Chromosome one'}, {
+                    **empty, 'name': 'Unrun', 'inputs': {'genotype': [], 'expression': [], 'clinical': []},
                 }])
                 runs = {run['history_id']: run for run in history['runs']}
                 self.assertEqual(set(runs), {'archive--baseline', 'archive--missing-output',
                                              'archive--no-dataset', 'recorded--baseline'})
                 expected = {
-                    **snapshot, 'jobs': report['jobs'], 'graph': report['graph'],
+                    **snapshot, 'name': 'Archived run', 'jobs': report['jobs'], 'graph': report['graph'],
                     'frequency': 0.45, 'top_networks': 1, 'status': 'completed', 'source': 'archive',
                 }
                 self.assertEqual({key: runs['archive--baseline'][key] for key in expected}, expected)

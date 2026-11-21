@@ -54,7 +54,7 @@ function fingerprints(folders) {
 }
 
 async function verify() {
-  running = await launch({provider: 'codex', visible: false, userData: path.join(temporary, 'app'),
+  running = await launch({provider: 'none', visible: false, userData: path.join(temporary, 'app'),
     stateFile: path.join(temporary, 'chat.json')});
   const {window} = running;
   const fixturePath = path.join(temporary, 'fixture.json');
@@ -92,10 +92,19 @@ async function verify() {
   const generic = 'recorded--' + fixture.generic;
   const job = (id, step) => `#ml-run-${id} [data-history-job="${step}"]`;
   const attempt = (id, step, number) => job(id, step) + ` [data-history-attempt="${number}"]`;
+  const selectStage = (id, stage) => click(`#ml-run-${id} [data-history-select-stage="${stage}"]`);
+  const activePanel = id => `#ml-run-${id} [data-history-stage-panel]:not([hidden])`;
+  const settings = id => click(activePanel(id) + ' [data-history-detail-tab="settings"]');
+  const picker = id => activePanel(id) + ' [data-history-attempt-select]';
+  const pickAttempt = (id, recordFile) => js(`(() => {
+    const select=document.querySelector(${JSON.stringify(picker(id))});
+    if(!select?.getClientRects().length)throw Error('Saved attempt picker is hidden.');
+    select.value=${JSON.stringify(recordFile)};
+    select.dispatchEvent(new Event('change',{bubbles:true}));
+  })()`);
 
-  await until(() => js(`!!document.querySelector('#ml-language')`), 'Workspace did not mount');
-  assert.deepEqual(await geometry(), [1650, 894, 53, 542]);
-  await click('#ml-language');
+  await until(() => js(`!!document.querySelector('#ml-chat-title').textContent`), 'Workspace did not mount');
+  assert.deepEqual(await geometry(), [1650, 894, 68, 542]);
   const initial = await history();
   const liveRecord = initial.runs.find(row => row.history_id === shared);
   const archivedRecord = initial.runs.find(row => row.history_id === archive);
@@ -127,19 +136,30 @@ async function verify() {
   assert.ok(!JSON.stringify(genericRecord.attempts).includes('must-not-be-adopted'));
 
   await open(shared);
-  await click(job(shared, 'genotype') + ' > summary');
-  assert.equal(await js(`document.querySelectorAll(${JSON.stringify(job(shared, 'genotype') + ' [data-history-attempt]')}).length`), 3);
+  await selectStage(shared, 1);
+  await settings(shared);
+  assert.deepEqual(await js(`(() => {
+    const select = document.querySelector(${JSON.stringify(picker(shared))});
+    return [...select.querySelectorAll('optgroup')].map(group => ({
+      label: group.querySelector('legend').textContent,
+      records: [...group.querySelectorAll('option')].map(option => option.value),
+    }));
+  })()`), [
+    {label: 'Current record', records: liveRecord.attempts.genotype.filter(entry => entry.current).map(entry => entry.record_file)},
+    {label: 'Previous attempts', records: liveRecord.attempts.genotype.filter(entry => !entry.current).reverse().map(entry => entry.record_file)},
+  ]);
   for (const number of [1, 2, 3]) {
     const selector = attempt(shared, 'genotype', number);
-    if (!await js(`document.querySelector(${JSON.stringify(selector)}).open`)) await click(selector + ' > summary');
+    await pickAttempt(shared, liveRecord.attempts.genotype.find(entry => entry.number === number).record_file);
     assert.equal(await js(`document.querySelector(${JSON.stringify(selector)}).dataset.attemptCurrent`), String(number === 3));
     const values = await js(`(() => {const entry=document.querySelector(${JSON.stringify(selector)});return {
       text:entry.textContent,settings:entry.querySelector('[data-history-saved="settings"]').textContent,
       result:entry.querySelector('[data-history-attempt-result]').textContent,
       events:entry.querySelector('[data-history-attempt-events]').textContent};})()`);
     assert.ok(values.text.includes(String(700 + number)) && values.settings.includes('0.' + number));
-    assert.ok(values.text.includes(`2026-11-10T0${number}:00:00-0800`));
-    assert.ok(values.events.includes(`2026-11-10T0${number}:05:00-0800`));
+    assert.ok(values.text.includes(`2026-11-10 0${number}:00:00`));
+    assert.ok(values.events.includes(`2026-11-10 0${number}:05:00`));
+    assert.doesNotMatch(values.text, /-08:?00/);
     if (number === 1) {
       assert.match(values.text, /Required outputs are missing\./);
       assert.match(values.text, /Controlled attempt-one failure/);
@@ -148,20 +168,29 @@ async function verify() {
     }
     if (number === 3) assert.match(values.result, /work\/res\/resg\/signet_Genotype.sampleID/);
   }
-  await click('#ml-language');
-  assert.equal(await js(`document.querySelector(${JSON.stringify(attempt(shared, 'genotype', 1))}).open`), true,
-    'Language switch collapsed an expanded previous attempt');
-  await click('#ml-language');
+  const priorRecord = liveRecord.attempts.genotype[0].record_file;
+  await pickAttempt(shared, priorRecord);
+  assert.equal(await js(`document.querySelector(${JSON.stringify(picker(shared))}).value`), priorRecord,
+    'The selected earlier attempt did not open');
   await open(archive);
-  await click(job(archive, 'genotype') + ' > summary');
+  await selectStage(archive, 1);
+  await settings(archive);
+  assert.equal(await js(`document.querySelector(${JSON.stringify(picker(archive))}) === null`), true,
+    'A single archived attempt offered a selector');
+  assert.ok(await js(`(() => {
+    const label = document.querySelector(${JSON.stringify(activePanel(archive) + ' [data-history-attempt-single]')});
+    return Boolean(label?.getClientRects().length && label.textContent.includes('Attempt number not recorded'));
+  })()`), 'A single archived attempt did not display its recorded number status');
   assert.equal(await js(`document.querySelectorAll(${JSON.stringify(job(archive, 'genotype') + ' [data-history-attempt]')}).length`), 1);
   assert.ok(!await js(`document.querySelector(${JSON.stringify(job(archive, 'genotype'))}).textContent.includes('703')`),
     'Same-named workspace retry leaked into the archive');
 
   await open(generic);
-  await click(job(generic, 'expression') + ' > summary');
+  await selectStage(generic, 2);
+  await settings(generic);
   for (const number of [1, 2, 3, 4, 5]) {
     const selector = attempt(generic, 'expression', number);
+    await pickAttempt(generic, genericRecord.attempts.expression.find(entry => entry.number === number).record_file);
     assert.ok(await js(`!!document.querySelector(${JSON.stringify(selector)})`));
     if (number === 2 || number === 5) {
       assert.equal(await js(`document.querySelector(${JSON.stringify(selector)}).dataset.attemptAvailable`), 'false');
@@ -183,14 +212,14 @@ async function verify() {
   assert.equal(restarted.starts.length, 2);
   assert.notEqual(restarted.starts[0], restarted.starts[1]);
   await open(shared);
-  await click(job(shared, 'genotype') + ' > summary');
-  assert.equal(await js(`document.querySelectorAll(${JSON.stringify(job(shared, 'genotype') + ' [data-history-attempt]')}).length`), 3);
+  await selectStage(shared, 1);
+  assert.equal(await js(`document.querySelector(${JSON.stringify(picker(shared))}).options.length`), 3);
   assert.deepEqual(fingerprints(folders), original);
   assert.equal(existsSync(path.join(temporary, 'forbidden-remote.ndjson')), false);
-  assert.deepEqual(await geometry(), [1650, 894, 53, 542]);
+  assert.deepEqual(await geometry(), [1650, 894, 68, 542]);
   await replacement.stop(); replacement = undefined;
   await running.quit();
-  console.log('PASS: all saved retry attempts, individual settings/jobs/times/failure/result evidence, missing and invalid archives, current-versus-previous/source isolation, bilingual expansion, actual Python restart, immutable originals and fixed geometry; local records only, no SSH/retry/analysis');
+  console.log('PASS: all saved retry attempts, individual settings/jobs/times/failure/result evidence, missing and invalid archives, current-versus-previous/source isolation, actual Python restart, immutable originals and fixed geometry; local records only, no SSH/retry/analysis');
 }
 
 verify().catch(async error => {console.error(error); await replacement?.forceStop(); await running?.backend.forceStop(); app.exit(1);});
