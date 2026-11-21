@@ -77,6 +77,17 @@
 main > #ssh-root { align-self:flex-end; margin:0 0 16px; flex-shrink:0; }
 .ssh-modal { max-height:calc(100dvh - 40px); overflow:auto; }
 .ssh-account-login code{display:block;margin-top:6px;color:#334155;font-size:12px;line-height:1.5}.ssh-account-login textarea{box-sizing:border-box;width:100%;resize:vertical;font:11px/16px ui-monospace,SFMono-Regular,monospace}
+.ssh-sign-in-dots{display:inline-block;white-space:nowrap}
+.ssh-sign-in-dots>span{display:inline-block}
+@keyframes ssh-sign-in-dot-bounce{
+  0%,60%,100%{translate:0 0}
+  30%{translate:0 -3px}
+}
+@media(prefers-reduced-motion:no-preference){
+  .ssh-sign-in-dots>span{animation:ssh-sign-in-dot-bounce 960ms ease-in-out infinite}
+  .ssh-sign-in-dots>span:nth-child(2){animation-delay:120ms}
+  .ssh-sign-in-dots>span:nth-child(3){animation-delay:240ms}
+}
 #ssh-root .ssh-dev-launch{position:fixed;right:20px;bottom:18px;background:#111827;color:#e5e7eb;border-color:#475569;font-size:12px}.ssh-dev-panel{position:fixed;inset:auto 20px 18px max(20px,15vw);z-index:3000;box-sizing:border-box;background:#111827;color:#e5e7eb;border:1px solid #475569;border-radius:10px;padding:14px;box-shadow:0 8px 40px #0006}.ssh-dev-panel header,.ssh-dev-panel nav,.ssh-dev-actions{display:flex;align-items:center;gap:12px;margin-bottom:10px;flex-wrap:wrap}.ssh-dev-panel header span{flex:1}.ssh-dev-panel p,.ssh-dev-actions span{font-size:12px;color:#cbd5e1}#ssh-root .ssh-dev-panel button{background:#38204f;color:var(--ssh-dev-text);border-color:#a855f7}#ssh-root .ssh-dev-panel button[aria-pressed=true]{background:var(--ssh-dev-accent);border-color:#d8b4fe;color:#fff}.ssh-dev-panel button:disabled{opacity:.45;cursor:default!important}.ssh-dev-panel pre{height:min(36vh,360px);overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.5 ui-monospace,monospace}.ssh-dev-terminal{height:min(40vh,400px);min-height:160px}.ssh-dev-panel [role=alert]{color:#fca5a5}.ssh-dev-panel [hidden]{display:none!important}
 .ssh-connection-diagnostics pre{box-sizing:border-box;max-height:220px;overflow:auto;background:#111827;color:#d1fae5;padding:12px;border-radius:6px;white-space:pre-wrap;overflow-wrap:anywhere;font:11px/1.5 ui-monospace,monospace}.ssh-connection-diagnostics summary{cursor:pointer}.ssh-dev-panel .ssh-connection-diagnostics pre{height:min(36vh,360px);max-height:360px}
 
@@ -159,25 +170,282 @@ main > #ssh-root { align-self:flex-end; margin:0 0 16px; flex-shrink:0; }
 [data-phase=error] .ssh-environment-dot,[data-phase=blocked] .ssh-environment-dot{background:var(--ssh-danger-color)}
 .ssh-environment-status:is([data-phase=checking],[data-phase=installing-source],[data-phase=verifying]) .ssh-environment-dot{background:var(--ssh-accent-color);animation:ssh-loading-glow 1.4s ease-in-out infinite}
 .ssh-environment-modal code{font-size:11px}
-.remote-files-modal{width:min(760px,92vw)}
-.remote-files{display:grid;grid-template-columns:170px minmax(0,1fr);gap:12px;min-height:320px}
-.remote-files-places{display:flex;flex-direction:column;gap:2px;overflow:auto;max-height:50vh}
-.ssh-modal.remote-files-modal .remote-files-places button,.ssh-modal.remote-files-modal .remote-files-row{display:flex;justify-content:space-between;gap:10px;width:100%;padding:6px 8px;border:0;border-radius:6px;background:transparent;color:inherit;font:inherit;font-size:12px;text-align:left;cursor:pointer;box-shadow:none}
-.ssh-modal.remote-files-modal .remote-files-places button:hover,.ssh-modal.remote-files-modal .remote-files-row:not(:disabled):hover{background:#eef1ec}
-.ssh-modal.remote-files-modal .remote-files-row[aria-selected=true]{background:#dcebe2;font-weight:600}
-.ssh-modal.remote-files-modal .remote-files-row:disabled{opacity:.5;cursor:not-allowed}
-.remote-files-name{min-width:0;overflow-wrap:anywhere}
-.remote-files-size{flex:none;opacity:.7}
-.remote-files-list{list-style:none;margin:0;padding:0;overflow:auto;max-height:50vh;border:1px solid var(--line,#d9ded6);border-radius:8px;min-height:240px}
-.remote-files-path{display:flex;gap:6px;margin-bottom:8px}
-.remote-files-path input{flex:1;min-width:0;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
-.remote-files-note{font-size:12px;opacity:.75;padding:8px}
-.remote-files-modal .remote-files-selected{margin-top:12px;font-size:12px;border:1px solid var(--ssh-input-border);border-radius:8px}
-.remote-files-modal .remote-files-selected h3{margin:0 0 6px;font-size:12px}
-.remote-files-modal .remote-files-selected ul{list-style:none;margin:0;padding:0;max-height:140px;overflow:auto}
-.remote-files-modal .remote-files-selected li{display:flex;align-items:start;justify-content:space-between;gap:10px;margin-top:4px}
-.remote-files-modal .remote-files-selected code{min-width:0;overflow-wrap:anywhere}
-.remote-files-modal .remote-files-selected p{margin:8px 0;font-size:12px}
+/* Path previews shared by the dataset and remote file picker. */
+.ml-file-location code {
+  padding: 0; background: transparent; color: var(--ml-muted, var(--remote-files-muted, #596c7d)); font-size: 12px; line-height: 1.45;
+}
+.ml-file-location {
+  display: grid; align-items: center; grid-template-columns: minmax(0, 1fr) auto; gap: 8px;
+}
+.ml-file-directory { display: flex; white-space: pre; overflow: hidden; }
+:is(.ml-file-directory-prefix, .ml-file-directory-tail) {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis;
+}
+.ml-file-directory-tail { flex: none; max-width: 100%; direction: rtl; }
+.ml-file-directory-prefix:not(:empty) + .ml-file-directory-tail {
+  max-width: calc(100% - 4ch);
+}
+:is(.ml-file-location, .ssh-modal) .ml-file-path-trigger {
+  min-height: 24px; padding: 2px 6px; border: 1px solid var(--ml-rule, var(--remote-files-line, #dbe4eb)); border-radius: 5px;
+  background: #fff; color: #245b87; font-size: 12px; white-space: nowrap; cursor: pointer;
+}
+.ml-file-location .ml-file-path-trigger:hover { background: #edf5fb; }
+.ml-file-path-panel {
+  inset: auto; position-area: block-end span-inline-start; position-try-fallbacks: flip-block, flip-inline, flip-block flip-inline;
+  width: min(420px, calc(100vw - 24px)); margin: 6px 0; padding: 12px;
+  border: 1px solid #c9d9e7; border-radius: 8px; background: #fff; color: var(--ml-ink, #171d28);
+  box-shadow: 0 10px 28px #203c5326;
+}
+.ml-file-path-panel > header {
+  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-bottom: 8px;
+}
+.ml-file-path-panel [data-copy-file-path] {
+  min-height: 31px; padding: 4px 9px; border: 1px solid var(--ml-rule, #dbe4eb); border-radius: 5px;
+  background: #fff; color: var(--ml-ink, #171d28); font: inherit; cursor: pointer;
+}
+.ml-file-path-panel [data-copy-file-path]:hover { background: #eaf3fa; }
+.ml-file-path-panel [data-full-file-path] {
+  display: block; padding: 8px; background: #f4f7fa; border-radius: 4px;
+  overflow-wrap: anywhere; white-space: pre-wrap; user-select: all;
+}
+.ml-file-path-panel [data-file-path-status] {
+  margin: 0; color: var(--ml-muted, var(--remote-files-muted, #596c7d)); font-size: 12px;
+}
+.ml-file-path-panel [data-file-path-status]:not(:empty) { margin-top: 8px; }
+
+/* Remote file browser and the draft selection beside it. */
+.ssh-modal.remote-files-modal {
+  --ssh-accent-color: #24618f;
+  --ssh-accent-hover: #1a4c74;
+  --ssh-accent-soft: #e9f2fa;
+  --remote-files-line: #dbe4eb;
+  --remote-files-muted: #596c7d;
+  --remote-files-surface: #f5f7f9;
+  --remote-files-padding: clamp(14px, 2.8vw, 24px);
+  --remote-files-list-height: clamp(126px, 39.5dvh, 350px);
+  width: min(1020px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  padding: 0;
+  border-color: #cbd8e2;
+  color: #171d28;
+  background: #fff;
+  box-shadow: 0 20px 70px #14283f35;
+}
+.remote-files-modal .ssh-modal-content { display: flex; flex-direction: column; }
+.remote-files-modal .ssh-modal-content > h2 {
+  margin: 0;
+  padding: 19px 64px 15px var(--remote-files-padding);
+  font-size: 21px;
+  line-height: 1.35;
+  font-weight: 650;
+}
+.remote-files { padding: 0 var(--remote-files-padding) 16px; }
+.remote-files-modal button { border-color: #c9d6e0; color: inherit; }
+.remote-files-modal button:not(:disabled):hover { background: var(--remote-files-surface); }
+.remote-files-places {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 3px 3px 6px;
+  margin: -3px -3px 10px;
+  scrollbar-width: thin;
+}
+.remote-files-places > span { flex: none; margin-inline-end: 4px; color: var(--remote-files-muted); font-size: 12px; }
+.remote-files-modal .remote-files-places button {
+  flex: none;
+  max-width: min(320px, 70%);
+  overflow: hidden;
+  padding: 5px 10px;
+  border-color: var(--remote-files-line);
+  border-radius: 6px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+.remote-files-modal .remote-files-places button[aria-current="location"] {
+  border-color: #b8cfe2;
+  background: var(--ssh-accent-soft);
+  color: var(--ssh-accent-hover);
+}
+.remote-files-path { margin-bottom: 14px; }
+.remote-files-path > label { margin: 0 0 6px; font-size: 13px; font-weight: 650; }
+.remote-files-path > div { display: flex; gap: 6px; }
+.remote-files-path input {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 9px;
+  border: 1px solid #b8c8d5;
+  border-radius: 5px;
+  background: #fff;
+  color: inherit;
+  font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.remote-files-path button { display: flex; align-items: center; gap: 4px; white-space: nowrap; }
+.remote-files-grid { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(238px, 1fr); gap: 12px; }
+.remote-files-browser {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--remote-files-line);
+  border-radius: 8px;
+  background: #fff;
+}
+.remote-files-list-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 72px 18px;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 18px 8px 12px;
+  border-bottom: 1px solid var(--remote-files-line);
+  background: var(--remote-files-surface);
+  color: var(--remote-files-muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+.remote-files-list-header span:last-child { text-align: right; }
+.remote-files-list {
+  height: var(--remote-files-list-height);
+  overflow: auto;
+  overscroll-behavior: contain;
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+  scrollbar-gutter: stable;
+}
+.remote-files-list > li + li { margin-top: 2px; }
+.remote-files-modal .remote-files-row {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) 72px 18px;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 36px;
+  padding: 5px 7px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  text-align: left;
+  font-size: 13px;
+}
+.remote-files-modal .remote-files-row[aria-pressed="true"] {
+  border-color: #c3d8e8;
+  background: var(--ssh-accent-soft);
+  color: #173e61;
+}
+.remote-files-modal .remote-files-row:focus-visible { outline-offset: -3px; }
+.remote-files-icon { width: 17px; height: 17px; flex: none; color: #527da2; }
+.remote-files-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.remote-files-size { color: var(--remote-files-muted); text-align: right; font-size: 12px; white-space: nowrap; }
+.remote-files-marker {
+  grid-column: 4;
+  justify-self: center;
+  display: grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  box-sizing: border-box;
+  border: 1px solid #a9bbc9;
+  border-radius: 3px;
+}
+.remote-files-row[aria-pressed="true"] .remote-files-marker {
+  border-color: var(--ssh-accent-color);
+  background: var(--ssh-accent-color);
+}
+.remote-files-row[aria-pressed="true"] .remote-files-marker::after {
+  width: 7px;
+  height: 4px;
+  border-left: 2px solid #fff;
+  border-bottom: 2px solid #fff;
+  transform: translateY(-1px) rotate(-45deg);
+  content: "";
+}
+.remote-files-row[data-entry-kind="folder"] .remote-files-marker {
+  width: 6px;
+  height: 6px;
+  border: 0;
+  border-top: 1px solid currentColor;
+  border-right: 1px solid currentColor;
+  border-radius: 0;
+  transform: rotate(45deg);
+  color: var(--remote-files-muted);
+}
+.remote-files-note { padding: 10px 8px; color: var(--remote-files-muted); font-size: 12px; }
+.remote-files-modal .remote-files-selected {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--remote-files-line);
+  border-radius: 8px;
+  background: var(--remote-files-surface);
+}
+.remote-files-selected-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.remote-files-selected-heading h3 { margin: 0; font-size: 15px; font-weight: 650; }
+.remote-files-selected-heading > span { flex: none; color: var(--remote-files-muted); font-size: 12px; }
+.remote-files-modal .remote-files-hint { margin: 5px 0 12px; color: var(--remote-files-muted); font-size: 12px; }
+.remote-files-selected ul {
+  max-height: max(102px, calc(var(--remote-files-list-height) - 48px));
+  overflow: auto;
+  overscroll-behavior: contain;
+  list-style: none;
+  margin: 0;
+  padding: 2px;
+}
+.remote-files-selected li {
+  display: grid;
+  grid-template-columns: 17px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px 7px;
+  padding: 8px;
+  border: 1px solid var(--remote-files-line);
+  border-radius: 6px;
+  background: #fff;
+}
+.remote-files-selected li + li { margin-top: 6px; }
+.remote-files-selected li > strong { display: block; font-size: 13px; font-weight: 650; overflow-wrap: anywhere; }
+.remote-files-selected .ml-file-location { grid-column: 2 / -1; }
+.remote-files-selected .ml-file-directory { font-size: 11px; }
+.remote-files-modal [data-remote-remove] { padding: 4px 6px; color: var(--ssh-accent-hover); font-size: 12px; }
+.remote-files-empty {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 48px;
+  padding: 0 10px;
+  border: 1px dashed #c5d4df;
+  border-radius: 6px;
+  color: var(--remote-files-muted);
+  background: #fff;
+  font-size: 13px;
+}
+.remote-files-modal [data-remote-error], .remote-files-modal [data-remote-state] {
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  overflow-wrap: anywhere;
+  background: var(--remote-files-surface);
+  font-size: 13px;
+}
+.remote-files-modal [data-remote-error] { background: #fff2f2; }
+.remote-files-modal .ssh-dialog-actions {
+  position: sticky;
+  z-index: 1;
+  bottom: 0;
+  align-items: center;
+  padding: 12px var(--remote-files-padding);
+  margin: 0;
+  border-top: 1px solid var(--remote-files-line);
+  background: var(--remote-files-surface);
+}
+.remote-files-modal .remote-files-apply-note { flex: 1; min-width: min(170px, 100%); margin: 0; color: var(--remote-files-muted); font-size: 12px; }
+@media (max-width: 700px) {
+  .remote-files-grid { grid-template-columns: minmax(0, 1fr); }
+  .ssh-modal.remote-files-modal { --remote-files-list-height: clamp(116px, 33dvh, 236px); }
+}
+@media (max-width: 480px) {
+  .remote-files-modal .remote-files-apply-note { flex-basis: 100%; }
+  .remote-files-list-header, .remote-files-modal .remote-files-row { gap: 6px; }
+  .remote-files-list-header { grid-template-columns: minmax(0, 1fr) 52px 18px; }
+  .remote-files-modal .remote-files-row { grid-template-columns: 18px minmax(0, 1fr) 52px 18px; }
+}
 @media(prefers-reduced-motion:reduce){.ssh-environment-dot{animation:none!important}}
 
 /* Disclosure hides details while preserving the switch and state indicator. */

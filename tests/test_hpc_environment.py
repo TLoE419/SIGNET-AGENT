@@ -1,3 +1,4 @@
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -24,8 +25,7 @@ def markers(**values):
 
 READY = dict(user='tester', host='login-i15', workspace_path='/pub/tester/signet-agent', workspace='yes',
              workspace_writable='yes', sbatch='yes', apptainer='apptainer version 1.4.5', signet='yes',
-             signet_revision=REVISION, signet_integrity='verified', signet_example='verified', file_container='3221225472', file_ref='1048576',
-             file_gmap='2048', file_gtf='1500000000', file_clinical='512', file_prepare='4096')
+             signet_revision=REVISION, signet_integrity='verified', signet_example='verified', file_container='3221225472')
 
 
 class Remote:
@@ -69,6 +69,45 @@ class CheckTest(unittest.TestCase):
         self.assertEqual(result['status'], 'unavailable')
         self.assertIn('SSH panel', result['reason'])
 
+    def test_local_runtime_helper_error_is_not_reported_as_an_hpc_connection_issue(self):
+        configuration = {
+            'root': '/pub/tester/signet-agent', 'source': '/pub/tester/signet-agent/software/pinned',
+            'image': '/pub/tester/signet-agent/images/signet.sif', 'executor': '/usr/bin/singularity',
+            'workRoot': '/pub/tester/signet-agent/runs', 'partition': 'free', 'revision': REVISION,
+            'runtimeModule': 'singularity/3.8',
+        }
+        for read_errors in ([FileNotFoundError(2, 'missing', '/private/path/runtime_modules.sh')],
+                            ['', PermissionError(13, 'denied', '/private/path/runtime_modules.sh')]):
+            with (
+                self.subTest(read_errors=read_errors),
+                patch.object(hpc.ssh_transport, 'available', return_value=True),
+                patch.object(hpc.ssh_transport, 'request', return_value={'stdout': json.dumps(configuration).encode()}),
+                patch.object(hpc.ssh_transport.Path, 'read_text', side_effect=read_errors),
+                patch.object(hpc.ssh_transport, 'remote') as remote,
+            ):
+                result = check_hpc_environment()
+                self.assertEqual((result['status'], result['code'], result['executed']),
+                                 ('unavailable', 'local_runtime_missing', False))
+                self.assertIn('SIGNET app file', result['reason'])
+                self.assertIn('runtime_modules.sh', result['detail'])
+                self.assertNotIn('/private/path', str(result))
+                remote.assert_not_called()
+
+    def test_transport_distinguishes_timeouts_from_ended_sessions(self):
+        for transport_code, check_code, reason in (
+            ('CONNECTION_TIMEOUT', 'remote_timeout', 'did not respond in time'),
+            ('REMOTE_SLOW', 'remote_timeout', 'did not respond in time'),
+            ('SESSION_CLOSED', 'remote_disconnected', 'connection to HPC3 ended'),
+            ('STALE_CONNECTION', 'remote_disconnected', 'connection to HPC3 ended'),
+        ):
+            error = hpc.ssh_transport.SshRemoteError('Broker details', code=transport_code)
+            with self.subTest(transport_code=transport_code), Remote('') as remote:
+                remote.side_effect = error
+                result = check_hpc_environment()
+                self.assertEqual((result['status'], result['code']), ('unavailable', check_code))
+                self.assertIn(reason, result['reason'])
+                self.assertNotIn('Broker details', result['reason'])
+
     def test_ssh_without_a_configured_environment_is_not_called_unreachable(self):
         error = hpc.ssh_transport.SshRemoteError('Checking remote paths.')
         with patch.object(hpc.ssh_transport, 'available', return_value=True), \
@@ -85,6 +124,18 @@ class CheckTest(unittest.TestCase):
         self.assertEqual(result['not_ready'], ['container'])
         self.assertIn('images/signet-0.0.6.sif', self.item(result, 'container')['detail'])
 
+    def test_workspace_timeout_preserves_confirmed_checks_and_skips_storage_checks(self):
+        result, _ = self.check(markers(user='tester', host='login-i15', workspace_path=READY['workspace_path'],
+                                       sbatch='yes', apptainer=READY['apptainer'], workspace_timeout='yes'))
+        self.assertFalse(result['ready'])
+        self.assertEqual(len(result['checks']), 6)
+        self.assertEqual([item['item'] for item in result['checks'] if item['status'] == 'ok'],
+                         ['connection', 'slurm', 'apptainer'])
+        self.assertEqual(self.item(result, 'workspace')['status'], 'problem')
+        self.assertIn('timed out', self.item(result, 'workspace')['detail'])
+        self.assertEqual(self.item(result, 'signet_source')['status'], 'unknown')
+        self.assertEqual(self.item(result, 'container')['status'], 'unknown')
+
     def test_missing_or_modified_example_data_is_reported_on_the_source_row(self):
         result, remote = self.check(markers(**{**READY, 'signet_example': 'missing'}))
         source = self.item(result, 'signet_source')
@@ -99,9 +150,7 @@ class CheckTest(unittest.TestCase):
         result, remote = self.check('Welcome banner\n' + markers(**READY))
         self.assertEqual((result['ready'], result['not_ready'], result['read_only'], result['executed']), (True, [], True, False))
         self.assertEqual([c['item'] for c in result['checks']],
-                         ['connection', 'workspace', 'slurm', 'apptainer', 'signet_source', 'container',
-                          'reference_ref', 'reference_gmap', 'reference_gtf', 'reference_clinical',
-                          'imputation_reference'])
+                         ['connection', 'workspace', 'slurm', 'apptainer', 'signet_source', 'container'])
         self.assertIn('3.0 GB', self.item(result, 'container')['detail'])
         self.assertEqual(remote.call_args.args, ('bash -s',))
         script = remote.call_args.kwargs['input'].decode()
@@ -110,37 +159,45 @@ class CheckTest(unittest.TestCase):
         for reads_content in ('cat ', 'less ', 'grep ', 'sed ', 'awk ', 'tail '):
             self.assertNotIn(reads_content, script)
 
+    def test_legacy_dataset_files_and_jobs_do_not_affect_shared_readiness(self):
+        result, remote = self.check(markers(**READY, file_ref='no', file_gmap='no', file_gtf='no',
+                                     file_clinical='empty', file_prepare='no', prepare_state='stale',
+                                     job_ref='41', job_ref_state='RUNNING', job_prepare_terminal='failed'))
+        self.assertTrue(result['ready'])
+        self.assertEqual(result['not_ready'], [])
+        script = remote.call_args.kwargs['input'].decode()
+        for excluded in ('refdata/clinical.tsv', 'refdata/ref/', 'refdata/gmap/',
+                         'refdata/prepared/', 'refdata/selected.tsv', 'clinical_columns_ok', 'prepared_state'):
+            self.assertNotIn(excluded, script)
+
     def test_fresh_account_lists_what_still_needs_preparation(self):
         result, _ = self.check(markers(user='tester', host='login-i15', workspace_path='/pub/tester/signet-agent',
                                        workspace='no', sbatch='yes', apptainer='apptainer version 1.4.5', signet='no',
-                                       file_container='no', file_ref='no', file_gmap='no', file_gtf='no', file_clinical='no',
-                                       file_prepare='no'))
-        self.assertEqual(result['not_ready'], ['workspace', 'signet_source', 'container', 'reference_ref',
-                                               'reference_gmap', 'reference_gtf', 'reference_clinical',
-                                               'imputation_reference'])
+                                       file_container='no'))
+        self.assertEqual(result['not_ready'], ['workspace', 'signet_source', 'container'])
         self.assertEqual(self.item(result, 'workspace')['status'], 'missing')
 
     def test_wrong_revision_modified_source_and_empty_files_are_problems(self):
         for change, item in [({'signet_revision': 'a' * 40}, 'signet_source'), ({'signet_integrity': 'mismatch'}, 'signet_source'),
-                             ({'signet': 'invalid'}, 'signet_source'), ({'file_gtf': 'empty'}, 'reference_gtf'),
+                             ({'signet': 'invalid'}, 'signet_source'), ({'file_container': 'empty'}, 'container'),
                              ({'workspace_writable': 'no'}, 'workspace'), ({'apptainer': 'no'}, 'apptainer')]:
             with self.subTest(change=change):
                 result, _ = self.check(markers(**{**READY, **change}))
                 self.assertEqual(self.item(result, item)['status'], 'problem')
                 self.assertEqual(result['not_ready'], [item])
 
-    def test_background_steps_show_as_in_progress_or_point_to_their_log(self):
+    def test_background_steps_show_progress_or_failure_details(self):
         base = {**READY, 'workspace': 'no', 'signet': 'no', 'file_container': 'no'}
         result, _ = self.check(markers(**base, step_workspace='running', step_workspace_host='login-i15',
                                        step_signet='failed', job_container='4242', job_container_state='RUNNING'))
         self.assertEqual(self.item(result, 'workspace')['status'], 'in_progress')
         self.assertIn('login-i15', self.item(result, 'workspace')['detail'])
         self.assertEqual(self.item(result, 'signet_source')['status'], 'problem')
-        self.assertIn('read_hpc_setup_log("signet")', self.item(result, 'signet_source')['detail'])
+        self.assertEqual('The last SIGNET installation failed.', self.item(result, 'signet_source')['detail'])
         self.assertEqual(self.item(result, 'container')['status'], 'in_progress')
         result, _ = self.check(markers(**base, step_workspace='stopped', job_container='4242', job_container_state=''))
         self.assertEqual(self.item(result, 'workspace')['status'], 'problem')
-        self.assertIn('read_hpc_setup_log("container")', self.item(result, 'container')['detail'])
+        self.assertIn('Download job 4242 ended without producing', self.item(result, 'container')['detail'])
 
     def test_example_only_background_install_reports_progress(self):
         result, _ = self.check(markers(**{**READY, 'signet_example': 'missing'},
@@ -222,7 +279,8 @@ class StepToolTest(unittest.TestCase):
             stat.write_text('#!/bin/sh\nwc -c < "$3" | tr -d " "\n')
             stat.chmod(0o700)
             done = subprocess.run(['bash', '-c', hpc._container_job()], capture_output=True, text=True,
-                                  env={**os.environ, 'I': str(image), 'PATH': f"{bin_dir}:{os.environ['PATH']}"})
+                                  env={**os.environ, 'I': str(image), 'D': str(Path(directory, '.signet-agent', 'steps')),
+                                       'PATH': f"{bin_dir}:{os.environ['PATH']}"})
             self.assertEqual(done.returncode, 1)
             self.assertIn('expected', done.stderr)
             self.assertEqual(list(image.parent.iterdir()), [])
