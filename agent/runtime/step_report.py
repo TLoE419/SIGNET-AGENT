@@ -2,6 +2,137 @@
 import re
 from agent.runtime import signet_jobs as jobs
 
+INPUT_ISSUE_CODES = frozenset({
+    'unsupported_path', 'unavailable_file', 'file_limit', 'file_changed', 'time_limit',
+    'scan_limit', 'text_encoding', 'binary_input', 'genotype_layout', 'inconsistent_columns',
+    'map_coordinates', 'ped_metadata', 'empty_table', 'genotype_roles', 'expression_header',
+    'expression_columns', 'expression_values', 'duplicate_gene', 'expression_rows',
+    'duplicate_sample', 'clinical_columns', 'clinical_width', 'clinical_identifier',
+    'clinical_rows', 'file_count', 'absolute_remote_path', 'unreadable_table',
+    'ped_map_markers', 'genotype_compatibility', 'expression_scale',
+    'duplicate_clinical_patient', 'sample_identifier', 'no_overlap', 'clinical_coverage',
+    'unmatched_samples', 'ambiguous_patient', 'missing_covariates', 'adjustment_groups',
+    'blocked_by_paths', 'clinical_pairing_empty', 'clinical_race_choice_required',
+    'clinical_missing_race', 'clinical_missing_gender', 'clinical_race_groups',
+    'clinical_gender_groups', 'clinical_choices', 'input_freeze',
+    'stage_input_review_required', 'unclassified_input_issue',
+})
+
+FAILURE_CODES = frozenset({
+    'scheduler_out_of_memory', 'scheduler_timeout', 'scheduler_node_fail',
+    'scheduler_preempted', 'scheduler_failed', 'scheduler_cancelled',
+    'exports_incomplete', 'missing_or_unreadable_file', 'missing_file', 'missing_command',
+    'classification_count_mismatch', 'insufficient_covariate_groups', 'invalid_numeric_values',
+    'matrix_shape_mismatch', 'resource_memory_limit', 'scientific_script_failed',
+    'scientific_runtime_error', 'nonzero_exit', 'missing_outputs', 'scheduler_state_unknown',
+    'submission_unconfirmed', 'cancelled', 'unclassified_failure',
+})
+
+
+def _counts(value, allowed):
+    if not isinstance(value, dict):
+        return {}
+    return {key: value[key] for key in allowed
+            if type(value.get(key)) is int and 0 <= value[key] <= 2 ** 53 - 1}
+
+
+def _input_issues(values, stage):
+    result = []
+    for value in values[:64] if isinstance(values, list) else []:
+        if not isinstance(value, dict):
+            continue
+        code = value.get('code')
+        result.append({'code': code if isinstance(code, str) and code in INPUT_ISSUE_CODES else 'unclassified_input_issue',
+                       'stage': stage,
+                       'severity': value.get('severity') if value.get('severity') in
+                       ('warning', 'needs_review', 'error') else 'error',
+                       **_counts(value, ('count',))})
+    return result
+
+
+def safe_input_validation(report):
+    """Project the private dataset review into fixed labels and numeric statistics."""
+    if not isinstance(report, dict):
+        return {'available': False}
+    statuses = ('passed', 'warning', 'failed', 'incomplete', 'unchecked')
+    result = {'available': True, 'scope': 'preliminary_before_qc',
+              'status': report.get('status') if report.get('status') in statuses else 'unchecked',
+              'checks': [], 'stage_readiness': {}}
+    metrics = ('rows', 'columns', 'samples', 'genes', 'markers', 'patients', 'ped_markers',
+               'duplicate_sample_ids', 'duplicate_patients', 'fid_iid_mismatches',
+               'missing_race', 'missing_gender')
+    for check in report.get('checks', []) if isinstance(report.get('checks'), list) else []:
+        if not isinstance(check, dict) or check.get('kind') not in ('genotype', 'expression', 'clinical'):
+            continue
+        stage = ('genotype', 'expression', 'clinical').index(check['kind']) + 1
+        result['checks'].append({'kind': check['kind'],
+            'status': check.get('status') if check.get('status') in statuses else 'unchecked',
+            'metrics': _counts(check.get('metrics'), metrics),
+            'issues': _input_issues(check.get('issues'), stage)})
+    pairing = report.get('pairing')
+    if isinstance(pairing, dict):
+        result['pairing'] = {**_counts(pairing, ('genotype_patients', 'expression_patients',
+            'matched_patients', 'clinical_matched', 'unmatched_genotype', 'unmatched_expression',
+            'missing_race', 'missing_gender', 'race_groups', 'gender_groups')),
+            'status': pairing.get('status') if pairing.get('status') in statuses else 'unchecked',
+            'issues': _input_issues(pairing.get('issues'), 3)}
+    readiness = report.get('stage_readiness')
+    for stage in ('1', '2', '3'):
+        value = readiness.get(stage) if isinstance(readiness, dict) else None
+        if isinstance(value, dict):
+            result['stage_readiness'][stage] = {
+                'status': value.get('status') if value.get('status') in
+                ('ready', 'needs_review', 'blocked', 'incomplete') else 'incomplete',
+                'issues': _input_issues(value.get('issues'), int(stage))}
+    return result
+
+
+def safe_clinical_review(review):
+    """Keep patient identities, source category labels and private issue text in the UI."""
+    if not isinstance(review, dict):
+        return {'available': False}
+    result = {'available': True, **_counts(review, ('rows', 'matched', 'clinical_matched',
+              'missing_gender', 'missing_race', 'retained', 'excluded')), 'diagnostics': []}
+    columns = review.get('columns')
+    if isinstance(columns, list) and any(columns.count(key) != 1 for key in ('submitter_id', 'race', 'gender')):
+        # The checker returns before measuring coverage or covariates when columns are invalid.
+        return {'available': True, **_counts(review, ('rows', 'matched')),
+                'diagnostics': [{'code': 'clinical_columns', 'stage': 3, 'severity': 'error'}]}
+    counts = review.get('unrecognized_race')
+    counts = counts if isinstance(counts, dict) else {}
+    numeric = _counts(counts, counts)
+    needed = review.get('needs_choice')
+    needed = needed if isinstance(needed, list) else []
+    result.update(unknown_race_count=sum(numeric.values()), needs_choice_count=len(needed),
+                  unhandled_race_count=sum(count for label, count in numeric.items() if label in needed))
+    groups = _counts(review, ('gender_groups',))
+    if groups:
+        result['gender_group_count'] = groups['gender_groups']
+
+    def add(code, count=None, severity='error'):
+        result['diagnostics'].append({'code': code, 'stage': 3, 'severity': severity,
+                                      **({'count': count} if count is not None else {})})
+
+    if result.get('matched') == 0:
+        add('clinical_pairing_empty', 0)
+    if ('matched' in result and 'clinical_matched' in result
+            and result['clinical_matched'] < result['matched']):
+        add('clinical_coverage', result['matched'] - result['clinical_matched'])
+    if needed:
+        add('clinical_race_choice_required', result['unhandled_race_count'], 'needs_review')
+    for field in ('missing_race', 'missing_gender'):
+        if result.get(field):
+            add('clinical_' + field, result[field])
+    after = review.get('races_after')
+    if (not needed and isinstance(after, dict) and columns is not None
+            and set(after) != {'asian', 'black or african american', 'white'}):
+        add('clinical_race_groups')
+    if result.get('gender_group_count', 2) < 2:
+        add('clinical_gender_groups')
+    if review.get('issues') and not result['diagnostics']:
+        add('stage_input_review_required')
+    return result
+
 _MEANING = {
     'signet_Genotype.sampleID': ('samples', None),
     'signet_Geno': ('samples', 'SNPs'),
@@ -131,6 +262,16 @@ def failure_summary(record):
                 ('cannot open', 'missing_or_unreadable_file', 'A required file could not be opened. Check the selected inputs and earlier-stage outputs.'),
                 ('No such file or directory', 'missing_file', 'A required file or directory was not found. Check inputs and earlier-stage outputs.'),
                 ('command not found', 'missing_command', 'A required scientific command was unavailable in the execution environment.'),
+                ('number of levels differs', 'classification_count_mismatch',
+                 'A categorical variable has an unexpected number of levels. Review the stage inputs; the message alone does not identify the variable or affected patients.'),
+                ('contrasts can be applied only to factors with 2 or more levels', 'insufficient_covariate_groups',
+                 'A model factor has fewer than two levels. Review covariate groups among the retained samples.'),
+                ('NA/NaN/Inf', 'invalid_numeric_values',
+                 'The scientific runtime encountered missing or nonfinite numeric values. Inspect the private diagnostic evidence.'),
+                ('non-conformable arguments', 'matrix_shape_mismatch',
+                 'The scientific runtime reported incompatible matrix dimensions. Review upstream matching and private diagnostics.'),
+                ('cannot allocate vector', 'resource_memory_limit',
+                 'The scientific runtime could not allocate memory. Review its resource allocation and private diagnostics.'),
                 ('Execution halted', 'scientific_script_failed', 'The scientific script stopped with an error.'),
                 ('Error in ', 'scientific_runtime_error', 'The scientific runtime reported an error. Inspect the private logs in the workspace.'))
     hints = record.get('failure_hints', [])
@@ -159,6 +300,8 @@ def failure_summary(record):
     if not diagnoses:
         diagnoses.append(('unclassified_failure', 'The saved evidence does not identify a recognized cause. Inspect the private logs in the workspace.'))
     result['classifications'] = [code for code, _ in diagnoses]
+    result['evidence'] = 'unclassified' if result['classifications'] == ['unclassified_failure'] else 'recognized_execution_evidence'
+    result['next_action'] = 'inspect_private_diagnostics'
     result['reason'] = diagnoses[0][1]
     result['scope'] = 'Execution diagnostics only. Raw logs, patient identifiers and input paths are not shared with the model.'
     return result

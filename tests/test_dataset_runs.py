@@ -107,6 +107,30 @@ class DatasetRunTest(unittest.TestCase):
         with self.assertRaises(jobs.StepError):
             workspace.review_adjust('custom-study', '/different/clinical')
 
+    def test_stage1_review_defers_clinical_choices_and_keeps_freezing_guards(self):
+        clinical = self.paths['clinical.tsv']
+        clinical.write_text(clinical.read_text().replace('asian', 'Unknown'))
+        original = clinical.read_bytes()
+        review = self.review()
+        self.assertTrue(review['ready'], review['issues'])
+        self.assertEqual(review['validation']['stage_readiness']['3']['status'], 'needs_review')
+        self.assertTrue(any('Stage 3:' in warning for warning in review['warnings']))
+        with self.assertRaises(jobs.StepError):
+            self.submit(review, acknowledge_warnings=False)
+        self.assertFalse((self.f.fake / 'sbatch_args').exists())
+        self.assertEqual(clinical.read_bytes(), original)
+        clinical.write_text('submitter_id\trace\nTCGA-AA-A001\twhite\n')
+        review = self.review()
+        self.assertTrue(review['ready'], review['issues'])
+        self.assertEqual(review['validation']['stage_readiness']['3']['status'], 'blocked')
+        self.assertTrue(any('Stage 3:' in warning for warning in review['warnings']))
+        clinical.unlink()
+        review = self.review()
+        self.assertFalse(review['ready'])
+        self.assertTrue(any('freeze' in issue for issue in review['issues']))
+        self.assertIn('validation', review)
+        self.assertFalse((self.f.fake / 'sbatch_args').exists())
+
     def test_stale_tokens_acknowledgement_chromosome_and_reference_mismatch_submit_nothing(self):
         review = self.review()
         for changes in ({'review_token': 'stale'}, {'acknowledge_warnings': False},

@@ -14,7 +14,7 @@ sys.path.insert(0, str(REPO))
 
 def install_file_fixture():
     """Exercise production metadata scripts only within the native test's files."""
-    from agent.runtime import hpc, hpc_files
+    from agent.runtime import hpc, hpc_files, workspace_validation
 
     root = Path(os.environ['SIGNET_WORKSPACE_TEST_FILES']).resolve()
     trace = Path(os.environ['SIGNET_WORKSPACE_TEST_FILE_CALLS'])
@@ -38,7 +38,7 @@ def install_file_fixture():
         arguments = shlex.split(command)[2:]
         paths = arguments
         if validating:
-            trusted = (REPO / 'agent/runtime/jobs/validate_dataset.py').read_text()
+            trusted = workspace_validation._SOURCE
             if body.strip() != trusted.strip() or len(arguments) != 1:
                 return {'status': 'failed', 'error': 'The fixture accepts only the production validation script.'}
             inputs = json.loads(arguments[0])

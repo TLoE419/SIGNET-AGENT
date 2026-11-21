@@ -9,14 +9,17 @@ import stat
 import sys
 import time
 
+if 'clinical_covariates' not in globals():
+    from agent.runtime.jobs.clinical_rules import clinical_covariates, MISSING_COVARIATES, SIGNET_RACES
+
 LIMITS = {'max_file_bytes': 128 * 1024 * 1024, 'max_total_bytes': 256 * 1024 * 1024,
           'max_line_bytes': 4 * 1024 * 1024, 'max_rows': 1000000, 'max_seconds': 30}
 KINDS = ('genotype', 'expression', 'clinical')
 SAFE = re.compile(r'/[A-Za-z0-9_./-]+')
 BLOCKED = ('/tmp', '/var/tmp', '/dev/shm', '/run')
 RULE = 'TCGA patient = third dash-separated identifier component; preliminary before QC.'
-SCOPE = 'TCGA input structure and preliminary sample matching only; not analysis readiness or scientific validity.'
-MISSING = {'', 'na', 'n/a', 'nan', 'unknown', 'not reported', '--'}
+SCOPE = 'TCGA input structure, preliminary pre-QC matching and stage-specific input suitability only; not execution readiness or scientific validity.'
+MISSING = MISSING_COVARIATES
 
 
 class StopReview(Exception):
@@ -313,50 +316,82 @@ def validate(inputs):
         check['message'] = check['issues'][0]['message'] if check['issues'] else 'The checked table structure matches the current input layout.'
 
     pairing = {'status': 'unchecked', 'rule': RULE, 'genotype_patients': 0, 'expression_patients': 0,
-               'matched_patients': 0, 'clinical_matched': 0, 'unmatched_genotype': 0, 'unmatched_expression': 0, 'issues': []}
-    if all(check['status'] in ('passed', 'warning') for check in checks):
+               'matched_patients': 0, 'clinical_matched': None, 'unmatched_genotype': 0, 'unmatched_expression': 0, 'issues': []}
+    clinical_issues = []
+    def clinical_issue(code, message, severity='error'):
+        clinical_issues.append({'code': code, 'message': message, 'stage': 3, 'severity': severity})
+    # Preliminary genotype/expression overlap remains useful when the clinical table needs repair.
+    if all(check['status'] in ('passed', 'warning') for check in checks[:2]):
         genotype_ids = state['ped']['patients']
         expression_ids = [patient(value) for value in state.get('expression_ids', [])]
         gen, expr = set(genotype_ids), set(value for value in expression_ids if value)
-        matched, rows = gen & expr, state['clinical']
+        matched = gen & expr
         pairing.update(genotype_patients=len(gen), expression_patients=len(expr), matched_patients=len(matched),
-                       clinical_matched=len(matched & set(rows)), unmatched_genotype=len(gen - expr),
-                       unmatched_expression=len(expr - gen), status='passed')
+                       unmatched_genotype=len(gen - expr), unmatched_expression=len(expr - gen), status='passed')
         checks[1]['metrics']['duplicate_patients'] = sum(value is not None for value in expression_ids) - len(expr)
         def pair_issue(code, message, failed=False):
-            pairing['issues'].append({'code': code, 'message': message})
+            pairing['issues'].append({'code': code, 'message': message, 'stage': 3,
+                                      'severity': 'error' if failed else 'warning'})
             pairing['status'] = 'failed' if failed or pairing['status'] == 'failed' else 'warning'
         if len(genotype_ids) != state['ped']['samples'] or any(value is None for value in expression_ids):
             pair_issue('sample_identifier', 'Some sample identifiers do not contain the TCGA patient component.', True)
         if not matched:
             pair_issue('no_overlap', 'Genotype and expression have no matching TCGA patient components.', True)
-        if len(matched & set(rows)) != len(matched):
-            pair_issue('clinical_coverage', 'Clinical rows are missing for some matched patients.', True)
         if gen - expr or expr - gen:
             pair_issue('unmatched_samples', 'Some patients occur in only one input; later matching will exclude them.')
         if len(genotype_ids) != len(gen) or sum(value is not None for value in expression_ids) != len(expr):
             pair_issue('ambiguous_patient', 'Repeated patient components may create ambiguous pairs; this preview does not reproduce later duplicate filtering.')
-        races, genders, missing_race, missing_gender, unsupported = set(), set(), 0, 0, 0
-        for value in matched & set(rows):
-            race, gender = rows[value]
-            if race == 'american indian or alaska native':
-                continue
-            race = 'white' if race == 'not reported' else race
-            missing_race += race.lower() in MISSING
-            missing_gender += gender.lower() in MISSING
-            if race.lower() not in MISSING:
-                races.add(race)
-                unsupported += race not in {'asian', 'black or african american', 'white'}
-            if gender.lower() not in MISSING:
-                genders.add(gender)
-        pairing.update(missing_race=missing_race, missing_gender=missing_gender, race_groups=len(races), gender_groups=len(genders))
-        if missing_race or missing_gender:
-            pair_issue('missing_covariates', 'Some matched clinical rows have missing race or gender values.', True)
-        if unsupported or races != {'asian', 'black or african american', 'white'} or len(genders) < 2:
-            pair_issue('adjustment_groups', 'The current Stage 3 execution guard requires its three supported race groups and at least two gender groups; this is a workflow constraint, not a universal clinical-file format rule.')
-    status = 'incomplete' if incomplete else 'failed' if any(check['status'] == 'failed' for check in checks) or pairing['status'] == 'failed' else 'warning' if any(check['status'] == 'warning' for check in checks) or pairing['status'] == 'warning' else 'passed'
-    return {'status': status, 'checks': checks, 'pairing': pairing, 'files': files,
-            'limits': LIMITS.copy(), 'read_only': True, 'executed': False, 'scope': SCOPE}
+        if checks[2]['status'] in ('passed', 'warning'):
+            rows = state['clinical']
+            pairing['clinical_matched'] = len(matched & set(rows))
+            if pairing['clinical_matched'] != len(matched):
+                clinical_issue('clinical_coverage', 'Clinical rows are missing for some matched patients.')
+            covariates = clinical_covariates(rows[value] for value in matched & set(rows))
+            pairing.update(missing_race=covariates['source_missing_race'], missing_gender=covariates['missing_gender'],
+                           race_groups=covariates['race_groups'], gender_groups=covariates['gender_groups'])
+            if covariates['needs_choice']:
+                clinical_issue('clinical_choices', 'Unrecognized clinical race values need a researcher choice before Stage 3; Stage 1 can continue.', 'needs_review')
+            if covariates['missing_gender'] or covariates['missing_race']:
+                clinical_issue('missing_covariates', 'Some matched clinical rows have missing race or gender values; resolve them before Stage 3.')
+            if not covariates['needs_choice'] and (set(covariates['races_after']) != SIGNET_RACES or covariates['gender_groups'] < 2):
+                clinical_issue('adjustment_groups', 'The current Stage 3 execution guard requires its three supported race groups and at least two gender groups; this is a workflow constraint, not a universal clinical-file format rule.')
+    for check, stage in zip(checks, (1, 2, 3)):
+        for problem in check['issues']:
+            problem.update(stage=stage, severity='warning' if check['status'] == 'warning' else 'error')
+    status = 'incomplete' if incomplete else 'failed' if any(check['status'] == 'failed' for check in checks) or pairing['status'] == 'failed' else 'warning' if clinical_issues or any(check['status'] == 'warning' for check in checks) or pairing['status'] == 'warning' else 'passed'
+    result = {'status': status, 'checks': checks, 'pairing': pairing, 'files': files,
+              'limits': LIMITS.copy(), 'read_only': True, 'executed': False, 'scope': SCOPE}
+    result['stage_readiness'] = stage_readiness(result, clinical_issues)
+    return result
+
+
+def stage_readiness(report, clinical_issues=None):
+    """Input suitability only; later reviews must use actual completed upstream outputs."""
+    checks = {check['kind']: check for check in report['checks']}
+    incomplete = report['status'] == 'incomplete'
+    frozen = len(report['files']) == 4 and all(meta['complete'] and meta['sha256'] for meta in report['files'])
+    result = {}
+    for stage, kind in ((1, 'genotype'), (2, 'expression'), (3, 'clinical')):
+        check = checks[kind]
+        problems = [dict(problem, stage=stage, severity=problem.get('severity', 'error')) for problem in check['issues']]
+        state = ('incomplete' if check['status'] == 'unchecked' else
+                 'blocked' if check['status'] == 'failed' else 'ready')
+        if stage == 1 and not frozen:
+            problems.append({'code': 'input_freeze', 'message': 'Every selected input must be readable and fully checked before Stage 1 can freeze this dataset.',
+                             'stage': 1, 'severity': 'error'})
+            state = 'incomplete' if incomplete else 'blocked'
+        if stage == 3:
+            problems.extend(report['pairing']['issues'])
+            problems.extend(clinical_issues or [])
+            if state == 'ready':
+                if report['pairing']['status'] == 'unchecked':
+                    state = 'incomplete'
+                elif any(problem['severity'] == 'error' for problem in problems):
+                    state = 'blocked'
+                elif any(problem['severity'] == 'needs_review' for problem in problems):
+                    state = 'needs_review'
+        result[str(stage)] = {'status': state, 'issues': problems}
+    return result
 
 
 if __name__ == '__main__':

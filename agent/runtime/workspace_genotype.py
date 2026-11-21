@@ -19,7 +19,8 @@ ADJUST_SNAPSHOT = 'workspace-adjust.json'
 CIS_SNAPSHOT = 'workspace-cis.json'
 NETWORK_SNAPSHOT = 'workspace-network.json'
 VISUALIZE_SNAPSHOT = 'workspace-visualize.json'
-_CLINICAL_REVIEW = (Path(__file__).with_name('jobs') / 'review_clinical.py').read_text()
+_CLINICAL_REVIEW = ((Path(__file__).with_name('jobs') / 'clinical_rules.py').read_text() + '\n'
+                    + (Path(__file__).with_name('jobs') / 'review_clinical.py').read_text())
 _RETRY_SOURCES = (Path(__file__).with_name('jobs') / 'review_retry_sources.py').read_text()
 DEFAULT_SETTINGS = {'restrict.tcga.geno': 1, 'mind': 0.1, 'geno': 0.1, 'hwe': 0.0001, 'int': 5000000}
 
@@ -505,14 +506,22 @@ def _review_adjust(run_id, clinical=None, choices=None, out=None):
     step = jobs.STEPS['adjust']
     initial = _initial(root)
     frozen = initial.get('frozen_inputs') if initial.get('mode') == 'dataset' else None
-    if frozen and clinical is not None and clinical != frozen['clinical'][0]:
-        raise jobs.StepError('invalid_request', 'This run uses its frozen clinical file; create a new run to use different inputs.')
-    inputs = {'cli.file': frozen['clinical'][0]} if frozen else _adjust_inputs(config, clinical)
+    previous = history['jobs'].get('adjust')
+    replacement_allowed = (all(history['jobs'].get(name, {}).get('state') == 'completed'
+                               for name in ('genotype', 'expression'))
+                           and (not previous or previous.get('state') in ('not_submitted', *jobs.RETRYABLE))
+                           and not jobs._active_step(root) and not (root / '.active').exists())
+    replacement = bool(frozen and clinical is not None and clinical != frozen['clinical'][0])
+    if replacement and not replacement_allowed:
+        raise jobs.StepError('conflict', 'Clinical replacement requires completed Stages 1 and 2 and an unsubmitted or retryable Stage 3 with no active work.')
+    # Keep the initial dataset immutable; an explicit Stage 3 review may select a separate clinical source.
+    inputs = {'cli.file': frozen['clinical'][0]} if frozen and clinical is None else _adjust_inputs(config, clinical)
     directory = jobs._remote_dir(config, root, run_id)
     checked = jobs._inputs(step, inputs, (config['root'] + '/refdata', config['source'] + '/example', directory))
     result = {'run_id': run_id, 'inputs': inputs, 'options': {'npc': 3},
               'resources': step.resources.copy(), 'limits': step.limits.copy(),
-              'ready': False, 'issues': [], 'clinical': None, 'choices': choices, 'frozen': bool(frozen)}
+              'ready': False, 'issues': [], 'clinical': None, 'choices': choices, 'frozen': bool(frozen),
+              'clinical_replacement': replacement, 'clinical_replacement_allowed': replacement_allowed}
     issues = result['issues']
     for name in ('genotype', 'expression'):
         record = history['jobs'].get(name)

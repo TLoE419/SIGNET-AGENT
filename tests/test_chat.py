@@ -51,7 +51,11 @@ class ChatTest(unittest.TestCase):
             first = generate.call_args.kwargs['config'].system_instruction
             main.run_conversation(client, 'second', history, workspace_context=None)
             second = generate.call_args.kwargs['config'].system_instruction
-        self.assertIn('archive--same', first)
+        self.assertNotIn('archive--same', first)
+        from agent.core.model_privacy import model_workspace_context, resolve_model_references
+        reference = model_workspace_context(selection)['history_id']
+        self.assertIn(reference, first)
+        self.assertEqual(resolve_model_references({'history_id': reference})['history_id'], 'archive--same')
         self.assertNotIn('archive--same', second)
         self.assertTrue(second.endswith('null'))
         self.assertNotIn('archive--same', str(history))

@@ -78,7 +78,11 @@ block submission with a reason; selecting a dataset does not install or run it.
 
 Stages 2–6 use that run's prerequisites and snapshots. Expression, annotation,
 and clinical inputs are frozen at Stage 1, so later changes in Data or reference
-settings apply to new runs. Custom-run clinical paths are read-only in Stage 3.
+settings apply to new runs. Stage 3 starts with that frozen clinical source.
+Its manual review can explicitly select a corrected clinical file, recheck it,
+and use a separate reviewed copy while preserving the original frozen inputs
+and completed Stages 1/2. Changing the clinical source invalidates the previous
+review; the user must check and confirm it again before submission.
 Run history retains the dataset name, original source paths, frozen paths,
 settings, and reference-preparation summary. The unchanged built-in chromosome 1
 example keeps its existing execution path.

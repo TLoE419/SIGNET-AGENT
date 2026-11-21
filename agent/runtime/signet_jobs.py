@@ -70,7 +70,10 @@ import agent.runtime.remote as vm
 import agent.tools.signet as signet
 
 # Lines that mean a SIGNET/R step failed even though `signet` exited 0.
-FAILURE_PATTERNS = ('Execution halted', 'Error in ', 'cannot open', 'No such file or directory', 'command not found')
+FAILURE_PATTERNS = ('Execution halted', 'Error in ', 'cannot open', 'No such file or directory',
+                    'command not found', 'number of levels differs',
+                    'contrasts can be applied only to factors with 2 or more levels',
+                    'NA/NaN/Inf', 'non-conformable arguments', 'cannot allocate vector')
 ACTIVE = ('submitting', 'submitted', 'pending', 'running', 'cancelling', 'validating', 'unknown')
 TERMINAL = ('completed', 'failed', 'cancelled')
 RETRYABLE = ('failed', 'cancelled')   # may be submitted again in the same run
