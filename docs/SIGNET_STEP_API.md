@@ -142,6 +142,8 @@ Inside the API:
 | 14 | `POST /signet/datasets/{dataset_id}/genotype/review` | no | Review this dataset's Stage 1 inputs and reference resources |
 | 15 | `POST /signet/datasets/{dataset_id}/genotype` | yes | Manually submit a dataset-bound genotype run |
 | 16 | `PATCH /signet/history/{history_id}/dataset` | no | Save organizational ownership for an unclassified recorded run |
+| 17 | `GET /signet/runs/{run_id}/genotype/retry` | yes | Review the original inputs and target of a failed or cancelled Stage 1 attempt |
+| 18 | `POST /signet/runs/{run_id}/genotype/retry` | yes | Manually submit the next Stage 1 attempt in that run |
 
 ### Workspace dataset metadata
 
@@ -251,6 +253,44 @@ they are not downloads or links to another attempt's current outputs. A saved
 completed state is technical evidence, not biological validation. This history
 extension does not submit, retry, cancel, or change any execution record.
 
+### Source-scoped execution logs
+
+`GET /signet/history/{history_id}/steps/{step}/log` reads one exact saved
+attempt's log. Required query fields are `identity` (the row's
+`record_identity`), `attempt` (a number, or `unknown` when actually unnumbered),
+and `job_id` (the saved digit string, or `none` when no job ID was recorded).
+`stream` selects `out`, `err`, or the explicit `submission` stream;
+`lines` defaults to 50 and is limited to 1–200. Submission errors read
+`sbatch.err`; they never silently replace a missing stderr log.
+
+The handler resolves the canonical source and attempt under the run lock,
+checks the saved job/attempt identity, and rejects changed targets with 409.
+Current steps use owned `steps/<step>.out`, `.err`, or `.sbatch.err` files;
+earlier attempts use their own `steps/<step>.attempt<N>.*` files. Local saved
+files are preferred. Remote reads require the matching configured, owned run
+folder and existing connection. Archived sources never fall back to live or
+remote logs. Symbolic links, paths outside the owned source and arbitrary
+metadata-supplied file pointers are not accepted.
+
+`GET /signet/history/{history_id}/operations/{operation}/log` supports actual
+old Agent operation records with `identity`, the operation's `record_revision`,
+`stream=out|err`, and optional `lines`. It reads only the fixed owned local
+`logs/<operation>.stdout` or `.stderr` file. Plans do not establish an executed
+operation, and replaced operation metadata rejects the stale request.
+
+Successful replies echo the source/run/step-or-operation/attempt/job identity,
+stream and record identity, plus `origin: local|remote`, `status: ready|empty`,
+`lines`, `truncated`, and `max_bytes: 65536`. A request reads at most a bounded
+tail; a long single line cannot produce an unbounded response. Missing,
+unreadable, disconnected and failed remote reads are explicit errors, rather
+than successful empty logs. Saved failure hints are metadata, never substituted
+for stdout/stderr. These GETs do not alter job state, metadata or original
+files, nor submit, cancel or retry work. The existing current-run log route
+remains available to legacy callers with its `lines`/`truncated` response.
+It now reports missing/unreadable files as errors, instead of a successful empty
+log. Mutable current local logs require a matching saved job marker; an
+unattributable stale copy is skipped in favor of the exact remote source.
+
 The workspace browser reuses `POST /hpc/files/shortcuts` and
 `POST /hpc/files/list`. Before saving a selection, `POST /hpc/files/inspect`
 accepts only `{"paths": ["/absolute/input/path"]}` (1–128 paths; 32 KiB body
@@ -327,6 +367,42 @@ compatibility. Dataset runs read expression, annotation, and clinical inputs
 from their frozen snapshot, not the current catalog or global selections.
 A differing clinical override is rejected for a frozen run. The original
 unchanged chromosome 1 example endpoints retain their existing behavior.
+
+### Workspace Stage 1 same-run retry
+
+`GET /signet/runs/{run_id}/genotype/retry?expected_job_id=<id|none>&expected_attempt=<N>`
+reviews a failed or cancelled workspace genotype attempt. The expected job ID
+and positive integer attempt must match the current saved record (`none` means
+the prior submission has no job ID). Active, unknown, completed and
+downstream-started runs are rejected. The service confirms scheduler and owned
+child-job termination before allowing a retry. This review does not submit work.
+
+The response includes the original `run_id`, `dataset_id`, `dataset_name`,
+`mode`, reviewed step `inputs`, original `source_inputs`, optional new
+`frozen_inputs`, saved `settings` and `resources`, `limits`, `ready`, `issues`,
+`warnings`, `review_token`, `expected_job_id`, `expected_attempt` and
+`next_attempt`. Source paths, chromosome and run environment remain fixed;
+`mind`, `geno`, `hwe`, interval and compute resources can be reviewed and changed.
+
+`POST /signet/runs/{run_id}/genotype/retry` requires `inputs`, `settings`,
+`resources`, `review_token`, `expected_job_id` (digits or `"none"`),
+`expected_attempt` (integer) and `acknowledge_warnings: true`. It rechecks the
+current attempt, original files, environment and review token before any new
+submission. It returns the ordinary step record with HTTP 202. Duplicate or
+stale requests are rejected; the original `workspace-genotype.json` remains
+unchanged and later reviews are saved separately.
+
+Custom retries freeze the exact original source files under
+`inputs/attempt<N>/{frozen,prepared}` and repeat reference preparation. They do
+not reuse partial preparation or current dataset/reference selections. Original
+source identities must still match. The first attempt retains its original
+`inputs/{frozen,prepared}` layout. Downstream stages use the successful genotype
+attempt's frozen paths. Legacy example runs without original file fingerprints
+state that limitation explicitly. Previous attempt JSON, local/remote saved
+logs, job/exit markers, submission files and results are archived without
+overwriting an existing archive. A pre-start refusal restores local artifacts.
+The shared step submission route also enforces the workspace run's original
+chromosome, input namespace, environment and absence of downstream records.
 
 ### Workspace chromosome 1 review and submission
 
@@ -764,6 +840,29 @@ Record fields (route 7 and route 4):
 | `progress` | `network` only: finished and total ParaFly commands per stage |
 | `attempt`, `previous_job_id` | Present on a retry |
 | `connection` | `"interrupted"` when HPC3 could not be reached (not saved) |
+
+### Guarded workspace cancellation
+
+The workspace uses the existing
+`POST /signet/runs/{run_id}/steps/{step}/cancel` route with
+`{"expected_job_id": "12345", "expected_attempt": 1}`. Both fields are required
+together when either is present; an empty body retains the legacy behavior.
+The expected job ID is a digit string and the attempt is a positive integer,
+with the initial missing stored attempt number interpreted as 1. The service
+compares both against the current saved record under the existing run lock,
+before any remote request. A changed job or attempt returns 409 without
+cancelling another attempt.
+
+The desktop confirmation identifies the selected run, stage, job and attempt.
+Only eligible live workspace jobs can expose this control. Changing the run,
+dataset or remote environment invalidates an unsubmitted confirmation. A POST
+does not itself establish cancellation: `cancelling` remains active, with
+settings and retry blocked, until the scheduler confirms that the parent and
+its owned children have stopped. Job-name and child working-directory checks
+continue to restrict cancellation to the recorded analysis. Scheduler lookup
+failures, partial failures and connection loss must remain unconfirmed, with
+their reason visible. If a job completed first, its actual terminal state is
+retained. Cancellation does not remove inputs, saved outputs or attempt records.
 
 ## 8. Files on HPC3 and on this computer
 

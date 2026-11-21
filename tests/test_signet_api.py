@@ -131,6 +131,27 @@ class SignetApiTest(unittest.TestCase):
         self.assertEqual((status, value['state']), (200, 'cancelled'))
         self.assertEqual(self.call('POST', '/signet/runs/step_test/steps/expression/cancel', {'force': True})[0], 400)
 
+    def test_cancel_guard_binds_the_request_to_the_displayed_job_and_attempt(self):
+        self.submit()
+        path = '/signet/runs/step_test/steps/expression/cancel'
+        calls = len(self.calls)
+        original = (self.root / 'steps/expression.json').read_bytes()
+        for body in ({'expected_job_id': '12345'}, {'expected_attempt': 1},
+                     {'expected_job_id': None, 'expected_attempt': None},
+                     {'expected_job_id': '12345', 'expected_attempt': True},
+                     {'expected_job_id': '12345', 'expected_attempt': 1.5}):
+            with self.subTest(body=body):
+                self.assertEqual(self.call('POST', path, body)[0], 400)
+        for body in ({'expected_job_id': '99999', 'expected_attempt': 1},
+                     {'expected_job_id': '12345', 'expected_attempt': 2}):
+            self.assertEqual(self.call('POST', path, body)[0], 409)
+        self.assertEqual(len(self.calls), calls)
+        self.assertEqual((self.root / 'steps/expression.json').read_bytes(), original)
+        self.assertFalse((self.fake / 'scancel').exists())
+        self.slurm(squeue='RUNNING', sacct='RUNNING', name='signet-expression-step_test')
+        status, value = self.call('POST', path, {'expected_job_id': '12345', 'expected_attempt': 1})
+        self.assertEqual((status, value['state']), (200, 'cancelling'))
+
     def test_scheduler_outage_keeps_unknown_submission_recoverable_over_http(self):
         self.lose_connection_on = 'sbatch --parsable'
         status, value = self.submit()
@@ -269,7 +290,7 @@ class SignetApiTest(unittest.TestCase):
     def test_step_errors_map_to_status_codes(self):
         self.assertEqual(self.call('POST', '/signet/runs/step_test/steps/expression', {'inputs': {'gexp.file': '/etc/passwd'}})[0], 400)
         self.assertEqual(self.call('POST', '/signet/runs/step_test/steps/expression', {})[0], 400)
-        self.assertEqual(self.call('POST', '/signet/runs/step_test/steps/visualize', {'inputs': self.inputs})[0], 404)
+        self.assertEqual(self.call('POST', '/signet/runs/step_test/steps/not_a_step', {'inputs': self.inputs})[0], 404)
         self.assertEqual(self.call('GET', '/signet/runs/step_test/steps/expression')[0], 404)
         for query in ('refresh=2', 'stream=out&stream=err', 'other=1'):
             self.assertEqual(self.call('GET', f'/signet/runs/step_test/steps/expression?{query}')[0], 400, query)

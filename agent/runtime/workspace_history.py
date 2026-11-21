@@ -301,6 +301,7 @@ def _operation(root, filename, record, digests, issues):
         raise ValueError('The recorded operation status must be text.')
     prepared = filename.endswith('.plan.json')
     result = {'operation': operation, 'record_file': filename,
+              'record_revision': digests[filename],
               'status': 'prepared' if prepared else record.get('status', 'unknown'),
               'executed': False if prepared else 'unknown' if record.get('status') == 'starting' else record.get('executed', 'unknown'),
               'inputs': copy.deepcopy(record.get('inputs', {})),

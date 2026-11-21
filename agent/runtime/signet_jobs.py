@@ -828,6 +828,15 @@ def submit(run_id, name, inputs, resources=None, options=None):
         if previous.get('state') == 'completed':
             raise StepError('conflict', f'Step {name} already completed in this run; use a new run to compute it again.')
         raise StepError('conflict', f'Step {name} of this run is {previous.get("state")}; check its status first.')
+    workspace_retry = None
+    workspace_snapshot = root / 'workspace-genotype.json'
+    if previous and name == 'genotype' and (workspace_snapshot.exists() or workspace_snapshot.is_symlink()):
+        from agent.runtime.workspace_genotype import _retry_context
+        _, workspace_retry, _, _, _ = _retry_context(run_id, previous.get('job_id') or 'none', previous.get('attempt', 1))
+        if signet._settings(root).get('restrict.tcga.geno') != str(workspace_retry['settings']['restrict.tcga.geno']):
+            raise StepError('conflict', 'A workspace retry must retain the original chromosome.')
+        if workspace_retry.get('mode') != 'dataset' and inputs != workspace_retry['inputs']:
+            raise StepError('conflict', 'A workspace retry must retain the original genotype input files.')
     attempt = previous.get('attempt', 1) + 1 if previous else 1
     active = _active_step(root)
     if active:
@@ -835,17 +844,26 @@ def submit(run_id, name, inputs, resources=None, options=None):
     _prerequisites(root, step)
     _check_current(step, signet._settings(root))
     config = _environment()
+    if workspace_retry is not None:
+        from agent.runtime.workspace_genotype import _retry_environment
+        _retry_environment(root, workspace_retry, previous, config)
     directory = _remote_dir(config, root, run_id)
     dataset_plan = None
     if name == 'genotype':
         from agent.runtime.workspace_inputs import staging_plan
-        dataset_plan = staging_plan(root, directory)
+        dataset_plan = staging_plan(root, directory, attempt=attempt)
+        if dataset_plan and inputs != dataset_plan['inputs']:
+            raise StepError('invalid_request', 'Review the input namespace for this genotype attempt before submitting.')
     checked = _inputs(step, inputs, (config['root'] + '/refdata', config['source'] + '/example', directory))
     if previous:
         _ensure_stopped(previous)  # before uploading config.ini or touching any old result
         archived = _attempt_path(root, name, attempt - 1)
         local_results = root / 'steps' / f'{name}.attempt{attempt - 1}.results'
-        if archived.exists() or local_results.exists():
+        local_pairs = [(signet._no_links(root / 'steps' / f'{name}.{suffix}'),
+                        signet._no_links(root / 'steps' / f'{name}.attempt{attempt - 1}.{suffix}'))
+                       for suffix in _JOB_FILES]
+        local_pairs.append((signet._no_links(root / step.download), signet._no_links(local_results)))
+        if archived.exists() or any(destination.exists() for _, destination in local_pairs):
             raise StepError('conflict', 'The previous attempt archive already exists; it will not be overwritten.')
     try:
         fd = os.open(root / '.active', os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
@@ -884,13 +902,18 @@ def submit(run_id, name, inputs, resources=None, options=None):
             # A refused submission has no job of its own; retain the last real ID across it.
             record['previous_job_id'] = previous.get('job_id') or previous.get('previous_job_id')
         archived = _attempt_path(root, name, attempt - 1) if previous else None
+        moved_local = []
+        saved_previous = False
         try:
             _upload(root, directory, token)
             if previous:   # keep the failed attempt's record before the new one replaces it
                 with archived.open('x') as stream:
                     stream.write(json.dumps(previous, indent=2) + '\n')
-                if (root / step.download).exists():
-                    (root / step.download).rename(local_results)
+                saved_previous = True
+                for source, destination in local_pairs:
+                    if source.exists():
+                        source.rename(destination)
+                        moved_local.append((source, destination))
             # Record intent before sbatch: a lost connection from here on may have started a job.
             _change(record, 'submitting')
             _save(root, record)
@@ -907,7 +930,11 @@ def submit(run_id, name, inputs, resources=None, options=None):
                 raise OSError('OpenSSH did not confirm the submission.')
         except OSError as error:
             if record.get('state') != 'submitting':
-                raise StepError('remote_failed', 'HPC3 connection failed before anything was submitted.') from error
+                for source, destination in reversed(moved_local):
+                    destination.rename(source)
+                if saved_previous:
+                    archived.unlink()
+                raise StepError('remote_failed', f'Could not prepare the HPC3 submission; no job was submitted: {error}') from error
             _change(record, 'unknown', reason='Connection lost while submitting; check status before doing anything else.')
             return _save(root, record)
         if code == 0 and re.fullmatch(r'[0-9]+', values.get('job', '')):
@@ -925,8 +952,8 @@ def submit(run_id, name, inputs, resources=None, options=None):
         elif previous:
             _save(root, previous)
             archived.unlink(missing_ok=True)
-            if local_results.exists():
-                local_results.rename(root / step.download)
+            for source, destination in reversed(moved_local):
+                destination.rename(source)
         else:
             _record_path(root, name).unlink(missing_ok=True)
         if 'missing_input' in values:
@@ -952,8 +979,8 @@ def _children_script(step):
     q = shlex.quote
     return ''.join(
         f'for c in $(grep -Eo "[0-9]+$" "$D/work/"{q(log)} 2>/dev/null | sort -u); do\n'
-        '  w="$(squeue -h -j "$c" -o %Z 2>/dev/null)"\n'
-        '  case "$w" in "$D"/*) scancel "$c" && say child_cancelled "$c";; esac\n'
+        '  w="$(squeue -h -j "$c" -o %Z 2>/dev/null)" || { say child_cancel_check_failed "$c"; continue; }\n'
+        '  case "$w" in "$D"/*) scancel "$c" && say child_cancelled "$c" || say child_cancel_failed "$c";; esac\n'
         'done\n' for log in step.children)
 
 
@@ -971,7 +998,8 @@ def _status_script(record, step):
         f'2>/dev/null | wc -l | tr -d " ") $(wc -l < "$D/work/"{q(stage)}/params.txt | tr -d " ")"; fi\n'
         for i, stage in enumerate(step.stages))
     # When the control job is gone, SIGNET's own jobs still queued for this run are orphans.
-    orphans = (f'if [ -n "$j" ] && [ -z "$(squeue -h -j "$j" -o %T 2>/dev/null)" ]; then\n{_children_script(step)}fi\n'
+    orphans = (f'if [ -n "$j" ] && parent_state="$(squeue -h -j "$j" -o %T 2>/dev/null)" '
+               f'&& [ -z "$parent_state" ]; then\n{_children_script(step)}fi\n'
                if step.children else '')
     queue_check = _queue_check(record) if record.get('cancel_requested_at') or step.children else ''
     export_check = ('grep -Fxq SIGNET_STAGE6_EXPORTS_COMPLETED "$D/steps/visualize.out" 2>/dev/null '
@@ -1103,12 +1131,21 @@ def _finish(root, record, step, done, missing, hints):
 
 
 @_one_at_a_time
-def cancel(run_id, name):
+def cancel(run_id, name, *, expected_job_id=None, expected_attempt=None):
     """Cancel the step's own Slurm job (checked by job name), and for signet -n the jobs SIGNET
     submitted inside this run's folder. Finished steps cannot be cancelled."""
     step = _step(name)
     root = _root(run_id)
     record = _load(root, name)
+    if (not isinstance(record, dict) or record.get('run_id') != run_id or record.get('step') != name
+            or type(record.get('attempt', 1)) is not int or record.get('attempt', 1) < 1):
+        raise StepError('conflict', 'The saved step does not identify this run, stage, and attempt.')
+    if expected_job_id is not None or expected_attempt is not None:
+        if (not isinstance(expected_job_id, str) or not re.fullmatch(r'[0-9]+', expected_job_id)
+                or type(expected_attempt) is not int or expected_attempt < 1):
+            raise StepError('invalid_request', 'Provide the displayed job ID and positive integer attempt number together.')
+        if record.get('job_id') != expected_job_id or record.get('attempt', 1) != expected_attempt:
+            raise StepError('conflict', 'The job or attempt changed. Refresh its status before cancelling.')
     if record['state'] in TERMINAL:
         raise StepError('conflict', f'Step {name} already ended as {record["state"]}.')
     if not record.get('job_id'):
@@ -1116,38 +1153,37 @@ def cancel(run_id, name):
     _environment()
     expected = f'signet-{name}-{run_id}'
     script = _say() + (f'D={shlex.quote(record["remote_dir"])}\nj={shlex.quote(record["job_id"])}\n'
-                       f'if [ "$(squeue -h -j "$j" -o %j 2>/dev/null)" = {shlex.quote(expected)} ]; then '
-                       'scancel "$j" && say cancel requested; else say cancel not_queued; fi\n'
+                       'parent_name="$(squeue -h -j "$j" -o %j 2>/dev/null)" || { say cancel_check_failed yes; exit 9; }\n'
+                       f'if [ "$parent_name" = {shlex.quote(expected)} ]; then '
+                       'scancel "$j" && say cancel requested || { say cancel_failed yes; exit 10; }; '
+                       'else say cancel not_queued; fi\n'
                        + _children_script(step))
+    def unconfirmed(reason):
+        record.pop('finished_at', None)
+        _change(record, 'cancelling', cancel_requested_at=record.get('cancel_requested_at') or _now(),
+                checked_at=0, reason=reason)
+        _save(root, record)
     try:
         code, values, _ = _shell(script, timeout=30)
     except OSError as error:
-        raise StepError('remote_failed', 'Could not reach HPC3; the job was not cancelled.') from error
-    if code or 'cancel' not in values:
-        raise StepError('remote_failed', 'scancel did not complete on HPC3.')
+        reason = 'Connection interrupted while requesting cancellation; its effect is unknown. Check status before retrying.'
+        unconfirmed(reason)
+        raise StepError('remote_failed', reason) from error
+    if values.get('cancel_check_failed') == 'yes':
+        raise StepError('remote_failed', 'The scheduler could not confirm the job identity; no cancellation command was sent.')
+    failed_child = values.get('child_cancel_failed') or values.get('child_cancel_check_failed')
+    if code or 'cancel' not in values or failed_child:
+        reason = ('Cancellation of an owned child job could not be confirmed; check status before retrying.' if failed_child
+                  else 'Cancellation did not complete; its effect is unconfirmed. Check status before retrying.')
+        unconfirmed(reason)
+        raise StepError('remote_failed', reason)
     if values['cancel'] == 'requested' or step.children:
         # The control job can already be gone while its cancelled children are still draining.
-        record.pop('finished_at', None)
-        _change(record, 'cancelling', cancel_requested_at=_now(), checked_at=0,
-                reason='Cancellation requested; waiting for HPC3 to confirm termination.')
-        _save(root, record)
+        unconfirmed('Cancellation requested; waiting for HPC3 to confirm termination.')
     return status(run_id, name, refresh=True)   # it already left the queue; report how it ended
 
 
 def read_log(run_id, name, stream='out', lines=50):
     """Last lines (at most 200) of the job's stdout ("out") or stderr ("err")."""
-    _step(name)
-    root = _root(run_id)
-    record = _load(root, name)
-    if stream not in ('out', 'err'):
-        raise StepError('invalid_request', 'stream must be out or err.')
-    if isinstance(lines, bool) or not isinstance(lines, int) or not 1 <= lines <= MAX_LOG_LINES:
-        raise StepError('invalid_request', f'lines must be between 1 and {MAX_LOG_LINES}.')
-    _environment()
-    path = shlex.quote(f'{record["remote_dir"]}/steps/{name}.{stream}')
-    try:
-        result = ssh_transport.remote(f'tail -n {lines + 1} {path} 2>/dev/null', capture_output=True, timeout=30)
-    except OSError as error:
-        raise StepError('remote_failed', 'Could not reach HPC3.') from error
-    text = result.stdout.decode('utf-8', 'replace').splitlines()
-    return {'lines': text[-lines:], 'truncated': len(text) > lines}
+    from agent.runtime.workspace_logs import read_legacy
+    return read_legacy(run_id, name, stream, lines)
