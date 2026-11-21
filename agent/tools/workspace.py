@@ -1,6 +1,7 @@
 """Model tools share the manual workspace reviews; submission is never exposed."""
 from agent.runtime import signet_jobs as jobs, workspace_genotype as workspace
 from agent.tools import signet
+from agent.runtime import step_report
 
 STAGES = ('genotype', 'expression', 'adjust', 'cis', 'network', 'visualize')
 
@@ -24,6 +25,11 @@ def get_workspace_stage(run_id: str, stage: int, source: str = 'live') -> dict:
                                           'submitted_at', 'completed_at') if key in record}
     if record.get('step') == name or record.get('job_id'):
         public.setdefault('attempt', 1)
+    if record.get('summary'):
+        public['summary'] = step_report.safe_summary(name, record, record['summary'])
+    public['progress'] = step_report.public_progress(record)
+    if record.get('state') in ('failed', 'cancelled', 'unknown'):
+        public['failure'] = step_report.failure_summary(record)
     current = signet._settings(root)
     step = jobs.STEPS[name]
     return {'status': 'ok', 'executed': False, 'source': source, 'run_id': run_id,
@@ -34,6 +40,28 @@ def get_workspace_stage(run_id: str, stage: int, source: str = 'live') -> dict:
             'options': {key: current.get(key, default) for key, (_, default) in step.prompts.items()},
             'requires': list(step.requires), 'resources': step.resources.copy(),
             'limits': {key: list(value) for key, value in step.limits.items()}}
+
+
+def get_workspace_report(run_id: str, stage: int, source: str = 'live') -> dict:
+    """Refresh one explicit live stage and return counts and safe diagnostics. No raw rows, IDs or log text."""
+    before = get_workspace_stage(run_id, stage, source)
+    result = step_report.report(run_id, _stage(stage))
+    after = get_workspace_stage(run_id, stage, source)
+    identity = ('source', 'run_id', 'history_id', 'dataset_id', 'attempt')
+    if (any(before.get(key) != after.get(key) for key in identity)
+            or before['job'].get('job_id') != after['job'].get('job_id')
+            or ('state' in after and result['state'] != after['state'])):
+        raise ValueError('The stage attempt changed during reporting. Refresh and review again.')
+    return {**after, **result}
+
+
+def _public_review(review):
+    # Full manual reviews contain input paths and arbitrary source labels; these stay in the manual form.
+    allowed = ('ready', 'settings', 'options', 'resources', 'limits')
+    result = {key: review[key] for key in allowed if key in review}
+    if review.get('issues'):
+        result['issue_count'] = len(review['issues'])
+    return result
 
 
 def _proposal(result):
@@ -60,7 +88,7 @@ def propose_workspace_stage(run_id: str, stage: int, source: str = 'live') -> di
     after = get_workspace_stage(run_id, stage, source)
     if before['job'] != after['job']:
         raise ValueError('The stage attempt changed during review. Refresh and review again.')
-    return _proposal({**after, 'status': 'needs_review', 'executed': False, 'review': review,
+    return _proposal({**after, 'status': 'needs_review', 'executed': False, 'review': _public_review(review),
             'reason': 'Review current inputs, settings and prerequisites in the manual form and explicitly confirm there. This proposal is not execution authorization.',
             'workspace_action': {'version': 1, 'action': 'view_stage',
                                  'history_id': after['history_id'], 'stage': stage}})
@@ -72,11 +100,11 @@ def propose_workspace_dataset(dataset_id: str) -> dict:
     saved = _saved(signet._name(dataset_id))
     review = workspace.review_dataset(dataset_id, saved['inputs'])
     return {'status': 'needs_review', 'executed': False, 'dataset_id': dataset_id,
-            'stage': 1, 'review': review,
+            'stage': 1, 'review': _public_review(review),
             'reason': 'Open this dataset Stage 1 manual review, choose a new run and explicitly confirm the current inputs, settings and warnings.'}
 
 
-WORKSPACE_TOOLS = [get_workspace_stage, propose_workspace_stage, propose_workspace_dataset]
+WORKSPACE_TOOLS = [get_workspace_stage, get_workspace_report, propose_workspace_stage, propose_workspace_dataset]
 
 # Preserve legacy Python entry points while removing scientific execution from the model allow-list.
 LEGACY_EXECUTION = {'configure_signet', 'genotype_tcga', 'genotype_gtex', 'expression_tcga',

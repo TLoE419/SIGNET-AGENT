@@ -3,6 +3,7 @@ import json
 
 from agent.paths import PROJECT_ROOT
 from agent.runtime import hpc
+from agent.tools.ui import UI_CHANNEL
 
 INVENTORY = json.loads((PROJECT_ROOT / 'signet_inventory.json').read_text())
 REVISION = INVENTORY['revision']
@@ -13,7 +14,7 @@ def check_hpc_environment() -> dict:
 
     Use it when the user asks whether they are ready, what is missing, or how a
     setup step is progressing. Requires the app's SSH connection to HPC3. Reports
-    existence, file sizes, hashes of the pinned source files and the app's own setup
+    existence, file sizes, required clinical header names, prepared-input metadata, hashes of the pinned source files and the app's own setup
     states. Reads only audited source files for hashing, returns no file contents
     or research data, and never changes anything on HPC3.
     Items whose status is not "ok" still need preparation; "in_progress" means a
@@ -27,9 +28,23 @@ def create_hpc_workspace() -> dict:
     return hpc.start_step('workspace')
 
 
+def _show_progress(result):
+    """When the assistant starts a setup step, open the Workflow panel so its row shows the progress."""
+    channel = UI_CHANNEL.get()
+    if channel is not None and result.get('executed'):
+        channel({'panel': 'workflow', 'visible': True, 'refresh': True})
+    return result
+
+
+
 def install_signet_source() -> dict:
-    """Direct the user to the Install button on the SIGNET row of the Workflow panel. Never clone a second source tree."""
-    return hpc.start_step('signet', INVENTORY['repository'], REVISION)
+    """Install the pinned SIGNET source with its example data on HPC3. Call only when the user's own message asks for it or agrees to it.
+
+    Runs in the background and returns immediately. Keeps files only if every
+    hash matches; never replaces an existing installation. Use
+    check_hpc_environment later.
+    """
+    return _show_progress(hpc.start_step('signet', INVENTORY['repository'], REVISION))
 
 
 def download_signet_container() -> dict:
@@ -43,7 +58,7 @@ def download_signet_container() -> dict:
 
 
 def download_reference_file(file: str) -> dict:
-    """Submit a Slurm job that downloads one public Phase 2 reference file into the HPC3 workspace: "ref" (1000 Genomes GRCh38 chr1 genotypes, about 950 MB), "gmap" (GRCh38 genetic map), "gtf" (GENCODE v22 gene annotation, collapsed for signet -t; needs the container) or "clinical" (TCGA-LUAD race by case). Call only for the files the user's own message asks for or agrees to.
+    """Submit a Slurm job that downloads one public Phase 2 reference file into the HPC3 workspace: "ref" (1000 Genomes GRCh38 chr1 genotypes, about 950 MB), "gmap" (GRCh38 genetic map), "gtf" (GENCODE v22 gene annotation, collapsed for signet -t; needs the container) or "clinical" (TCGA-LUAD race and sex at birth by case). Call only for the files the user's own message asks for or agrees to.
 
     Downloads only the raw file from a fixed source and records its URL, size
     and checksum in refdata/SOURCES.tsv; matching ref and gmap to a study

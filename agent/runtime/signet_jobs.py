@@ -77,6 +77,7 @@ RETRYABLE = ('failed', 'cancelled')   # may be submitted again in the same run
 # Files a job leaves in <run>/steps on HPC3; renamed to <step>.attempt<N>.<suffix> before a retry.
 _JOB_FILES = ('job', 'done', 'out', 'err', 'sbatch', 'sbatch.err')
 CACHE_SECONDS = 15
+VISUALIZE_OUTPUT_GRACE_SECONDS = 120
 MAX_LOG_LINES = 200
 _MARKER = '@@'
 _PATH = re.compile(r'/[A-Za-z0-9_./-]+')
@@ -172,7 +173,7 @@ STEPS = {
         # temporary files in tmp/tmpg/impute, a folder no setting can move.
         needs=('res/rest/signet_gexp', 'res/rest/signet_gexpID',
                'res/resg/signet_Geno', 'res/resg/signet_Genotype.sampleID',
-               'tmp/tmpg/impute/impute_Genotype.sizes'),
+               'tmp/tmpg/impute/impute_Genotype.sizes', 'tmp/tmpg/clean_Genotype.fam'),
         # script/adj/adj.sh asks "Enter the number of PCs for population structures";
         # adj_adjust.R uses that many of the 10 genotype PCs as covariates (0 = none).
         prompts={'npc': ('pcs', 3)},
@@ -262,6 +263,23 @@ STEPS = {
         failures=("doesn't exist",),
         description='TCGA network visualization (signet -v): export the selected subnetworks, '
                     'directed edge list and original interactive graphs without starting a Shiny server.'),
+}
+
+
+DOWNLOADED_STEPS = ('network', 'visualize')
+# Raised when the counting changes, so summaries saved by an older version are counted again.
+SUMMARY_VERSION = 3
+# Inputs whose size the summary reports, so "before" and "after" both come from HPC3.
+_COUNTED_INPUTS = {'genotype': ('ped.file', 'map.file'), 'expression': ('gexp.file',)}
+
+# Each manifest is paired with the completion file(s) written by ParaFly.
+COMMAND_PROGRESS = {
+    'genotype': (('imputation', 'tmp/tmpg/impute_params.txt', 'impute_params.txt.completed'),),
+    'adjust': (('variant_filter', 'tmp/tmpg/qsub.sh', 'qsub.sh.completed'),),
+    'cis': (('low_frequency', 'tmp/tmpc/low.qsub.sh', 'low.qsub.sh.completed'),
+            ('rare_variants', 'tmp/tmpc/rare.qsub.sh', 'rare.qsub.sh.completed')),
+    'network': (('stage1', 'tmp/tmpn/stage1/params.txt', 'params[0-9]*.txt.completed'),
+                ('stage2', 'tmp/tmpn/stage2/params.txt', 'params[0-9]*.txt.completed')),
 }
 
 
@@ -746,6 +764,11 @@ export SINGULARITY_BIND={q(bind)} APPTAINER_BIND={q(bind)}
         env = f"--env {q(','.join(f'{k}={v}' for k, v in step.env.items()))} " if step.env else ''
         run = (f"{q(config['executor'])} exec --cleanenv --no-home {env}--bind {q(bind)} {q(config['image'])} "
                f"bash ./signet {step.flag} {stdin}")
+    if name == 'expression':
+        # Write each marker only after the corresponding audited R script ends.
+        run = """printf '\nfile.create(file.path(Sys.getenv("SIGNET_TMP_ROOT"), "tmpt", ".signet-normalized"))\n' >> script/gexp_prep/gexp_prep.R
+printf '\nfile.create(file.path(Sys.getenv("SIGNET_TMP_ROOT"), "tmpt", ".signet-annotated"))\n' >> script/gexp_prep/gpos.R
+""" + run
     if dataset_plan:
         from agent.runtime.workspace_inputs import stage_command
         run = ('(\n' + stage_command(dataset_plan)
@@ -765,6 +788,9 @@ cp -- tmp/tmpa/Geno.pca.evec res/resa/workspace-pca.evec &&
 cp -- tmp/tmpa/Geno.eval res/resa/workspace-pca.eval
 )'''
     if name == 'visualize':
+        # Record each successfully rendered circular graph for measured work units.
+        run = r"""sed -i '/^[[:space:]]*dev.off()$/a\   file.create(file.path(Sys.getenv("SIGNET_TMP_ROOT"), "tmpv", paste0(".signet-network-", i)))' script/netvis/circular.R
+""" + run
         # cloud=T leaves the official exports intact and skips only the blocking Shiny app.
         run = f'''(
 if ! grep -q SIGNET_STAGE6_EXPORTS_COMPLETED script/netvis/netshiny.R; then
@@ -830,6 +856,17 @@ def _input_checks(files):
         for key, path, root in files)
 
 
+def _expression_input_check(name, files):
+    if name != 'expression':
+        return ''
+    source = (Path(__file__).with_name('jobs') / 'step_inputs.py').read_text()
+    annotation = next(path for key, path, _ in files if key == 'pmap.file')
+    return ("python3 - " + shlex.quote(annotation) + " <<'SIGNET_GTF_CHECK'\n"
+            + source + "\nimport sys\nproblem = gtf_problem(sys.argv[1])\n"
+            + "if problem:\n    print('@@invalid_input\t' + problem)\n    sys.exit(9)\nSIGNET_GTF_CHECK\n"
+            + "[ $? -eq 0 ] || exit 9\n")
+
+
 def _submit_script(config, run_id, name, step, directory, files, resources, options=None, archive=None,
                    needs=None, settings=None, dataset_plan=None, submission_token=None):
     """Login-node script: check every input file and earlier result, write the job script, sbatch it, record the job ID.
@@ -852,7 +889,7 @@ def _submit_script(config, run_id, name, step, directory, files, resources, opti
     # Results of earlier steps must still be in this run's folder (nobody cleaned it up).
     needs = ''.join(f'if [ ! -s "$D/work/"{q(path)} ]; then say missing_prior {q(path)}; exit 4; fi\n'
                     for path in (step.needs if needs is None else needs))
-    checks = _input_checks(files)
+    checks = _input_checks(files) + _expression_input_check(name, files)
     job = _job_script(config, run_id, name, step, directory, binds, options, settings, dataset_plan)
     receipt = f"$D/steps/{name}.submission.{submission_token}" if submission_token else "/dev/null"
     receipt_setup = ''
@@ -1186,6 +1223,8 @@ def submit(run_id, name, inputs, resources=None, options=None):
                 destination.rename(source)
         else:
             _record_path(root, name).unlink(missing_ok=True)
+        if 'invalid_input' in values:
+            raise StepError('invalid_request', values['invalid_input'])
         if 'missing_input' in values:
             key = values['missing_input']
             hint = (f' (looked for {values.get("missing_file")}; set {_chromosome_key(step)} to the chromosome you have'
@@ -1214,6 +1253,58 @@ def _children_script(step):
         'done\n' for log in step.children)
 
 
+def _progress_script(record):
+    """Count only current-attempt evidence from the official scripts."""
+    name = record['step']
+    commands = []
+    for label, manifest, completed in COMMAND_PROGRESS.get(name, ()):
+        directory, basename = manifest.rsplit('/', 1)
+        commands.append(f'count_commands {label} "$D/work/"{shlex.quote(directory)} '
+                        f'{shlex.quote(basename)} {shlex.quote(completed)}')
+    if name == 'expression':
+        commands.append('count_markers expression_outputs 2 "$D/work/tmp/tmpt/" .signet-normalized .signet-annotated')
+    if name == 'visualize':
+        count = record.get('settings', {}).get('ntop')
+        if isinstance(count, str) and re.fullmatch(r'(?:[1-9]|[1-9][0-9]|100)', count):
+            names = ' '.join(f'.signet-network-{index}' for index in range(1, int(count) + 1))
+            commands.append(f'count_markers subnetworks {count} "$D/work/tmp/tmpv/" {names}')
+    if not commands:
+        return ''
+    # Retry counters can remain in temporary folders until the new job starts.
+    # Compare to the script written immediately before this attempt was submitted.
+    freshness = f' && [ "$1" -nt "$D/steps/{name}.sbatch" ]' if record.get('attempt', 1) > 1 else ''
+    return f'''
+fresh_progress_file() {{ [ -f "$1" ]{freshness}; }}
+count_commands() {{
+  local key="$1" directory="$2" manifest="$2/$3" pattern="$4" file counts
+  fresh_progress_file "$manifest" || return 0
+  set -- "$manifest"
+  for file in "$directory"/$pattern; do
+    if fresh_progress_file "$file"; then set -- "$@" "$file"; fi
+  done
+  counts="$(awk 'FILENAME == ARGV[1] {{ if (NF) {{ remaining[$0]++; total++ }}; next }}
+    NF && remaining[$0] > 0 {{ remaining[$0]--; done++ }}
+    END {{ if (total) printf "%d %d", done, total }}' "$@")" || return 0
+  if [ -n "$counts" ]; then say "progress_$key" "$counts"; fi
+}}
+count_markers() {{
+  local key="$1" total="$2" directory="$3" file done=0
+  shift 3
+  for file in "$@"; do
+    if fresh_progress_file "$directory$file"; then done=$((done + 1)); fi
+  done
+  if [ "$done" -gt 0 ] || [ "$account_state" != COMPLETED ]; then
+    say "progress_$key" "$done $total"
+  fi
+}}
+case "$queue_state:$account_state" in
+  RUNNING:*|COMPLETING:*|:RUNNING*|:COMPLETING*|:COMPLETED*)
+    {chr(10).join(commands)}
+    ;;
+esac
+'''
+
+
 def _status_script(record, step, *, read_only=False):
     q = shlex.quote
     directory, name = record['remote_dir'], record['step']
@@ -1221,11 +1312,7 @@ def _status_script(record, step, *, read_only=False):
     outputs = ''.join(f'[ -s {q(directory + "/work/" + path)} ] && say output_{i} yes\n'
                       for i, path in enumerate(_required(step, record)))
     pattern = '|'.join(re.escape(p) for p in FAILURE_PATTERNS + step.failures)
-    # SIGNET's ParaFly batches: params.txt lists every command, params<N>.txt.completed the finished ones.
-    progress = ''.join(
-        f'if [ -s "$D/work/"{q(stage)}/params.txt ]; then say progress_{i} "$(cat "$D/work/"{q(stage)}/params[0-9]*.txt.completed '
-        f'2>/dev/null | wc -l | tr -d " ") $(wc -l < "$D/work/"{q(stage)}/params.txt | tr -d " ")"; fi\n'
-        for i, stage in enumerate(step.stages))
+    progress = _progress_script(record)
     # When the control job is gone, SIGNET's own jobs still queued for this run are orphans.
     orphans = (f'if [ -n "$j" ] && parent_state="$(squeue -h -j "$j" -o %T 2>/dev/null)" '
                f'&& [ -z "$parent_state" ]; then\n{_children_script(step)}fi\n'
@@ -1237,8 +1324,10 @@ def _status_script(record, step, *, read_only=False):
 j={q(job or '')}
 say job "$j"
 if [ -n "$j" ]; then
-  say squeue "$(squeue -h -j "$j" -o %T 2>/dev/null)"
-  say sacct "$(sacct -n -X -P -j "$j" -o State 2>/dev/null | head -n 1)"
+  queue_state="$(squeue -h -j "$j" -o %T 2>/dev/null)"
+  account_state="$(sacct -n -X -P -j "$j" -o State 2>/dev/null | head -n 1)"
+  say squeue "$queue_state"
+  say sacct "$account_state"
 fi
 [ -f "$D/steps/{name}.done" ] && say done "$(head -n 1 "$D/steps/{name}.done")"
 {outputs}cat "$D/steps/{name}.out" "$D/steps/{name}.err" 2>/dev/null | grep -E -m 20 {q(pattern)} | while IFS= read -r l; do say line "$l"; done
@@ -1264,9 +1353,10 @@ def status(run_id, name, refresh=False):
         return {**record, 'reason': 'Submission is unconfirmed. Use manual reconciliation. Do not resubmit.'}
     checking_outputs = bool(record.get('output_revalidation_requested_at'))
     _environment()
-    guard = _output_guard(root, record) if checking_outputs else ''
+    guarded = checking_outputs or name not in DOWNLOADED_STEPS
+    guard = _output_guard(root, record) if guarded else ''
     try:
-        code, values, hints = _shell(_say() + guard + _status_script(record, step, read_only=checking_outputs), timeout=60)
+        code, values, hints = _shell(_say() + guard + _status_script(record, step, read_only=checking_outputs) + guard, timeout=60)
     except OSError:
         reply = {**record, 'connection': 'interrupted', 'reason': 'Could not reach HPC3; the job keeps running. Try again later.'}
         if checking_outputs:
@@ -1286,9 +1376,14 @@ def status(run_id, name, refresh=False):
     queued, accounted = values.get('squeue', ''), values.get('sacct', '').split(' ')[0]
     slurm = queued or accounted
     record['slurm_state'] = slurm or None
-    if step.stages:
-        record['progress'] = {f'stage{i + 1}': values[f'progress_{i}'] for i in range(len(step.stages))
-                              if f'progress_{i}' in values}   # "finished total" ParaFly commands
+    measured = {}
+    for key, value in values.items():
+        if key.startswith('progress_') and re.fullmatch(r'[0-9]+ [0-9]+', value):
+            done_count, total = map(int, value.split())
+            if 0 <= done_count <= total and total > 0:
+                measured[key.removeprefix('progress_')] = value
+    if measured:
+        record.setdefault('progress', {}).update(measured)
     missing = [path for i, path in enumerate(_required(step, record)) if values.get(f'output_{i}') != 'yes']
     cancelling = record.get('cancel_requested_at')
     terminal = slurm == 'COMPLETED' or slurm.startswith('CANCELLED') or slurm in _SLURM_FAILED
@@ -1312,8 +1407,8 @@ def status(run_id, name, refresh=False):
         _change(record, 'failed', finished_at=_now(), missing_outputs=missing, failure_hints=hints,
                 reason=f'Slurm ended the job with {slurm}.')
     elif slurm == 'COMPLETED' or 'done' in values:
-        if record['step'] == 'visualize' and values.get('exports_completed') != 'yes':
-            hints = [*hints, 'The official Stage 6 export completion marker is missing.']
+        if record['step'] == 'visualize':
+            record['exports_completed'] = values.get('exports_completed') == 'yes'
         _finish(root, record, step, values.get('done', ''), missing, hints)
     elif not record.get('job_id'):
         # Empty lookups can mean scheduler failure or accounting delay, not an unsubmitted job.
@@ -1364,6 +1459,83 @@ def _restore_revalidated_outputs(root, data, step, record):
     return sorted(files)
 
 
+def _summary_script(record, step):
+    """Login-node shell: row count and first-row field count of each output and counted input. Numbers only."""
+    q = shlex.quote
+    lines = [_say(), f'D={q(record["remote_dir"])}',
+             # Non-empty lines, and the fields of the first one: comma-separated for .csv, and for a first
+             # line with commas but no spaces or tabs (signet_Afreq is comma-separated without the suffix).
+             'count() { awk -v sep="$2" \'BEGIN { if (sep != "") FS = sep } NF { n++; if (!c) '
+             '{ if (sep == "" && $0 ~ /,/ && $0 !~ /[ \\t]/) c = split($0, f, ","); else c = NF } } '
+             'END { printf "%d %d", n, c }\' "$1" 2>/dev/null; }']
+    for index, path in enumerate(_required(step, record)):
+        sep = ',' if path.endswith('.csv') else ''
+        lines.append(f'if [ -f "$D/work/"{q(path)} ]; then say out_{index} "$(count "$D/work/"{q(path)} {q(sep)})"; fi')
+    for key in _COUNTED_INPUTS.get(record['step'], ()):
+        path = record.get('inputs', {}).get(key)
+        if path:
+            lines.append(f'if [ -f {q(path)} ]; then say in_{key.replace(".", "_")} "$(count {q(path)} \'\')"; fi')
+    if record['step'] == 'genotype':
+        source = (Path(__file__).with_name('jobs') / 'reference_summary.py').read_text()
+        lines.append('P="$D/work/res/resg/workspace-reference-preparation.json"')
+        lines.append('if [ -f "$P" ] && [ ! -L "$P" ] && [ "$(readlink -f -- "$P")" = "$P" ]; then')
+        lines.append("say reference_preparation \"$(python3 - \"$P\" <<'SIGNET_PREPARATION_SUMMARY'\n"
+                     + source + "\nSIGNET_PREPARATION_SUMMARY\n)\"\nfi")
+    return '\n'.join(lines) + '\n'
+
+
+def _output_summary(record, step, root=None):
+    """Counts of the step's outputs and inputs, computed on HPC3; never values, IDs or rows."""
+    guard = _output_guard(root, record) if root is not None else ''
+    if root is not None and record.get('output_revalidation_requested_at'):
+        guard += _queue_check(record, require_stopped=True)
+    script = _say() + guard + _summary_script(record, step)
+    if root is not None:
+        script += guard
+    code, values, _ = _shell(script, timeout=120)
+    if code:
+        raise OSError('the summary did not complete on HPC3')
+    def counts(value):
+        rows, columns = (int(part) for part in value.split())
+        return {'rows': rows, 'columns': columns}
+    summary = {'outputs': [], 'inputs': {}, 'version': SUMMARY_VERSION}
+    for index, path in enumerate(_required(step, record)):
+        entry = {'file': path.rsplit('/', 1)[-1]}
+        value = values.get(f'out_{index}', '')
+        entry.update(counts(value) if re.fullmatch(r'[0-9]+ [0-9]+', value) else {'available': False})
+        summary['outputs'].append(entry)
+    for key in _COUNTED_INPUTS.get(record['step'], ()):
+        value = values.get(f'in_{key.replace(".", "_")}', '')
+        if re.fullmatch(r'[0-9]+ [0-9]+', value):
+            summary['inputs'][key] = {'file': record['inputs'][key].rsplit('/', 1)[-1], **counts(value)}
+    if 'reference_preparation' in values:
+        from agent.runtime.jobs.reference_summary import safe_preparation
+        try:
+            prepared = safe_preparation(json.loads(values['reference_preparation']))
+        except (TypeError, ValueError):
+            prepared = {}
+        if prepared:
+            summary['reference_preparation'] = prepared
+    return summary
+
+
+@_one_at_a_time
+def ensure_summary(run_id, name):
+    """The completed step's counts, computing them on HPC3 once for records made before summaries existed."""
+    step = _step(name)
+    root = _root(run_id)
+    record = _load(root, name)
+    if record.get('state') != 'completed' or record.get('summary', {}).get('version') == SUMMARY_VERSION:
+        return record.get('summary')
+    _environment()
+    try:
+        record['summary'] = _output_summary(record, step, root)
+    except (OSError, ValueError, subprocess.TimeoutExpired, StepError):
+        return None
+    _save(root, record)
+    return record['summary']
+
+
 def _finish(root, record, step, done, missing, hints):
     """The job ended: decide completed or failed (spec §7), and on success copy the results here."""
     # Slurm completion can be visible before the exit marker is readable in full.
@@ -1374,6 +1546,17 @@ def _finish(root, record, step, done, missing, hints):
                 reason='Waiting for a complete exit marker on HPC3; check status again. Do not resubmit.')
         return
     exit_code = marker.group(1)
+    if (record['step'] == 'visualize' and exit_code == '0' and missing and not hints
+            and not record.get('output_revalidation_requested_at')):
+        checked_at = record.get('checked_at', time.time())
+        since = record.setdefault('missing_outputs_since', checked_at)
+        if checked_at - since < VISUALIZE_OUTPUT_GRACE_SECONDS:
+            record.pop('finished_at', None)
+            _change(record, 'validating', exit_code='0', missing_outputs=missing, failure_hints=[],
+                    reason='Waiting for visualization outputs to appear on HPC3.')
+            return
+    if record['step'] == 'visualize' and not record.get('exports_completed'):
+        hints = [*hints, 'The official Stage 6 export completion marker is missing.']
     if exit_code != '0' or missing or hints:
         reason = (f'signet exited with {exit_code}.' if exit_code != '0' else
                   'Required outputs are missing.' if missing else 'The log reports an error.')
@@ -1381,6 +1564,20 @@ def _finish(root, record, step, done, missing, hints):
                 failure_hints=hints, reason=reason)
         return
     record.pop('finished_at', None)
+    record.pop('missing_outputs_since', None)
+    _change(record, 'validating', exit_code='0')
+    try:
+        record['summary'] = _output_summary(record, step, root)
+    except (OSError, ValueError, subprocess.TimeoutExpired, StepError):
+        if record['step'] not in DOWNLOADED_STEPS:
+            record['reason'] = 'Could not verify the owned remote results and summary; check status again. No analysis was resubmitted.'
+            return
+    if record['step'] not in DOWNLOADED_STEPS:
+        record['outputs'] = []
+        record['remote_outputs'] = ['work/' + path for path in _required(step, record)]
+        _change(record, 'completed', finished_at=_now(), exit_code='0', missing_outputs=[], failure_hints=[],
+                reason='Outputs present and logs clean; person-level results stay on HPC3. This is not scientific validation.')
+        return
     _change(record, 'validating', exit_code='0')
     try:
         q = shlex.quote

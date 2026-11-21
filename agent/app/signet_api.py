@@ -35,10 +35,11 @@ from agent.runtime import workspace_datasets
 from agent.runtime import workspace_validation
 from agent.runtime import workspace_history
 from agent.runtime import workspace_logs
+from agent.stage6 import result_assets
 import agent.tools.signet as signet
 
 MAX_BODY = 32768
-STATUS = {'invalid_request': 400, 'not_found': 404, 'conflict': 409, 'not_ready': 412, 'remote_failed': 502}
+STATUS = {'invalid_request': 400, 'not_found': 404, 'conflict': 409, 'review_required': 409, 'not_ready': 412, 'remote_failed': 502}
 _RUN_NAME = r'[A-Za-z0-9][A-Za-z0-9_-]{0,63}'  # same rule as agent.tools.signet._name
 _RUN = rf'(?P<run_id>{_RUN_NAME})'
 _STEP = r'(?P<step>[a-z_]{1,32})'
@@ -182,14 +183,21 @@ def submit_expression_example(handler, url, run_id):
 
 
 def review_adjust_example(handler, url, run_id):
-    query = _query(url, ('clinical',))
-    return 200, workspace_genotype.review_adjust(run_id, query.get('clinical'))
+    query = _query(url, ('clinical', 'choices'))
+    try:
+        choices = json.loads(query['choices']) if 'choices' in query else None
+    except ValueError as error:
+        raise ApiError(400, 'invalid_request', 'Clinical choices must be a JSON object.') from error
+    return 200, workspace_genotype.review_adjust(run_id, query.get('clinical'), choices)
 
 
 def submit_adjust_example(handler, url, run_id):
     _query(url, ())
-    fields = ('inputs', 'options', 'resources')
-    return 202, workspace_genotype.submit_adjust(run_id, **_body(handler, fields, required=fields))
+    fields = ('inputs', 'options', 'resources', 'review_token')
+    body = _body(handler, (*fields, 'choices'), required=fields)
+    if not isinstance(body['review_token'], str) or not re.fullmatch(r'[a-f0-9]{64}', body['review_token']):
+        raise ApiError(400, 'invalid_request', 'Check the clinical file and confirm the current review before submitting.')
+    return 202, workspace_genotype.submit_adjust(run_id, **body)
 
 
 def review_cis_example(handler, url, run_id):
@@ -450,9 +458,71 @@ def get_operation_log(handler, url, history_id, operation):
         query.get('stream', 'out'), lines, history_loader=handler.server.stage6.history)
 
 
+def get_stage6_assets(handler, url, history_id):
+    query = _query(url, ('identity', 'revision'))
+    return 200, result_assets.manager(handler.server).metadata(history_id, query.get('identity'), query.get('revision'))
+
+
+def issue_stage6_download(handler, url, history_id):
+    _query(url, ())
+    body = _body(handler, ('identity', 'revision', 'asset'), required=('identity',))
+    asset = body.get('asset')
+    if asset is not None and (not isinstance(asset, str) or not asset.endswith('.pdf')):
+        raise ApiError(400, 'invalid_request', 'Select an original PDF figure from this result.')
+    return 200, result_assets.manager(handler.server).issue_download(history_id, body['identity'], asset, body.get('revision'))
+
+
+def serve_result_asset(handler, url):
+    """Ticket-only GETs for opaque-origin frames and one-use browser downloads.
+
+    ChatHandler still checks the exact local Host before dispatching here. The
+    page token and Origin are required to issue these short-lived grants.
+    """
+    try:
+        assets = result_assets.manager(handler.server)
+        preview = result_assets.PREVIEW_PATH.fullmatch(url.path)
+        if preview:
+            _query(url, ())
+            origin = f'http://127.0.0.1:{handler.server.server_port}'
+            data, content_type, csp = assets.preview(preview['ticket'], preview['name'], origin)
+            filename = None
+        elif url.path == '/stage6/result-download':
+            query = _query(url, ('ticket',))
+            ticket = query.get('ticket', '')
+            if not result_assets.TICKET.fullmatch(ticket):
+                raise ApiError(400, 'invalid_request', 'Invalid result download link.')
+            data, filename, content_type = assets.download(ticket)
+            csp = "sandbox; default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+        else:
+            raise ApiError(404, 'not_found', 'No such result asset.')
+        handler.send_response(200)
+        handler.send_header('Content-Type', content_type)
+        handler.send_header('Content-Length', str(len(data)))
+        handler.send_header('Cache-Control', 'no-store')
+        handler.send_header('X-Content-Type-Options', 'nosniff')
+        handler.send_header('Referrer-Policy', 'no-referrer')
+        handler.send_header('Content-Security-Policy', csp)
+        if filename:
+            handler.send_header('Content-Disposition', f'attachment; filename="{filename}"')
+        handler.end_headers()
+        handler.wfile.write(data)
+    except (BrokenPipeError, ConnectionResetError):
+        return
+    except jobs.StepError as error:
+        return handler.json_response({'error': str(error), 'code': error.code}, STATUS.get(error.code, 400))
+    except ApiError as error:
+        return handler.json_response({'error': str(error), 'code': error.code}, error.status)
+    except (OSError, ValueError):
+        return handler.json_response({'error': 'The original result asset is unavailable.', 'code': 'not_found'}, 404)
+
+
 # Each path pattern maps HTTP methods to the function above that serves it.
 ROUTES = [
     (re.compile(r'/signet/catalog'), {'GET': get_catalog}),
+    (re.compile(rf'/signet/history/(?P<history_id>{workspace_history.HISTORY_ID})/stage6/assets'),
+     {'GET': get_stage6_assets}),
+    (re.compile(rf'/signet/history/(?P<history_id>{workspace_history.HISTORY_ID})/stage6/assets/download'),
+     {'POST': issue_stage6_download}),
     (re.compile(rf'/signet/history/(?P<history_id>{workspace_history.HISTORY_ID})/dataset'),
      {'PATCH': assign_history_dataset}),
     (re.compile(rf'/signet/history/(?P<history_id>{workspace_history.HISTORY_ID})/steps/{_STEP}/log'),

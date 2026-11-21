@@ -57,7 +57,8 @@ class OutputRevalidationTest(unittest.TestCase):
         self.assertFalse(jobs.output_revalidation(record)['active'])
         self.assertEqual(originals, {path: path.read_bytes() for path in originals})
         for relative in fixtures.OUTPUTS:
-            self.assertEqual((self.root / 'work' / relative).read_text(), 'data\n')
+            self.assertFalse((self.root / 'work' / relative).exists())
+            self.assertEqual((self.f.remote_dir / 'work' / relative).read_text(), 'data\n')
         self.assert_no_compute_commands(self.f.calls[start:])
 
     def test_still_missing_outputs_stay_failed_and_original_evidence_survives_later_success(self):
@@ -168,7 +169,7 @@ class OutputRevalidationTest(unittest.TestCase):
                     target.unlink()
                     target.write_bytes(original)
 
-    def test_download_failure_or_conflicting_local_files_never_report_completion(self):
+    def test_remote_only_validation_preserves_conflicting_local_files_without_transfer(self):
         self.seed()
         self.f.finish_job()
         for relative in fixtures.OUTPUTS:
@@ -176,12 +177,14 @@ class OutputRevalidationTest(unittest.TestCase):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text('conflicting old local data\n')
         originals = {path: path.read_bytes() for path in (self.root / 'work/res/rest').rglob('*') if path.is_file()}
+        start = len(self.f.calls)
         record = self.check()
-        self.assertNotEqual(record['state'], 'completed')
+        self.assertEqual(record['state'], 'completed')
         self.assertEqual(originals, {path: path.read_bytes() for path in originals})
+        self.assertFalse(any('tar czf' in call for call in self.f.calls[start:]))
         self.f.lose_connection_on = 'tar czf -'
         record = jobs.status('step_test', 'expression', refresh=True)
-        self.assertNotEqual(record['state'], 'completed')
+        self.assertEqual(record['state'], 'completed')
         self.assertEqual(originals, {path: path.read_bytes() for path in originals})
 
     def test_http_requires_exact_target_and_page_token(self):

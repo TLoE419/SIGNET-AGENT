@@ -14,7 +14,7 @@ class ReadFileTest(unittest.TestCase):
         self.root = Path(self.temp.name).resolve()
         self.patch = patch.object(tools, 'PROJECT', self.root)
         self.patch.start()
-        self.path = self.root / 'runs/demo/work/res/pairs'
+        self.path = self.root / 'runs/demo/work/res/resc/signet_all.sig.pValue_0.05'
         self.path.parent.mkdir(parents=True)
 
     def tearDown(self):
@@ -23,7 +23,7 @@ class ReadFileTest(unittest.TestCase):
 
     def test_real_dispatch_paginates_without_losing_lines_or_claiming_records(self):
         self.path.write_bytes('基因\t變異\r\n1\t2\r\n\r\n3\t4'.encode())
-        first = st.dispatch_tool('read_file', {'path':'runs/demo/work/res/pairs', 'max_lines':2})
+        first = st.dispatch_tool('read_file', {'path':'runs/demo/work/res/resc/signet_all.sig.pValue_0.05', 'max_lines':2})
         self.assertEqual(first['status'], 'ok')
         self.assertEqual(first['total_lines'], 4)
         self.assertEqual(first['returned_lines'], 2)
@@ -47,6 +47,8 @@ class ReadFileTest(unittest.TestCase):
 
     def test_rejects_outside_hidden_links_credentials_binary_and_invalid_arguments(self):
         paths = ['.env', 'main.py', 'data/../.env', 'data/.private/secret',
+                 'data/raw-clinical.tsv', 'runs/demo/steps/genotype.json',
+                 'runs/demo/work/res/resg/signet_Genotype.sampleID',
                  'data/credentials', 'data/credentials.json', 'data/private.pem', 'data/node_modules/key.txt']
         for relative in paths:
             target = self.root / relative
@@ -63,6 +65,16 @@ class ReadFileTest(unittest.TestCase):
         self.assertEqual(st.dispatch_tool('read_file',{'path':str(link)})['status'],'invalid')
         for args in [{'start_line':0},{'max_lines':501},{'start_line':True},{'max_lines':'5'},{'extra':1}]:
             self.assertEqual(st.dispatch_tool('read_file',{'path':str(self.path),**args})['status'],'invalid')
+
+    def test_raw_research_data_is_refused_before_contents_are_opened(self):
+        path = self.root / 'data/private-clinical.tsv'
+        path.parent.mkdir(parents=True)
+        path.write_text('patient_id\trace\nPRIVATE-PERSON\tasian\n')
+        with patch.object(Path, 'open', side_effect=AssertionError('Raw data must not be opened')):
+            result = st.dispatch_tool('read_file', {'path': str(path)})
+        self.assertEqual(result['status'], 'invalid')
+        self.assertFalse(result['executed'])
+        self.assertNotIn('PRIVATE-PERSON', str(result))
 
     def test_empty_and_oversized_files(self):
         self.path.touch()
