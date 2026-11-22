@@ -23,6 +23,11 @@ printf 'runtime_module=%s\\n' "$runtime_module"
 partition=${quote(partition)}
 if [ -z "$partition" ] && command -v sinfo >/dev/null 2>&1; then partition=$(sinfo -h -o '%P' 2>/dev/null | sed -n 's/\\*$//p' | head -1); fi
 printf 'partition=%s\\n' "$partition"
+if command -v timeout >/dev/null 2>&1; then
+ workspace_status=0
+ timeout -k 1s 8s stat -- "$root" >/dev/null 2>&1 || workspace_status=$?
+ case "$workspace_status" in 124|137) printf 'workspace_timeout=yes\\n'; exit 0;; esac
+fi
 if [ -e "$root/software/${revision}" ]; then printf 'source=exists\\n'; else printf 'source=missing\\n'; fi
 if [ -e "$root/software/${revision}/example" ]; then printf 'example=exists\\n'; else printf 'example=missing\\n'; fi
 if [ -s "$root/images/signet-0.0.6.sif" ]; then printf 'image=exists\\n'; else printf 'image=missing\\n'; fi

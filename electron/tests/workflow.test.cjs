@@ -9,7 +9,7 @@ function fixture({stage2=false}={}){
  const dom=new JSDOM('<meta name="chat-token" content="fixture"><details id="workflow" open><summary id="workflow-summary"></summary><span id="workflow-environment-status"></span><button id="workflow-check"></button><ul id="workflow-items"></ul><p id="workflow-message"></p></details>'+(stage2?STAGE2:''),{runScripts:'outside-only',url:'http://127.0.0.1/'});
  const w=dom.window;let listener;const calls=[],checks=[];let reply=async()=>({status:'ok',checks:[]}),confirm=false;
  const settled={phase:'needs-install',message:'Installation required',config};
- w.uiText=(el,text)=>{el.textContent=text};w.translateUI=text=>text;w.confirm=()=>confirm;
+ w.confirm=()=>confirm;
  w.signetDesktop={environment:{subscribe:fn=>{listener=fn;return()=>{}},getSnapshot:async()=>({ok:true,value:{phase:'disconnected',message:''}}),
   check:async(...args)=>{checks.push(args);listener(settled);return {ok:true,value:settled}}}};
  const bodies=[];w.fetch=async(url,options={})=>{calls.push(url);if(options.body)bodies.push([url,JSON.parse(options.body)]);return {ok:true,json:()=>reply(url)}};
@@ -28,34 +28,27 @@ test('workflow discards an in-flight readiness reply when SSH disconnects',async
  assert.match(f.text('workflow-message'),/SSH disconnected/);
  f.dom.window.close();
 });
-test('reference download cancellation does not send a write request',async()=>{
- const f=fixture();f.reply(async()=>({status:'ok',checks:[{item:'reference_ref',status:'missing',detail:'Not installed'}]}));
- f.click();await settle();
- const button=f.w.document.querySelector('[data-status=missing] button');assert.ok(button);button.click();await settle();
- assert.equal(f.calls.some(url=>url.includes('/hpc/reference')),false);f.dom.window.close();
-});
 test('the check button rechecks the environment with its saved location, then shows what is missing',async()=>{
  const f=fixture();f.snapshot({phase:'ready',message:'',config});await settle();
  f.reply(async()=>({status:'ok',checks:[{item:'container',status:'missing',detail:'images/signet-0.0.6.sif is missing.'}]}));
  f.click();await settle();await settle();
  assert.deepEqual(f.checks,[['/pub/u/signet-agent','standard']]);
  assert.match(f.w.document.body.textContent,/images\/signet-0\.0\.6\.sif is missing/);
- assert.doesNotMatch(f.w.document.body.textContent,/not reachable|尚未連線/);f.dom.window.close();
+ assert.doesNotMatch(f.w.document.body.textContent,/not reachable|HPC3 not connected/);f.dom.window.close();
 });
 test('an unconfigured environment is not described as a lost connection',async()=>{
  const f=fixture();f.reply(async()=>({status:'not_ready',reason:'Checking remote paths.'}));
  f.snapshot({phase:'needs-install',message:'Installation required',config});await settle();await settle();
- assert.equal(f.text('workflow-summary'),'環境尚未就緒');assert.match(f.text('workflow-message'),/Checking remote paths/);f.dom.window.close();
+ assert.equal(f.text('workflow-summary'),'Environment not ready');assert.match(f.text('workflow-message'),/Checking remote paths/);f.dom.window.close();
 });
-test('SIGNET installs through the Python service only after confirmation; the container is a Slurm step',async()=>{
- const f=fixture();f.reply(async url=>url==='/hpc/check'?{status:'ok',checks:[{item:'signet_source',status:'missing',detail:'No source'},{item:'container',status:'missing',detail:'No image'}]}:url==='/hpc/files/selected'?{status:'ok',selected:{}}:{status:'ok',detail:'Started'});
+test('SIGNET installs through the shared backend only after confirmation; the container is a Slurm step',async()=>{
+ const f=fixture();f.reply(async url=>url==='/hpc/check'?{status:'ok',checks:[{item:'signet_source',status:'missing',detail:'No source'},{item:'container',status:'missing',detail:'No image'}]}:{status:'ok',detail:'Started'});
  f.snapshot({phase:'needs-install',message:'',config});await settle();await settle();
  const buttons=()=>[...f.w.document.querySelectorAll('[data-status=missing] button')];
- assert.deepEqual(buttons().map(b=>b.textContent),['安裝','下載']);
- buttons()[0].click();await settle();assert.equal(f.calls.includes('/hpc/signet'),false);
- f.allow();buttons()[0].click();await settle();assert.ok(f.calls.includes('/hpc/signet'));
- assert.equal('install' in f.w.signetDesktop.environment,false,'the desktop bridge has no installer');
- await new Promise(resolve=>setTimeout(resolve,3100));
+ assert.deepEqual(buttons().map(b=>b.textContent),['Install','Download']);
+ buttons()[0].click();await settle();assert.equal('install' in f.w.signetDesktop.environment,false);
+ assert.equal(f.calls.includes('/hpc/signet'),false);
+ f.allow();buttons()[0].click();await settle();assert.equal('install' in f.w.signetDesktop.environment,false);assert.equal(f.calls.filter(url=>url==='/hpc/signet').length,1);
  buttons()[1].click();await settle();assert.ok(f.calls.includes('/hpc/container'));f.dom.window.close();
 });
 test('once SIGNET is installed, the desktop re-verifies the environment that still lists it as missing',async()=>{
@@ -79,26 +72,16 @@ test('a verification failure stays visible beside the per-item results',async()=
  f.snapshot({phase:'error',message:'runtime-verification failed',config});await settle();await settle();
  assert.match(f.text('workflow-message'),/runtime-verification failed/);assert.match(f.w.document.body.textContent,/6 GB/);f.dom.window.close();
 });
-test('reference rows offer the file window, and only its own route carries the chosen path',async()=>{
- const f=fixture();const opened=[];f.w.addEventListener('open-remote-files',event=>opened.push(event.detail));
- f.reply(async url=>url==='/hpc/files/selected'?{status:'ok',selected:{gtf:'/dfs7/lab/refs/g.gtf'}}:url==='/hpc/files/clear'?{status:'ok'}:{status:'ok',checks:[{item:'reference_gtf',status:'ok',detail:'Selected file (1.0 GB)'},{item:'reference_ref',status:'missing',detail:'Missing'}]});
- f.snapshot({phase:'needs-install',message:'',config});await settle();await settle();await settle();
- assert.match(f.w.document.body.textContent,/\/dfs7\/lab\/refs\/g\.gtf/);
- const gtf=[...f.w.document.querySelectorAll('[data-status=ok] button')];assert.deepEqual(gtf.map(b=>b.textContent),['選擇 HPC 檔案','改用預設']);
- const ref=[...f.w.document.querySelectorAll('[data-status=missing] button')];assert.deepEqual(ref.map(b=>b.textContent),['下載','選擇 HPC 檔案']);
- gtf[0].click();assert.equal(opened[0].key,'gtf');assert.equal(opened[0].current,'/dfs7/lab/refs/g.gtf');
- gtf[1].click();await settle();assert.equal(f.calls.includes('/hpc/files/clear'),false,'cancelling keeps the selection');
- f.allow();[...f.w.document.querySelectorAll('[data-status=ok] button')][1].click();await settle();assert.ok(f.calls.includes('/hpc/files/clear'));
+test('environment readiness uses only infrastructure and software checks',async()=>{
+ const f=fixture();
+ const checks=['connection','workspace','slurm','apptainer','signet_source','container'].map(item=>({item,status:'ok',detail:''}));
+ f.reply(async()=>({status:'ok',ready:true,checks}));
+ f.snapshot({phase:'ready',message:'',config});await settle();await settle();
+ assert.deepEqual(f.calls,['/hpc/check']);
+ assert.equal(f.text('workflow-summary'),'Environment: 3/3 ready');
+ assert.equal(f.w.document.querySelectorAll('.workflow-item').length,3);
  f.dom.window.close();
 });
-test('a chosen file refreshes the panel, and disconnecting forgets its path',async()=>{
- const f=fixture();f.reply(async url=>url==='/hpc/files/selected'?{status:'ok',selected:{gtf:'/dfs7/lab/g.gtf'}}:{status:'ok',checks:[]});
- f.snapshot({phase:'needs-install',message:'',config});await settle();await settle();await settle();
- const before=f.calls.length;f.w.dispatchEvent(new f.w.Event('remote-file-selected'));await settle();assert.ok(f.calls.length>before);await settle();await settle();
- f.snapshot({phase:'disconnected',message:'SSH disconnected'});await settle();
- assert.doesNotMatch(f.w.document.body.textContent,/\/dfs7/);f.dom.window.close();
-});
-
 const READY_CHECKS={status:'ok',ready:true,checks:[{item:'signet_source',status:'ok',detail:'Installed'}]};
 test('the next step appears only when every item and the desktop check are ready',async()=>{
  const f=fixture({stage2:true});f.reply(async url=>url==='/hpc/check'?{status:'ok',ready:false,checks:[{item:'reference_gtf',status:'missing',detail:'Missing'}]}:url.startsWith('/signet/progress')?{analyses:[]}:{status:'ok',selected:{}});

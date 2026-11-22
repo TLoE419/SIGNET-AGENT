@@ -58,6 +58,10 @@ export class EnvironmentService extends EventEmitter {
   if(!validRemotePath(values.root||''))throw Error('The remote installation path is unsupported. Choose an absolute path without spaces.');
   if(values.runtime_module&&!validRuntimeModule(values.runtime_module))throw Error('Invalid container runtime module returned by remote check.');
   const config:EnvironmentConfig={...(values.runtime_module?{runtimeModule:values.runtime_module}:{}),root:values.root,source:`${values.root}/software/${this.inventory.revision}`,image:`${values.root}/images/signet-0.0.6.sif`,workRoot:`${values.root}/runs`,executor:values.executor,revision:this.inventory.revision,partition:values.partition};
+  if(values.workspace_timeout==='yes'){
+   this.set('blocked','Reading the HPC3 workspace directory timed out.',{config,missing:['Workspace directory']});
+   return;
+  }
   const missing=['bash','tar','sha256sum','timeout','python3','setsid','sbatch','scontrol','sinfo','squeue'].filter(tool=>values[tool]!=='yes');
   if(values.source==='missing'&&values.git!=='yes')missing.push('git');
   if(!validRemotePath(config.executor||''))missing.push('Singularity or Apptainer');

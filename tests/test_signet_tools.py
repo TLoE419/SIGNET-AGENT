@@ -51,7 +51,7 @@ class ToolsTest(unittest.TestCase):
                         'run_visualization', 'get_visualization_workspace', 'propose_visualization_change'):
             self.assertNotIn(removed, names)
             self.assertEqual(self.call(removed, run_id='test')['status'],
-                             'needs_review' if removed in LEGACY_EXECUTION else 'invalid')
+                             'needs_review' if removed in LEGACY_EXECUTION | {'get_visualization_workspace', 'propose_visualization_change'} else 'invalid')
 
     def test_catalog_describes_setup_and_six_stages_for_the_assistant(self):
         catalog = self.call('signet_catalog')

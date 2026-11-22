@@ -97,27 +97,15 @@ def _update(root, values):
 HPC3_SETUP = [
     {'step': 'Check the environment', 'tool': 'check_hpc_environment', 'button': 'Check environment (HPC3 settings)',
      'what': 'Read-only check that HPC3 is ready: installation folder, Slurm, the container runtime, the pinned SIGNET '
-             'source and example data, the container, the four reference files and the imputation conversion.'},
+             'source and example data, and the container. Dataset inputs and references are reviewed separately for each analysis.'},
     {'step': 'Install SIGNET', 'tool': 'install_signet_source', 'button': '安裝',
      'what': 'Installs the official SIGNET source at the pinned commit, with its example data, on the HPC3 '
              'login node. Files are kept only if every hash matches; an existing installation is never replaced.'},
     {'step': 'Download the container', 'tool': 'download_signet_container', 'button': '下載',
      'what': 'Slurm job that downloads the SIGNET container provided by Prof. Zhang (about 6 GB) and keeps it only '
              'if its size and checksum match.'},
-    {'step': 'Download reference files', 'tool': 'download_reference_file', 'button': '下載',
-     'what': 'One Slurm job per file: ref (1000 Genomes GRCh38 chromosome 1 genotypes), gmap (SHAPEIT4 GRCh38 '
-             'genetic map), gtf (GENCODE v22, collapsed to one record per gene for signet -t) and clinical '
-             '(TCGA-LUAD case IDs, race and sex at birth from GDC, saved as submitter_id, race and gender).'},
-    {'step': 'Choose your own reference file', 'tool': None, 'button': '選擇 HPC 檔案 (Workflow panel)',
-     'what': 'The researcher may choose a file on HPC3 instead of a download. The app checks its format and that '
-             'compute nodes can read it. Only the researcher can choose; the assistant never sees the path.'},
-    {'step': 'Convert ref and gmap for imputation', 'tool': 'prepare_imputation_reference', 'button': '轉檔',
-     'what': 'Slurm job that turns ref and gmap into IMPUTE2 inputs for the example study (chromosome 1): keeps '
-             'only study markers whose position and alleles match the reference, and reports a counts-only '
-             'summary with the match rate. Runs again when ref, gmap or the study change.'},
     {'step': 'Read a setup log', 'tool': 'read_hpc_setup_log', 'button': None,
-     'what': 'Shows the last lines of one setup step\'s log, to explain a failure. Logs hold counts and messages, '
-             'no research data.'},
+     'what': 'Returns fixed diagnostic codes for one setup failure. Raw log lines are not returned to the assistant.'},
 ]
 _HOW_TO_RUN = ('From the confirmation card in chat. The researcher reviews the inputs, settings and resources, '
                'then confirms; the job runs on HPC3 through Slurm. The assistant cannot confirm a card.')

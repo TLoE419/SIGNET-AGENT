@@ -1,24 +1,24 @@
 """HPC3 workspace layout, read-only readiness checks and one-step-at-a-time setup over the app's SSH connection.
 
 The desktop EnvironmentService owns the verified workspace, pinned source,
-container executor and scheduler partition. Reference jobs reuse that configuration. Checks report only
-existence, file sizes, whether the clinical table's header names the columns signet -a reads,
-and the app's own step states. The pinned SIGNET source is verified by its hashes once, by the
-desktop HPC3 settings check (electron/main/environment); this check does not hash it again.
-Research data is not read.
+container executor and scheduler partition. Readiness reports only shared
+runtime prerequisites and the app's own installation state.
 
-Each setup step returns as soon as it has started: the SIGNET source installation
-runs as a detached process on the login node; downloads run as Slurm jobs, because login
+Each setup step returns as soon as it has started: light steps run as a
+detached process on the login node; downloads run as Slurm jobs, because login
 nodes must not download large files and compute nodes can reach the internet. Step state and logs live under the configured workspace, isolated by installation root. Setup only adds what is
 missing and never overwrites existing files.
 """
 from contextvars import ContextVar
 import json
+import hashlib
 import os
 from pathlib import Path
 import re
 import shlex
 import subprocess
+import threading
+import time
 
 from agent.runtime import ssh_transport
 from agent.paths import PROJECT_ROOT
@@ -35,108 +35,21 @@ CONTAINER_BYTES = 6383458834
 CONTAINER_SHA256 = 'de28f224f3da41b17ff08a03d0f04b1d5c033b2afbad18ed448b646b2feda277'
 CONTAINER_RESOURCES = ('--partition=free', '--cpus-per-task=1', '--mem=2G', '--time=02:00:00')
 WORKSPACE_FOLDERS = ('refdata', 'runs')
-# Public Phase 2 (TCGA, GRCh38) inputs shared by every analysis. Only the raw
-# files are prepared here; matching ref and gmap to a study's markers happens in
-# data preprocessing. The example data covers chromosome 1 of TCGA-LUAD.
-_KG = ('https://ftp.1000genomes.ebi.ac.uk/vol1/ftp/data_collections/1000_genomes_project/release/'
-       '20181203_biallelic_SNV/ALL.chr1.shapeit2_integrated_v1a.GRCh38.20181129.phased.vcf.gz')
-_GDC_LUAD = ('https://api.gdc.cancer.gov/cases?filters=%7B%22op%22%3A%22%3D%22%2C%22content%22%3A%7B%22field%22'
-             '%3A%22project.project_id%22%2C%22value%22%3A%22TCGA-LUAD%22%7D%7D'
-             '&fields=submitter_id,demographic.race,demographic.sex_at_birth&format=TSV&size=5000')
-REFERENCES = {
-    'ref': {'path': 'refdata/ref/ALL.chr1.GRCh38.phased.vcf.gz', 'url': _KG,
-            'source': '1000 Genomes GRCh38 chromosome 1 phased genotypes (about 950 MB)'},
-    'gmap': {'path': 'refdata/gmap/chr1.b38.gmap.gz',
-             'url': 'https://github.com/odelaneau/shapeit4/raw/master/maps/genetic_maps.b38.tar.gz',
-             'source': 'SHAPEIT4 GRCh38 genetic map, chromosome 1'},
-    # signet -t keeps gene rows whose transcript_type is protein_coding. Only a collapsed GTF has that
-    # field on gene rows; the full GENCODE file silently yields 0 genes.
-    'gtf': {'path': 'refdata/gencode.v22.genes.gtf',
-            'url': 'https://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_22/gencode.v22.annotation.gtf.gz',
-            'source': 'GENCODE release 22 gene annotation, collapsed with the GTEx pipeline (TCGA expression uses v22 gene IDs)',
-            'needs_container': True,
-            'resources': ('--partition=free', '--cpus-per-task=1', '--mem=16G', '--time=04:00:00')},
-    'clinical': {'path': 'refdata/clinical.tsv', 'url': _GDC_LUAD,
-                 'source': 'TCGA-LUAD case IDs, race and sex at birth from the GDC API (open access)'},
+# Historical example paths still resolve in Data and earlier runs. They are
+# inputs to individual analyses, not environment prerequisites.
+REFERENCE_FILES = {
+    'ref': 'refdata/ref/ALL.chr1.GRCh38.phased.vcf.gz',
+    'gmap': 'refdata/gmap/chr1.b38.gmap.gz',
+    'gtf': 'refdata/gencode.v22.genes.gtf',
+    'clinical': 'refdata/clinical.tsv',
 }
-REFERENCE_FILES = {key: spec['path'] for key, spec in REFERENCES.items()}
-REFERENCE_RESOURCES = ('--partition=free', '--cpus-per-task=1', '--mem=2G', '--time=02:00:00')
-# IMPUTE2 inputs matched to the SIGNET example study (TCGA-LUAD, chromosome 1). The
-# converter runs on a compute node; summary.json is written last, so it marks completion.
-EXAMPLE_STUDY = f'{SIGNET_DIRECTORY}/example/geno/example'
 PREPARED = 'refdata/prepared/example'
-PREPARE_RESOURCES = ('--partition=free', '--cpus-per-task=1', '--mem=4G', '--time=02:00:00')
-# signet -a (script/adj/adj_adjust.R) reads these columns by name from the clinical table.
-CLINICAL_COLUMNS = ('submitter_id', 'race', 'gender')
-_CLINICAL_SHELL = r'''
-# Reads only the header line, with shell builtins: column names, never case rows.
-clinical_columns_ok() {
-  local header="" column
-  IFS= read -r header < "$1" || [ -n "$header" ] || return 1
-  header=$'\t'"${header%$'\r'}"$'\t'
-  for column in submitter_id race gender; do
-    case "$header" in *$'\t'"$column"$'\t'*) ;; *) return 1;; esac
-  done
-}
-'''
-# The converter records which files it read (inputs.json). A later check compares them with the
-# files that would be used now, so a changed or newly selected ref/gmap means converting again.
-_PREPARED_STATE = r'''
-prepared_state() {
-  [ -s "$W/@PREPARED@/summary.json" ] || { printf none; return 0; }
-  python3 - "$W/@PREPARED@/inputs.json" "$@" <<'SIGNET_INPUTS'
-import json, os, sys
-names = ('reference', 'genetic_map', 'study_ped', 'study_map')
-try:
-    with open(sys.argv[1]) as stream:
-        recorded = json.load(stream)
-    current = {}
-    for name, path in zip(names, sys.argv[2:]):
-        info = os.stat(path)
-        current[name] = {'path': os.path.realpath(path), 'size': info.st_size, 'mtime_ns': info.st_mtime_ns}
-    print('current' if recorded == current else 'stale', end='')
-except (OSError, ValueError):
-    print('stale', end='')
-SIGNET_INPUTS
-}
-'''.replace('@PREPARED@', PREPARED)
-_PREPARE_SOURCE = (Path(__file__).with_name('jobs') / 'prepare_reference.py').read_text()
-_TABLE_SUMMARY_SOURCE = (Path(__file__).with_name('jobs') / 'table_summary.py').read_text()
-# Every Slurm step records its job ID as <step>.job in the state directory.
-JOB_STEPS = ('container', *REFERENCES, 'prepare')
+JOB_STEPS = ('container',)
 STEPS = ('workspace', 'signet', *JOB_STEPS)
 STATE_DIRECTORY = '$HOME/.signet-agent/steps'
 LOG_LINES = 20
-# Exact converter messages contain no paths or input values; other failures stay redacted.
-_SAFE_PREPARATION_ERRORS = frozenset((
-    'The study map file has no markers.',
-    'The study map has repeated positions.',
-    'The study ped and map files do not describe the same markers.',
-    'The reference VCF has no GT (genotype) field.',
-    'The genetic map positions are not increasing.',
-    'The genetic map does not cover the study markers.',
-    'Unsupported reference format. Supported: VCF (.vcf or .vcf.gz) or IMPUTE2 .gen.',
-    'Unsupported genetic map format. Supported: "pos chr cM" (SHAPEIT4/Eagle) or IMPUTE2 "position rate cM".',
-    'The output folder already exists; nothing was replaced.',
-    'No study marker matches the reference by position and alleles; check that both use the same genome build.',
-))
 _SEGMENT = r'(?:[A-Za-z0-9._-]+|\$USER)'
 _MARKER = '@@'
-_IMAGE_SIGNATURE = '''
-image_signature() {
-  [ -s "$I" ] || return 1
-  python3 - "$I" <<'SIGNET_IMAGE_STAT'
-import os
-import sys
-
-try:
-    image = os.stat(sys.argv[1])
-except OSError:
-    sys.exit(1)
-print(image.st_ino, image.st_size, image.st_mtime_ns, image.st_ctime_ns, sep=':')
-SIGNET_IMAGE_STAT
-}
-'''
 
 
 def workspace():
@@ -173,30 +86,6 @@ field_of() {{
   while IFS= read -r line; do case "$line" in "$2"=*) value="${{line#$2=}}";; esac; done < "$D/$1.status"
   printf %s "$value"
 }}
-selected_of() {{
-  local key path found=""
-  [ -f "$W/refdata/selected.tsv" ] || return 0
-  while IFS=$'\t' read -r key path; do if [ "$key" = "$1" ]; then found="$path"; fi; done < "$W/refdata/selected.tsv"
-  printf %s "$found"
-}}
-{_IMAGE_SIGNATURE}
-selected_access() {{
-  local key="$1" path="$2" id checked_path signature access
-  [ -n "$E" ] && signature="$(image_signature)" || {{ printf needs_container; return; }}
-  if ! IFS=$'\t' read -r id checked_path 2>/dev/null < "$D/selected-$key.check" ||
-     [[ ! "$id" =~ ^[a-f0-9]{{32}}$ ]] || [ "$checked_path" != "$path" ]; then
-    printf unverified
-    return
-  fi
-  local check="$D/selected-$key-$id" checked_image job
-  if IFS=$'\t' read -r access checked_image 2>/dev/null < "$check/status"; then
-    if [ "$signature" = "$checked_image" ]; then printf '%s' "$access"; else printf unverified; fi
-  elif read -r job 2>/dev/null < "$check/job" && [ -n "$(squeue -h -j "$job" -o %T 2>/dev/null)" ]; then
-    printf pending
-  else
-    printf unknown
-  fi
-}}
 say workspace_path "$W"
 '''
 
@@ -209,6 +98,11 @@ for step in {' '.join(JOB_STEPS)}; do
   read -r job < "$D/$step.job"
   say "job_$step" "$job"
   say "job_${{step}}_state" "$(squeue -h -j "$job" -o %T 2>/dev/null)"
+  terminal_job="$(field_of "$step" job)"; terminal="$(state_of "$step")"
+  if [[ "$job" =~ ^[0-9]+$ ]] && [ "$terminal_job" = "$job" ] && {{ [ "$terminal" = done ] || [ "$terminal" = failed ]; }}; then
+    say "job_${{step}}_terminal" "$terminal"
+    say "job_${{step}}_terminal_job" "$terminal_job"
+  fi
 done
 for step in workspace signet; do
   st="$(state_of $step)"
@@ -220,8 +114,72 @@ done
 '''
 
 
-def _checked_files():
-    return {'container': CONTAINER, **REFERENCE_FILES, 'prepare': f'{PREPARED}/summary.json'}
+_SETUP_WATCH_SOURCE = (Path(__file__).with_name('jobs') / 'watch_setup.py').read_text()
+_SETUP_WATCHERS = threading.BoundedSemaphore(2)
+# Closing the local broker socket does not cancel a remote exec. Retain its
+# admission slot through the bounded SSH command plus its preceding health check.
+_SETUP_WATCH_LEASE_SECONDS = 90
+
+
+def _setup_watch_script(root, cursor=None, seconds=0):
+    config = _CONFIG.get() or {'root': root, 'source': root + '/signet', 'image': root + '/' + CONTAINER}
+    scope = hashlib.sha256(json.dumps(config, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    args = [root, config['source'], config['image'], scope, cursor or '0' * 64, str(seconds)]
+    return ("python3 - " + ' '.join(shlex.quote(value) for value in args)
+            + " <<'SIGNET_SETUP_WATCH'\n" + _SETUP_WATCH_SOURCE + "\nSIGNET_SETUP_WATCH\n")
+
+
+def watch_setup(cursor, cancel_event=None):
+    """Wait for fixed setup metadata changes; no full checks, scheduler calls or writes."""
+    if not isinstance(cursor, str) or not re.fullmatch(r'[a-f0-9]{64}', cursor):
+        return {'status': 'invalid', 'executed': False, 'error': 'Invalid setup cursor.'}
+    if not _SETUP_WATCHERS.acquire(blocking=False):
+        return {'status': 'unavailable', 'executed': False, 'reason': 'A setup status wait is already active. Retry shortly.'}
+    semaphore = _SETUP_WATCHERS
+    started = None
+    confirmed = False
+    def command(root):
+        nonlocal started
+        script = _prelude(root) + _setup_watch_script(root, cursor, 45)
+        started = time.monotonic()
+        return script
+    try:
+        values, error = _run(command,
+                             timeout=55, required='setup_cursor',
+                             **({'cancel_event': cancel_event} if cancel_event is not None else {}))
+        confirmed = error is None
+    finally:
+        remaining = max(0, _SETUP_WATCH_LEASE_SECONDS - (time.monotonic() - started)) if started is not None else 0
+        if remaining and (not confirmed or cancel_event is not None and cancel_event.is_set()):
+            release = threading.Timer(remaining, semaphore.release)
+            release.daemon = True
+            release.start()
+        else:
+            semaphore.release()
+    if error:
+        return error
+    current = values.get('setup_cursor', '')
+    if (not re.fullmatch(r'[a-f0-9]{64}', current) or values.get('setup_changed') not in ('yes', 'no')
+            or (values['setup_changed'] == 'yes') != (current != cursor)):
+        return {'status': 'failed', 'executed': False, 'reason': 'Invalid remote setup notification.'}
+    return {'status': 'ok', 'executed': False, 'read_only': True, 'workspace': values.get('workspace_path'),
+            'setup_cursor': current, 'changed': values['setup_changed'] == 'yes'}
+
+
+def _setup_status_hook(step):
+    if step not in STEPS:
+        raise ValueError('Invalid setup step.')
+    return f'''mkdir -p "$D"
+printf 'job=%s\\nstate=running\\n' "${{SLURM_JOB_ID:-}}" > "$D/{step}.status"
+signet_setup_exit() {{
+  result=$?
+  trap - EXIT
+  state=failed; [ "$result" -ne 0 ] || state=done
+  printf 'state=%s\\n' "$state" >> "$D/{step}.status"
+  exit "$result"
+}}
+trap signet_setup_exit EXIT
+'''
 
 
 def _check_script(root):
@@ -229,40 +187,30 @@ def _check_script(root):
     if config is not None and config.get('revision') != SOURCE_INVENTORY['revision']:
         raise ValueError('Desktop source revision does not match the audited inventory; recheck the remote environment.')
     # Match EnvironmentService.sourceCheck: the installed archive has no Git metadata.
-    files = ' '.join(f'{key}:{path}' for key, path in _checked_files().items())
-    return _prelude(root) + _CLINICAL_SHELL + _PREPARED_STATE + f'''
+    return _prelude(root) + '''
 say user "$(id -un)"
 say host "$(hostname)"
-if [ -d "$W" ]; then say workspace yes; if [ -w "$W" ]; then say workspace_writable yes; else say workspace_writable no; fi
-else say workspace no; fi
 if command -v sbatch >/dev/null 2>&1; then say sbatch yes; else say sbatch no; fi
 if "$E" --version >/dev/null 2>&1; then
   say apptainer "$("$E" --version 2>/dev/null | head -n 1)"
 else say apptainer no; fi
+if command -v timeout >/dev/null 2>&1; then
+  workspace_status=0
+  timeout -k 1s 8s stat -- "$W" >/dev/null 2>&1 || workspace_status=$?
+  case "$workspace_status" in 124|137) say workspace_timeout yes; exit 0;; esac
+fi
+''' + _setup_watch_script(root) + f'''
+if [ -d "$W" ]; then say workspace yes; if [ -w "$W" ]; then say workspace_writable yes; else say workspace_writable no; fi
+else say workspace no; fi
 if [ ! -e "$S" ]; then say signet no
 elif [ ! -d "$S" ] || [ -L "$S" ]; then say signet invalid
 else
   say signet yes
   if [ -d "$S/example" ]; then say signet_example present; else say signet_example missing; fi
 fi
-for item in {files}; do
-  key="${{item%%:*}}"; rel="${{item#*:}}"
-  if [ "$key" = container ]; then rel="$I"; else rel="$W/$rel"; fi
-  chosen="$(selected_of "$key")"
-  if [ -n "$chosen" ]; then
-    rel="$chosen"; say "selected_$key" yes
-    say "access_$key" "$(selected_access "$key" "$chosen")"
-  fi
-  if [ -s "$rel" ]; then say "file_$key" "$(stat -c %s "$rel" 2>/dev/null || stat -f %z "$rel")"
-  elif [ -e "$rel" ]; then say "file_$key" empty
-  else say "file_$key" no; fi
-  if [ "$key" = clinical ] && [ -s "$rel" ]; then
-    if clinical_columns_ok "$rel"; then say clinical_columns ok; else say clinical_columns missing; fi
-  fi
-done
-chosen_ref="$(selected_of ref)"; chosen_gmap="$(selected_of gmap)"
-say prepare_state "$(prepared_state "${{chosen_ref:-$W/{REFERENCE_FILES['ref']}}}" "${{chosen_gmap:-$W/{REFERENCE_FILES['gmap']}}}" \
-  "$S/example/geno/example.ped" "$S/example/geno/example.map")"
+if [ -s "$I" ]; then say file_container "$(stat -c %s "$I" 2>/dev/null || stat -f %z "$I")"
+elif [ -e "$I" ]; then say file_container empty
+else say file_container no; fi
 ''' + _report_steps()
 
 
@@ -280,118 +228,11 @@ def _ensure_workspace():
 _NOTE_MISSING_WORKSPACE = 'if [ ! -d "$W" ]; then say creates_workspace yes; fi\n'
 
 
-# How each raw file is fetched into "$TARGET.partial" on the compute node.
-FULL_GTF = 'refdata/gencode.v22.annotation.gtf'
-COLLAPSE_COMMIT = '3218db7cba2980ffdf3bca2decddfcae0b2835fe'
-COLLAPSE_URL = f'https://raw.githubusercontent.com/broadinstitute/gtex-pipeline/{COLLAPSE_COMMIT}/gene_model/collapse_annotation.py'
-COLLAPSE_SHA256 = 'a543e9084d95e58d56813263484a01c9708253da998811069ccea9acd14d58b5'
-
-_FETCH = {
-    'ref': 'curl -fsSL --retry 3 -o "$TARGET.partial" "$URL"',
-    'gmap': ('curl -fsSL --retry 3 -o "$TARGET.tar.gz.partial" "$URL"\n'
-             'tar -xzf "$TARGET.tar.gz.partial" -O chr1.b38.gmap.gz > "$TARGET.partial"\n'
-             'rm -f "$TARGET.tar.gz.partial"'),
-    # An already downloaded full GTF is reused. The official tool runs unmodified inside the container;
-    # it needs bx-python, which is added beside the workspace only if the image lacks it.
-    'gtf': f'''FULL="$W/{FULL_GTF}"
-if [ ! -s "$FULL" ]; then
-  curl -fsSL --retry 3 -o "$FULL.gz.partial" "$URL"
-  gunzip -c "$FULL.gz.partial" > "$FULL.partial"
-  mv "$FULL.partial" "$FULL"
-  rm -f "$FULL.gz.partial"
-fi
-TOOLS="$W/refdata/.tools"
-mkdir -p "$TOOLS"
-curl -fsSL --retry 3 -o "$TOOLS/collapse_annotation.py.partial" '{COLLAPSE_URL}'
-digest="$(sha256sum "$TOOLS/collapse_annotation.py.partial" | cut -d " " -f 1)"
-if [ "$digest" != "{COLLAPSE_SHA256}" ]; then
-  echo "collapse_annotation.py checksum mismatch: got $digest." >&2
-  exit 1
-fi
-mv "$TOOLS/collapse_annotation.py.partial" "$TOOLS/collapse_annotation.py"
-in_container() {{ "$E" exec --cleanenv --no-home --bind "$W:$W" --env PYTHONPATH="$TOOLS/python" "$I" "$@"; }}
-if ! in_container python3 -c 'import numpy, pandas, bx.intervals.intersection'; then
-  in_container python3 -m pip install --quiet --no-deps --target "$TOOLS/python" bx-python
-fi
-in_container python3 "$TOOLS/collapse_annotation.py" "$FULL" "$TARGET.partial"
-# Never publish a GTF that signet -t would silently read as 0 genes.
-awk -F '\t' '$3 == "gene" {{ found = 1; exit !($9 ~ /transcript_type/) }} END {{ if (!found) exit 1 }}' "$TARGET.partial" || {{
-  rm -f "$TARGET.partial"
-  echo "The collapsed GTF has no gene rows with transcript_type." >&2
-  exit 1
-}}''',
-    # GDC sends CRLF lines, and R would keep the \r on submitter_id. SIGNET reads "race" and
-    # "gender"; GDC now calls the second one demographic.sex_at_birth. Values are left as GDC
-    # gives them: how to treat blank or Unknown entries is the researcher's decision.
-    'clinical': _CLINICAL_SHELL + r'''curl -fsSL --retry 3 "$URL" | tr -d "\r" |
-  sed "1s/demographic\.race/race/; 1s/demographic\.sex_at_birth/gender/" > "$TARGET.partial"
-clinical_columns_ok "$TARGET.partial" || {
-  rm -f "$TARGET.partial"
-  echo "GDC did not return submitter_id, race and gender columns; nothing was saved." >&2
-  exit 1
-}
-# Counts only, so the log (which the assistant may read) holds no case IDs.
-awk -F '\t' 'NR == 1 { for (i = 1; i <= NF; i++) col[$i] = i; next }
-  { n++; r = $col["race"]; g = $col["gender"]; race[r == "" ? "(blank)" : r]++; sex[g == "" ? "(blank)" : g]++ }
-  END { line = "Clinical cases: " n "; race:"; for (v in race) line = line " " v "=" race[v]
-        line = line "; gender:"; for (v in sex) line = line " " v "=" sex[v]; print line }' "$TARGET.partial"''',
-}
-
-
-def _reference_job(key):
-    """Batch script that downloads one raw reference file and records where it came from."""
-    spec = REFERENCES[key]
-    assert "'" not in spec['url']
-    prelude = ssh_transport.runtime_module_prelude(_CONFIG.get() or {}) if spec.get('needs_container') else ''
-    return f'''#!/bin/bash
-set -euo pipefail
-{_ensure_workspace()}
-{prelude}
-URL='{spec["url"]}'
-TARGET="$W/{spec["path"]}"
-mkdir -p "$(dirname "$TARGET")"
-rm -f "$TARGET.partial"
-{_FETCH[key]}
-[ -s "$TARGET.partial" ] || {{ echo "The downloaded file is empty." >&2; exit 1; }}
-mv "$TARGET.partial" "$TARGET"
-size="$(stat -c %s "$TARGET" 2>/dev/null || stat -f %z "$TARGET")"
-digest="$( (sha256sum "$TARGET" 2>/dev/null || shasum -a 256 "$TARGET") | cut -d " " -f 1)"
-printf "%s\\t%s\\t%s\\t%s\\t%s\\n" {key} "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$size" "$digest" "$URL" >> "$W/refdata/SOURCES.tsv"
-echo "Saved $TARGET ($size bytes, sha256 $digest)"
-'''
-
-
-def _step_lock(step, busy_step=None):
+def _step_lock(step):
     """Serialize concurrent panel/model requests without replacing another job's state."""
     return f'''mkdir -p "$D"
-if ! mkdir "$D/{step}.lock" 2>/dev/null; then say {busy_step or step} in_progress; exit 0; fi
+if ! mkdir "$D/{step}.lock" 2>/dev/null; then say {step} in_progress; exit 0; fi
 trap 'rmdir "$D/{step}.lock"' EXIT
-'''
-
-
-def _reference_script(root, key):
-    """Submit one reference download as a Slurm job unless the file exists or is already downloading."""
-    path = REFERENCES[key]['path']
-    outdated = '' if key != 'clinical' else _CLINICAL_SHELL + f'''
-if [ -z "$running" ] && [ -z "$(selected_of clinical)" ] && [ -s "$W/{path}" ] && ! clinical_columns_ok "$W/{path}"; then
-  mv -n "$W/{path}" "$W/{path}.replaced-$(date +%s)-$$"; [ ! -e "$W/{path}" ] || exit 1; say clinical_replaced yes
-fi
-'''
-    return _prelude(root) + _step_lock(key) + f'''
-running=""
-if [ -s "$D/{key}.job" ]; then read -r job < "$D/{key}.job"; running="$(squeue -h -j "$job" -o %T 2>/dev/null)"; fi
-{outdated}if [ -n "$running" ]; then say {key} in_progress; say {key}_job "$job"
-elif [ -n "$(selected_of {key})" ] || [ -s "$W/{path}" ]; then say {key} existing
-{'elif [ -z "$E" ] || [ ! -s "$I" ]; then say ' + key + ' needs_container' if REFERENCES[key].get('needs_container') else ''}
-else
-''' + _NOTE_MISSING_WORKSPACE + f'''  mkdir -p "$D" && chmod 700 "$D"
-  cat > "$D/{key}.sbatch" <<'SIGNET_JOB'
-{_reference_job(key)}SIGNET_JOB
-  job="$(sbatch --parsable --job-name=signet-{key} {' '.join(REFERENCES[key].get('resources', REFERENCE_RESOURCES))} --output="$D/{key}.log" "$D/{key}.sbatch" 2>/dev/null)"
-  job="${{job%%;*}}"
-  if [ -n "$job" ]; then printf '%s\\n' "$job" > "$D/{key}.job"; say {key} started; say {key}_job "$job"
-  else say {key} failed; fi
-fi
 '''
 
 
@@ -399,7 +240,7 @@ def _container_job():
     """Batch script that downloads the image on a compute node and publishes it only after verification."""
     return f'''#!/bin/bash
 set -euo pipefail
-PARTIAL="$I.partial"
+{_setup_status_hook('container')}PARTIAL="$I.partial"
 mkdir -p "$(dirname "$I")"
 rm -f "$PARTIAL"
 curl -fL --retry 3 -o "$PARTIAL" '{CONTAINER_URL}'
@@ -437,45 +278,6 @@ else
   job="${{job%%;*}}"
   if [ -n "$job" ]; then printf '%s\\n' "$job" > "$D/container.job"; say container started; say container_job "$job"
   else say container failed; fi
-fi
-'''
-
-
-def _prepare_script(root):
-    """Submit the converter as a Slurm job once SIGNET (for the example study), ref and gmap exist."""
-    study = '$S/example/geno/example'
-    job = f'''#!/bin/bash
-set -euo pipefail
-python3 "$D/prepare_reference.py" --study-ped "{study}.ped" --study-map "{study}.map" \\
-  --reference "$SIGNET_REF" --genetic-map "$SIGNET_GMAP" --out "$W/{PREPARED}"
-'''
-    return _prelude(root) + _PREPARED_STATE + _step_lock('selected', busy_step='prepare') + f'''
-# A file chosen on HPC3 takes the place of the downloaded one; sbatch passes these on to the job.
-chosen_ref="$(selected_of ref)"; SIGNET_REF="${{chosen_ref:-$W/{REFERENCE_FILES['ref']}}}"
-chosen_gmap="$(selected_of gmap)"; SIGNET_GMAP="${{chosen_gmap:-$W/{REFERENCE_FILES['gmap']}}}"
-export SIGNET_REF SIGNET_GMAP
-running=""
-if [ -s "$D/prepare.job" ]; then read -r job < "$D/prepare.job"; running="$(squeue -h -j "$job" -o %T 2>/dev/null)"; fi
-if [ -n "$running" ]; then say prepare in_progress; say prepare_job "$job"
-elif [ "$(prepared_state "$SIGNET_REF" "$SIGNET_GMAP" "{study}.ped" "{study}.map")" = current ]; then say prepare existing
-elif [ ! -s "{study}.ped" ] || [ ! -s "{study}.map" ]; then say prepare needs_signet
-elif [ ! -s "$SIGNET_REF" ]; then say prepare needs_ref
-elif [ ! -s "$SIGNET_GMAP" ]; then say prepare needs_gmap
-elif {{ [ -n "$chosen_ref" ] && [ "$(selected_access ref "$chosen_ref")" != ok ]; }} ||
-     {{ [ -n "$chosen_gmap" ] && [ "$(selected_access gmap "$chosen_gmap")" != ok ]; }}; then
-  say prepare needs_verified_selection
-else
-  # Built from other files than the ones used now: keep it under another name, never delete it.
-  if [ -e "$W/{PREPARED}" ]; then mv -n "$W/{PREPARED}" "$W/{PREPARED}.replaced-$(date +%s)-$$"; [ ! -e "$W/{PREPARED}" ] || exit 1; say prepare_replaced yes; fi
-  mkdir -p "$D" && chmod 700 "$D"
-  cat > "$D/prepare_reference.py" <<'SIGNET_PY'
-{_PREPARE_SOURCE}SIGNET_PY
-  cat > "$D/prepare.sbatch" <<'SIGNET_JOB'
-{job}SIGNET_JOB
-  job="$(sbatch --parsable --job-name=signet-prepare {' '.join(PREPARE_RESOURCES)} --output="$D/prepare.log" "$D/prepare.sbatch" 2>/dev/null)"
-  job="${{job%%;*}}"
-  if [ -n "$job" ]; then printf '%s\\n' "$job" > "$D/prepare.job"; say prepare started; say prepare_job "$job"
-  else say prepare failed; fi
 fi
 '''
 
@@ -607,7 +409,8 @@ def _step_status(values, step):
     if state == 'running':
         return 'in_progress', f'Setup is running in the background on {host}; check again later.'
     if state in ('failed', 'stopped'):
-        return 'problem', f'The last {step} setup {state}; read_hpc_setup_log("{step}") shows why.'
+        task = 'SIGNET installation' if step == 'signet' else 'workspace setup'
+        return 'problem', f'The last {task} {state}.'
     return None
 
 
@@ -621,28 +424,14 @@ def _workspace_pending(values):
     return None
 
 
-def _selected_status(size, access):
-    """State of a file the user chose on HPC3. Its path stays out: this result also reaches the assistant."""
-    if size in ('no', 'empty'):
-        return 'problem', 'The selected file is missing or empty; choose it again.'
-    if access == 'ok':
-        return 'ok', f'Selected file ({_size(size)}); readable from compute nodes and the container.'
-    if access == 'pending':
-        return 'in_progress', f'Selected file ({_size(size)}); checking that compute nodes can read it.'
-    if access == 'failed':
-        return 'problem', 'Compute nodes or the container could not read the selected file; choose another location.'
-    if access == 'needs_container':
-        return 'problem', 'Install the container, then select this file again to verify access.'
-    if access == 'unverified':
-        return 'problem', 'Select this file again to verify access with the current container.'
-    return 'problem', 'The compute-node check for the selected file did not finish; choose the file again.'
-
-
 def _checks(values, revision):
     checks = []
     add = lambda item, status, detail: checks.append({'item': item, 'status': status, 'detail': detail})
     add('connection', 'ok', f"{values.get('user', '?')} on {values.get('host', '?')}")
-    if values.get('workspace') != 'yes':
+    workspace_timeout = values.get('workspace_timeout') == 'yes'
+    if workspace_timeout:
+        add('workspace', 'problem', 'Reading the HPC3 workspace directory timed out.')
+    elif values.get('workspace') != 'yes':
         add('workspace', *(_step_status(values, 'workspace') or _workspace_pending(values)
                            or ('missing', f"Folder {values.get('workspace_path')} does not exist yet.")))
     elif values.get('workspace_writable') != 'yes':
@@ -654,70 +443,70 @@ def _checks(values, revision):
     apptainer = values.get('apptainer', 'no')
     add('apptainer', 'problem' if apptainer == 'no' else 'ok',
         'Singularity or Apptainer was not found.' if apptainer == 'no' else apptainer)
+    if workspace_timeout:
+        for item in ('signet_source', 'container'):
+            add(item, 'unknown', 'Waiting for the remote workspace directory to respond.')
+        return checks
     signet = values.get('signet', 'no')
     if signet == 'no':
         add('signet_source', *(_step_status(values, 'signet') or ('missing', 'SIGNET has not been installed in the remote environment.')))
     elif signet != 'yes':
-        add('signet_source', 'problem', 'The SIGNET installation path is not a folder. Choose another installation root in HPC3 settings.')
+        add('signet_source', 'problem', f'Audited source verification failed for revision {revision[:12]}; files may be missing or modified. Recheck HPC3 settings.')
     elif values.get('signet_example') == 'missing':
         add('signet_source', *(_step_status(values, 'signet') or
                                ('missing', 'The SIGNET example data has not been installed; press Install to add it.')))
     elif values.get('signet_example') == 'mismatch':
         add('signet_source', 'problem', 'The SIGNET example data differs from the pinned revision; move the example folder aside, then install again.')
     else:
-        # The desktop HPC3 settings check verifies these files by their hashes; it is not repeated here.
         add('signet_source', 'ok', f'Installed at pinned revision {revision[:12]}. Its files are verified by the HPC3 settings check.')
-    for key, path in _checked_files().items():
-        value = values.get(f'file_{key}', 'no')
-        item = {'container': 'container', 'prepare': 'imputation_reference'}.get(key, f'reference_{key}')
-        if key == 'clinical' and value not in ('no', 'empty') and values.get('clinical_columns') == 'missing':
-            columns = ', '.join(CLINICAL_COLUMNS)
-            add(item, 'problem', f'The selected clinical file lacks the columns signet -a reads ({columns}); choose another file.'
-                if values.get('selected_clinical') == 'yes' else
-                f'{path} is an older download without the columns signet -a reads ({columns}). '
-                'Download again: the old file is kept under another name.')
-            continue
-        if values.get(f'selected_{key}') == 'yes':
-            add(item, *_selected_status(value, values.get(f'access_{key}')))
-            continue
-        job, state = values.get(f'job_{key}'), values.get(f'job_{key}_state')
-        if value == 'no' and state:
-            add(item, 'in_progress', f'Download job {job} is {state.lower()}; check again later.')
-        elif value == 'no' and job:
-            add(item, 'problem', f'Download job {job} ended without producing {path}; '
-                                 f'read_hpc_setup_log("{key}") shows why.')
-        elif value == 'no':
-            add(item, 'missing', f'{path} is missing.')
-        elif value == 'empty':
-            add(item, 'problem', f'{path} is empty.')
-        elif key == 'prepare' and values.get('prepare_state') == 'stale':
-            add(item, 'missing', 'ref, gmap or the example study differ from the files used by the last conversion '
-                                 '(or that conversion predates this record). Convert again: the previous result is kept '
-                                 'under another name.')
-        else:
-            add(item, 'ok', f'{path} ({_size(value)})')
+    value = values.get('file_container', 'no')
+    job, state = values.get('job_container'), values.get('job_container_state')
+    terminal = values.get('job_container_terminal')
+    current_terminal = bool(job and values.get('job_container_terminal_job') == job)
+    if current_terminal and terminal == 'failed':
+        add('container', 'problem', f'Setup job {job} failed.')
+    elif current_terminal and terminal == 'done' and value == 'no':
+        add('container', 'problem', f'Setup job {job} finished without producing {CONTAINER}.')
+    elif value == 'no' and state:
+        add('container', 'in_progress', f'Download job {job} is {state.lower()}. Check again later.')
+    elif value == 'no' and job:
+        add('container', 'problem', f'Download job {job} ended without producing {CONTAINER}.')
+    elif value == 'no':
+        add('container', 'missing', f'{CONTAINER} is missing.')
+    elif value == 'empty':
+        add('container', 'problem', f'{CONTAINER} is empty.')
+    else:
+        add('container', 'ok', f'{CONTAINER} ({_size(value)})')
     return checks
 
 
-def _unreachable(error):
-    return {'status': 'unavailable', 'executed': False,
-            **({'code': 'remote_timeout'} if ssh_transport.is_timeout(error) else {}),
-            'reason': f'HPC3 is not reachable or too slow: {error}. Connect with the SSH panel, '
-                      'then run check_hpc_environment to see the current state.'}
+def _transport_failure(error):
+    failure = {'status': 'unavailable', 'executed': False}
+    if isinstance(error, ssh_transport.LocalRuntimeHelperError):
+        return {**failure, 'code': 'local_runtime_missing',
+                'reason': 'A required SIGNET app file is missing or unreadable. Repair the installation and try again.',
+                'detail': 'Local application file: runtime_modules.sh.'}
+    if ssh_transport.is_timeout(error):
+        return {**failure, 'code': 'remote_timeout',
+                'reason': 'HPC3 did not respond in time. Check the environment again.'}
+    if isinstance(error, ssh_transport.SshRemoteError) and error.code in ('SESSION_CLOSED', 'STALE_CONNECTION'):
+        return {**failure, 'code': 'remote_disconnected',
+                'reason': 'The connection to HPC3 ended. Reconnect and check the environment again.'}
+    return {**failure, 'reason': 'Could not reach HPC3. Check the SSH panel and try again.'}
 
 
-def _run(script, timeout, required='workspace_path'):
+def _run(script, timeout, required='workspace_path', cancel_event=None):
     """Run a fixed script in a login shell (so `module` exists); return markers or an error result."""
     if not ssh_transport.available():
         return None, {'status': 'unavailable', 'executed': False,
                       'reason': 'Not running in the desktop app, so there is no HPC3 connection to use.'}
     try:
-        config = ssh_transport.setup_environment()
+        config = ssh_transport.setup_environment(**({'cancel_event': cancel_event} if cancel_event is not None else {}))
     except ssh_transport.SshRemoteError as error:
         # SSH works; the desktop has no configured environment yet, and its message says why.
         return None, {'status': 'not_ready', 'executed': False, 'reason': str(error)}
     except OSError as error:
-        return None, _unreachable(error)
+        return None, _transport_failure(error)
     try:
         context = _CONFIG.set(config)
         try:
@@ -728,11 +517,12 @@ def _run(script, timeout, required='workspace_path'):
         finally:
             _CONFIG.reset(context)
         result = ssh_transport.remote('bash -s', input=command.encode(),
-                                      capture_output=True, timeout=timeout)
+                                      capture_output=True, timeout=timeout,
+                                      **({'cancel_event': cancel_event} if cancel_event is not None else {}))
     except ValueError as error:
         return None, {'status': 'invalid', 'executed': False, 'error': str(error)}
     except (OSError, subprocess.SubprocessError) as error:
-        return None, _unreachable(error)
+        return None, _transport_failure(error)
     values = _parse(result.stdout)
     if result.returncode != 0 or required not in values:
         return None, {'status': 'failed', 'executed': False,
@@ -749,20 +539,15 @@ def check_environment(revision):
     missing = [check['item'] for check in checks if check['status'] != 'ok']
     return {'status': 'ok', 'executed': False, 'read_only': True, 'ready': not missing,
             'workspace': values.get('workspace_path'), 'checks': checks, 'not_ready': missing,
-            'evidence_scope': 'Existence, file sizes, required clinical headers, prepared-input metadata, audited source hashes and the app\'s own setup states only. '
-                              'Only pinned source files were read for hashing; no contents or research data were returned and nothing on HPC3 was changed. '
-                              'Readiness here does not establish scientific validity.'}
+            **({'setup_cursor': values['setup_cursor']} if re.fullmatch(r'[a-f0-9]{64}', values.get('setup_cursor', '')) else {}),
+            'evidence_scope': 'Shared environment only: connection, workspace, scheduler, runtime, pinned source and container. '
+                              'Source integrity is verified by the desktop settings check. No study files were inspected or changed.'}
 
 
 _OUTCOMES = {
     'started': 'Started in the background; call check_hpc_environment later to see when it finishes.',
     'in_progress': 'Already running in the background; nothing new was started.',
     'existing': 'Already present; left unchanged.',
-    'needs_signet': 'Install SIGNET first; the example study data comes with it.',
-    'needs_container': 'Download the SIGNET container first; this step runs inside it.',
-    'needs_ref': 'Download the ref file first.',
-    'needs_verified_selection': 'Verify the selected reference files with the current container before converting.',
-    'needs_gmap': 'Download the gmap file first.',
     'needs_git': 'git is not available on the HPC3 login node, so SIGNET cannot be downloaded.',
     'failed': 'Could not start this step; nothing was changed.',
 }
@@ -783,8 +568,7 @@ def start_step(step, repository=None, revision=None):
     if step == 'container' and not CONTAINER_SHA256:
         return {'status': 'blocked', 'executed': False, 'step': step,
                 'reason': 'The container checksum has not been pinned in this version of the app, so nothing was downloaded.'}
-    script = {'prepare': _prepare_script, 'container': _container_script, 'signet': _signet_script,
-              **{key: (lambda root, key=key: _reference_script(root, key)) for key in REFERENCES}}[step]
+    script = {'container': _container_script, 'signet': _signet_script}[step]
     values, error = _run(script, timeout=120, required=step)
     if error:
         return error
@@ -799,36 +583,6 @@ def start_step(step, repository=None, revision=None):
     return result
 
 
-def _table_summary_script(root, key):
-    """Summarize the table in use for one reference (a chosen file, else the download) on the login node."""
-    return _prelude(root) + f'''
-chosen="$(selected_of {key})"; P="${{chosen:-$W/{REFERENCE_FILES[key]}}}"
-if [ ! -s "$P" ]; then say table missing
-else
-  say table "$(python3 - "$P" <<'SIGNET_PY'
-{_TABLE_SUMMARY_SOURCE}SIGNET_PY
-)"
-fi
-'''
-
-
-def summarize_reference(key):
-    """Counts-only summary of a reference table on HPC3; its path and rows stay on HPC3."""
-    if key != 'clinical':
-        return {'status': 'invalid', 'executed': False, 'error': 'Only the clinical table can be summarized.'}
-    values, error = _run(lambda root: _table_summary_script(root, key), timeout=60, required='table')
-    if error:
-        return error
-    if values['table'] == 'missing':
-        return {'status': 'missing', 'executed': False, 'file': key,
-                'detail': 'No clinical table yet: download it or choose one in the Workflow panel.'}
-    try:
-        result = json.loads(values['table'])
-    except ValueError:
-        return {'status': 'failed', 'executed': False, 'reason': 'The summary could not be read.'}
-    return {**result, 'executed': False, 'file': key}
-
-
 def read_log(step):
     """Return the last lines of the app's own log for one setup step."""
     if step not in STEPS:
@@ -839,25 +593,5 @@ def read_log(step):
     if values['log_exists'] != 'yes':
         return {'status': 'ok', 'executed': False, 'step': step, 'lines': [], 'detail': 'This step has not run yet.'}
     lines = values.get('lines', [])
-    if step == 'prepare':
-        # Old and new error logs can contain selected paths or input data in exceptions.
-        lines = _preparation_log_summary(lines)
     return {'status': 'ok', 'executed': False, 'step': step, 'lines': lines,
             'evidence_scope': f'Last {LOG_LINES} lines of the app-generated setup log only; never research data.'}
-
-
-def _preparation_log_summary(lines):
-    last_line = next((line for line in reversed(lines) if line.strip()), '')
-    if not last_line:
-        return []
-    try:
-        summary = json.loads(last_line)
-    except ValueError:
-        summary = None
-    if (isinstance(summary, dict) and summary.get('status') == 'ok' and
-            summary.get('scope') == 'Counts only. The original study files were not changed.'):
-        return [last_line]
-    if (isinstance(summary, dict) and summary.get('status') == 'failed'
-            and isinstance(summary.get('error'), str) and summary['error'] in _SAFE_PREPARATION_ERRORS):
-        return [summary['error']]
-    return ['Reference preparation did not report success. Check the selected inputs and the remote job log.']

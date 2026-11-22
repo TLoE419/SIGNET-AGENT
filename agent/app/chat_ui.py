@@ -7,6 +7,8 @@ import os
 from pathlib import Path
 import re
 import secrets
+import select
+import socket
 from socketserver import TCPServer
 import threading
 from urllib.parse import urlsplit, parse_qs
@@ -50,6 +52,7 @@ class ChatServer(ThreadingHTTPServer):
         self.state_file = Path(state_file) if state_file else None
         self.pending_history = []
         self.active_session = None
+        self.setup_shutdown = threading.Event()
         self.analysis_download_lock = threading.Lock()
         self.analysis_downloads = {}
         self.analysis_previews = {}
@@ -71,6 +74,14 @@ class ChatServer(ThreadingHTTPServer):
         # The loopback service needs no reverse DNS, which can stall on offline hosts.
         TCPServer.server_bind(self)
         self.server_name, self.server_port = self.server_address[:2]
+
+    def shutdown(self):
+        self.setup_shutdown.set()
+        return super().shutdown()
+
+    def server_close(self):
+        self.setup_shutdown.set()
+        return super().server_close()
 
     def visible_messages(self, session):
         messages = []
@@ -370,6 +381,8 @@ class ChatHandler(BaseHTTPRequestHandler):
         """Workflow-panel buttons call one HPC3 tool directly; the click is the user's approval."""
         if self.path.startswith('/hpc/files/'):
             return self.hpc_files_post()
+        if self.path == '/hpc/watch':
+            return self.hpc_watch_post()
         from agent.tools import hpc as hpc_tools
         from agent.runtime.hpc import STEPS
         log_actions = {f'/hpc/log/{step}': (lambda step=step: hpc_tools.read_hpc_setup_log(step))
@@ -378,9 +391,7 @@ class ChatHandler(BaseHTTPRequestHandler):
                    '/hpc/workspace': hpc_tools.create_hpc_workspace,
                    '/hpc/signet': hpc_tools.install_signet_source,
                    '/hpc/container': hpc_tools.download_signet_container,
-                   '/hpc/prepare': hpc_tools.prepare_imputation_reference,
-                   **{f'/hpc/reference/{key}': (lambda key=key: hpc_tools.download_reference_file(key))
-                      for key in ('ref', 'gmap', 'gtf', 'clinical')}, **log_actions}
+                   **log_actions}
         action = actions.get(self.path)
         if action is None:
             return self._error(404, '找不到此操作。')
@@ -400,6 +411,51 @@ class ChatHandler(BaseHTTPRequestHandler):
             if body != {}:
                 return self._error(400, 'The log request must be an empty JSON object.')
         return self.json_response(action())
+
+    def hpc_watch_post(self):
+        """Wait only for setup metadata; stop when the local client or service leaves."""
+        from agent.runtime import hpc
+        try:
+            size = int(self.headers.get('Content-Length', '0') or 0)
+        except ValueError:
+            size = -1
+        if not 0 <= size <= 1024:
+            return self._error(400, 'Invalid request length.')
+        self.connection.settimeout(10)
+        try:
+            body = json.loads(self.rfile.read(size) or b'{}')
+        except ValueError:
+            body = None
+        if (not isinstance(body, dict) or set(body) != {'cursor'}
+                or not isinstance(body['cursor'], str) or not re.fullmatch(r'[a-f0-9]{64}', body['cursor'])):
+            return self._error(400, 'Provide only a valid setup cursor.')
+        cancelled, finished = threading.Event(), threading.Event()
+
+        def observe_client():
+            while not finished.wait(0.1):
+                if self.server.setup_shutdown.is_set():
+                    cancelled.set()
+                    return
+                try:
+                    readable, _, _ = select.select([self.connection], [], [], 0)
+                    if readable and self.connection.recv(1, socket.MSG_PEEK) == b'':
+                        cancelled.set()
+                        return
+                except OSError:
+                    cancelled.set()
+                    return
+
+        observer = threading.Thread(target=observe_client, daemon=True)
+        observer.start()
+        try:
+            result = hpc.watch_setup(body['cursor'], cancel_event=cancelled)
+            if not cancelled.is_set():
+                return self.json_response(result)
+        except (BrokenPipeError, ConnectionResetError):
+            cancelled.set()
+        finally:
+            finished.set()
+            observer.join(timeout=1)
 
     def hpc_files_post(self):
         """The desktop file window. Paths stay on this route and never join the conversation."""
