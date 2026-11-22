@@ -1222,8 +1222,9 @@ def _output_check(record, response=None):
         return
     checks = record.setdefault('output_checks', [])
     if checks:
-        checks[-1].update(checked_at=_now(), after=_output_observation(response or record),
-                          outcome='interrupted' if (response or {}).get('connection') else record['state'])
+        observed = response or record
+        outcome = observed.get('status_check_issue') or ('interrupted' if observed.get('connection') else record['state'])
+        checks[-1].update(checked_at=_now(), after=_output_observation(observed), outcome=outcome)
     if record['state'] in TERMINAL:
         record.pop('output_revalidation_requested_at', None)
 
@@ -1236,37 +1237,47 @@ def _output_guard(root, record, *, ownership_only=False, allow_mount_alias=False
         owner, _ = _json(root / 'steps/remote.owner')
     except (OSError, ValueError) as error:
         raise StepError('conflict', 'The original remote output folder ownership is unavailable.') from error
-    allowed = {config['workRoot'] + '/' + record['run_id'], config['workRoot'] + '/runs/' + record['run_id']}
+    work_root = config['workRoot']
+    allowed = {work_root + '/' + record['run_id'], work_root + '/runs/' + record['run_id']}
     if (directory not in allowed or owner.get('remote_dir') != directory
             or not isinstance(owner.get('token'), str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', owner['token'])):
         raise StepError('conflict', 'Select the original remote environment and owned run folder before checking outputs.')
     q = shlex.quote
     guard = (f'D={q(directory)}\nJ={q(directory + "/steps/" + record["step"] + ".job")}\n'
             f'T={q(owner["token"])}\n'
-            '[ "$(readlink -f -- "$D")" = "$D" ] && [ -f "$D/.owner" ] && [ ! -L "$D/.owner" ] '
+            # Resolve the configured mount alias while disallowing redirects inside it.
+            f'W="$(readlink -f -- {q(work_root)})"\n'
+            f'C="${{W%/}}"/{q(directory[len(work_root) + 1:])}\n'
+            '[ -n "$W" ] && [ "$(readlink -f -- "$D")" = "$C" ] && [ -f "$D/.owner" ] && [ ! -L "$D/.owner" ] '
             '&& [ "$(head -c 129 -- "$D/.owner" 2>/dev/null)" = "$T" ] || { say output_source_mismatch owner; exit 91; }\n')
-    alias_check = ''
-    if allow_mount_alias:
-        alias_check = (f'W={q(config["workRoot"])}\n'
-                       'output_canonical() { case "$1" in "$W"/*) '
-                       '[ "$(readlink -f -- "$1")" = "$(readlink -f -- "$W")/${1#"$W"/}" ];; '
-                       '*) return 1;; esac; }\n')
-        guard = alias_check + guard.replace('[ "$(readlink -f -- "$D")" = "$D" ]', 'output_canonical "$D"')
     if ownership_only:
         return guard
     guard += (f'E={q(record["job_id"])}\n'
-            '[ "$(readlink -f -- "$J")" = "$J" ] && [ -f "$J" ] '
+            '[ ! -L "$J" ] && [ "$(readlink -f -- "$J")" = "$C/${J#"$D"/}" ] && [ -f "$J" ] '
             '&& [ "$(head -c 128 -- "$J" 2>/dev/null)" = "$E" ] || { say output_source_mismatch job; exit 92; }\n')
     paths = [directory + '/steps/' + record['step'] + '.' + suffix for suffix in ('done', 'out', 'err')]
     paths += [directory + '/work/' + path for path in _required(_step(record['step']), record)]
     guard += ('for p in ' + ' '.join(q(path) for path in paths) + '; do\n'
               '  [ ! -L "$p" ] || { say output_source_mismatch artifact; exit 91; }\n'
-              '  if [ -e "$p" ]; then [ "$(readlink -f -- "$p")" = "$p" ] && [ -f "$p" ] '
+              '  if [ -e "$p" ]; then [ "$(readlink -f -- "$p")" = "$C/${p#"$D"/}" ] && [ -f "$p" ] '
               '|| { say output_source_mismatch artifact; exit 91; }; fi\ndone\n')
-    if allow_mount_alias:
-        guard = guard.replace('[ "$(readlink -f -- "$J")" = "$J" ]', 'output_canonical "$J"')
-        guard = guard.replace('[ "$(readlink -f -- "$p")" = "$p" ]', 'output_canonical "$p"')
     return guard
+
+
+def _bounded_status_guard(guard, job_id):
+    return ("if command -v timeout >/dev/null 2>&1; then\n"
+            "timeout -k 1s 10s bash -s <<'SIGNET_STATUS_GUARD'\n" + _say() + guard +
+            "SIGNET_STATUS_GUARD\n"
+            'guard_exit=$?\n'
+            'case "$guard_exit" in\n'
+            '  124|137)\n'
+            '    say output_check_timeout yes\n'
+            f'    account="$(timeout -k 1s 4s sacct -n -X -P -j {shlex.quote(job_id)} '
+            '-o State 2>/dev/null | head -n 1)"\n'
+            '    say scheduler_only "$account" ;;\n'
+            'esac\n'
+            '[ "$guard_exit" -eq 0 ] || exit "$guard_exit"\n'
+            'else\n' + guard + 'fi\n')
 
 
 @_one_at_a_time
@@ -1599,7 +1610,7 @@ def status(run_id, name, refresh=False):
     checking_outputs = bool(record.get('output_revalidation_requested_at'))
     _environment()
     guarded = checking_outputs or name not in DOWNLOADED_STEPS
-    guard = _output_guard(root, record) if guarded else ''
+    guard = _bounded_status_guard(_output_guard(root, record), record['job_id']) if guarded else ''
     try:
         code, values, hints = _shell(_say() + guard + _status_script(record, step, read_only=checking_outputs) + guard, timeout=60)
     except OSError:
@@ -1610,10 +1621,19 @@ def status(run_id, name, refresh=False):
             _save(root, record)
         return reply
     if code:
-        reply = {**record, 'connection': 'interrupted', 'reason': 'The status check did not complete on HPC3.'}
+        if values.get('output_check_timeout') == 'yes':
+            scheduler = values.get('scheduler_only', '').split(' ')[0]
+            reply = {**record, 'status_check_issue': 'output_check_timeout',
+                     'slurm_state': None,
+                     'reason': 'Reading remote job files timed out. Showing the last confirmed analysis status.'}
+            if scheduler in ('PENDING', 'COMPLETED', 'CANCELLED', *_SLURM_RUNNING, *_SLURM_FAILED):
+                reply['slurm_state'] = scheduler
+        elif values.get('output_source_mismatch'):
+            reply = {**record, 'status_check_issue': 'output_source_mismatch',
+                     'reason': 'The remote job folder or its files do not match the saved run.'}
+        else:
+            reply = {**record, 'connection': 'interrupted', 'reason': 'The status check did not complete on HPC3.'}
         if checking_outputs:
-            if values.get('output_source_mismatch'):
-                reply['reason'] = 'The remote job or artifact path no longer matches the saved attempt; no outputs were accepted.'
             _output_check(record, reply)
             _save(root, record)
         return reply
