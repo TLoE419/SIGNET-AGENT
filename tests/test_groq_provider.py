@@ -48,7 +48,7 @@ class GroqTest(unittest.TestCase):
                 answer = main.run_conversation(client, text, [])
         dispatch.assert_not_called()
         self.assertNotIn('tools', self.requests[0])
-        self.assertIn('模型請求失敗', answer)
+        self.assertIn('Model request failed', answer)
 
     def test_budget_stops_before_network_and_preserves_long_user_conditions(self):
         conditions = '研究條件不能刪除：甲乙丙丁戊己庚辛壬癸。' * 2000
@@ -56,8 +56,8 @@ class GroqTest(unittest.TestCase):
         with self.client([]) as client:
             answer = main.run_conversation(client, conditions, history)
         self.assertEqual(self.requests, [])
-        self.assertIn('未送出模型請求', answer)
-        self.assertNotIn('輸入「繼續」', answer)
+        self.assertIn('No model request was sent', answer)
+        self.assertNotIn('Send “continue”', answer)
         self.assertEqual(history[0].parts[0].text, conditions)
 
     def test_private_tool_result_is_withheld_without_replaying_or_losing_local_evidence(self):
@@ -186,7 +186,7 @@ class GroqTest(unittest.TestCase):
             with patch.object(main, 'dispatch_tool') as dispatch:
                 result = main.run_conversation(client, '介紹需要的資料', [])
         self.assertIn('已完成的部分說明', result)
-        self.assertIn('長度上限', result)
+        self.assertIn('reached the length limit', result)
         dispatch.assert_not_called()
 
     def test_rate_limit_after_tool_waits_and_resends_only_model_request(self):
@@ -196,15 +196,40 @@ class GroqTest(unittest.TestCase):
                      (200, completion('已依工具結果完成說明。'))]
         history, events = [], []
         with self.client(responses) as client:
+            timing = ModelRequestTiming()
+            client.timing = timing
             with patch.object(main, 'dispatch_tool', return_value=signet_catalog()) as dispatch:
                 result = main.run_conversation(client, '介紹分析能力', history, progress=events.append,
-                                               http_timing=ModelRequestTiming())
+                                               http_timing=timing)
         self.assertEqual(result, '已依工具結果完成說明。')
         dispatch.assert_called_once()
         self.assertEqual(len(self.requests), 3)
         self.assertEqual(self.requests[1], self.requests[2])
         self.assertTrue(self.pauses)
-        self.assertIn('等待', '\n'.join(events))
+        self.assertIn('Quota wait:', '\n'.join(events))
+
+    def test_user_stop_interrupts_quota_wait_without_retrying_the_model(self):
+        from agent.core.model_timing import ModelRequestTiming
+        cancelled = False
+
+        def cancel_requested():
+            return cancelled
+
+        def report(message):
+            nonlocal cancelled
+            if message.startswith('Quota wait:'):
+                cancelled = True
+
+        timing = ModelRequestTiming(cancel_requested=cancel_requested)
+        rejected = (429, {'error': {'message': 'Please try again in 20.7s.'}})
+        with self.client([rejected]) as client:
+            client.timing = timing
+            answer = main.run_conversation(client, 'Question', progress=report,
+                                           http_timing=timing, cancel_requested=cancel_requested)
+        self.assertEqual(answer, '')
+        self.assertEqual(len(self.requests), 1)
+        self.assertFalse(self.pauses)
+        self.assertFalse(client.pacer.stopped.is_set())
 
     def client(self, responses):
         self.requests = []
@@ -266,7 +291,7 @@ class GroqTest(unittest.TestCase):
         self.assertTrue(compact['scripts_omitted'])
         self.assertIn('scripts', history[2].parts[0].function_response.response)
         self.assertIn(GROQ_MODEL, events[0])
-        self.assertIn('選擇原因', '\n'.join(events))
+        self.assertIn('Selection reason:', '\n'.join(events))
         self.assertIn({'role':'user', 'content':'繼續'}, self.requests[2]['messages'])
         self.assertEqual(self.send_times, [0, 0, 0])
         self.assertEqual(self.pauses, [])
@@ -311,7 +336,7 @@ class GroqTest(unittest.TestCase):
                 with patch.object(main, 'dispatch_tool') as dispatch:
                     answer = main.run_conversation(client, '查詢', [])
                 dispatch.assert_not_called()
-                self.assertIn('模型請求失敗', answer)
+                self.assertIn('Model request failed', answer)
 
 
 if __name__ == '__main__':

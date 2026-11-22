@@ -1,24 +1,18 @@
-"""Signed-in Codex CLI adapter."""
-from contextlib import AbstractContextManager
-import shutil
-from typing import Any
+"""SIGNET's isolated Codex CLI test provider."""
+import threading
 
-from agent.core.model_timing import ModelRequestTiming
 from .base import ProviderAdapter
+from .codex_client import CodexClient
 
 
 class CodexProviderAdapter(ProviderAdapter):
+    label = 'Codex CLI'
+
     def __init__(self):
-        from agent.providers.codex_client import configured_model
-        self.label = 'Codex CLI / ' + (configured_model() or '預設模型')
-        if not shutil.which('codex'):
-            self.startup_messages = (
-                '尚未安裝 Codex 命令列；介面仍可開啟，聊天前請依 docs/USER_GUIDE.md 安裝與登入。',)
+        self.stopped = threading.Event()
 
-    def create_client(self, timing: ModelRequestTiming) -> AbstractContextManager[Any]:
-        from agent.providers.codex_client import CodexClient
-        return CodexClient(timing=timing)
+    def create_client(self, timing):
+        return CodexClient(timing=timing, stopped=self.stopped)
 
-    def stop(self) -> None:
-        from agent.providers.codex_client import STOP
-        STOP.set()
+    def stop(self):
+        self.stopped.set()

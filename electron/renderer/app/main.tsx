@@ -8,7 +8,7 @@ if(!(window as any).signetDesktop?.isDesktop)throw Error('Launch SIGNET through 
 const workspace=document.getElementById('signet-lens-left-preview');
 if(workspace){
  const modelSettings=document.getElementById('ml-model-settings');
- if(modelSettings)createRoot(modelSettings).render(<WorkspaceModelSettings workspace={workspace} bridge={(window as any).signetDesktop.model} model={document.querySelector('meta[name="model-label"]')?.getAttribute('content')||'—'}/>);
+ if(modelSettings)createRoot(modelSettings).render(<WorkspaceModelSettings bridge={(window as any).signetDesktop.model} model={document.querySelector('meta[name="model-label"]')?.getAttribute('content')||'—'}/>);
  const controls=document.getElementById('ml-remote-controls');
  const readiness=document.getElementById('ml-environment-settings');
  const pane=controls?.closest<HTMLElement>('.ml-nav-pane');

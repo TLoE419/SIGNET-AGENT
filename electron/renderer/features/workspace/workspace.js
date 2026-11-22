@@ -2210,7 +2210,9 @@
   }
 
   function loadChat(record, saved) {
-    for (const {role, text} of saved.messages ?? []) {
+    for (const {role, text, model_fallback} of saved.messages ?? []) {
+      if (role === "notice") {record.transcript.append(createMessage("ml-chat-notice", text)); continue;}
+      if (model_fallback) record.transcript.append(createMessage("ml-chat-notice", `This response uses ${model_fallback}.`));
       if (role === "user") record.transcript.append(createMessage("ml-message", text));
       else renderAgentAnswer(createAgentReply(record), text);
     }
@@ -2246,6 +2248,7 @@
     } catch (error) {
       chatLabel(byId("chat-status"), error.message);
     } finally {
+      if (stop) {stop.hidden = true; stop.onclick = null;}
       setChatBusy(false);
     }
   }
@@ -2890,6 +2893,7 @@
     const text = input.value.trim();
     if (chatBusy || !text) return;
     const record = activeChat;
+    const turnId = crypto.randomUUID();
     const navigationAtSend = ++navigationRevision;
     const selection = {context: null};
     window.dispatchEvent(new CustomEvent("workspace-context-request", {detail: selection}));
@@ -2910,10 +2914,39 @@
     reply.scrollIntoView({ block: "nearest" });
 
     const operations = new Map();
+    const stop = byId("stop");
+    let registered = false, stopping = false;
+    async function requestStop() {
+      try {
+        const response = await fetch("/chat/cancel", {method: "POST",
+          headers: {"Content-Type": "application/json", "X-Chat-Token": chatToken},
+          body: JSON.stringify({session: record.session, turn_id: turnId})});
+        if (!response.ok) throw Error("Could not stop the response. Try again.");
+      } catch (error) {
+        if (!done) {stopping = false; if (stop) stop.disabled = false; status.textContent = error.message;}
+      }
+    }
+    if (stop) {
+      stop.hidden = false; stop.disabled = false;
+      stop.onclick = () => {
+        if (stopping || done) return;
+        stopping = true; stop.disabled = true;
+        status.textContent = "Stopping response…";
+        if (registered) void requestStop();
+      };
+    }
     let done = false, failed = false, answered = false, outcome = "completed";
     function consume(line) {
       if (!line.trim()) return;
       const event = JSON.parse(line);
+      if (event.type === "turn_started" && event.text?.turn_id === turnId) {
+        registered = true;
+        if (stopping) void requestStop();
+      }
+      if (event.type === "model_fallback") {
+        reply.before(createMessage("ml-chat-notice", `This response uses ${event.text.model}.`));
+      }
+      if (stopping && ["answer", "workspace_action", "ui"].includes(event.type)) return;
       if (event.type === "ui" && event.text?.panel === "workflow" && event.text.visible === true &&
           record === activeChat && navigationAtSend === navigationRevision) {
         openNavigation("settings");
@@ -2942,6 +2975,7 @@
       if (event.type === "done") {
         outcome = event.status === "cancelled" ? "needs_review" : chatOutcomes[event.status] ? event.status : failed ? "needs_review" : "completed";
         if (failed && outcome === "completed") outcome = "needs_review";
+        if (event.status === "cancelled") reply.textContent = "Response stopped. Completed tool records are retained.";
         done = true;
       }
     }
@@ -2950,7 +2984,7 @@
       const response = await fetch("/chat", {
         method: "POST",
         headers: {"Content-Type": "application/json", "X-Chat-Token": chatToken},
-        body: JSON.stringify({text, session: record.session, language: root.lang, workspace_context}),
+        body: JSON.stringify({text, session: record.session, turn_id: turnId, language: root.lang, workspace_context}),
       });
       if (!response.ok) throw new Error(await readChatError(response));
       const reader = response.body.getReader();
@@ -2988,6 +3022,7 @@
       chatLabel(turn.status, needsReview);
       record.outcome = "needs_review";
     } finally {
+      if (stop) {stop.hidden = true; stop.onclick = null;}
       setChatBusy(false);
       if (!byId("chat-transcripts").hidden && !byId("agent-view").hidden && !byId("chat-panel").hidden) {
         input.focus({preventScroll: true});

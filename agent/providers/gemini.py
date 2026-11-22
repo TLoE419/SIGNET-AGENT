@@ -6,6 +6,8 @@ from agent.core.model_timing import ModelRequestTiming
 from .base import ProviderAdapter
 from .settings import required_key
 
+REQUEST_TIMEOUT_MS = 45_000
+
 
 class GeminiProviderAdapter(ProviderAdapter):
     def __init__(self, model: str):
@@ -17,4 +19,4 @@ class GeminiProviderAdapter(ProviderAdapter):
         from google.genai import types
         return genai.Client(
             api_key=self._api_key,
-            http_options=types.HttpOptions(client_args=timing.client_args()))
+            http_options=types.HttpOptions(timeout=REQUEST_TIMEOUT_MS, client_args=timing.client_args()))

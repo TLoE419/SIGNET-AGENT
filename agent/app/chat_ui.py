@@ -1,5 +1,6 @@
 """Loopback-only Python API for the Electron client and standalone backend development."""
 import argparse
+from dataclasses import dataclass, field
 import csv
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
@@ -17,7 +18,7 @@ from dotenv import load_dotenv
 from google.genai import types
 
 from agent.app import signet_api
-from agent.app.chat_outcome import ChatOutcome
+from agent.app.chat_outcome import ChatOutcome, STOPPED_NOTICE
 from agent.core.conversation import MODEL, run_conversation
 from agent.core.model_timing import ModelRequestTiming
 from agent.paths import PROJECT_ROOT
@@ -28,6 +29,16 @@ from agent.stage6.workspace import ARCHIVED_STEP_JOBS, Workspace
 from agent.tools.ui import UI_CHANNEL
 
 ROOT = PROJECT_ROOT
+BACKEND_PROVIDERS = ('none', *PROVIDERS)
+TURN_MARKER = 'SIGNET_TURN '
+SESSION_ID = r'[a-f0-9-]{36}'
+TURN_ID = r'[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}'
+
+@dataclass
+class _ChatTurn:
+    session: str
+    turn_id: str
+    cancelled: threading.Event = field(default_factory=threading.Event)
 
 
 def _analysis_context(session):
@@ -52,6 +63,7 @@ class ChatServer(ThreadingHTTPServer):
         self.state_file = Path(state_file) if state_file else None
         self.pending_history = []
         self.active_session = None
+        self.deleted_sessions = set()
         self.setup_shutdown = threading.Event()
         self.analysis_download_lock = threading.Lock()
         self.analysis_downloads = {}
@@ -65,8 +77,11 @@ class ChatServer(ThreadingHTTPServer):
                               for key, value in state.get('histories', {}).items()}
             self.pending_history = [types.Content.model_validate(item)
                                     for item in state.get('pending_history', [])]
+            self.deleted_sessions = set(state.get('deleted_sessions', []))
         # Scientific tools share local runs, so serialize turns across browser tabs.
         self.turn_lock = threading.Lock()
+        self.chat_turn_lock = threading.Lock()
+        self.chat_turn = None
         self.stage6 = Workspace(self)
         super().__init__(address, ChatHandler)
 
@@ -84,13 +99,39 @@ class ChatServer(ThreadingHTTPServer):
         return super().server_close()
 
     def visible_messages(self, session):
-        messages = []
-        for item in self.histories.get(session, []):
-            if any(part.function_call or part.function_response for part in item.parts or []):
+        fallback_models = {}
+        stopped_after = set()
+        for turn in self.events.get(session, []):
+            if not isinstance(turn, list):
                 continue
-            text = '\n'.join(part.text for part in item.parts or [] if part.text and not part.thought)
-            if text and not text.startswith('服務更新續接資料：'):
-                messages.append({'role': 'user' if item.role == 'user' else 'assistant', 'text': text})
+            marker = next((line for line in reversed(turn)
+                           if isinstance(line, str) and line.startswith(TURN_MARKER)), None)
+            if marker is None:
+                continue
+            try:
+                metadata = json.loads(marker[len(TURN_MARKER):])
+            except ValueError:
+                continue
+            if not isinstance(metadata, dict):
+                continue
+            index, model = metadata.get('assistant_index'), metadata.get('model_fallback')
+            if (type(index) is int and index >= 0 and isinstance(model, str)
+                    and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9.-]{0,127}', model)):
+                fallback_models[index] = model
+            stopped_index = metadata.get('stopped_after')
+            if metadata.get('status') == 'cancelled' and type(stopped_index) is int and stopped_index >= 0:
+                stopped_after.add(stopped_index)
+        messages = []
+        for index, item in enumerate(self.histories.get(session, [])):
+            if not any(part.function_call or part.function_response for part in item.parts or []):
+                text = '\n'.join(part.text for part in item.parts or [] if part.text and not part.thought)
+                if text and not text.startswith('服務更新續接資料：'):
+                    message = {'role': 'user' if item.role == 'user' else 'assistant', 'text': text}
+                    if item.role == 'model' and index in fallback_models:
+                        message['model_fallback'] = fallback_models[index]
+                    messages.append(message)
+            if index in stopped_after:
+                messages.append({'role': 'notice', 'text': STOPPED_NOTICE})
         return messages
 
     def save_state(self):
@@ -101,12 +142,37 @@ class ChatServer(ThreadingHTTPServer):
                      'histories': {key: [item.model_dump(mode='json', exclude_none=True) for item in value]
                                    for key, value in self.histories.items()},
                      'pending_history': [item.model_dump(mode='json', exclude_none=True)
-                                         for item in self.pending_history]}
+                                         for item in self.pending_history],
+                     'deleted_sessions': sorted(self.deleted_sessions)}
             temporary = self.state_file.with_suffix('.tmp')
             with open(temporary, 'w', opener=lambda path, flags: os.open(path, flags, 0o600)) as stream:
                 json.dump(state, stream, ensure_ascii=False)
             os.chmod(temporary, 0o600)
             temporary.replace(self.state_file)
+
+    def delete_session(self, session):
+        """Remove one saved conversation while the caller holds both state locks."""
+        workspace = self.stage6
+        has_workspace = session in workspace.sessions
+        if session in self.deleted_sessions:
+            return True
+        if session not in self.histories and session not in self.events and not has_workspace:
+            return False
+        previous = self.histories.copy(), self.events.copy(), workspace.sessions.copy(), self.active_session
+        self.histories.pop(session, None)
+        self.events.pop(session, None)
+        workspace.sessions.pop(session, None)
+        if self.active_session == session:
+            self.active_session = None
+        self.deleted_sessions.add(session)
+        try:
+            self.save_state()
+        except (OSError, TypeError, ValueError):
+            self.histories, self.events, workspace.sessions, self.active_session = previous
+            self.deleted_sessions.remove(session)
+            raise
+        return True
+
 
 
 class ChatHandler(BaseHTTPRequestHandler):
@@ -134,14 +200,14 @@ class ChatHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if not self._local_request():
-            return self._error(403, '僅允許本機介面。')
+            return self._error(403, 'Only the local interface is allowed.')
         url = urlsplit(self.path)
-        if url.path == '/stage6/result-download' or url.path.startswith('/stage6/result-preview/'):
-            return signet_api.serve_result_asset(self, url)
         if url.path == '/signet/result-download':
             return signet_api.download_results(self, url)
         if url.path.startswith('/signet/result-preview/'):
             return signet_api.preview_result(self, url)
+        if url.path.startswith('/stage6/result-preview/') or url.path == '/stage6/result-download':
+            return signet_api.serve_result_asset(self, url)
         if url.path.startswith('/signet/'):
             # Responses name the user's runs and HPC3 paths, so reads need the page token too.
             if not secrets.compare_digest(self.headers.get('X-Chat-Token', ''), self.server.token):
@@ -156,14 +222,14 @@ class ChatHandler(BaseHTTPRequestHandler):
         if url.path == '/stage6/history':
             return self.stage6_history_get(url)
         if url.path != '/bootstrap':
-            return self._error(404, '找不到此 API。')
+            return self._error(404, 'API endpoint not found.')
         if not self.server.turn_lock.acquire(blocking=False):
-            return self._error(409, '回合仍在執行，請保留原頁面等待完成。')
+            return self._error(409, 'A turn is still running. Keep the original page open until it finishes.')
         try:
             query = parse_qs(url.query)
             session = query.get('session', [None])[0]
-            saved = list(self.server.histories)
-            saved = [key for key in saved if re.fullmatch(r'[a-f0-9-]{36}', key)]
+            saved = list(dict.fromkeys([*self.server.histories, *self.server.stage6.sessions]))
+            saved = [key for key in saved if re.fullmatch(SESSION_ID, key) and key not in self.server.deleted_sessions]
             if session is None and query.get('new') != ['1']:
                 active = self.server.active_session
                 histories = [key for key in self.server.histories if key in saved]
@@ -175,7 +241,7 @@ class ChatHandler(BaseHTTPRequestHandler):
                 initial['sessions'].append({'session': key, 'title': ' '.join(title.split())[:80]})
             if session is not None:
                 if session not in saved:
-                    return self._error(404, '找不到這段對話。')
+                    return self._error(404, 'Conversation not found.')
                 initial.update(session=session, messages=self.server.visible_messages(session),
                                events=self.server.events.get(session, []))
                 if self.server.active_session != session:
@@ -205,21 +271,44 @@ class ChatHandler(BaseHTTPRequestHandler):
 
     def do_DELETE(self):
         if not self._app_request():
-            return self._error(403, '請從本機聊天頁面送出。')
+            return self._error(403, 'Send requests from the local chat page.')
         url = urlsplit(self.path)
-        if not url.path.startswith('/signet/'):
-            return self._error(404, '找不到此操作。')
-        return signet_api.handle(self, 'DELETE', url)
+        if url.path.startswith('/signet/'):
+            return signet_api.handle(self, 'DELETE', url)
+        match = re.fullmatch(rf'/chat/({SESSION_ID})', self.path)
+        if not match:
+            return self._error(404, 'Conversation not found.')
+        busy = 'A conversation turn or visualization is running. Try again when it finishes.'
+        if not self.server.turn_lock.acquire(blocking=False):
+            return self._error(409, busy)
+        session = match[1]
+        try:
+            workspace_lock = self.server.stage6.lock
+            if not workspace_lock.acquire(blocking=False):
+                return self._error(409, busy)
+            try:
+                deleted = self.server.delete_session(session)
+            finally:
+                workspace_lock.release()
+        except (OSError, TypeError, ValueError):
+            return self._error(500, 'Could not save the conversation deletion. Try again.')
+        finally:
+            self.server.turn_lock.release()
+        if not deleted:
+            return self._error(404, 'Conversation not found.')
+        return self.json_response({'deleted': session})
 
     def do_POST(self):
         if not self._app_request():
-            return self._error(403, '請從本機聊天頁面送出。')
+            return self._error(403, 'Send requests from the local chat page.')
         if self.path.startswith('/signet/'):
             return signet_api.handle(self, 'POST', urlsplit(self.path))
         if self.path.startswith('/hpc/'):
             return self.hpc_post()
+        if self.path == '/chat/cancel':
+            return self.cancel_chat_turn()
         if self.path != '/chat':
-            return self._error(404, '找不到此操作。')
+            return self._error(404, 'Operation not found.')
         try:
             self.connection.settimeout(10)
             size = int(self.headers.get('Content-Length', '0'))
@@ -229,32 +318,43 @@ class ChatHandler(BaseHTTPRequestHandler):
             if not isinstance(payload, dict):
                 raise ValueError()
             text, session = payload.get('text'), payload.get('session')
-            language = payload.get('language', 'en')
             if (not isinstance(text, str) or not text.strip() or len(text) > 8000
-                    or not isinstance(session, str) or not re.fullmatch(r'[a-f0-9-]{36}', session)
-                    or language not in ('en', 'zh-Hant')):
+                    or not isinstance(session, str) or not re.fullmatch(SESSION_ID, session)):
                 raise ValueError()
         except (ValueError, OSError):
-            return self._error(400, '訊息格式不正確，請輸入 1 至 8000 字。')
+            return self._error(400, 'Invalid message. Enter 1–8000 characters.')
+        turn_id = payload.get('turn_id')
+        if 'turn_id' in payload and (not isinstance(turn_id, str) or not re.fullmatch(TURN_ID, turn_id)):
+            return self._error(400, 'Invalid chat turn identifier.')
+        if self.server.client_factory is None:
+            return self._error(503, 'Set up a model in Settings to send chat messages.')
         try:
             validated_context = workspace_context.validate(payload.get('workspace_context'), self.server.stage6.history)
         except (ValueError, KeyError, TypeError, OSError):
-            return self._error(400, 'Workspace selection changed or is invalid; reselect the dataset/run and send again.'
-                               if language == 'en' else '工作區選取已變更或無效；請重新選取資料組與執行後再傳送。')
+            return self._error(400, 'Workspace selection changed or is invalid; reselect the dataset/run and send again.')
         if not self.server.turn_lock.acquire(blocking=False):
-            return self._error(409, '另一個回合仍在執行，請等候結束；關閉頁面不會取消工具。')
+            return self._error(409, 'Another turn is running. Wait for it to finish; closing the page does not cancel tools.')
+        turn = _ChatTurn(session, turn_id) if turn_id else None
         try:
+            if session in self.server.deleted_sessions:
+                return self._error(404, 'Conversation not found.')
             self.server.active_session = session
             if session not in self.server.histories and self.server.pending_history:
                 self.server.histories[session] = self.server.pending_history
                 self.server.pending_history = []
             history = self.server.histories.setdefault(session, [])
+            history_start = len(history)
             events = []
             self.server.events.setdefault(session, []).append(events)
+            if turn is not None:
+                with self.server.chat_turn_lock:
+                    self.server.chat_turn = turn
             self.connection.settimeout(None)
             self._headers(200, 'application/x-ndjson; charset=utf-8')
             connected = True
             outcome = ChatOutcome()
+            fallback_model = None
+            assistant_index = None
 
             def emit(kind, message):
                 nonlocal connected
@@ -269,36 +369,109 @@ class ChatHandler(BaseHTTPRequestHandler):
                         # Keep recording actual results if the browser disconnects; never replay tools.
                         connected = False
 
+            def model_fallback(model):
+                nonlocal fallback_model
+                fallback_model = model
+                emit('model_fallback', {'model': model})
+
+            def display_workspace_action(request):
+                if turn is None or not turn.cancelled.is_set():
+                    if 'workspace_action' in request:
+                        emit('workspace_action', request['workspace_action'])
+                    else:
+                        emit('ui', request)
+
+            if turn is not None:
+                emit('turn_started', {'turn_id': turn_id})
+            cancel_requested = turn.cancelled.is_set if turn is not None else None
+            answer = None
             try:
-                timing = ModelRequestTiming()
+                timing = ModelRequestTiming(cancel_requested=cancel_requested)
                 with self.server.client_factory(timing) as client:
                     genotype_token = CHAT_SESSION.set(session)
                     context_token = workspace_context.CHAT_CONTEXT.set((self.server.stage6, session))
                     # Panel requests from show_panel go straight to this page as they happen.
-                    ui_token = UI_CHANNEL.set(lambda request: emit('workspace_action', request['workspace_action']) if 'workspace_action' in request else emit('ui', request))
+                    ui_token = UI_CHANNEL.set(display_workspace_action)
                     try:
-                        answer = run_conversation(client, text.strip(), history,
-                                              progress=lambda message: emit('progress', message), http_timing=timing,
-                                                  language=language, context=_analysis_context(session), workspace_context=validated_context)
+                        answer = run_conversation(
+                            client, text.strip(), history, progress=lambda message: emit('progress', message),
+                            http_timing=timing, context=_analysis_context(session), workspace_context=validated_context, on_model_fallback=model_fallback,
+                            **({'cancel_requested': cancel_requested} if turn is not None else {}))
                     finally:
                         UI_CHANNEL.reset(ui_token)
                         CHAT_SESSION.reset(genotype_token)
                         workspace_context.CHAT_CONTEXT.reset(context_token)
-                # Failure returns have no final model content; retain their public answer on reload.
-                if not history or history[-1].role != 'model' or any(part.function_call for part in history[-1].parts or []):
-                    history.append(types.Content(role='model', parts=[types.Part.from_text(text=answer)]))
-                emit('answer', answer)
             except Exception:
-                emit('error', '回合發生非預期錯誤；操作狀態可能未知，請核對工作狀態後再繼續。')
-            if not connected:
+                answer = None
+            stopped = self._finish_chat_turn(turn)
+            if stopped:
+                if (len(history) > history_start and history[-1].role == 'model'
+                        and not any(part.function_call for part in history[-1].parts or [])):
+                    history.pop()
+                if len(history) == history_start:
+                    history.append(types.Content(role='user', parts=[types.Part.from_text(text=text.strip())]))
+                outcome.status = 'cancelled'
+            elif answer is not None:
+                try:
+                    # Failure returns have no final model content; retain their public answer on reload.
+                    if not history or history[-1].role != 'model' or any(part.function_call for part in history[-1].parts or []):
+                        history.append(types.Content(role='model', parts=[types.Part.from_text(text=answer)]))
+                    if len(history) > history_start:
+                        assistant_index = len(history) - 1
+                    emit('answer', answer)
+                except Exception:
+                    answer = None
+            if answer is None and not stopped:
+                emit('error', 'Unexpected turn error. Operation status may be unknown; check the run status before continuing.')
+            if not connected and not stopped:
                 outcome.status = 'needs_review'
-            events.append('SIGNET_TURN ' + json.dumps({'status': outcome.status}))
+            marker = {'status': outcome.status}
+            if stopped:
+                marker['stopped_after'] = len(history) - 1
+            if assistant_index is not None and fallback_model is not None:
+                marker.update(assistant_index=assistant_index, model_fallback=fallback_model)
+            events.append(TURN_MARKER + json.dumps(marker))
             emit('done', outcome.summary())
         finally:
             try:
+                self._finish_chat_turn(turn)
                 self.server.save_state()
             finally:
                 self.server.turn_lock.release()
+
+
+    def _finish_chat_turn(self, turn):
+        if turn is None:
+            return False
+        with self.server.chat_turn_lock:
+            if self.server.chat_turn is turn:
+                self.server.chat_turn = None
+            return turn.cancelled.is_set()
+
+
+    def cancel_chat_turn(self):
+        try:
+            self.connection.settimeout(10)
+            size = int(self.headers.get('Content-Length', '0'))
+            if not 0 < size <= 512:
+                raise ValueError()
+            payload = json.loads(self.rfile.read(size))
+            if not isinstance(payload, dict):
+                raise ValueError()
+            session, turn_id = payload.get('session'), payload.get('turn_id')
+            if (not isinstance(session, str) or not re.fullmatch(SESSION_ID, session)
+                    or not isinstance(turn_id, str) or not re.fullmatch(TURN_ID, turn_id)):
+                raise ValueError()
+        except (ValueError, OSError):
+            return self._error(400, 'Invalid chat turn identifier.')
+        with self.server.chat_turn_lock:
+            turn = self.server.chat_turn
+            found = turn is not None and (turn.session, turn.turn_id) == (session, turn_id)
+            if found:
+                turn.cancelled.set()
+        if not found:
+            return self._error(404, 'This chat turn is no longer active.')
+        return self.json_response({'status': 'cancellation_requested', 'turn_id': turn_id})
 
 
     def archived_stage_results_get(self, url):
@@ -487,17 +660,18 @@ class ChatHandler(BaseHTTPRequestHandler):
         return self.json_response(action())
 
 
-def create_server(provider='codex', port=8880, state_file=ROOT / '.chat-state.json'):
+def create_server(provider='none', port=8880, state_file=ROOT / '.chat-state.json'):
     """Build the Python API for Electron or standalone backend development."""
-    if provider not in PROVIDERS:
+    if provider not in BACKEND_PROVIDERS:
         raise ValueError('Unsupported model provider.')
     load_dotenv(ROOT / '.env')
-    configured = create_provider_adapter(provider, gemini_model=MODEL)
     from agent.tools.signet import source_path
-    for message in configured.startup_messages:
-        print(message, flush=True)
     if not source_path().is_dir():
-        print('科學來源尚未準備；可聊天與查詢工具目錄。分析前請執行 python scripts/setup_source.py。', flush=True)
+        print('The analysis source is not installed. Run python scripts/setup_source.py before starting analysis.', flush=True)
+    if provider == 'none':
+        return ChatServer(('127.0.0.1', port), None,
+                          model_label='Chat not configured', state_file=state_file)
+    configured = create_provider_adapter(provider, gemini_model=MODEL)
     return ChatServer(('127.0.0.1', port), configured.create_client,
                       model_label=configured.label, state_file=state_file,
                       stop_provider=configured.stop)

@@ -55,14 +55,22 @@ test('owned API serves bootstrap without frontend assets, preserves protections 
   assert.equal(response.status, 200);
   assert.match(response.headers.get('content-security-policy'), /frame-ancestors 'none'/);
   const html = await response.text();
-  assert.deepEqual(JSON.parse(html).initial,{sessions:[]});
+  const bootstrap = JSON.parse(html);
+  assert.deepEqual(bootstrap.initial,{sessions:[]});
+  assert.equal(bootstrap.model, 'Chat not configured');
   assert.equal((await request(origin)).status,404);
   assert.equal((await request(origin + '/chat.js')).status,404);
   assert.doesNotMatch(html, /__TOKEN__|__MODEL__/);
   assert.equal((await request(origin + '/.env')).status, 404);
   assert.equal((await request(origin + '/chat', {method: 'POST', body: '{}'})).status, 403);
-  const token = JSON.parse(html).token;
+  const token = bootstrap.token;
   assert.equal((await request(origin + '/chat', {method: 'POST', headers: {'Origin': origin, 'X-Chat-Token': token}, body: '{}'})).status, 400);
+  const unconfigured = await request(origin + '/chat', {
+    method: 'POST', headers: {'Origin': origin, 'X-Chat-Token': token},
+    body: JSON.stringify({text: 'Fixture question', session: '12345678-0000-0000-0000-000000000000'}),
+  });
+  assert.equal(unconfigured.status, 503);
+  assert.match(JSON.parse(await unconfigured.text()).error, /Set up a model in Settings/);
   await backend.stop();
   await assert.rejects(request(origin));
   const state = JSON.parse(await readFile(stateFile, 'utf8'));

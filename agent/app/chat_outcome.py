@@ -3,6 +3,8 @@ import json
 import re
 from agent.core.tool_status import activity_status
 
+STOPPED_NOTICE = 'Response stopped.'
+
 
 class ChatOutcome:
     def __init__(self):
@@ -21,19 +23,22 @@ class ChatOutcome:
                 if isinstance(value, str) and value in {'failed', 'cancelled', 'needs_review'}:
                     status = 'failed' if value == 'failed' else 'needs_review'
             else:
-                match = re.match(r'工具結果：.*；status=([^；]+)；', text)
+                match = re.match(r'^Tool result: .*; status=([^;]+);', text)
                 if match:
                     value = activity_status(match[1])
                     if value != 'completed':
                         status = 'failed' if value == 'failed' else 'needs_review'
-        elif kind == 'answer' and re.search(r'工具已中斷|已中斷等待模型', text):
+        elif kind == 'answer' and re.search(r'^(?:A tool was interrupted|Stopped waiting for the model)', text, re.MULTILINE):
             status = 'needs_review'
-        elif kind == 'answer' and re.search(r'模型請求失敗|精簡後輸入估算|模型未回傳完整內容|模型未產生有效回答|模型補答時|已達工具呼叫輪數|單輪工具呼叫', text):
+        elif kind == 'answer' and re.search(r'^(?:Model request failed|The estimated input is|The model did not return complete content|'
+                                                  r'The model did not produce a valid answer|The answer repair returned tool calls|'
+                                                  r'Tool-round limit reached|Too many tool calls)', text, re.MULTILINE):
             status = 'failed'
         if status and self.status != 'failed':
             self.status = status
 
     def summary(self):
-        return {'completed': '回合結束；不代表分析已執行或通過驗證。',
-                'failed': '回合失敗；部分回答與工具紀錄已保留。',
-                'needs_review': '回合需要確認；部分輸出已保留，請核對工作狀態，勿直接重送。'}[self.status]
+        return {'completed': 'Turn finished. Check the analysis status for execution and verification.',
+                'failed': 'Turn failed. Partial answers and tool activity were retained.',
+                'cancelled': STOPPED_NOTICE,
+                'needs_review': 'Turn needs review. Partial output was retained. Check the run status before retrying.'}[self.status]

@@ -355,3 +355,33 @@ test('advanced terminal opens views without shell commands and closes only its o
     restore();
   }
 });
+
+test('Stop waits for server registration and retains the same turn while ignoring a late answer', async t => {
+ const h=harness(t);await h.ready();
+ const original=h.window.fetch, requests=[];
+ let register, finish, turn;
+ const bytes=events=>new TextEncoder().encode(events.map(event=>JSON.stringify(event)).join('\n')+'\n');
+ h.window.fetch=async(url, options)=>{
+  if(url==='/chat'){
+   turn=JSON.parse(options.body);let reads=0;
+   return {ok:true,body:{getReader:()=>({read:()=>{
+    if(reads++===0)return new Promise(resolve=>{register=()=>resolve({value:bytes([{type:'turn_started',text:{turn_id:turn.turn_id}}]),done:false})});
+    if(reads===2)return new Promise(resolve=>{finish=()=>resolve({value:bytes([{type:'answer',text:'late answer must not appear'},{type:'done',text:'Stopped',status:'cancelled'}]),done:false})});
+    return Promise.resolve({done:true});
+   }})}};
+  }
+  if(url==='/chat/cancel'){requests.push(JSON.parse(options.body));return response({status:'cancellation_requested'});}
+  return original(url,options);
+ };
+ h.q('#ml-input').value='stop this response';
+ h.q('#ml-composer').dispatchEvent(new h.window.Event('submit',{bubbles:true,cancelable:true}));
+ await until(()=>register&& !h.q('#ml-stop').hidden);
+ h.click('#ml-stop');assert.equal(requests.length,0);
+ register();await until(()=>requests.length===1&&finish);
+ assert.deepEqual(requests[0],{session:turn.session,turn_id:turn.turn_id});
+ assert.equal(h.q('#ml-send').disabled,true,'wait for the server checkpoint');
+ finish();await until(()=>!h.q('#ml-send').disabled);
+ assert.equal(h.q('#ml-stop').hidden,true);
+ assert.doesNotMatch(h.q('#ml-chat-transcripts').textContent,/late answer must not appear/);
+ assert.match(h.q('#ml-chat-transcripts').textContent,/Response stopped/);
+});

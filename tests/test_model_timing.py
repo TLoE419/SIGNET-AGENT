@@ -32,7 +32,7 @@ class ModelTimingTest(unittest.TestCase):
                 client.models.generate_content(model=main.MODEL,contents='SECRET-PROMPT',config=main.config)
             timing.finish()
         self.assertEqual(len(timing.attempts),1)
-        self.assertIn('狀態碼=503','\n'.join(events))
+        self.assertIn('status=503','\n'.join(events))
         self.assertNotIn('fake-timing-key','\n'.join(events))
         self.assertNotIn('SECRET-PROMPT','\n'.join(events))
 
@@ -47,11 +47,11 @@ class ModelTimingTest(unittest.TestCase):
         self.assertEqual(len(requests),2)
         self.assertEqual(len(timing.attempts),2)
         joined='\n'.join(events)
-        self.assertIn('狀態碼=503',joined)
-        self.assertIn('狀態碼=200',joined)
-        self.assertIn('觀測到 2 次',joined)
-        self.assertIn('內部思考=8',joined)
-        self.assertIn('不能換算',joined)
+        self.assertIn('status=503',joined)
+        self.assertIn('status=200',joined)
+        self.assertIn('observed 2 HTTP attempts',joined)
+        self.assertIn('reasoning=8',joined)
+        self.assertIn('do not measure elapsed time',joined)
 
     def test_segments_and_between_attempt_gap_are_measured_not_inferred(self):
         now=[0.0]
@@ -82,7 +82,7 @@ class ModelTimingTest(unittest.TestCase):
         second.extensions['trace']('http11.receive_response_body.complete',{})
         timing.finish()
         joined='\n'.join(events)
-        for expected in ('TCP 連線=2.00 秒','TLS 握手=1.00 秒','送出至回應標頭=10.00 秒','標頭至回應讀完=2.00 秒','再次送出前間隔=4.00 秒','無法分拆'):
+        for expected in ('TCP connection=2.00 s','TLS handshake=1.00 s','send to response headers=10.00 s','headers to response complete=2.00 s','Gap before retry=4.00 s','combined network, service wait and processing'):
             self.assertIn(expected,joined)
         self.assertNotIn('SECRET',joined)
         self.assertNotIn('example.invalid',joined)
@@ -93,7 +93,7 @@ class ModelTimingTest(unittest.TestCase):
         events=[]
         timing.begin(events.append)
         timing.finish()
-        self.assertIn('未觀測到 HTTP','\n'.join(events))
+        self.assertIn('no HTTP attempt observed','\n'.join(events))
         events.clear()
         timing.begin(events.append)
         request=httpx.Request('POST','https://example.invalid')
@@ -103,7 +103,7 @@ class ModelTimingTest(unittest.TestCase):
         timing.finish()
         joined='\n'.join(events)
         self.assertIn('connect_tcp',joined)
-        self.assertNotIn('送出至回應標頭=',joined)
+        self.assertNotIn('send to response headers=',joined)
         self.assertNotIn('SECRET',joined)
 
     def test_conversation_reports_transport_timings_on_api_failure(self):
@@ -113,7 +113,7 @@ class ModelTimingTest(unittest.TestCase):
             result=main.run_conversation(client,'controlled prompt',[],progress=events.append,http_timing=timing)
         self.assertIn('503',result)
         self.assertFalse(timing.active)
-        self.assertIn('觀測到 1 次 HTTP 嘗試','\n'.join(events))
+        self.assertIn('observed 1 HTTP attempt.', '\n'.join(events))
 
     def test_conversation_reports_transport_and_usage_on_success(self):
         timing=ModelRequestTiming()
@@ -121,8 +121,8 @@ class ModelTimingTest(unittest.TestCase):
         with self.sdk_request(timing,[200])[0] as client:
             result=main.run_conversation(client,'controlled prompt',[],progress=events.append,http_timing=timing)
         self.assertEqual(result,'controlled answer')
-        self.assertIn('輸入=12','\n'.join(events))
-        self.assertIn('請求本文大小=','\n'.join(events))
+        self.assertIn('input=12','\n'.join(events))
+        self.assertIn('request body size=','\n'.join(events))
         self.assertNotIn('controlled prompt','\n'.join(events))
 
 
