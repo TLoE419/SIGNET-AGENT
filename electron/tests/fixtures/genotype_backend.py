@@ -10,6 +10,7 @@ import tempfile
 REPO = Path(__file__).resolve().parents[3]
 sys.path[:0] = [str(REPO), str(REPO / 'tests')]
 from test_signet_jobs import EXAMPLE_EXPRESSION_PATH, StepsTest
+from agent.runtime import signet_jobs
 
 
 def main():
@@ -19,11 +20,10 @@ def main():
     metadata = Path(os.environ['SIGNET_GENOTYPE_TEST_METADATA'])
     tempfile.tempdir = str(metadata.parent)
     fixture = StepsTest()
+    downloaded_steps = signet_jobs.DOWNLOADED_STEPS
     try:
         fixture.setUp()
-        # Exercise production privacy behavior, not the transfer-test override.
-        from agent.runtime import signet_jobs
-        signet_jobs.DOWNLOADED_STEPS = ('network', 'visualize')
+        signet_jobs.DOWNLOADED_STEPS = downloaded_steps
         inputs = fixture.genotype_inputs()
         expression = fixture.hpc / 'ws/signet' / EXAMPLE_EXPRESSION_PATH
         expression.parent.mkdir(parents=True, exist_ok=True)
@@ -47,7 +47,11 @@ def main():
         dataset_path.write_text(json.dumps({
             'id': 'example-chr1',
             'name': ['第 1 號染色體範例', 'Chromosome 1 example'],
-            'inputs': {'genotype': [inputs['ped.file'], inputs['map.file']], 'expression': [], 'clinical': []},
+            'inputs': {
+                'genotype': ['study.ped', 'study.map'],
+                'expression': ['example_gexp'],
+                'clinical': ['official-demo-chr1-restart-clinical.tsv'],
+            },
         }), encoding='utf-8')
         metadata.write_text(json.dumps({
             'project': str(fixture.project), 'remote': fixture.config['workRoot'],

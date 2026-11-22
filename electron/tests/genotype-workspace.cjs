@@ -207,7 +207,7 @@ async function verify() {
     const selector = `${expressionPanel} [data-expression-input="${key}"]`;
     const rendered = await js(`(() => {
       const input = document.querySelector(${JSON.stringify(selector)});
-      return input?.value || input?.textContent;
+      return input?.querySelector('[data-full-file-path]')?.textContent ?? input?.textContent;
     })()`);
     assert.equal(rendered, file, `Stage 2 did not review the prepared ${key}`);
   }
@@ -314,7 +314,9 @@ async function verify() {
     'Stage 3 clinical review did not enable its manual submit button');
   assert.ok(await js(`document.querySelector('${adjustmentPanel} [data-adjust-form]')?.getClientRects().length > 0`),
     'Stage 3 clinical file and principal component controls are hidden');
-  assert.equal(await js(`document.querySelector('[data-adjust-input="cli.file"]').value`), fixture.adjust_inputs['cli.file']);
+  const clinicalSource = fixture.adjust_inputs['cli.file'];
+  const originalClinical = readFileSync(clinicalSource, 'utf8');
+  assert.equal(await js(`document.querySelector('[data-adjust-input="cli.file"]').value`), clinicalSource);
   assert.equal(await js(`document.querySelector('[data-adjust-option="npc"]').value`), '3');
   await setReviewValue('[data-adjust-option="npc"]', '2');
   await setReviewValue('[data-adjust-resource="cpus"]', '2');
@@ -334,7 +336,13 @@ async function verify() {
   assert.equal(readAdjustment().run_id, runId);
   assert.equal(readAdjustment().job_id, '333');
   assert.equal(readAdjustment().options.npc, 2);
-  assert.deepEqual(readAdjustment().inputs, fixture.adjust_inputs);
+  const savedAdjustment = readAdjustment();
+  assert.equal(savedAdjustment.clinical.source, clinicalSource);
+  const reviewedClinical = savedAdjustment.inputs['cli.file'];
+  assert.notEqual(reviewedClinical, clinicalSource, 'Stage 3 must use its reviewed clinical copy');
+  assert.ok(reviewedClinical.startsWith(path.join(remoteRun, 'inputs/clinical') + path.sep));
+  assert.equal(readFileSync(reviewedClinical, 'utf8'), originalClinical);
+  assert.equal(readFileSync(clinicalSource, 'utf8'), originalClinical);
   assert.deepEqual(readFileSync(sbatchCalls, 'utf8').trim().split('\n'), ['submitted', 'submitted', 'submitted']);
   writeFileSync(path.join(fixture.slurm, 'squeue'), 'RUNNING\n');
   await until(async () => await adjustmentState() === 'running', 'Stage 3 did not automatically report execution');
@@ -354,7 +362,7 @@ async function verify() {
     'signet_gexp.data': '-1 -2 -2\n0 0 0\n1 2 2\n',
     'signet_gexp_rmpc.data': '-0.5 -1 -0.75\n0 0 0\n0.5 1 0.75\n',
     'signet_geno.data': '0 1 2\n2 1 0\n1 0 1\n',
-    'workspace-clinical.tsv': readFileSync(fixture.adjust_inputs['cli.file'], 'utf8'),
+    'workspace-clinical.tsv': readFileSync(reviewedClinical, 'utf8'),
     'workspace-genotype-ids.txt': sampleIds.join('\n') + '\n',
     'workspace-pca.evec': '#eigvals: 6 3 1\nTCGA-XX-A001 -1 0 0\nTCGA-XX-A002 0 1 0\nTCGA-XX-A003 1 -1 0\n',
     'workspace-pca.eval': '6\n3\n1\n',
@@ -509,14 +517,20 @@ async function verify() {
   assert.equal(readNetwork().resources.hours, 3);
   assert.match(readFileSync(path.join(remoteRun, 'steps/network.sbatch'), 'utf8'), /bash \.\/signet -n/);
   assert.deepEqual(readFileSync(sbatchCalls, 'utf8').trim().split('\n'), Array(5).fill('submitted'));
-  for (const [phase, completed] of [['stage1', 'one\n'], ['stage2', '']]) {
+  for (const [phase, completed] of [['stage1', 'first\n'], ['stage2', '']]) {
     const directory = path.join(remoteRun, 'work/tmp/tmpn', phase);
     mkdirSync(directory, {recursive:true});
     writeFileSync(path.join(directory, 'params.txt'), 'first\nsecond\n');
     writeFileSync(path.join(directory, 'params1.txt.completed'), completed);
   }
   writeFileSync(path.join(fixture.slurm, 'squeue'), 'RUNNING\n');
-  await until(async () => await networkState() === 'running', 'Stage 5 did not automatically report execution');
+  try {
+    // The renderer poll and backend cache each have a 15-second interval.
+    await until(async () => await networkState() === 'running', 'Stage 5 did not automatically report execution', 35000);
+  } catch (error) {
+    const {state, slurm_state: schedulerState} = readNetwork();
+    throw Error(`${error.message} (screen: ${await networkState()}, saved: ${state}, scheduler: ${schedulerState})`, {cause: error});
+  }
   assert.deepEqual(readNetwork().progress, {stage1:'1 2', stage2:'0 2'});
   assert.ok(await js(`document.querySelector('${networkPanel} [data-network-work-progress]')?.getClientRects().length > 0`),
     'Stage 5 internal calculation progress is hidden');
@@ -541,7 +555,9 @@ async function verify() {
   const candidates = await js(`[...document.querySelectorAll('#lens-history-stage [data-stage-table] tbody tr')]
     .map(row => [...row.cells].map(cell => cell.textContent))`);
   assert.deepEqual(candidates, [['MEGF6','GENE1','50%'], ['GENE1','MEGF6','100%'], ['GENE1','OTHER','50%']]);
-  assert.deepEqual(await js(`[...document.querySelectorAll('#lens-history-stage .ml-count-label')].map(n => Number(n.textContent))`), [2,1]);
+  const frequencyCounts = await js(`[...document.querySelectorAll('#lens-history-stage .ml-count-bar title')]
+    .map(label => Number(label.textContent.match(/[\\d,]+$/)?.[0].replaceAll(',', '')))`);
+  assert.deepEqual(frequencyCounts, [2,1]);
   assert.equal(await js(`document.querySelector('#lens-history-stage [data-stage-setting="nboots"]').textContent`), '2');
   assert.equal(await js(`document.querySelector('#lens-history-stage [data-stage-setting="walltime"]').textContent`), '1:30:00');
   const networkFinishedReload = once(window.webContents, 'did-finish-load');

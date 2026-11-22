@@ -205,7 +205,7 @@ code:not(pre code) {
 :is(#lens-stage6, .ml-history-network) :is(th, td):nth-child(n+3) { text-align: right; }
 :is(#lens-stage6, .ml-history-network) tbody tr:last-child td { border-bottom: 0; }
 
-#signet-lens-left-preview :is(#lens-stage3, #lens-history-stage3, #lens-stage6, .ml-stage-snapshot, .ml-history-network) {
+#signet-lens-left-preview :is(#lens-stage3, #lens-history-stage3, #lens-stage6, .ml-stage-snapshot, .ml-history-network):not(.ml-stage-review) {
   display: grid;
   grid-template-columns: minmax(0, 1fr) min(292px, 42%);
   position: relative; overflow: auto;
@@ -303,10 +303,10 @@ code:not(pre code) {
 :is(#lens-stage3, #lens-history-stage3) .s3-figure h3, .ml-stage-snapshot .ml-result-figure h3 { font-size: 16px; font-weight: 600; margin: 0 0 10px; }
 :is(#lens-stage3, #lens-history-stage3) .s3-chart, .ml-stage-snapshot .ml-count-chart { display: block; width: 100%; height: auto; }
 .s3-remote-plot { display: block; width: 100%; height: auto; object-fit: contain; }
-[data-adjust-clinical-choices] fieldset { margin-block: 8px; padding: 8px; }
-[data-adjust-clinical-choices] label { display: block; margin-block: 5px; }
-[data-adjust-clinical-choices] input { accent-color: var(--ml-accent); }
 .ml-genotype-progress progress { display: block; inline-size: 100%; accent-color: var(--ml-accent); }
+.ml-genotype-progress .ml-progress-hint {
+  display: block; margin-top: 4px; color: var(--ml-muted);
+}
 .ml-rerun-diff { inline-size: 100%; table-layout: fixed; border-collapse: collapse; }
 .ml-rerun-diff :is(th, td) { padding: 6px; text-align: start; overflow-wrap: anywhere; border-block-end: 1px solid var(--ml-line); }
 :is(#lens-stage3, #lens-history-stage3) .s3-chart text { fill: #536579; font-size: 12px; font-variant-numeric: tabular-nums; }
@@ -1516,82 +1516,310 @@ code:not(pre code) {
 #signet-lens-left-preview .ml-stage-detail dt { color: #52697c; }
 #signet-lens-left-preview .ml-stage-detail dd { margin: 0; }
 
-#signet-lens-left-preview :is(#lens-stage1, .ml-expression-panel) .ml-genotype-main {
-  overflow: auto;
-  padding: 33px 26px 24px 32px;
+#signet-lens-left-preview .ml-stage-review {
+  container: stage-review / inline-size;
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(230px, 27%);
+  position: relative; min-width: 0; overflow: auto;
+  background: #f7f9fb; color: var(--ml-ink);
+  font: 13px/1.4 system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+}
+#signet-lens-left-preview .ml-stage-review:has(> .ml-genotype-progress[hidden]) {
+  grid-template-columns: minmax(0, 1fr);
+}
+#signet-lens-left-preview .ml-stage-review .ml-genotype-main {
+  container: stage-review-main / inline-size;
+  min-width: 0; min-height: 0; overflow: auto;
+  padding: 22px clamp(16px, 2.8cqi, 32px) 26px;
+}
+#signet-lens-left-preview .ml-stage-review .ml-genotype-main :is(h2, h3, p) { margin: 0; }
+#signet-lens-left-preview .ml-stage-review :is([data-stage-review-form], .ml-stage-review-progress-card) h3 {
+  margin: 0; font-size: 13px; font-weight: 600;
+}
+#signet-lens-left-preview .ml-stage-review .ml-genotype-notice {
+  color: #6b4a28; margin: 10px 0 0; overflow-wrap: anywhere;
+}
+#signet-lens-left-preview .ml-stage-review .ml-nav-action:disabled { cursor: wait; opacity: .6; }
+
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-header {
+  display: flex; align-items: center; gap: 12px; margin-bottom: 14px;
+}
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-icon {
+  display: grid; place-items: center; flex: none; width: 43px; height: 43px;
+  border: 1px solid #d5e5f0; border-radius: 8px; background: #edf5fb; color: #28608c;
+}
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-icon .lucide { width: 20px; height: 20px; }
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-header h2 {
+  margin-block: 2px; font-size: 21px; font-weight: 670; line-height: 1.2;
+}
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-header :is(.ml-genotype-eyebrow, [data-genotype-dataset]) {
+  color: var(--ml-muted); overflow-wrap: anywhere;
+}
+#signet-lens-left-preview .ml-stage-review .ml-genotype-eyebrow {
+  font-size: 11px; font-weight: 640;
 }
 
-#signet-lens-left-preview :is(#lens-stage1, .ml-expression-panel) .ml-genotype-main :is(h2, h3, p) { margin: 0; }
-#signet-lens-left-preview :is(#lens-stage1, .ml-expression-panel) .ml-genotype-main h2 { margin-block: 3px; font-size: 19px; font-weight: 600; }
-#signet-lens-left-preview :is(#lens-stage1, .ml-expression-panel) :is(.ml-genotype-eyebrow, [data-genotype-guidance], [data-expression-guidance], [data-adjust-guidance], [data-cis-guidance]) { color: var(--ml-muted); }
-#signet-lens-left-preview :is(#lens-stage1, .ml-expression-panel) .ml-genotype-main :is([data-genotype-readiness], [data-expression-readiness], [data-adjust-readiness], [data-cis-readiness]) { margin-top: 15px; font-weight: 600; }
-#signet-lens-left-preview :is(#lens-stage1, .ml-expression-panel) .ml-genotype-main :is([data-genotype-guidance], [data-expression-guidance], [data-adjust-guidance], [data-cis-guidance]) { margin-top: 4px; }
-
-#signet-lens-left-preview :is(#lens-stage1, .ml-expression-panel) :is([data-genotype-form], [data-expression-form], [data-adjust-form], [data-cis-form]) {
-  display: grid;
-  margin-top: 14px;
-  gap: 10px;
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-context {
+  display: flex; flex-wrap: wrap; align-items: end; gap: 10px 16px;
+  margin-bottom: 12px;
 }
-
-#signet-lens-left-preview :is(#lens-stage1, .ml-expression-panel) :is([data-genotype-form], [data-expression-form], [data-adjust-form], [data-cis-form]) h3 { font-size: 13px; font-weight: 600; }
-#signet-lens-left-preview :is(#lens-stage1, .ml-expression-panel) :is([data-genotype-form], [data-expression-form], [data-adjust-form], [data-cis-form]) code { overflow-wrap: anywhere; }
-#signet-lens-left-preview :is(#lens-stage1, .ml-expression-panel) :is([data-genotype-fields], [data-expression-fields], [data-adjust-fields], [data-cis-fields]) {
-  min-width: 0;
-  margin: 0;
-  padding: 7px 10px 10px;
-  border: 1px solid var(--ml-rule);
-  border-radius: 5px;
+#signet-lens-left-preview .ml-stage-review .ml-expression-run-label {
+  display: grid; flex: 1 1 250px; min-width: 0; gap: 4px;
+  color: var(--ml-muted); font-weight: 600;
 }
-
-#signet-lens-left-preview :is(#lens-stage1, .ml-expression-panel) :is([data-genotype-fields], [data-expression-fields], [data-adjust-fields], [data-cis-fields]) legend { padding-inline: 4px; font-weight: 600; }
-#signet-lens-left-preview :is(#lens-stage1, .ml-expression-panel) .ml-genotype-controls {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px 10px;
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-navigation {
+  display: flex; flex-wrap: wrap; gap: 6px; margin-inline-start: auto;
 }
-
-#signet-lens-left-preview :is(#lens-stage1, .ml-expression-panel) .ml-genotype-controls label { display: grid; gap: 3px; color: var(--ml-muted); }
-#signet-lens-left-preview :is(#lens-stage1, .ml-expression-panel) .ml-genotype-controls input {
-  width: 100%;
-  min-height: 28px;
-  padding-inline: 6px;
-  border: 1px solid var(--ml-rule);
-  border-radius: 4px;
-  background: #fff;
-  color: var(--ml-ink);
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-navigation .ml-nav-action { margin: 0; }
+#signet-lens-left-preview .ml-stage-review :is(.ml-expression-run-label select, .ml-clinical-input, [data-adjust-gender-column]) {
+  width: 100%; min-width: 0; min-height: 32px; padding: 6px 8px;
+  border: 1px solid var(--ml-rule); border-radius: 4px; background: #fff; color: var(--ml-ink);
   font: inherit;
-  font-variant-numeric: tabular-nums;
+}
+#signet-lens-left-preview .ml-stage-review .ml-expression-run-label select { text-overflow: ellipsis; font-weight: 400; }
+#signet-lens-left-preview .ml-stage-review :is(.ml-expression-run-label select, .ml-clinical-input, [data-adjust-gender-column]):focus-visible {
+  outline: 2px solid #4e89ba; outline-offset: 1px;
 }
 
-#signet-lens-left-preview :is(#lens-stage1, .ml-expression-panel) .ml-genotype-controls input:read-only { background: #f5f7f8; }
-#signet-lens-left-preview :is(#lens-stage1, .ml-expression-panel) .ml-genotype-submit {
-  justify-self: start;
-  margin: 2px 0 0;
-  border-color: #24618f;
-  background: #24618f;
-  color: #fff;
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-readiness {
+  --stage-review-line: #dbe4eb;
+  --stage-review-fill: #f2f6f9;
+  --stage-review-text: #315b7b;
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  gap: 6px 12px; padding: 10px 13px;
+  border: 1px solid var(--stage-review-line); border-radius: 8px;
+  background: var(--stage-review-fill);
+}
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-readiness[data-review-state="ready"] {
+  --stage-review-line: #cfe2d7;
+  --stage-review-fill: #eef6f1;
+  --stage-review-text: #265c42;
+}
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-readiness[data-review-state="error"] {
+  --stage-review-line: #ead7b4;
+  --stage-review-fill: #fcf6ec;
+  --stage-review-text: #6d491c;
+}
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-readiness > div {
+  flex: 1 1 200px; min-width: 0;
+}
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-readiness .ml-stage-review-status {
+  margin: 0; color: var(--stage-review-text); font-weight: 600;
+}
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-readiness .ml-stage-review-guidance {
+  margin-top: 2px; color: var(--ml-muted);
+}
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-readiness .ml-stage-review-guidance:empty { display: none; }
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-readiness .ml-genotype-notice {
+  flex: 1 0 100%; margin: 0; color: var(--stage-review-text);
+}
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-readiness .ml-nav-action {
+  max-width: 100%; margin: 0; background: #fff;
+}
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-readiness .ml-nav-action:hover:not(:disabled) {
+  background: #edf5fb;
+}
+#signet-lens-left-preview .ml-stage-review [data-genotype-retry-context]:not([hidden]) {
+  margin-top: 10px; color: var(--ml-muted); overflow-wrap: anywhere;
 }
 
-#signet-lens-left-preview :is(#lens-stage1, .ml-expression-panel) .ml-genotype-submit:hover:not(:disabled) { background: #1e5179; }
-#signet-lens-left-preview :is(#lens-stage1, .ml-expression-panel) .ml-nav-action:disabled { cursor: wait; opacity: .6; }
-#signet-lens-left-preview :is(#lens-stage1, .ml-expression-panel) .ml-genotype-progress { padding: 16px 16px 16px 8px; overflow: auto; }
-#signet-lens-left-preview :is(#lens-stage1, .ml-expression-panel) .ml-genotype-progress h3 { margin: 0; font-size: 13px; font-weight: 600; }
-#signet-lens-left-preview :is(#lens-stage1, .ml-expression-panel) .ml-genotype-status {
-  color: #24618f;
-  margin: 13px 0 8px;
-  font-weight: 600;
+#signet-lens-left-preview .ml-stage-review [data-stage-review-form] {
+  display: grid; margin-top: 12px; gap: 12px;
+}
+#signet-lens-left-preview .ml-stage-review :is(.ml-stage-review-files, .ml-stage-review-source-section, .ml-stage-review-progress-card) {
+  min-width: 0; border: 1px solid #dbe4eb; border-radius: 9px; background: #fff;
+}
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-files {
+  padding: 11px 13px 3px;
+}
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-files h3 { margin-bottom: 7px; }
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-file-list {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 17px; margin: 0;
+}
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-file-list > div {
+  min-width: 0; padding: 7px 0 8px; border-top: 1px solid var(--ml-rule);
+}
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-file-list dt {
+  margin: 0 0 2px; color: var(--ml-muted); font-size: 11px; font-weight: 600;
+}
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-file-list dd { min-width: 0; margin: 0; }
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-file-list dd > div + div { margin-top: 5px; }
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-path > strong {
+  display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-weight: 630;
+}
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-file-list .ml-file-directory { font-size: 11px; }
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-file-list .ml-file-path-trigger { font-size: 11px; }
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-source-section > summary {
+  display: list-item; list-style: revert; list-style-position: inside;
+  padding: 8px 13px; border-radius: 8px; color: #315b7b; font-weight: 620; cursor: pointer;
+}
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-source-section > summary:hover {
+  background: #f4f8fb;
+}
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-source-section > summary::-webkit-details-marker { display: revert; }
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-source-section .ml-stage-review-file-list { padding: 0 13px 3px; }
+
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-settings {
+  display: grid; align-items: start; gap: 10px;
+}
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-settings fieldset {
+  min-width: 0; margin: 0; padding: 8px 11px 11px;
+  border: 1px solid #dbe4eb; border-radius: 8px; background: #fff;
+}
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-settings legend { padding-inline: 4px; font-weight: 600; }
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-settings .ml-settings-note:not([hidden]) {
+  margin-block: 6px 2px; color: var(--ml-muted); overflow-wrap: anywhere;
+}
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-settings .ml-genotype-controls {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 92px), 1fr)); gap: 8px 10px;
+}
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-settings .ml-genotype-controls label {
+  display: flex; flex-direction: column; justify-content: space-between; gap: 3px; color: var(--ml-muted);
+}
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-settings .ml-genotype-controls input {
+  width: 100%; min-width: 0; min-height: 32px; padding-inline: 6px;
+  border: 1px solid var(--ml-rule); border-radius: 4px; background: #fff;
+  color: var(--ml-ink); font: inherit; font-variant-numeric: tabular-nums;
+}
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-settings .ml-genotype-controls input:focus-visible {
+  outline: 2px solid #4e89ba; outline-offset: 1px;
+}
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-settings input:read-only { background: #f5f7f8; }
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-file-list:has(.ml-stage-review-clinical-file) {
+  grid-template-columns: minmax(0, 1fr);
+}
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-clinical-file { min-width: 0; }
+#signet-lens-left-preview .ml-stage-review [data-adjust-clinical-replacement] {
+  margin-block: 0 9px; color: var(--ml-muted); overflow-wrap: anywhere;
+}
+#signet-lens-left-preview .ml-stage-review [data-adjust-original-clinical] > span {
+  display: block; margin-top: 6px; font-size: 11px; font-weight: 600;
+}
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-clinical-file .ml-clinical-input { margin-block: 3px 6px; }
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-clinical:not(:has(> :not([hidden]):not(:empty))) {
+  display: none;
+}
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-clinical {
+  min-width: 0; padding: 10px 13px;
+  border: 1px solid #dbe4eb; border-radius: 8px; background: #fff;
+}
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-clinical [data-adjust-clinical-summary] {
+  color: var(--ml-muted); overflow-wrap: anywhere;
+}
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-clinical-totals {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 105px), 1fr));
+  list-style: none; padding: 0; margin: 0 0 8px; gap: 8px;
+}
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-clinical-totals li {
+  padding: 8px 10px; border: 1px solid #e0e9ef; border-radius: 6px; background: #f5f8fa;
+}
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-clinical-totals strong {
+  display: block; font-size: 17px; font-variant-numeric: tabular-nums; color: var(--ml-ink);
+}
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-clinical :is([data-adjust-clinical-schema], [data-adjust-clinical-choices]) fieldset {
+  min-width: 0; margin: 8px 0 0; padding: 8px 10px;
+  border: 1px solid #ead9ba; border-radius: 6px; background: #fcf7ed;
+}
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-clinical :is([data-adjust-clinical-schema], [data-adjust-clinical-choices]) legend {
+  padding-inline: 4px; font-weight: 600;
+}
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-clinical [data-adjust-clinical-choices] label {
+  display: flex; align-items: baseline; gap: 7px; margin-top: 5px; overflow-wrap: anywhere;
+}
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-clinical [data-adjust-clinical-choices] input {
+  flex: none; margin: 0; accent-color: #24618f;
+}
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-clinical .ml-key-values { margin-block: 6px; }
+
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-warnings {
+  padding: 11px 13px; border: 1px solid #ead9ba; border-radius: 8px;
+  background: #fcf7ed; color: #694b24;
+}
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-warnings ul {
+  display: grid; gap: 3px; margin: 7px 0; padding-inline-start: 19px;
+  overflow-wrap: anywhere;
+}
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-warnings label {
+  display: flex; align-items: flex-start; gap: 7px;
+  padding-top: 8px; border-top: 1px solid #ead9ba;
+  color: var(--ml-ink); font-weight: 570; cursor: pointer;
+}
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-warnings input {
+  flex: none; accent-color: #24618f;
+}
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-actions {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px;
+}
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-actions .ml-genotype-submit {
+  min-height: 37px; margin: 0; padding-inline: 13px;
+  border-color: #24618f; background: #24618f; color: #fff; font-weight: 630;
+}
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-actions .ml-genotype-submit:hover:not(:disabled) { background: #1e5179; }
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-actions .ml-genotype-submit:disabled { cursor: default; }
+
+#signet-lens-left-preview .ml-stage-review .ml-genotype-progress {
+  min-height: 0; padding: 22px 20px 26px 0; overflow: auto;
+}
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-progress-card { padding: 12px; }
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-progress-card .ml-result-inspector-heading {
+  display: flex; align-items: center; gap: 6px; padding: 2px 0 8px;
+  border-bottom: 1px solid var(--ml-rule); color: #315b7b;
+}
+#signet-lens-left-preview .ml-stage-review .ml-genotype-status {
+  display: inline-block; max-width: 100%; padding: 3px 7px; margin: 9px 0 6px;
+  border-radius: 5px; background: #edf4f9; color: #2e5e84; font-weight: 600;
+}
+#signet-lens-left-preview .ml-stage-review[data-run-state="completed"] .ml-genotype-status {
+  background: #edf6ef; color: #2a6041;
+}
+#signet-lens-left-preview .ml-stage-review:is([data-run-state="failed"], [data-run-state="unknown"]) .ml-genotype-status {
+  background: #fcf2df; color: #6d491c;
+}
+#signet-lens-left-preview .ml-stage-review .ml-genotype-events { margin: 12px 0 0; padding-inline-start: 15px; }
+#signet-lens-left-preview .ml-stage-review .ml-genotype-events li { margin-block: 6px; }
+#signet-lens-left-preview .ml-stage-review .ml-genotype-events time { display: block; color: var(--ml-muted); }
+#signet-lens-left-preview .ml-stage-review .ml-genotype-progress .ml-key-values {
+  grid-template-columns: minmax(0, 1fr); margin-block: 7px;
+}
+#signet-lens-left-preview .ml-stage-review .ml-genotype-progress .ml-key-values :is(dt, dd) {
+  padding: 4px 7px; border-bottom: 0;
+}
+#signet-lens-left-preview .ml-stage-review .ml-genotype-progress .ml-genotype-actions {
+  display: flex; flex-wrap: wrap; gap: 6px;
+}
+#signet-lens-left-preview .ml-stage-review .ml-genotype-progress .ml-genotype-actions:has(> :not([hidden])) {
+  margin-top: 6px;
+}
+#signet-lens-left-preview .ml-stage-review .ml-genotype-progress .ml-nav-action {
+  max-width: 100%; margin-top: 0;
 }
 
-#signet-lens-left-preview :is(#lens-stage1, .ml-expression-panel) .ml-genotype-events {
-  color: var(--ml-ink);
-  margin: 12px 0 0;
-  padding: 0 0 0 13px;
+@container stage-review-main (min-width: 612px) {
+  #signet-lens-left-preview .ml-stage-review .ml-stage-review-settings {
+    grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr);
+  }
+  #signet-lens-left-preview .ml-stage-review .ml-stage-review-network-settings {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  #signet-lens-left-preview .ml-stage-review .ml-stage-review-network-settings > fieldset:first-child {
+    grid-column: 1 / -1;
+  }
+}
+@container stage-review-main (max-width: 487px) {
+  #signet-lens-left-preview .ml-stage-review .ml-stage-review-file-list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@container stage-review (max-width: 695px) {
+  #signet-lens-left-preview .ml-stage-review > :is(.ml-genotype-main, .ml-genotype-progress) {
+    grid-column: 1 / -1; overflow: visible;
+  }
+  #signet-lens-left-preview .ml-stage-review > .ml-genotype-main { block-size: max-content; }
+  #signet-lens-left-preview .ml-stage-review > .ml-genotype-progress {
+    padding: 0 clamp(16px, 2.8cqi, 32px) 20px;
+  }
 }
 
-#signet-lens-left-preview :is(#lens-stage1, .ml-expression-panel) .ml-genotype-events li { margin: 6px 0; }
-#signet-lens-left-preview :is(#lens-stage1, .ml-expression-panel) .ml-genotype-events time { display: block; color: var(--ml-muted); }
-#signet-lens-left-preview :is(#lens-stage1, .ml-expression-panel) .ml-genotype-notice { color: #6b4a28; margin: 10px 0 0; overflow-wrap: anywhere; }
-#signet-lens-left-preview :is(#lens-stage1, .ml-expression-panel) .ml-genotype-actions { display: grid; justify-items: start; }
 #signet-lens-left-preview .ml-job-cancel-confirmation { max-width: 100%; margin: 8px 0; padding: 9px; border: 1px solid var(--ml-rule); border-radius: 5px; overflow-wrap: anywhere; }
 #signet-lens-left-preview .ml-job-cancel-confirmation p { margin: 0 0 8px; }
 #signet-lens-left-preview .ml-job-logs { margin-top: 12px; min-width: 0; border: 1px solid var(--ml-rule); border-radius: 5px; overflow: hidden; }
@@ -1605,14 +1833,6 @@ code:not(pre code) {
 #signet-lens-left-preview .ml-job-log-content [role="status"], #signet-lens-left-preview .ml-job-log-source { margin: 8px 0; color: var(--ml-muted); overflow-wrap: anywhere; }
 #signet-lens-left-preview [data-job-log-text] { max-height: 240px; margin: 8px 0 0; padding: 9px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; background: #f3f5f7; border-radius: 4px; font: 12px/1.5 var(--workspace-mono); }
 
-#signet-lens-left-preview .ml-expression-run-label { display: grid; gap: 5px; margin-top: 12px; color: var(--ml-muted); }
-#signet-lens-left-preview .ml-expression-run-label select { width: 100%; padding: 6px; border: 1px solid var(--ml-rule); border-radius: 4px; background: #fff; color: var(--ml-ink); font: inherit; }
-
-#signet-lens-left-preview .ml-clinical-input { box-sizing: border-box; width: 100%; min-width: 0; padding: 6px; border: 1px solid var(--ml-rule); border-radius: 4px; background: #fff; color: var(--ml-ink); font: inherit; }
-
-#signet-lens-left-preview .ml-cis-inputs summary { color: var(--ml-muted); cursor: pointer; }
-#signet-lens-left-preview .ml-cis-inputs dl { margin-top: 8px; }
-
 @media (prefers-reduced-motion: no-preference) {
   @supports (interpolate-size: allow-keywords) {
     #signet-lens-left-preview details::details-content {
@@ -1625,7 +1845,7 @@ code:not(pre code) {
     #signet-lens-left-preview details:not([open])::details-content { interactivity: inert; }
     #signet-lens-left-preview .ml-run-inputs > summary { transition: margin-bottom var(--ml-size-motion); }
 
-    #signet-lens-left-preview :is(.ml-stage-detail, .ml-job-cancel-confirmation, :is(#lens-stage1, .ml-expression-panel) form) {
+    #signet-lens-left-preview :is(.ml-stage-detail, .ml-job-cancel-confirmation, [data-stage-review-form]) {
       interpolate-size: allow-keywords;
       block-size: auto;
       overflow: clip;
@@ -1636,7 +1856,7 @@ code:not(pre code) {
         border-block-width var(--ml-size-motion),
         display var(--ml-size-motion) allow-discrete;
     }
-    #signet-lens-left-preview :is(.ml-stage-detail, .ml-job-cancel-confirmation, :is(#lens-stage1, .ml-expression-panel) form)[hidden] {
+    #signet-lens-left-preview :is(.ml-stage-detail, .ml-job-cancel-confirmation, [data-stage-review-form])[hidden] {
       block-size: 0;
       margin-block: 0;
       padding-block: 0;
@@ -1644,7 +1864,7 @@ code:not(pre code) {
       interactivity: inert;
     }
     @starting-style {
-      #signet-lens-left-preview :is(.ml-stage-detail, .ml-job-cancel-confirmation, :is(#lens-stage1, .ml-expression-panel) form):not([hidden]) {
+      #signet-lens-left-preview :is(.ml-stage-detail, .ml-job-cancel-confirmation, [data-stage-review-form]):not([hidden]) {
         block-size: 0;
         margin-block: 0;
         padding-block: 0;

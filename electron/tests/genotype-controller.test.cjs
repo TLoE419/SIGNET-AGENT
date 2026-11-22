@@ -17,11 +17,11 @@ const response=value=>({ok:true,status:200,json:async()=>clone(value)});
 const timeoutResponse=()=>({ok:false,status:504,json:async()=>({code:'read_timeout'})});
 const settle=()=>new Promise(resolve=>setTimeout(resolve,0));
 async function until(check){for(let i=0;i<50;i++){if(check())return;await settle()}assert.fail('Controller did not settle')}
-function harness(t,handler){
+function harness(t,handler,onRetryCatalog){
  const dom=new JSDOM('<!doctype html><section id="panel"></section>',{url:'http://localhost',runScripts:'outside-only'});t.after(()=>dom.window.close());
  const {window}=dom,calls=[],changed=[];window.eval(source);const panel=window.document.querySelector('#panel');
  window.fetch=async(url,options={})=>{const call={url,options,body:options.body?JSON.parse(options.body):undefined};calls.push(call);return handler?handler(call):response(review(dataset()))};
- const controller=window.mountGenotypeRun({panel,token:'test-token',onHistoryChanged:(...args)=>changed.push(args)});
+ const controller=window.mountGenotypeRun({panel,token:'test-token',onRetryCatalog,onHistoryChanged:(...args)=>changed.push(args)});
  const context=(d,runs=[])=>controller.setContext({datasetId:d.id,dataset:d,runs,visible:true});
  const remote=overrides=>window.dispatchEvent(new window.CustomEvent('workspace-remote-context',{detail:{connected:true,identity:'account@host|session',environmentKey:'root-a',...overrides}}));
  const q=selector=>panel.querySelector(selector),click=part=>q(`[data-genotype-${part}]`).click();
@@ -101,8 +101,21 @@ test('reference overrides route the example to manual dataset review and invalid
 });
 
 test('an unavailable dataset catalog blocks new legacy review and submission',async t=>{
- const h=harness(t,()=>response(legacyReview()));const unavailable={...clone(example),ready:false};
- h.context(unavailable);h.click('review');h.click('submit');await settle();assert.equal(h.calls.length,0);assert.equal(h.q('[data-genotype-submit]').disabled,true);
+ let catalogRetries=0;
+ const h=harness(t,()=>response(legacyReview()),()=>{catalogRetries++;h.context(unavailable)});
+ const unavailable={...clone(example),ready:false};
+ const retry=h.q('[data-genotype-retry-catalog]');
+ h.context(unavailable);
+ assert.match(h.q('[data-genotype-readiness]').textContent,/Loading the dataset catalog/);
+ assert.equal(retry.hidden,true);
+ h.context({...unavailable,catalogUnavailable:true});
+ assert.match(h.q('[data-genotype-readiness]').textContent,/Could not load the dataset catalog/);
+ assert.equal(retry.hidden,false);
+ h.click('review');h.click('submit');await settle();assert.equal(h.calls.length,0);assert.equal(h.q('[data-genotype-submit]').disabled,true);
+ retry.click();assert.equal(catalogRetries,1);
+ assert.match(h.q('[data-genotype-readiness]').textContent,/Loading the dataset catalog/);
+ assert.equal(retry.hidden,true);
+ assert.equal(h.calls.length,0,'retry loads the catalog without requesting review or submission');
  h.context(example);await until(()=>!h.q('[data-genotype-submit]').disabled);assert.equal(h.calls.length,1);
  h.context(unavailable);assert.equal(h.q('[data-genotype-submit]').disabled,true);h.click('submit');await settle();assert.equal(h.calls.length,1);
 });

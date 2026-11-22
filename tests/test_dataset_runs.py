@@ -3,10 +3,11 @@ import json
 import gzip
 from pathlib import Path
 import subprocess
+import tempfile
 import unittest
 from unittest.mock import patch
 
-from agent.runtime import hpc, ssh_transport, workspace_datasets, workspace_genotype as workspace, workspace_inputs, workspace_validation
+from agent.runtime import hpc, hpc_files, ssh_transport, workspace_datasets, workspace_genotype as workspace, workspace_inputs, workspace_validation
 from agent.runtime.jobs import stage_dataset
 import agent.runtime.signet_jobs as jobs
 import test_signet_jobs as step_fixtures
@@ -14,19 +15,17 @@ import test_signet_jobs as step_fixtures
 
 class DatasetRunTest(unittest.TestCase):
     def setUp(self):
+        # Use a real, canonical fixture path outside node-local storage such as /tmp on Linux CI.
+        fixture_parents = (Path(tempfile.gettempdir()).resolve(), Path(__file__).resolve().parent, Path.home().resolve())
+        shared_parent = next(path for path in fixture_parents if not any(
+            path.is_relative_to(blocked) for blocked in hpc_files._UNREADABLE_ON_COMPUTE))
         self.f = step_fixtures.StepsTest()
-        self.f.setUp()
+        self.f.setUp(temporary_parent=shared_parent)
         self.addCleanup(self.f.doCleanups)
         config = {**self.f.config, 'revision': hpc.SOURCE_INVENTORY['revision']}
         item = patch.object(ssh_transport, 'setup_environment', return_value=config)
         item.start()
         self.addCleanup(item.stop)
-        # Local temporary folders stand in for shared HPC storage, including on Linux CI.
-        for module, name in ((workspace_validation, '_SOURCE'), (workspace_inputs, '_REVIEW')):
-            source = getattr(module, name).replace("BLOCKED = ('/tmp', '/var/tmp', '/dev/shm', '/run')", 'BLOCKED = ()')
-            item = patch.object(module, name, source)
-            item.start()
-            self.addCleanup(item.stop)
         self.files = self.f.hpc / 'outside-selected-study'
         self.files.mkdir()
         ids = ['TCGA-AA-A00' + str(n) for n in range(1, 7)]

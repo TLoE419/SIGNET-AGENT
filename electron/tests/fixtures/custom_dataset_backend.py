@@ -11,6 +11,7 @@ from unittest.mock import patch
 REPO = Path(__file__).resolve().parents[3]
 sys.path[:0] = [str(REPO), str(REPO / 'tests')]
 from test_signet_jobs import StepsTest
+from agent.runtime import signet_jobs
 import agent.runtime.ssh_transport as transport
 import agent.tools.signet as signet
 
@@ -135,8 +136,10 @@ def main():
     metadata = Path(os.environ['SIGNET_CUSTOM_TEST_METADATA'])
     tempfile.tempdir = str(metadata.parent)
     fixture = StepsTest()
+    downloaded_steps = signet_jobs.DOWNLOADED_STEPS
     try:
         fixture.setUp()
+        signet_jobs.DOWNLOADED_STEPS = downloaded_steps
         fixture.config['revision'] = signet.INVENTORY['revision']
         os.environ['SIGNET_DATASETS_STATE_FILE'] = str(fixture.project / 'data/workspace-datasets.json')
         os.environ['SIGNET_CUSTOM_REMOTE'] = fixture.config['workRoot']

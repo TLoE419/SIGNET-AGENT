@@ -92,7 +92,7 @@ test('missing gender shows a manual mapping or replacement and requires a fresh 
  assert.equal(sent.body.review_token,token);
 });
 
-test('all six stages show measured counts and reject invalid progress instead of inventing percentages',async t=>{
+test('all six stages switch from indeterminate to measured progress and stop on unconfirmed status',async t=>{
  const specs=[['Genotype','genotype','imputation','Imputation chunks'],
   ['Expression','expression','expression_outputs','Expression preparation'],
   ['Adjustment','adjust','variant_filter','Variant filtering'],
@@ -102,17 +102,43 @@ test('all six stages show measured counts and reject invalid progress instead of
  for(const [factory,step,unit,label] of specs){
   const {w,panel}=fixture(t);
   const record={run_id:'progress-run',step,state:'running',job_id:'123',attempt:1,inputs:{},settings:{},options:{npc:3},resources,
-   progress:{[unit]:'2 5',rare_variants:'9 3',invalid:'99 100'}};
-  w.fetch=async()=>json(record);
+   progress:{rare_variants:'9 3',invalid:'99 100'}};
+  let reported=record;
+  w.fetch=async()=>json(reported);
   const jobs=Object.fromEntries(['genotype','expression','adjust','cis','network'].map(name=>[name,{state:'completed'}]));jobs[step]=record;
   const controller=w['mount'+factory+'Run']({panel,token:'page-token'});
   const dataset={id:'dataset-a',name:['資料','Data'],ready:true,persisted:true,inputs:{genotype:[],expression:[],clinical:[]}};
   controller.setContext({datasetId:'dataset-a',dataset,runId:'progress-run',visible:true,runs:[{run_id:'progress-run',dataset_id:'dataset-a',source:'live',jobs}]});
-  await until(()=>panel.querySelector('progress'));
+  const refresh=panel.querySelector('[data-'+step+'-refresh]');
+  await until(()=>panel.querySelector('progress')&&!refresh.disabled);
+  const activity=panel.querySelector('progress');
+  assert.equal(activity.hasAttribute('value'),false);
+  assert.match(activity.getAttribute('aria-label'),/work counts are available/);
+  const remote=connected=>w.dispatchEvent(new w.CustomEvent('workspace-remote-context',{detail:{connected}}));
+  const notice=panel.querySelector('[data-'+step+'-notice]');
+  remote(false);
+  assert.match(notice.textContent,/Connection interrupted/);
+  assert.equal(panel.querySelector('progress'),null,'disconnect stops indeterminate activity immediately');
+  remote(true);
+  reported={...record,progress:{...record.progress,[unit]:'2 5'}};
+  refresh.click();
+  await until(()=>panel.querySelector('progress[value="2"]')&&!refresh.disabled);
   const bar=panel.querySelector('progress');assert.equal(bar.value,2);assert.equal(bar.max,5);
   assert.equal(bar.getAttribute('aria-label'),label);
   assert.match(panel.querySelector('[data-'+step+'-work-progress]').textContent,/2 \/ 5/);
   assert.equal(panel.querySelectorAll('progress').length,1);
+  remote(false);
+  assert.match(notice.textContent,/Connection interrupted/);
+  assert.equal(panel.querySelector('progress').value,2,'disconnect preserves the last confirmed count');
+  remote(true);
+  reported={...reported,connection:'interrupted'};
+  refresh.click();
+  await until(()=>notice.textContent.includes('Connection interrupted')&&!refresh.disabled);
+  assert.equal(panel.querySelector('progress').value,2);
+  reported={...record,connection:'interrupted'};
+  refresh.click();
+  await until(()=>!refresh.disabled);
+  assert.equal(panel.querySelector('progress'),null);
  }
 });
 
@@ -175,8 +201,8 @@ test('an explicit replacement permission repairs frozen clinical input after fre
  await until(()=>q('[data-adjust-input="cli.file"]').value===original&&!q('[data-adjust-review]').disabled);
  const clinical=q('[data-adjust-input="cli.file"]');
  assert.equal(clinical.readOnly,false);assert.equal(q('[data-adjust-submit]').disabled,true);
- assert.match(q('[data-adjust-clinical-replacement]').textContent,/completed Stages 1 and 2 are reused/);
- assert.match(q('[data-adjust-clinical-replacement]').textContent,/Original frozen file: \/run\/inputs\/frozen\/clinical/);
+ assert.match(q('[data-adjust-clinical-replacement]').textContent,/reuses completed Stages 1 and 2/);
+ assert.equal(q('[data-adjust-original-path]').textContent,original);
  assert.equal(q('[data-adjust-gender-column]'),null,'no mapping can be chosen without a suitable column');
  q('[data-adjust-use-corrected-clinical]').click();
  assert.equal(w.document.activeElement,clinical);
@@ -225,12 +251,21 @@ test('a failed Stage 3 submission keeps the replacement and the actual error',as
    review_token:clinical===replacement?token:null,inputs:{'cli.file':clinical},options:{npc:3},resources,limits:{},
    issues:clinical===original?['The clinical file needs one column named gender.']:[]});
  };
- controller=w.mountAdjustmentRun({panel,token:'page-token',onHistoryChanged:()=>Promise.resolve().then(()=>controller.setContext(context))});
+ const renderFilePath=path=>{
+  const button=w.document.createElement('button');
+  button.type='button';button.textContent='Full path';button.dataset.path=path;
+  return button;
+ };
+ controller=w.mountAdjustmentRun({panel,token:'page-token',renderFilePath,
+  onHistoryChanged:()=>Promise.resolve().then(()=>controller.setContext(context))});
  const q=selector=>panel.querySelector(selector);
  controller.setContext(context);
  const path=q('[data-adjust-input="cli.file"]'),review=q('[data-adjust-review]'),submit=q('[data-adjust-submit]');
  await until(()=>path.value===original&&!review.disabled);
  path.value=replacement;path.dispatchEvent(new w.Event('input',{bubbles:true}));
+ assert.equal(q('[data-adjust-clinical-path]').hidden,false);
+ assert.equal(q('[data-adjust-clinical-path] button').dataset.path,replacement);
+ assert.equal(q('[data-adjust-original-path] button').dataset.path,original);
  review.click();await until(()=>!submit.disabled);
  submit.click();await pause();
  assert.equal(path.value,replacement);
