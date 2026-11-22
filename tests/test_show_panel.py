@@ -18,12 +18,13 @@ class ShowPanelToolTest(unittest.TestCase):
         token = UI_CHANNEL.set(sent.append)
         try:
             self.assertEqual(show_panel('workflow', True)['status'], 'ok')
-            self.assertEqual(dispatch_tool('show_panel', {'panel': 'visualization', 'visible': False})['executed'], False)
+            # The old Stage 6 panel is gone; results are on the chat cards.
+            self.assertEqual(show_panel('visualization', False)['status'], 'invalid')
             self.assertEqual(show_panel('settings', True)['status'], 'invalid')
             self.assertEqual(dispatch_tool('show_panel', {'panel': 'workflow', 'visible': 'yes'})['status'], 'invalid')
         finally:
             UI_CHANNEL.reset(token)
-        self.assertEqual(sent, [{'panel': 'workflow', 'visible': True}, {'panel': 'visualization', 'visible': False}])
+        self.assertEqual(sent, [{'panel': 'workflow', 'visible': True}])
 
     def test_without_a_chat_page_nothing_is_sent(self):
         self.assertEqual(show_panel('workflow', True)['status'], 'unavailable')

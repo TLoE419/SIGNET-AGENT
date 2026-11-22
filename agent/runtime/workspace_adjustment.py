@@ -1,4 +1,4 @@
-"""Read a completed workspace adjustment from the files collected with that job."""
+"""Read completed adjustment aggregates on HPC3; individual results remain there."""
 
 import csv
 import math
@@ -85,7 +85,7 @@ def _genotype_width(directory, retained, matched):
     return width
 
 
-def completed_result(run_id):
+def _local_completed_result(run_id):
     root = signet._run(run_id)
     history = workspace_genotype.run_history(root)
     job = history['jobs']['adjust']
@@ -146,3 +146,8 @@ def completed_result(run_id):
             'pca': {'points': [scores[shortened[index]] for index in retained],
                     'variance_explained': variance, 'source': 'signet_smartpca'},
             'comparison': comparison}
+
+
+def completed_result(run_id):
+    from agent.runtime.workspace_projection import completed_result as project
+    return project(run_id, 3)
