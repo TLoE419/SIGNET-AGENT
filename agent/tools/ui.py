@@ -4,14 +4,14 @@ import re
 
 # Set by the chat service for one turn; a callable that forwards a request to the page.
 UI_CHANNEL = ContextVar('ui_channel', default=None)
-PANELS = ('workflow', 'visualization')
+PANELS = ('workflow',)
 
 
 def show_panel(panel: str, visible: bool) -> dict:
-    """Open or collapse a panel on the chat page: "workflow" (the setup and analysis checklist) or "visualization" (Stage 6 network results). Use when the user asks to show, open, hide or collapse one.
+    """Open or collapse the "workflow" panel on the chat page (the setup and analysis checklist).
+    Use when the user asks to show, open, hide or collapse it. Analysis results are on the chat cards.
 
-    Changes only what the page shows; it runs nothing and changes no data. The
-    visualization panel opens only when Stage 6 results exist.
+    Changes only what the page shows; it runs nothing and changes no data.
     """
     if panel not in PANELS:
         return {'status': 'invalid', 'executed': False, 'error': f'panel must be one of {", ".join(PANELS)}.'}
@@ -25,7 +25,7 @@ def show_panel(panel: str, visible: bool) -> dict:
 
 def request_workspace_action(payload):
     """Validate and forward one navigation request; shared by navigation and reviewed proposals."""
-    from agent.stage6.workspace import CHAT_CONTEXT
+    from agent.runtime.workspace_context import CHAT_CONTEXT
     if not isinstance(payload, dict) or set(payload) - {'version', 'action', 'history_id', 'stage', 'gene'} or type(payload.get('version')) is not int or payload['version'] != 1:
         return {'status': 'invalid', 'executed': False}
     action, history_id, stage, gene = (payload.get(key) for key in ('action', 'history_id', 'stage', 'gene'))
