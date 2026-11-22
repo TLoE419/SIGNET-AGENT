@@ -75,6 +75,36 @@ def install_file_fixture():
     hpc_files._call = local_metadata
 
 
+def install_projection_fixture():
+    """Generate the native test's saved aggregates through the real guarded projector."""
+    from unittest.mock import patch
+    from agent.runtime import signet_jobs as jobs, ssh_transport, workspace_projection
+    from agent.tools import signet
+
+    root = signet.PROJECT / 'runs/workspace-persistence-live'
+    if not root.is_dir():
+        return
+    config = {'root': str(signet.PROJECT), 'workRoot': str(root.parent),
+              'source': str(signet.PROJECT / 'software/pinned'), 'image': str(signet.PROJECT / 'image.sif'),
+              'executor': '/bin/echo', 'partition': 'fixture'}
+    record_path = root / 'steps/genotype.json'
+    record = json.loads(record_path.read_text())
+    record.update(remote_dir=str(root), image=config['image'], partition=config['partition'])
+    record_path.write_text(json.dumps(record))
+    (root / '.owner').write_text('workspace-native-fixture')
+    (root / 'steps/remote.owner').write_text(json.dumps({'remote_dir': str(root), 'token': 'workspace-native-fixture'}))
+    (root / 'steps/genotype.job').write_text(record['job_id'])
+    (root / 'steps/genotype.done').write_text('0 2026-11-17T01:05:00-08:00\n')
+
+    def execute(command, **kwargs):
+        if command != 'bash -s' or b'SIGNET_PROJECT_WORKSPACE' not in kwargs['input']:
+            raise AssertionError('Only the fixed projection script is allowed in this fixture.')
+        return subprocess.run(['bash', '-s'], input=kwargs['input'], capture_output=True, timeout=10)
+
+    with patch.object(jobs, '_environment', return_value=config), patch.object(ssh_transport, 'remote', side_effect=execute):
+        workspace_projection.completed_result(root.name, '1')
+
+
 def main():
     server = REPO / 'electron/main/backend/server.py'
     if sys.argv[1:3] != ['-u', str(server)]:

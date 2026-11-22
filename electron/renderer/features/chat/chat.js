@@ -52,7 +52,6 @@ function createTurn() {
   root.append(head, steps, transport);
   $('activity').append(root);
   $('chat-progress').hidden = false;
-  $('chat-progress').open = true;
   return {root, steps, timer, transport:transport.lastChild, started:performance.now(), current:null, mode:null};
 }
 function card(turn, title, kind) {
@@ -102,6 +101,7 @@ function progress(turn, text) {
 }
 async function send(text) {
   if (busy || !text.trim()) return;
+  const turnId = crypto.randomUUID();
   const selection = {context: null};
   window.dispatchEvent(new CustomEvent('workspace-context-request', {detail: selection}));
   const workspace_context = selection.context;
@@ -120,9 +120,22 @@ async function send(text) {
   $('state').classList.add('live');
   $('state').textContent = "Connecting";
   const interval = setInterval(() => {turn.timer.textContent = `${Math.floor((performance.now()-turn.started)/1000)} s`;}, 250);
-  let done = false, failed = false;
+  let done = false, failed = false, registered = false, stopping = false;
+  const stop = $('stop-response');
+  async function requestStop() {
+    try {
+      const response = await fetch('/chat/cancel', {method:'POST',
+        headers:{'Content-Type':'application/json','X-Chat-Token':document.querySelector('meta[name="chat-token"]').content},
+        body:JSON.stringify({session,turn_id:turnId})});
+      if (!response.ok) throw Error('Could not stop the response. Try again.');
+    } catch (error) {if (!done) {stopping=false;if(stop)stop.disabled=false;$('state').textContent=error.message;}}
+  }
+  if(stop){stop.hidden=false;stop.disabled=false;stop.onclick=()=>{
+    if(done||stopping)return;stopping=true;stop.disabled=true;$('state').textContent='Stopping response…';
+    if(registered)void requestStop();
+  };}
   try {
-    const response = await fetch('/chat', {method:'POST', headers:{'Content-Type':'application/json','X-Chat-Token':document.querySelector('meta[name="chat-token"]').content},body:JSON.stringify({text,session,workspace_context})});
+    const response = await fetch('/chat', {method:'POST', headers:{'Content-Type':'application/json','X-Chat-Token':document.querySelector('meta[name="chat-token"]').content},body:JSON.stringify({text,session,turn_id:turnId,workspace_context})});
     if (!response.ok) {
       const error = await response.json();
       throw new Error(error.error || "The local service rejected the request.");
@@ -132,7 +145,10 @@ async function send(text) {
     function consume(line) {
       if (!line.trim()) return;
       const event = JSON.parse(line);
-      if (event.type === 'workspace') window.dispatchEvent(new CustomEvent('stage6-update', {detail:event.text}));
+      if(event.type==='turn_started'&&event.text?.turn_id===turnId){registered=true;if(stopping)void requestStop();}
+      if(event.type==='model_fallback')message('notice',`This response uses ${event.text.model}.`);
+      if(stopping&&['answer','workspace_action','ui'].includes(event.type))return;
+      if(event.type==='done'&&event.status==='cancelled')answer.textContent='Response stopped. Completed tool records are retained.';
       if (event.type === 'ui') window.dispatchEvent(new CustomEvent('panel-request', {detail:event.text}));
       if (event.type === 'progress') progress(turn, event.text);
       if (event.type === 'answer') {
@@ -160,6 +176,7 @@ async function send(text) {
     card(turn,"Needs attention",'error').append(node('div','step-line',text));
     $('state').textContent = "Needs attention";
   } finally {
+    if(stop){stop.hidden=true;stop.onclick=null;}
     clearInterval(interval);
     turn.timer.textContent = `${((performance.now()-turn.started)/1000).toFixed(1)} s`;
     $('state').classList.remove('live');
@@ -181,6 +198,7 @@ $('new-chat').addEventListener('click', () => {if (!busy) location.assign(locati
 if (initialChat.messages?.length) {
   $('welcome')?.remove();
   for (const saved of initialChat.messages) {
+    if(saved.model_fallback)message('notice',`This response uses ${saved.model_fallback}.`);
     const body = message(saved.role, saved.text);
     if (saved.role === 'assistant') {
       body.classList.add('markdown');

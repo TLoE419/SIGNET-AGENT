@@ -1653,3 +1653,5 @@ code:not(pre code) {
     }
   }
 }
+.s3-remote-plot { display: block; width: 100%; height: auto; }
+.s3-remote-plot[hidden] { display: none; }

@@ -161,6 +161,7 @@ const nativeComponents = () => buildSync({entryPoints: [path.join(renderer, 'app
   await js(`document.querySelector('[data-nav-target="history"]').click();document.querySelector('[data-run-target="workspace--shared"]').click();document.querySelector('#ml-run-workspace--shared [data-history-select-stage="6"]').click();document.querySelector('#ml-run-workspace--shared [data-run-stage="6"]').click()`);
   await until(() => js(`document.getElementById('lens-stage6').dataset.runState==='ready'`), 'Saved graph did not load');
   const nativeClick = async selector => {
+    await js('new Promise(resolve=>setTimeout(resolve,350))');
     const point = await js(`(()=>{const node=document.querySelector(${JSON.stringify(selector)});node.scrollIntoView({block:'nearest',inline:'nearest',behavior:'instant'});const box=node.getBoundingClientRect();return {x:box.x+box.width/2,y:box.y+box.height/2}})()`);
     for (const type of ['mouseMove', 'mouseDown', 'mouseUp']) window.webContents.sendInputEvent({type,
       ...(type === 'mouseMove' ? {} : {button: 'left', clickCount: 1}), x: Math.round(point.x), y: Math.round(point.y)});
@@ -224,6 +225,8 @@ const nativeComponents = () => buildSync({entryPoints: [path.join(renderer, 'app
   await js(`document.getElementById('ml-dataset-select').value='dataset-b';document.getElementById('ml-dataset-select').dispatchEvent(new Event('change',{bubbles:true}));void 0`);
   await until(()=>js(`document.getElementById('ml-dataset-select').value==='dataset-b'`),'Dataset did not switch');
   await nativeClick('[data-nav-target="analysis"]');
+  await nativeClick('#ml-stage-tab');
+  await nativeClick('.ml-stage-button[data-stage="6"]');
   await js(`document.getElementById('ml-stage6-run').value='workspace--second';document.getElementById('ml-stage6-run').dispatchEvent(new Event('change',{bubbles:true}));void 0`);
   await until(()=>js(`document.getElementById('lens-stage6').dataset.historyId==='workspace--second'&&document.getElementById('lens-stage6').dataset.runState==='ready'`),'Second dataset graph did not load');
   await finishTurn(oldDatasetTurn,[{type:'workspace_action',text:{version:1,action:'select_gene',history_id:'archive--shared',stage:6,gene:'X'}},
@@ -261,6 +264,7 @@ const nativeComponents = () => buildSync({entryPoints: [path.join(renderer, 'app
   await js(`window.signetQaStreams[${delayedTurn}].push([{type:'workspace_action',text:{version:1,action:'select_gene',history_id:'workspace--shared',stage:6,gene:'B'}},{type:'answer',text:'A delayed lookup result'},{type:'done',text:'Conversation complete',status:'completed'}]);window.signetQaStreams[${delayedTurn}].end();void 0`);
   await until(()=>js(`!document.getElementById('ml-send').disabled&&window.signetQaHeldGraphs.length>0`),'Delayed graph request did not remain pending after turn end');
   await nativeClick('[data-nav-target="analysis"]');
+  await nativeClick('#ml-agent-tab');
   await nativeClick('#ml-chat-list-toggle');
   await nativeClick('#ml-chat-records > .ml-chat-record:nth-child(2) .ml-nav-list-item');
   await until(()=>js(`document.getElementById('ml-chat-title').textContent==='Saved failure'`),'Saved chat did not switch');
@@ -277,6 +281,7 @@ const nativeComponents = () => buildSync({entryPoints: [path.join(renderer, 'app
 
   const interruptedTurn=await startTurn('Keep this partial answer if the connection fails');
   await js(`window.signetQaStreams[${interruptedTurn}].push([{type:'answer',text:'Partial evidence retained from interrupted stream'},{type:'progress',text:'SIGNET_TOOL '+JSON.stringify({operation_id:'c'.repeat(32),tool_name:'get_workspace_stage',status:'running',elapsed_ms:20,result_summary:'Checking saved state'})}]);void 0`);
+  await nativeClick('#ml-agent-tab');
   await nativeClick('#ml-chat-list-toggle');
   assert.equal(await js(`document.querySelector('#ml-chat-records .ml-nav-list-item').disabled`),true);
   await nativeClick('#ml-chat-records > .ml-chat-record:first-child .ml-nav-list-item');
@@ -287,6 +292,7 @@ const nativeComponents = () => buildSync({entryPoints: [path.join(renderer, 'app
   assert.match(await js(`document.getElementById('ml-chat-transcripts').textContent`),/Partial evidence retained from interrupted stream/);
   await nativeClick('#ml-chat-records > .ml-chat-record:first-child .ml-nav-list-item');
   await until(()=>js(`document.getElementById('ml-chat-title').textContent==='Current chat'`),'First chat did not reopen after the interrupted turn');
+  await nativeClick('#ml-agent-tab');
   await nativeClick('#ml-chat-list-toggle');await nativeClick('#ml-chat-records > .ml-chat-record:nth-child(2) .ml-nav-list-item');
   await until(()=>js(`document.getElementById('ml-chat-title').textContent==='Saved failure'`),'Interrupted chat did not reopen');
   console.log('PASS: pending reply locks chat switching; disconnect retains partial answer and needs-review state across reopen');

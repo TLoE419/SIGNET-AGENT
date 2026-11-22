@@ -19,6 +19,9 @@ class RuntimePrivacyContracts(unittest.TestCase):
         f = fixtures.StepsTest()
         f.setUp()
         self.addCleanup(f.doCleanups)
+        downloads = patch.object(jobs, 'DOWNLOADED_STEPS', ('network', 'visualize'))
+        downloads.start()
+        self.addCleanup(downloads.stop)
         return f
 
     def test_first_four_complete_remotely_and_preserve_existing_local_archives(self):
@@ -272,7 +275,11 @@ class RuntimePrivacyContracts(unittest.TestCase):
                                   ({'state': 'failed', 'slurm_state': 'OUT_OF_MEMORY', 'reason': 'PRIVATE-ID'},
                                    'scheduler_out_of_memory')):
             with patch.object(tools, 'get_workspace_stage', return_value=view), \
-                    patch.object(jobs, 'status', return_value=record):
+                    patch.object(jobs, 'status', return_value=record), \
+                    patch.object(jobs, '_root', return_value=Path('fixture')), \
+                    patch.object(jobs, 'analysis_session', return_value=None), \
+                    patch.object(jobs, 'run_records', return_value={'expression': record}), \
+                    patch.object(step_report, '_card', return_value=None):
                 result = tools.get_workspace_report('fixture', 2)
             self.assertEqual(result['failure']['classifications'][0], expected)
             self.assertTrue(result['failure']['reason'])

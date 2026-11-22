@@ -18,6 +18,16 @@ class BackendTransitionQA(unittest.TestCase):
         self.f.setUp()
         self.addCleanup(self.f.doCleanups)
         self.f.visualize_ready()
+        # Keep the synthetic upstream cohort valid under the current clinical preflight.
+        ids = ''.join(f'TCGA-AA-{index:04d}-01A\n' for index in range(1, 4))
+        for base in (self.f.root, self.f.remote_dir):
+            for relative in (jobs.GENOTYPE_IDS, jobs.EXPRESSION_IDS):
+                target = base / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(ids)
+        (self.f.hpc / 'ws/refdata/clinical.tsv').write_text(
+            'submitter_id\trace\tgender\nTCGA-AA-0001\tasian\tfemale\n'
+            'TCGA-AA-0002\tblack or african american\tmale\nTCGA-AA-0003\twhite\tfemale\n')
         signet._update(self.f.root, {'restrict.tcga.geno': '1', 'restrict.tcga': '1'})
         settings = signet._settings(self.f.root)
         snapshots = {'genotype': workspace.SNAPSHOT, 'expression': workspace.EXPRESSION_SNAPSHOT,

@@ -43,7 +43,8 @@ test('navigation and request policy reject other ports, schemes, credentials and
   }
   assert.equal(navigationAllowed(origin + '/?session=abc', origin), true);
   assert.equal(navigationAllowed(origin + '/classic?session=abc', origin), true);
-  assert.equal(navigationAllowed(origin + '/stage6/file?name=result', origin), true);
+  assert.equal(navigationAllowed(origin + '/signet/result-download?ticket=abc', origin), true);
+  assert.equal(navigationAllowed(origin + '/stage6/file?name=result', origin), false);
   assert.equal(navigationAllowed(origin + '/chat', origin), false);
 });
 

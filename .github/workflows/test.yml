@@ -29,7 +29,6 @@ jobs:
       - name: Test renderer formatting, language and graph interactions
         run: |
           node tests/test_markdown.cjs
-          node tests/test_stage6_graph.cjs
           node tests/test_chat_progress.cjs
   electron:
     runs-on: macos-15

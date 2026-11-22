@@ -57,7 +57,7 @@ class DiagnosticsTest(unittest.TestCase):
         self.assertIn('busy',result)
 
     def test_trace_shows_missing_dependencies_without_dumping_result(self):
-        call=types.FunctionCall(id='c1',name='expression_tcga',args={'run_id':'sample'})
+        call=types.FunctionCall(id='c1',name='cis_eqtl',args={'run_id':'sample'})
         client,_=client_for(response(calls=[call]),response('環境缺少依賴。'))
         events=[]
         with patch.object(main,'dispatch_tool',return_value={'status':'unavailable','executed':False,

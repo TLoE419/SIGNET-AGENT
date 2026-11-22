@@ -24,12 +24,12 @@ app.on('will-quit', () => { clearTimeout(deadline); rmSync(temporary, {recursive
     const until=async check=>{for(let i=0;i<200;i++){if(check())return;await new Promise(resolve=>setTimeout(resolve,25))}throw Error('Advanced Settings did not mount')};
     await until(()=>document.querySelector('#ml-remote-switch'));
     document.querySelector('[data-nav-target="settings"]').click();
-    if (window.signetDesktop.isDevMode) await until(()=>document.querySelector('.ssh-dev-launch')?.getClientRects().length);
+    await until(()=>document.querySelector('.ssh-dev-launch')?.getClientRects().length);
     return {label:document.querySelector('.ssh-dev-launch')?.textContent ?? null,development:window.signetDesktop.isDevMode};
   })()`);
   assert.equal(advanced.development,devMode);
   if (devMode) assert.match(advanced.label,/Advanced: remote terminal/);
-  else assert.equal(advanced.label,null);
+  else assert.match(advanced.label,/Advanced: remote terminal/);
  const classicLoaded = once(window.webContents, 'did-finish-load');
  require('electron').Menu.getApplicationMenu().getMenuItemById('classic-view').click();
  await classicLoaded;
@@ -45,17 +45,21 @@ app.on('will-quit', () => { clearTimeout(deadline); rmSync(temporary, {recursive
     language:document.documentElement.lang, languageToggle:!!document.querySelector('#language-toggle'),
     node:typeof window.require,
     chatStatus:(await fetch('/chat',{method:'POST',body:'{}'})).status,
-    workspace:(await fetch('/stage6?session=12345678-1234-1234-1234-123456789abc',
+    progress:(await fetch('/signet/progress?session=12345678-1234-1234-1234-123456789abc',
       {headers:{'X-Chat-Token':document.querySelector('meta[name="chat-token"]').content}})).status,
     devBridge:!!window.signetDesktop?.devTerminal,devButton:!!document.querySelector('.ssh-dev-launch'),
     sshButton:!!document.querySelector('#ssh-root .ssh-status-block'),
     sshBridge:Object.keys(window.signetDesktop?.ssh||{}).sort(),
-    resources:performance.getEntriesByType('resource').filter(x=>x.name.startsWith(location.origin)).length
+    resources:performance.getEntriesByType('resource').filter(x=>x.name.startsWith(location.origin)).map(x=>new URL(x.name).pathname)
   }))()`);
-  assert.equal(value.composer, true); assert.equal(value.stage6, true);
-  assert.equal(value.language, 'en'); assert.equal(value.languageToggle, false);
-  assert.equal(value.node, 'undefined'); assert.equal(value.chatStatus, 403); assert.equal(value.workspace, 200);
-  assert.equal(value.devBridge,devMode);assert.equal(value.devButton,devMode);
+  assert.equal(value.composer, true); assert.equal(value.stage6, false); assert.equal(value.language, 'en'); assert.equal(value.languageToggle, false);
+  assert.equal(value.node, 'undefined'); assert.equal(value.chatStatus, 403); assert.equal(value.progress, 200);
+  // Advanced Settings use the trusted bridge in production; the classic launcher stays dev-only.
+  assert.equal(value.devBridge,true);assert.equal(value.devButton,devMode);
+  const terminalHistory=await window.webContents.executeJavaScript(`window.signetDesktop.devTerminal.history()`);
+  assert.equal(terminalHistory.ok,true);
+  assert.equal(terminalHistory.value.some(event=>event.message==='Persistent PTY login shell opened.'),false,
+    'Loading either interface must not automatically open a terminal shell');
   if(devMode){
     const terminalHistory=await window.webContents.executeJavaScript(`window.signetDesktop.devTerminal.history()`);
     assert.equal(terminalHistory.ok,true);
@@ -67,7 +71,7 @@ app.on('will-quit', () => { clearTimeout(deadline); rmSync(temporary, {recursive
   assert.equal(value.sshButton, true);
   assert.deepEqual(value.sshBridge, ['addExternalKey', 'answerAuthChallenge', 'cancelRegistration', 'connect', 'disconnect', 'generateKey', 'getSnapshot', 'healthCheck', 'initialize', 'inspectPrivateKey', 'listKeys', 'listProfiles', 'pickPrivateKey', 'registerGenerated', 'removeKey', 'saveProfile', 'selectProfile', 'subscribe', 'subscribeAuthChallenge', 'trustHost', 'updateKey']);
   assert.equal(value.sshBridge.some(name => /exec|shell|readFile|writeFile/.test(name)), false);
-  assert.ok(value.resources >= 5);
+  for (const asset of ['/chat.css', '/ssh.css', '/workspace.js', '/renderer.js']) assert.ok(value.resources.includes(asset), asset);
   const external = await window.webContents.executeJavaScript(`fetch('http://127.0.0.1:1/').then(()=>false,()=>true)`);
   assert.equal(external, true);
   const currentURL = window.webContents.getURL();
@@ -107,7 +111,7 @@ app.on('will-quit', () => { clearTimeout(deadline); rmSync(temporary, {recursive
   app.on('before-quit', event => { if (!shutdownVerified) event.preventDefault(); });
   backend.closed.then(async () => {
     await assert.rejects(fetch(origin));
-    console.log('PASS: actual Web UI, sandbox, HTTP protections, workspace, language, navigation and owned service shutdown');
+    console.log('PASS: actual Web UI, sandbox, HTTP protections, analysis progress, language, navigation and owned service shutdown');
     shutdownVerified = true;
     app.quit();
   }).catch(error => { console.error(error); app.exit(1); });

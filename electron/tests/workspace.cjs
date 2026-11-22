@@ -294,6 +294,9 @@ function createLiveHistoryFixture() {
   if (!existsSync(example)) writeFileSync(example, JSON.stringify({id: 'example-chr1',
     name: ['第 1 號染色體範例', 'Chromosome 1 example'],
     inputs: {genotype: ['study.ped', 'study.map'], expression: ['example_gexp'], clinical: ['clinical.tsv']}}));
+  require('node:child_process').execFileSync(process.env.SIGNET_WORKSPACE_TEST_PYTHON, ['-c',
+    "import runpy,sys; import agent.tools.signet as signet; from pathlib import Path; signet.PROJECT=Path(sys.argv[1]); runpy.run_path(sys.argv[2])['install_projection_fixture']()",
+    project, path.join(__dirname, 'fixtures/workspace_backend.py')], {cwd:path.join(__dirname,'../..')});
   return {run_id, inputs: {genotype: [inputs['ped.file'], inputs['map.file'], inputs.ref + '1.gen', inputs.gmap + '1.map']},
     settings, root};
 }

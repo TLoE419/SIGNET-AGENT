@@ -7,7 +7,7 @@ function subscribe(channel, listener) {
   ipcRenderer.on(channel, receive);
   return () => ipcRenderer.removeListener(channel, receive);
 }
-const devTerminal=process.argv.includes('--signet-dev-mode')&&process.argv.includes('--signet-dev-terminal')?Object.freeze({
+const devTerminal=process.argv.includes('--signet-dev-terminal')?Object.freeze({
   open:(id,cols,rows)=>ipcRenderer.invoke('ssh-dev:open',id,cols,rows),
   input:(id,data)=>ipcRenderer.invoke('ssh-dev:input',id,data),
   resize:(id,cols,rows)=>ipcRenderer.invoke('ssh-dev:resize',id,cols,rows),
