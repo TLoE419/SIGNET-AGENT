@@ -34,8 +34,9 @@ export class EnvironmentService extends EventEmitter {
   this.active(token);const start=Date.now();this.log(step,'Started.');
   const result=await this.ssh.exec('bash -s',Buffer.from(script),timeout).catch(error=>{this.log(step,`Failed after ${Date.now()-start} ms: ${(error as Error).message}`);throw error});this.active(token);
   this.log(step,`Finished in ${Date.now()-start} ms; exit=${result.returncode}.`);
-  if(result.stderr.length)this.log(step,result.stderr.toString('utf8').slice(-4096).replace(/[\x00-\x08\x0b-\x1f\x7f]/g,''));
-  if(result.returncode!==0)throw Error(`${step} failed (exit ${result.returncode}). Review development diagnostics or choose another installation root.`);
+  const detail=result.stderr.toString('utf8').slice(-4096).replace(/[\x00-\x08\x0b-\x1f\x7f]/g,'').trim();
+  if(detail)this.log(step,detail);
+  if(result.returncode!==0)throw Error(`${step} failed (exit ${result.returncode}). ${detail.slice(-2048)||'Review development diagnostics or choose another installation root.'}`);
   return result.stdout.toString('utf8');
  }
  private run(action:(token:number)=>Promise<void>){

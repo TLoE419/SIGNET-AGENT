@@ -6,7 +6,7 @@ from pathlib import Path
 import threading
 
 import agent.tools.signet as st
-from agent.runtime import workspace_genotype
+from agent.runtime import workspace_genotype, workspace_datasets
 
 ARCHIVED_STEP_JOBS = {'1': 'genotype', '2': 'expression', '4': 'cis', '5': 'network'}
 
@@ -346,19 +346,11 @@ class Workspace:
 
     def archived_history(self):
         datasets = {}
-        for path in sorted((st.PROJECT / 'data/datasets').glob('*.json')):
-            try:
-                record = json.loads(st._no_links(path).read_text(encoding='utf-8'))
-                dataset_id = st._name(record['id'])
-                if dataset_id != path.stem:
-                    continue
-                dataset = {'id': dataset_id, 'name': _history_name(record['name']),
-                           'inputs': _history_inputs(record['inputs'])}
-                if 'folder' in record:
-                    dataset['folder'] = _history_text(record['folder'])
-                datasets[dataset_id] = dataset
-            except (OSError, ValueError, KeyError, TypeError):
-                continue
+        for record in workspace_datasets.list_datasets():
+            dataset = {key: record[key] for key in ('id', 'name', 'inputs')}
+            if record['folder']:
+                dataset['folder'] = record['folder']
+            datasets[record['id']] = dataset
 
         runs = []
         for path in sorted(_archive_directory().glob('*/history.json')):

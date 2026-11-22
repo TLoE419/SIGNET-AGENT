@@ -17,6 +17,8 @@ const environmentBridge=(window as unknown as {signetDesktop:{environment:Enviro
 export type SshControlStatus = ComponentProps<typeof SshStatusBlock> & {
  environment:EnvironmentSnapshot;
  onEnvironment:()=>void;
+ onInstallEnvironment:()=>Promise<{ok:boolean;error?:string}>;
+ onVerifyEnvironment:()=>ReturnType<EnvironmentBridge['check']>;
 };
 export function SshControls({renderStatus}:{renderStatus?:(props:SshControlStatus)=>ReactNode}){
  const [environment,setEnvironment]=useState<EnvironmentSnapshot>({phase:'disconnected',message:'Connect SSH first.'}),[environmentOpen,setEnvironmentOpen]=useState(false);
@@ -31,9 +33,19 @@ export function SshControls({renderStatus}:{renderStatus?:(props:SshControlStatu
  async function connect(input:FormInput){setDraft(null);if(input.auth.method==='duo'){await ssh.save(input);setOpen(false);setAccount(true);return}try{await ssh.connect(input)}catch(e){credentialRequest(e)}}
  async function toggle(){if(connection?.phase==='slow'&&liveStatus==='error'){await ssh.connectSaved();return}if(liveStatus==='connected'||liveStatus==='connecting'){await ssh.disconnect();return}if(!p){setOpen(true);return}if(p.auth.method==='duo'){setAccount(true);return}try{await ssh.connectSaved()}catch(e){credentialRequest(e)}}
  const connection=ssh.snapshot.connection,identity=connectionIdentity(p,keys);
- const statusProps:SshControlStatus={environment,onEnvironment:()=>setEnvironmentOpen(true),name:identity.name,host:identity.endpoint,status,phase:connection?.phase,error:ssh.error||connection?.error,busy:ssh.busy,onEdit:()=>setOpen(true),onToggle:()=>void toggle().catch(()=>{})};
+ const statusProps:SshControlStatus={environment,onEnvironment:()=>setEnvironmentOpen(true),
+  onInstallEnvironment:async()=>{
+   const token=document.querySelector<HTMLMetaElement>('meta[name="chat-token"]')?.content??'';
+   const reply=await fetch('/hpc/signet',{method:'POST',body:'{}',headers:{'Content-Type':'application/json','X-Chat-Token':token}});
+   const result=await reply.json();
+   if(!reply.ok||result.status!=='ok'||!['started','in_progress','existing'].includes(result.outcome))return {ok:false,error:result.error||result.reason||result.detail||'SIGNET installation was not confirmed.'};
+   await environmentBridge.check(environment.config?.root||'',environment.config?.partition||'');
+   return {ok:true};
+  },
+  onVerifyEnvironment:()=>environmentBridge.check(environment.config?.root||'',environment.config?.partition||''),
+  name:identity.name,host:identity.endpoint,status,phase:connection?.phase,error:ssh.error||connection?.error,busy:ssh.busy,onEdit:()=>setOpen(true),onToggle:()=>void toggle().catch(()=>{})};
  return <>{devTerminal&&!renderStatus&&<DevTerminalPanel onConnect={()=>setOpen(true)} diagnostics={diagnostics} bridge={devTerminal} connected={liveStatus==='connected'} status={liveStatus}/>}{renderStatus ? renderStatus(statusProps) : <SshStatusBlock {...statusProps}/>}
- <RemoteFilesHost/>
+ <RemoteFilesHost connected={liveStatus==='connected'} connectionIdentity={`${identity.endpoint}|${connection?.connectedAt||''}`}/>
  {environmentOpen&&<EnvironmentModal diagnostics={diagnosticView} snapshot={environment} bridge={environmentBridge} onClose={()=>setEnvironmentOpen(false)}/>}
  <UnlockPrompt diagnostics={diagnosticView} open={unlock} name={identity.name} onClose={()=>{setUnlock(false);if(liveStatus==='connecting')void ssh.disconnect()}} onConnect={ssh.connectSaved} pendingHost={ssh.snapshot.pendingHost} onTrust={ssh.trustHost}/>
  <ConnectionModal retained={connection?.phase==='slow'} onRetry={()=>ssh.connectSaved()} diagnostics={diagnosticView} open={open} onClose={()=>setOpen(false)} profile={draft||p} keys={keys} status={status} busy={ssh.busy} health={connection?.health} error={ssh.error||connection?.error} onOpenKeyRegistration={input=>{setDraft(input);setOpen(false);setKeyOpen(true)}} onUpdateKey={async(id,input)=>{await onboarding.updateKey(id,input);await refreshKeys()}} onRemoveKey={async id=>{await onboarding.removeKey(id);setDraft(null);await refreshKeys()}} onInspectKey={ssh.inspect} onSave={async input=>{await ssh.save(input);setDraft(null)}} onConnect={connect} onDisconnect={ssh.disconnect} onCheck={()=>ssh.healthCheck(true)} pendingHost={ssh.snapshot.pendingHost} onTrustHost={ssh.trustHost}/>

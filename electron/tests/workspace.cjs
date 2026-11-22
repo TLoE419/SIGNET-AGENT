@@ -1,15 +1,52 @@
 'use strict';
 
 const assert = require('node:assert/strict');
-const {randomBytes} = require('node:crypto');
-const {mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync} = require('node:fs');
+const {once} = require('node:events');
+const {createHash, randomBytes} = require('node:crypto');
+const {cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync} = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const {app, BrowserWindow, screen} = require('electron');
+const {Server, utils} = require('ssh2');
+const {Backend} = require('../main/backend/backend.cjs');
+const {launch} = require('../main/app/main.cjs');
+const {HostKeyTrustStore} = require('../build/ssh/index.cjs');
 
-const temporary = mkdtempSync(path.join(os.tmpdir(), 'signet-workspace-test-'));
+const temporary = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'signet-workspace-test-')));
 app.setPath('appData', temporary);
+const project = path.join(temporary, 'project');
+const backendMetadata = path.join(temporary, 'backend-starts.json');
+const datasetState = path.join(project, 'data/workspace-datasets.json');
+const remoteRoot = path.join(temporary, 'remote-files');
+const remoteCalls = path.join(temporary, 'file-metadata-calls.ndjson');
+const remote = {root: remoteRoot, folder: path.join(remoteRoot, 'cohorts/chr2'),
+  nested: path.join(remoteRoot, 'cohorts/chr2/nested'), sizes: {},
+  genotype: [path.join(remoteRoot, 'cohorts/chr2/study.ped'), path.join(remoteRoot, 'cohorts/chr2/study.map')],
+  expression: [path.join(remoteRoot, 'cohorts/chr2/expression.tsv')],
+  clinical: [path.join(remoteRoot, 'cohorts/chr2/clinical.tsv')],
+  invalid: [path.join(remoteRoot, 'cohorts/chr2/empty.tsv')]};
+mkdirSync(path.join(remoteRoot, 'home'), {recursive: true});
+mkdirSync(remote.nested, {recursive: true});
+for (const [filename, content] of [[remote.genotype[0], 'F1 P1 0 0 1 -9 A A\n'], [remote.genotype[1], '1 rs1 0 101\n'],
+  [remote.expression[0], 'gene\tS1\nMEGF6\t2\n'], [remote.clinical[0], 'submitter_id\trace\tgender\nP1\tasian\tfemale\n'],
+  [remote.invalid[0], '']]) {
+  writeFileSync(filename, content);
+  remote.sizes[filename] = Buffer.byteLength(content);
+}
+const repo = path.resolve(__dirname, '../..');
+const pythonWrapper = path.join(temporary, 'python-fixture');
+const defaultPython = path.join(repo, '.venv/bin/python');
+process.env.SIGNET_WORKSPACE_TEST_PYTHON = process.env.SIGNET_PYTHON || (existsSync(defaultPython) ? defaultPython : 'python3');
+process.env.SIGNET_WORKSPACE_TEST_ENTRY = path.join(__dirname, 'fixtures/workspace_backend.py');
+process.env.SIGNET_WORKSPACE_TEST_PROJECT = project;
+process.env.SIGNET_WORKSPACE_TEST_BACKEND = backendMetadata;
+process.env.SIGNET_WORKSPACE_TEST_FILES = remoteRoot;
+process.env.SIGNET_WORKSPACE_TEST_FILE_CALLS = remoteCalls;
+process.env.SIGNET_DATASETS_STATE_FILE = datasetState;
+writeFileSync(pythonWrapper, '#!/bin/sh\nexec "$SIGNET_WORKSPACE_TEST_PYTHON" "$SIGNET_WORKSPACE_TEST_ENTRY" "$@"\n', {mode: 0o700});
+process.env.SIGNET_PYTHON = pythonWrapper;
 const stateFile = path.join(temporary, 'SIGNET Research Assistant', 'state', '.chat-state.json');
+const userData = path.dirname(path.dirname(stateFile));
 const existingSession = '19579628-cff7-48b1-8a7e-e275eff4272c';
 const existingMessage = 'Retained workspace conversation';
 const existingActivity = 'Retained workspace activity';
@@ -41,25 +78,78 @@ emit({'type': 'turn.completed', 'usage': {'input_tokens': 30, 'output_tokens': 1
 process.env.PATH = [temporary, process.env.PATH].filter(Boolean).join(path.delimiter);
 process.env.SIGNET_WORKSPACE_TEST_CAPTURE = captureFile;
 
-const archiveDir = path.resolve(__dirname, '../../data/stage6-results');
+const archiveDir = path.join(project, 'data/stage6-results');
 const datasetDir = path.resolve(archiveDir, '../datasets');
 const useArchivedRuns = process.argv.includes('--archived-run');
 const fixturePaths = [];
+let running, replacementBackend, startup, sshServer, sshProfile;
 
 function cleanup() {
   clearTimeout(deadline);
+  sshServer?.close();
   for (const fixture of fixturePaths.reverse()) rmSync(fixture, {recursive: true, force: true});
   rmSync(temporary, {recursive: true, force: true});
 }
 
 function fail(error) {
   console.error(error);
+  void replacementBackend?.forceStop();
+  void running?.backend.forceStop();
   cleanup();
   app.exit(1);
 }
 
-const deadline = setTimeout(() => fail(Error('Workspace startup and chat test timed out')), 45000);
+const deadline = setTimeout(() => fail(Error('Workspace persistence and chat test timed out')), 90000);
 app.on('will-quit', cleanup);
+
+async function prepareLocalConnection() {
+  const host = utils.generateKeyPairSync('ed25519', {});
+  const key = utils.generateKeyPairSync('ed25519', {passphrase: 'file-browser-fixture', cipher: 'aes256-ctr', rounds: 4});
+  const privateKeyPath = path.join(temporary, 'browser-key');
+  writeFileSync(privateKeyPath, key.private, {mode: 0o600});
+  // The native dialog requires a connected desktop session. This loopback SSH
+  // server returns probe metadata only and never executes a supplied command.
+  sshServer = new Server({hostKeys: [host.private]}, client => {
+    client.on('error', () => {});
+    client.on('authentication', context => context.method === 'publickey' ? context.accept() : context.reject(['publickey']));
+    client.on('ready', () => client.on('session', accept => {
+      const session = accept();
+      session.on('pty', acceptPty => acceptPty?.());
+      session.on('shell', acceptShell => {
+        const stream = acceptShell();
+        stream.on('error', () => {});
+        stream.write('[testuser@file-browser-fixture:~] $ ');
+      });
+      session.on('exec', (acceptExec, _reject, info) => {
+        const stream = acceptExec();
+        stream.on('error', () => {});
+        if (info.command !== 'bash -s') {
+          stream.write('host=file-browser-fixture\nuser=testuser\nslurm=yes\n');
+          stream.exit(0); stream.end(); return;
+        }
+        stream.on('data', () => {});
+        stream.on('end', () => {
+          if (stream.destroyed) return;
+          stream.write('home=/home/testuser\nroot=/home/testuser/mock-signet\n' +
+            ['bash', 'git', 'tar', 'sha256sum', 'timeout', 'python3', 'setsid', 'sbatch', 'scontrol', 'sinfo', 'squeue']
+              .map(tool => tool + '=yes\n').join('') +
+            'executor=/usr/bin/apptainer\npartition=mock\nwritable=yes\nsource=missing\nexample=missing\nimage=missing\n');
+          stream.exit(0); stream.end();
+        });
+      });
+    }));
+  });
+  await new Promise(resolve => sshServer.listen(0, '127.0.0.1', resolve));
+  const port = sshServer.address().port;
+  const trust = new HostKeyTrustStore(path.join(userData, 'ssh'));
+  const publicKey = Buffer.from(host.public.split(' ')[1], 'base64');
+  await trust.load();
+  await trust.trust({host: '127.0.0.1', port, algorithm: 'ssh-ed25519',
+    fingerprint: 'SHA256:' + createHash('sha256').update(publicKey).digest('base64').replace(/=+$/, ''),
+    publicKey: publicKey.toString('base64')});
+  sshProfile = {name: 'Local file metadata fixture', host: '127.0.0.1', port, username: 'testuser',
+    auth: {method: 'private-key', privateKeyPath}};
+}
 
 function createHistoryFixture() {
   const name = path.basename(temporary);
@@ -67,6 +157,12 @@ function createHistoryFixture() {
     {id: name + '-a', name: ['測試資料甲', 'Test dataset A'], inputs: {genotype: ['current-a.ped'], expression: ['current-a-expression'], clinical: []}},
     {id: name + '-b', name: ['測試資料乙', 'Test dataset B'], inputs: {genotype: ['current-b.ped'], expression: [], clinical: []}},
   ];
+  for (const [index, dataset] of groups.entries()) {
+    dataset.folder = '/fixture/cohort-' + index;
+    dataset.default_inputs = dataset.inputs;
+    dataset.alternative_inputs = {genotype: [], expression: [], clinical: []};
+    dataset.selections = {genotype: 0, expression: 0, clinical: 0};
+  }
   mkdirSync(datasetDir, {recursive: true});
   mkdirSync(archiveDir, {recursive: true});
   for (const dataset of groups) {
@@ -158,6 +254,8 @@ function createHistoryFixture() {
 }
 
 function readArchivedHistory() {
+  cpSync(path.join(repo, 'data/datasets'), datasetDir, {recursive: true});
+  cpSync(path.join(repo, 'data/stage6-results'), archiveDir, {recursive: true});
   const read = filename => JSON.parse(readFileSync(filename, 'utf8'));
   const groups = ['example-chr1', 'simulated-cohort-b'].map(id => read(path.join(datasetDir, id + '.json')));
   const runs = [
@@ -177,12 +275,166 @@ function readArchivedHistory() {
   return {groups, runs};
 }
 
-let history;
+function createLiveHistoryFixture() {
+  const run_id = 'workspace-persistence-live';
+  const root = path.join(project, 'runs', run_id);
+  const inputs = {'ped.file': '/fixture/original.ped', 'map.file': '/fixture/original.map',
+    ref: '/fixture/original-ref/chr', gmap: '/fixture/original-map/chr'};
+  const settings = {'restrict.tcga.geno': '1', mind: '0.07', geno: '0.08', hwe: '0.0001', int: '5000000'};
+  const snapshot = {run_id, dataset_id: 'example-chr1', submitted_at: '2026-11-17T01:00:00-0800',
+    inputs, settings, resources: {cpus: 3, mem_gb: 12, hours: 2}};
+  mkdirSync(path.join(root, 'steps'), {recursive: true});
+  mkdirSync(path.join(root, 'work/res/resg'), {recursive: true});
+  writeFileSync(path.join(root, 'manifest.json'), JSON.stringify({run_id}));
+  writeFileSync(path.join(root, 'workspace-genotype.json'), JSON.stringify(snapshot));
+  writeFileSync(path.join(root, 'steps/genotype.json'), JSON.stringify({...snapshot, step: 'genotype',
+    state: 'completed', job_id: '9001', finished_at: '2026-11-17T01:05:00-0800'}));
+  writeFileSync(path.join(root, 'work/config.ini'), 'mind = 0.07\ngeno = 0.08\nrestrict.tcga.geno = 1\nfreq = 0.45\nntop = 1\n');
+  writeFileSync(path.join(root, 'work/res/resg/signet_Geno'), '0 1\n2 0\n');
+  writeFileSync(path.join(root, 'work/res/resg/signet_Genotype.sampleID'), 'P1\nP2\n');
+  const example = path.join(datasetDir, 'example-chr1.json');
+  if (!existsSync(example)) writeFileSync(example, JSON.stringify({id: 'example-chr1',
+    name: ['第 1 號染色體範例', 'Chromosome 1 example'],
+    inputs: {genotype: ['study.ped', 'study.map'], expression: ['example_gexp'], clinical: ['clinical.tsv']}}));
+  return {run_id, inputs: {genotype: [inputs['ped.file'], inputs['map.file'], inputs.ref + '1.gen', inputs.gmap + '1.map']},
+    settings, root};
+}
+
+function frozenFiles(directories) {
+  const hashes = {};
+  function visit(directory) {
+    for (const entry of readdirSync(directory, {withFileTypes: true})) {
+      const filename = path.join(directory, entry.name);
+      if (entry.isDirectory()) visit(filename);
+      else hashes[path.relative(project, filename)] = createHash('sha256').update(readFileSync(filename)).digest('hex');
+    }
+  }
+  directories.forEach(visit);
+  return hashes;
+}
+
+let history, liveHistory, originalFiles;
 try {
   history = useArchivedRuns ? readArchivedHistory() : createHistoryFixture();
+  liveHistory = createLiveHistoryFixture();
+  originalFiles = frozenFiles([archiveDir, liveHistory.root, remoteRoot]);
 } catch (error) { fail(error); }
 
-async function verifyWorkspace({groups, runs}) {
+async function chooseRemoteFiles({type, remote, paths = [], cancel = false, inspectOnly = false,
+  expectError = false, exerciseNavigation = false, expectedCurrent}) {
+  const find = selector => {
+    const element = document.querySelector(selector);
+    if (!element) throw Error('Missing remote file control: ' + selector);
+    return element;
+  };
+  const check = (condition, message) => { if (!condition) throw Error(message); };
+  const waitFor = async (condition, description) => {
+    const end = Date.now() + 10000;
+    while (!condition()) {
+      check(Date.now() < end, typeof description === 'function' ? description() : description);
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+  };
+  const prefix = 'dialog.remote-files-modal[open]';
+  const control = selector => find(prefix + ' ' + selector);
+  const click = selector => control(selector).click();
+  find(`[data-input-target="${type}"]`).click();
+  const trigger = find(`#ml-input-${type} [data-input-replace]`);
+  check(!trigger.disabled, 'An empty persisted dataset must allow choosing remote files');
+  trigger.click();
+  await waitFor(() => Boolean(document.querySelector(prefix + ' [data-remote-path]:not(:disabled)')),
+    'Remote folders and shortcuts did not load');
+  check(Boolean(find(prefix).querySelector('[data-mode="dataset"]')), 'The file dialog opened in reference-selection mode');
+  check(find(prefix).getClientRects().length > 0, 'The Data page file dialog is not visibly rendered');
+  check(!find(prefix).closest('[hidden]'), 'The Data page file dialog inherits a hidden ancestor');
+  const selected = () => [...find(prefix).querySelectorAll('[data-remote-selected-path]')]
+    .map(element => element.dataset.remoteSelectedPath);
+  if (expectedCurrent) {
+    check(JSON.stringify(selected().sort()) === JSON.stringify([...expectedCurrent].sort()),
+      'The remote picker did not restore the dataset’s saved paths');
+  }
+  if (inspectOnly) {
+    click('[data-remote-cancel]');
+    await waitFor(() => !document.querySelector(prefix), 'Cancel did not close the remote picker');
+    return;
+  }
+  async function go(folder) {
+    const input = control('[data-remote-path]');
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, folder);
+    input.dispatchEvent(new Event('input', {bubbles: true}));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    click('[data-remote-go]');
+    await waitFor(() => control('[data-remote-path]').value === folder &&
+      Boolean(document.querySelector(prefix + ' [data-remote-go]:not(:disabled)')),
+    'Typing a remote folder path did not navigate');
+  }
+  await go(remote.folder);
+  await waitFor(() => Boolean(document.querySelector(prefix + ` [data-remote-entry-path="${CSS.escape(remote.genotype[0])}"]`)),
+    'The real fixture folder entries did not appear');
+  if (exerciseNavigation) {
+    const folder = control(`[data-remote-entry-path="${CSS.escape(remote.nested)}"]`);
+    check(folder.dataset.entryKind === 'folder', 'Remote folder metadata was lost');
+    folder.click();
+    await waitFor(() => control('[data-remote-path]').value === remote.nested && !control('[data-remote-go]').disabled,
+      'Clicking a folder did not open it');
+    click('[data-remote-up]');
+    await waitFor(() => control('[data-remote-path]').value === remote.folder && !control('[data-remote-go]').disabled,
+      'Up did not restore the parent folder');
+    for (const filename of remote.genotype) {
+      const row = control(`[data-remote-entry-path="${CSS.escape(filename)}"]`);
+      check(row.dataset.entryKind === 'file' && row.querySelector('[data-remote-size]')?.textContent === remote.sizes[filename] + ' B',
+        'Remote filenames and sizes must come from the fixture metadata');
+    }
+  }
+  let removed = 0;
+  while (find(prefix).querySelector('[data-remote-remove]')) {
+    check(++removed <= 128, 'The remote selection basket could not be cleared');
+    const remove = control('[data-remote-remove]');
+    const filename = remove.closest('[data-remote-selected-path]').dataset.remoteSelectedPath;
+    remove.click();
+    await waitFor(() => !selected().includes(filename), () =>
+      'Remote basket removal did not settle: ' + JSON.stringify({type, filename, selected: selected()}));
+  }
+  for (const [index, filename] of paths.entries()) {
+    const selector = `[data-remote-entry-path="${CSS.escape(filename)}"]`;
+    await waitFor(() => !control(selector).disabled, 'The remote file entry stayed disabled: ' + filename);
+    click(selector);
+    const expected = type === 'genotype' ? paths.slice(0, index + 1) : [filename];
+    await waitFor(() => JSON.stringify(selected().sort()) === JSON.stringify([...expected].sort()), () =>
+      'The selected remote files differ from the requested set: ' + JSON.stringify({type, filename,
+        expected, selected: selected(), entryDisabled: control(selector).disabled}));
+  }
+  check(JSON.stringify(selected().sort()) === JSON.stringify([...paths].sort()),
+    'The selected remote files differ from the requested set: ' + JSON.stringify({type, expected: paths, selected: selected()}));
+  if (cancel) {
+    click('[data-remote-cancel]');
+    await waitFor(() => !document.querySelector(prefix), 'Cancel did not close the remote picker');
+    return;
+  }
+  click('[data-remote-apply]');
+  if (expectError) {
+    await waitFor(() => Boolean(document.querySelector(prefix + ' [data-remote-error]')?.textContent),
+      'Invalid remote-file inspection did not display an error');
+    const errorNode = control('[data-remote-error]');
+    const visibility = [];
+    for (let node = errorNode; node && visibility.length < 12; node = node.parentElement) {
+      visibility.push({tag: node.tagName, id: node.id, className: node.className, hidden: node.hidden,
+        display: getComputedStyle(node).display, rectangles: node.getClientRects().length});
+    }
+    check(errorNode.getClientRects().length > 0, 'The inspection error is hidden: ' + JSON.stringify(visibility));
+    check(/empty|missing|regular|read|file/i.test(control('[data-remote-error]').textContent), 'The inspection failure has no useful file explanation');
+    click('[data-remote-cancel]');
+    await waitFor(() => !document.querySelector(prefix), 'Could not close the failed inspection');
+    return;
+  }
+  await waitFor(() => !document.querySelector(prefix), 'Inspecting and saving remote files did not close the picker');
+  await waitFor(() => find(`#ml-input-${type} .ml-current-input`).dataset.saveState === 'applied',
+    'The inspected remote files were not saved to this dataset');
+  check(paths.every(filename => find(`#ml-input-${type} [data-current-files]`).textContent.includes(filename)),
+    'Saved remote files did not update the current dataset');
+}
+
+async function verifyWorkspace({groups, runs, remote}) {
   const find = selector => {
     const element = document.querySelector(selector);
     if (!element) throw new Error(`Workspace is missing ${selector}`);
@@ -236,12 +488,8 @@ async function verifyWorkspace({groups, runs}) {
     check(datasetPicker.value === group.id, 'Could not select dataset ' + group.id);
     const current = find('#ml-input-genotype [data-current-files]').textContent;
     check(group.inputs.genotype.every(file => current.includes(file)), 'Dataset showed the wrong current files');
-    if (group.id === 'example-chr1') {
-      click('#ml-input-genotype [data-input-replace]');
-      click('#ml-file-picker input[value="1"]');
-      click('[data-input-apply]');
-      check(find('#ml-input-genotype [data-current-files]').textContent.includes('study-qc-preview.ped'),
-        'Could not select alternate draft files to test the saved history');
+    if (group === groups[0]) {
+      await window.workspaceChooseRemoteFiles({type: 'genotype', remote, paths: remote.genotype});
     }
     check(JSON.stringify(resultIds()) === JSON.stringify(runIds), 'Stage 6 picker showed another dataset’s runs');
 
@@ -351,11 +599,151 @@ async function verifyWorkspace({groups, runs}) {
   click('#ml-dataset-add');
   find('#ml-dataset-name').value = 'Third workspace dataset';
   click('#ml-dataset-create');
-  check(datasetPicker.selectedOptions[0]?.textContent === 'Third workspace dataset', 'New dataset was not selected');
+  await waitFor(() => find('#ml-dataset-form').dataset.saveState === 'saved' &&
+    datasetPicker.selectedOptions[0]?.textContent === 'Third workspace dataset', 'New dataset was not saved and selected');
+  const id = datasetPicker.value;
+  check(id.startsWith('dataset-') && !id.startsWith('draft-'), 'New dataset did not receive a persisted ID');
+  const catalog = await fetch('/signet/datasets', {headers: {'X-Chat-Token': token}}).then(reply => reply.json());
+  const created = catalog.datasets.find(dataset => dataset.id === id);
+  check(Boolean(created), 'New dataset was missing from the backend catalog');
+  check(['genotype', 'expression', 'clinical'].every(type => created.inputs[type].length === 0),
+    'A newly created dataset must start with empty file selections');
+  for (const type of ['genotype', 'expression', 'clinical']) {
+    await window.workspaceChooseRemoteFiles({type, remote, paths: remote[type], exerciseNavigation: type === 'genotype'});
+  }
+  const readRecord = async () => (await fetch('/signet/datasets', {headers: {'X-Chat-Token': token}})
+    .then(reply => reply.json())).datasets.find(dataset => dataset.id === id);
+  const beforeCancel = await readRecord();
+  await window.workspaceChooseRemoteFiles({type: 'expression', remote, paths: remote.clinical, cancel: true});
+  check(JSON.stringify(await readRecord()) === JSON.stringify(beforeCancel), 'Cancelling the browser saved an unconfirmed file selection');
+  await window.workspaceChooseRemoteFiles({type: 'expression', remote, paths: remote.invalid, expectError: true});
+  check(JSON.stringify(await readRecord()) === JSON.stringify(beforeCancel), 'A failed file inspection overwrote the saved dataset');
+  click('[data-input-target="clinical"]');
+  click('#ml-input-clinical [data-input-reset]');
+  await waitFor(() => find('#ml-input-clinical .ml-current-input').dataset.saveState === 'default',
+    'Resetting clinical files to their default was not saved');
   click('#ml-language');
   check(datasetPicker.selectedOptions[0]?.textContent === 'Third workspace dataset', 'Language change lost the new dataset');
   go('history');
   check(!historyIds().length && visible('#ml-empty-history') && !resultIds().length, 'New dataset inherited saved runs');
+  const saved = await fetch('/signet/datasets', {headers: {'X-Chat-Token': token}}).then(reply => reply.json());
+  const record = saved.datasets.find(dataset => dataset.id === id);
+  check(record.selections.genotype === 1 && record.selections.expression === 1 && record.selections.clinical === 0,
+    'The backend did not retain the per-type default and alternate choices');
+  check(JSON.stringify(record.inputs.genotype) === JSON.stringify(remote.genotype), 'The PED and MAP pair was not retained together');
+  return {created: record, changed: saved.datasets.find(dataset => dataset.id === groups[0].id)};
+}
+
+async function verifyPersistedWorkspace({saved, groups, runs, live, remote, changeLive = false}) {
+  const find = selector => {
+    const element = document.querySelector(selector);
+    if (!element) throw Error('Missing control after reopening: ' + selector);
+    return element;
+  };
+  const click = selector => {
+    const element = find(selector);
+    if (element instanceof HTMLElement) element.click();
+    else element.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+  };
+  const check = (condition, message) => { if (!condition) throw Error(message); };
+  const waitFor = async (condition, description) => {
+    const end = Date.now() + 10000;
+    while (!condition()) {
+      check(Date.now() < end, description);
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+  };
+  const visible = selector => Boolean(find(selector).getClientRects().length);
+  const go = view => click(`[data-nav-target="${view}"]`);
+  const picker = find('#ml-dataset-select');
+  const selectDataset = id => {
+    picker.value = id;
+    picker.dispatchEvent(new Event('change', {bubbles: true}));
+    check(picker.value === id, 'A saved dataset disappeared after backend restart: ' + id);
+  };
+  const visibleHistory = () => [...document.querySelectorAll('#ml-run-list [data-run-target]')]
+    .filter(button => button.getClientRects().length).map(button => button.dataset.runTarget).sort();
+  const token = document.querySelector('meta[name="chat-token"]').content;
+  await waitFor(() => [...picker.options].some(option => option.value === saved.created.id),
+    'The persisted dataset catalog did not reload');
+  const catalog = await fetch('/signet/datasets', {headers: {'X-Chat-Token': token}}).then(reply => reply.json());
+  for (const record of [saved.created, saved.changed, saved.liveDataset].filter(Boolean)) {
+    const current = catalog.datasets.find(dataset => dataset.id === record.id);
+    check(JSON.stringify(current) === JSON.stringify(record), 'Saved dataset configuration changed across restart: ' + record.id);
+    go('data');
+    selectDataset(record.id);
+    for (const type of ['genotype', 'expression', 'clinical']) {
+      click(`[data-input-target="${type}"]`);
+      const text = find(`#ml-input-${type} [data-current-files]`).textContent;
+      check(record.inputs[type].every(file => text.includes(file)), 'Reopened ' + type + ' files differ from the saved configuration');
+    }
+  }
+  go('data');
+  selectDataset(saved.created.id);
+  for (const type of ['genotype', 'expression', 'clinical']) {
+    await window.workspaceChooseRemoteFiles({type, remote, inspectOnly: true, expectedCurrent: saved.created.inputs[type]});
+    check(find(`#ml-input-${type} [data-input-reset]`).disabled === (saved.created.selections[type] === 0),
+      'The persisted default/custom state was lost for ' + type);
+  }
+  go('history');
+  check(!visibleHistory().length && visible('#ml-empty-history'), 'The new dataset inherited another dataset’s history after restart');
+
+  for (const group of groups) {
+    go('data');
+    selectDataset(group.id);
+    go('history');
+    const expected = runs.filter(run => run.dataset_id === group.id).map(run => run.run_id);
+    if (group.id === 'example-chr1') expected.push(live.run_id);
+    check(JSON.stringify(visibleHistory()) === JSON.stringify(expected.sort()), 'Reopened history crossed dataset boundaries');
+  }
+
+  const archived = runs[0];
+  go('data');
+  selectDataset(archived.dataset_id);
+  go('history');
+  click(`[data-run-target="${archived.run_id}"]`);
+  const archivedFiles = [...find(`#ml-run-${archived.run_id}`).querySelectorAll('.ml-run-inputs code')].map(node => node.textContent);
+  check(JSON.stringify(archivedFiles) === JSON.stringify(['genotype', 'expression', 'clinical'].flatMap(type => archived.inputs[type])),
+    'Editing current files replaced an archived run’s original inputs');
+  for (const stage of [1, 2, 4, 5, 3, 6]) {
+    click(`[data-run-stage="${stage}"][data-run-id="${archived.run_id}"]`);
+    const panel = find(stage === 3 ? '#lens-history-stage3' : stage === 6 ? '#lens-stage6' : '#lens-history-stage');
+    await waitFor(() => panel.dataset.runState === 'ready' && panel.dataset.runId === archived.run_id,
+      'A saved stage did not reopen after backend restart: ' + stage);
+    if ([1, 2, 4, 5].includes(stage)) {
+      for (const [key, value] of Object.entries(archived.stepSettings[stage])) {
+        check(panel.querySelector(`[data-stage-setting="${key}"]`)?.textContent.includes(value),
+          'Reopening an archive replaced its recorded settings: ' + key);
+      }
+    } else if (stage === 3) {
+      check(Number(panel.querySelector('[data-s3-components]').textContent) === archived.stage3.npc,
+        'Reopening an archive changed its principal component count');
+    } else {
+      if (panel.dataset.selectedGene) click('#lens-stage6 [data-s6-clear]');
+      check(panel.querySelectorAll('tbody tr').length === archived.connections, 'Reopened archived graph has the wrong connections');
+    }
+    click(`${stage === 3 ? '#lens-history-stage3' : stage === 6 ? '#lens-stage6' : '#lens-history-stage'} [data-run-back]`);
+  }
+
+  go('data');
+  selectDataset('example-chr1');
+  if (changeLive) {
+    await window.workspaceChooseRemoteFiles({type: 'genotype', remote, paths: remote.genotype});
+  }
+  go('history');
+  click(`[data-run-target="${live.run_id}"]`);
+  const liveFiles = [...find(`#ml-run-${live.run_id}`).querySelectorAll('.ml-run-inputs code')].map(node => node.textContent);
+  check(JSON.stringify(liveFiles) === JSON.stringify(live.inputs.genotype), 'Current dataset files replaced the live run’s frozen input snapshot');
+  click(`[data-run-stage="1"][data-run-id="${live.run_id}"]`);
+  const panel = find('#lens-history-stage');
+  await waitFor(() => panel.dataset.runState === 'ready' && panel.dataset.runId === live.run_id,
+    'The completed live Stage 1 result did not reopen');
+  check(panel.querySelector('[data-stage-setting="mind"]')?.textContent === live.settings.mind,
+    'Current dataset configuration replaced the live run’s saved setting');
+  check(JSON.stringify([...panel.querySelectorAll('.ml-count-label')].map(node => Number(node.textContent))) === JSON.stringify([0, 0, 0, 0, 0, 2]),
+    'The live result changed when dataset files were edited');
+  const finalCatalog = await fetch('/signet/datasets', {headers: {'X-Chat-Token': token}}).then(reply => reply.json());
+  return {...saved, liveDataset: finalCatalog.datasets.find(dataset => dataset.id === 'example-chr1')};
 }
 
 async function verifyChat({existingMessage, existingActivity, firstMessage, nextMessage}) {
@@ -433,6 +821,17 @@ app.once('browser-window-created', (_event, window) => {
         };
       })()`);
       assert.deepEqual(initial, {geometry: [1650, 894, 53, 542], css: true, rendered: true, node: 'undefined', liveBridge: 'object'});
+      const connected = await window.webContents.executeJavaScript(`(async()=>{
+        const profile=await window.signetDesktop.ssh.saveProfile(${JSON.stringify(sshProfile)});
+        if(!profile.ok)throw Error(profile.error.message);
+        const reply=await window.signetDesktop.ssh.connect(profile.value.id,'file-browser-fixture');
+        if(!reply.ok)throw Error(reply.error.message);
+        for(let count=0;count<100;count++){
+          if(document.querySelector('#ml-remote-status')?.dataset.status==='connected')return true;
+          await new Promise(resolve=>setTimeout(resolve,25));
+        }return false;
+      })()`);
+      assert.equal(connected, true, 'The isolated file-browser session did not connect');
       if (process.env.SIGNET_WORKSPACE_SCREENSHOT) {
         const screenshot = await window.webContents.capturePage();
         writeFileSync(process.env.SIGNET_WORKSPACE_SCREENSHOT, screenshot.toPNG());
@@ -451,11 +850,51 @@ app.once('browser-window-created', (_event, window) => {
       assert.deepEqual(stored.histories[stored.active_session].map(message => message.parts[0].text),
         [firstMessage, 'Provider replied to: ' + firstMessage, nextMessage, 'Provider replied to: ' + nextMessage]);
       assert.deepEqual(stored.events[existingSession], [[existingActivity]]);
-      await window.webContents.executeJavaScript(`(${verifyWorkspace.toString()})(${JSON.stringify(history)})`);
-      console.log(`PASS: workspace geometry, Agent chat, scoped dataset history, frozen inputs, all six archived stages (${history.runs.map(run => `${run.connections}/${run.incident}`).join(', ')} total/MEGF6 edges)`);
+      const remoteHelper = `window.workspaceChooseRemoteFiles = (${chooseRemoteFiles.toString()});`;
+      let saved = await window.webContents.executeJavaScript(remoteHelper + `(${verifyWorkspace.toString()})(${JSON.stringify({...history, remote})})`);
+      const persistenceInputs = () => JSON.stringify({saved, ...history, live: liveHistory, remote});
+      saved = await window.webContents.executeJavaScript(`(${verifyPersistedWorkspace.toString()})(${JSON.stringify({saved, ...history, live: liveHistory, remote, changeLive: true})})`);
+      assert.deepEqual(frozenFiles([archiveDir, liveHistory.root, remoteRoot]), originalFiles,
+        'Editing dataset files mutated archived or live analysis snapshots');
+      const persistedBytes = readFileSync(datasetState);
+      const firstStart = JSON.parse(readFileSync(backendMetadata, 'utf8'));
+      assert.equal(firstStart.starts.length, 1);
+
+      // Replace the real Python process, then reload the renderer. This proves
+      // disk persistence rather than keeping the original JavaScript objects.
+      running = await startup;
+      await running.backend.stop();
+      assert.equal(running.backend.exited, true);
+      replacementBackend = new Backend(running.backend.options);
+      const reopenedOrigin = await replacementBackend.start();
+      assert.equal(reopenedOrigin, running.origin);
+      const reopened = JSON.parse(readFileSync(backendMetadata, 'utf8'));
+      assert.equal(reopened.starts.length, 2);
+      assert.notEqual(reopened.starts[0], reopened.starts[1], 'The backend process was not restarted');
+      const loaded = once(window.webContents, 'did-finish-load');
+      window.webContents.reload();
+      await loaded;
+      await window.webContents.executeJavaScript(remoteHelper + `(${verifyPersistedWorkspace.toString()})(${persistenceInputs()})`);
+      assert.deepEqual(readFileSync(datasetState), persistedBytes, 'Reopening rewrote the saved dataset configuration');
+      assert.deepEqual(frozenFiles([archiveDir, liveHistory.root, remoteRoot]), originalFiles,
+        'Reopening stage results mutated archived or live analysis snapshots');
+      const fileCalls = readFileSync(remoteCalls, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+      assert.deepEqual([...new Set(fileCalls.map(call => call.kind))].sort(), ['inspect', 'list', 'shortcuts']);
+      assert.ok(fileCalls.some(call => call.kind === 'inspect' && JSON.stringify(call.paths) === JSON.stringify(remote.genotype)),
+        'The PED and MAP files must be inspected together through the production metadata endpoint');
+      assert.ok(fileCalls.some(call => call.kind === 'inspect' && call.paths.includes(remote.invalid[0])),
+        'The invalid-file error must come from the real inspection endpoint');
+      assert.equal(existsSync(path.join(remoteRoot, 'refdata/selected.tsv')), false, 'Dataset selection must not change reference selections');
+      assert.deepEqual(readdirSync(path.join(project, 'runs')), [liveHistory.run_id], 'Browsing files must not create analysis runs');
+      assert.deepEqual(await window.webContents.executeJavaScript(`(()=>{const root=document.querySelector('.ml-app');return [root.offsetWidth,root.offsetHeight,root.querySelector('.ml-rail').offsetWidth,root.querySelector('.ml-chat').offsetWidth]})()`),
+        [1650, 894, 53, 542]);
+      await replacementBackend.stop();
+      replacementBackend = undefined;
+      console.log(`PASS: workspace geometry, Agent chat, real metadata-backed remote folders/path/up/sizes and PED+MAP selection, cancel and failed-inspection preservation, dataset/file/default persistence across a Python restart, scoped history, immutable files and analysis snapshots, all six archived stages (${history.runs.map(run => `${run.connections}/${run.incident}`).join(', ')} total/MEGF6 edges); isolated files and localhost SSH only, no HPC/jobs`);
       window.close();
     } catch (error) { fail(error); }
   }));
 });
 
-require(path.resolve(__dirname, '..', require('../package.json').main));
+startup = prepareLocalConnection().then(() => launch({provider: 'codex', userData}));
+startup.then(value => { running = value; }).catch(fail);

@@ -40,6 +40,7 @@ from urllib.parse import parse_qs
 from agent.runtime import analysis_family, analysis_rerun, step_proposal
 from agent.runtime import signet_jobs as jobs
 from agent.runtime import workspace_genotype
+from agent.runtime import workspace_datasets
 from agent.runtime.visualization import read_graph, threshold_counts
 import agent.tools.signet as signet
 
@@ -151,6 +152,22 @@ def get_catalog(handler, url):
     """
     _query(url, ())
     return 200, jobs.catalog()
+
+
+def list_datasets(handler, url):
+    _query(url, ())
+    return 200, {'datasets': workspace_datasets.list_datasets()}
+
+
+def create_dataset(handler, url):
+    _query(url, ())
+    return 201, workspace_datasets.create_dataset(**_body(
+        handler, ('name', 'folder', 'inputs', 'alternative_inputs'), required=('name',)))
+
+
+def update_dataset(handler, url, dataset_id):
+    _query(url, ())
+    return 200, workspace_datasets.update_dataset(dataset_id, **_body(handler, ('inputs',), required=('inputs',)))
 
 
 def review_genotype_example(handler, url):
@@ -670,6 +687,8 @@ def get_log(handler, url, run_id, step):
 ROUTES = [
     (re.compile(r'/signet/progress'), {'GET': get_progress}),
     (re.compile(r'/signet/catalog'), {'GET': get_catalog}),
+    (re.compile(r'/signet/datasets'), {'GET': list_datasets, 'POST': create_dataset}),
+    (re.compile(rf'/signet/datasets/(?P<dataset_id>{_RUN_NAME})'), {'PATCH': update_dataset}),
     (re.compile(r'/signet/genotype/example'), {'GET': review_genotype_example, 'POST': submit_genotype_example}),
     (re.compile(rf'/signet/runs/{_RUN}/expression/example'),
      {'GET': review_expression_example, 'POST': submit_expression_example}),

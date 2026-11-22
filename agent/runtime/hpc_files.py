@@ -5,7 +5,9 @@ tool: file names and paths can reveal research details, so they never reach the
 assistant, which sees only whether a reference is ready. Browsing reads names,
 types and sizes. Selecting reads a few leading lines to check the format and
 returns a verdict, never file contents. Files stay where they are: a selection
-records the path in refdata/selected.tsv and is never copied.
+records the path in refdata/selected.tsv and is never copied. Dataset inspection
+checks only canonical paths, regular-file metadata and readability; it never
+reads contents, records reference selections or starts access-check jobs.
 """
 import posixpath
 import re
@@ -19,6 +21,8 @@ ACCESS_RESOURCES = ('--partition=free', '--cpus-per-task=1', '--mem=512M', '--ti
 _SAFE = r'/[A-Za-z0-9_./-]+'
 _UNREADABLE_ON_COMPUTE = ('/tmp', '/var/tmp', '/dev/shm', '/run')
 UNSUPPORTED_NAME = 'Paths may use only letters, numbers, _, -, . and /, because SIGNET scripts cannot handle others.'
+MAX_INSPECT_PATHS = 128
+MAX_INSPECT_BODY = 32768
 _RESULT = "print('@@result\\t' + json.dumps(result))\n"
 
 
@@ -64,6 +68,41 @@ else:
                                 'size': 0 if folder else info.st_size, 'supported': bool(SAFE.fullmatch(full))})
         result = {'status': 'ok', 'path': path, 'kind': 'folder', 'entries': entries, 'truncated': len(names) > 2000}
 ''', path)
+
+
+def _inspect_script(paths):
+    return _python(f'''
+import stat
+files, seen = [], set()
+result = None
+for requested in sys.argv[1:]:
+    real = os.path.realpath(requested)
+    if len(real) > 2048 or not SAFE.fullmatch(real):
+        result = {{'status': 'invalid', 'error': {UNSUPPORTED_NAME!r}}}
+        break
+    if real == os.path.sep or any(real == top or real.startswith(top + '/') for top in {_UNREADABLE_ON_COMPUTE!r}):
+        result = {{'status': 'invalid', 'error': 'Compute nodes cannot read this location. Choose a file in home, /pub, /dfs or CRSP.'}}
+        break
+    try:
+        info = os.stat(real)
+    except OSError:
+        result = {{'status': 'invalid', 'error': 'A selected file is missing or your account cannot access it.'}}
+        break
+    if not stat.S_ISREG(info.st_mode):
+        result = {{'status': 'invalid', 'error': 'Select regular files, not folders or special files.'}}
+    elif not os.access(real, os.R_OK):
+        result = {{'status': 'invalid', 'error': 'Your account cannot read a selected file.'}}
+    elif info.st_size == 0:
+        result = {{'status': 'invalid', 'error': 'A selected file is empty.'}}
+    elif real in seen:
+        result = {{'status': 'invalid', 'error': 'Select each file only once.'}}
+    if result:
+        break
+    seen.add(real)
+    files.append({{'path': real, 'size': info.st_size}})
+if result is None:
+    result = {{'status': 'ok', 'executed': False, 'read_only': True, 'files': files}}
+''', *paths)
 
 
 def _shortcuts_script(dfs='/dfs[0-9]*', crsp='/share/crsp'):
@@ -302,6 +341,21 @@ def list_folder(path):
     except ValueError as error:
         return {'status': 'invalid', 'error': str(error)}
     return _call(lambda root: hpc._prelude(root) + _list_script(path), 30)
+
+
+def inspect(paths):
+    """Inspect dataset-file metadata only; reference format/access selection is a separate action."""
+    try:
+        if not isinstance(paths, list) or not 1 <= len(paths) <= MAX_INSPECT_PATHS:
+            raise ValueError(f'Select between 1 and {MAX_INSPECT_PATHS} files.')
+        checked = [_safe_path(path) for path in paths]
+        if len(set(checked)) != len(checked):
+            raise ValueError('Select each file only once.')
+        if len(json.dumps({'paths': checked}).encode()) > MAX_INSPECT_BODY:
+            raise ValueError('The selected file paths are too long.')
+    except ValueError as error:
+        return {'status': 'invalid', 'executed': False, 'error': str(error)}
+    return _call(lambda root: hpc._prelude(root) + _inspect_script(checked), 30)
 
 
 def select(key, path):
