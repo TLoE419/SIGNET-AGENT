@@ -32,6 +32,12 @@ directory and repeat reference preparation for every attempt; their original
 sources must remain unchanged and available. Completed runs or runs with
 later-stage records require a new analysis instead.
 
+If a stage failed only because its required outputs were not yet readable,
+**Recheck outputs** checks and collects the same job's results without a new
+submission. The original failure and later checks remain in that attempt's
+history. Confirmed program errors, scheduler failures, cancellation and unknown
+submissions cannot use this recovery action.
+
 **Run history** also lists recorded local Agent operations, generic Slurm run
 records, and archived results. Filter by the current dataset, unclassified
 records, or all runs. Same-named runs from different sources remain separate.

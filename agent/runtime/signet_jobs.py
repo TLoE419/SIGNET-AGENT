@@ -49,6 +49,8 @@ submission reads them, and simultaneous status checks must not download twice.
 """
 from dataclasses import dataclass, field
 import functools
+import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -995,7 +997,7 @@ def _input_checks(files):
 
 
 def _submit_script(config, run_id, name, step, directory, files, resources, options=None, archive=None,
-                   needs=None, settings=None, dataset_plan=None):
+                   needs=None, settings=None, dataset_plan=None, submission_token=None):
     """Login-node script: check every input file and earlier result, write the job script, sbatch it, record the job ID.
 
     archive=N (a retry): once every check passed, the previous attempt's files are renamed
@@ -1019,31 +1021,46 @@ def _submit_script(config, run_id, name, step, directory, files, resources, opti
     checks = _input_checks(files)
     formats = _input_check(name, files)
     job = _job_script(config, run_id, name, step, directory, binds, options, settings, dataset_plan)
+    receipt = f"$D/steps/{name}.submission.{submission_token}" if submission_token else "/dev/null"
+    receipt_setup = ''
+    if submission_token:
+        receipt_setup = (f'R="{receipt}"\n'
+                         '(set -o noclobber; printf "checking\\n" > "$R") || { say conflict receipt; exit 6; }\n'
+                         'dispatched=no\n'
+                         'trap \'rc=$?; if [ "$dispatched" = no ] && [ "$rc" -ne 0 ]; then '
+                         'printf "not_dispatched\\n" > "$R"; fi\' EXIT\n')
+    comment = f" --comment={shlex.quote(submission_token)}" if submission_token else ""
     sbatch = (f'sbatch --parsable --partition={config["partition"]} --cpus-per-task={resources["cpus"]} '
-              f'--mem={resources["mem_gb"]}G --time={resources["time"]} "$D/steps/{name}.sbatch"')
+              f'--mem={resources["mem_gb"]}G --time={resources["time"]}{comment} "$D/steps/{name}.sbatch"')
     return _say() + f'''D={q(directory)}
-{checks}{needs}{formats}if [ ! -s {q(config['image'])} ]; then say not_ready container; exit 5; fi
+{receipt_setup}{checks}{needs}{formats}if [ ! -s {q(config['image'])} ]; then say not_ready container; exit 5; fi
 if ! command -v sbatch >/dev/null 2>&1; then say not_ready sbatch; exit 5; fi
 {keep}if [ -e "$D/steps/{name}.job" ]; then say conflict submitted; exit 6; fi
 say attempt_started yes
-cat > "$D/steps/{name}.sbatch" <<'SIGNET_JOB'
+cat > "$D/steps/{name}.sbatch" <<'SIGNET_JOB' || exit 8
 {job}SIGNET_JOB
+printf 'dispatching\\n' > "{receipt}" || exit 8
+dispatched=yes
+say submission_dispatched yes
 job="$({sbatch} 2>"$D/steps/{name}.sbatch.err")" || {{ say sbatch_failed "$(head -c 300 "$D/steps/{name}.sbatch.err")"; exit 7; }}
 job="${{job%%;*}}"   # --parsable prints "<id>;<cluster>" on multi-cluster setups
 printf '%s\\n' "$job" > "$D/steps/{name}.job"
+printf 'accepted %s\\n' "$job" > "{receipt}"
 say job "$job"
 '''
 
 
-def _queue_check(record):
+def _queue_check(record, *, require_stopped=False):
     """List active jobs of this run, including SIGNET's children, with a checked scheduler query."""
     q = shlex.quote
-    return (f'jobs="$(squeue -h -u "$(id -un)" -o "%i %j %Z" 2>/dev/null)" && {{\n'
-            '  say queue_checked yes\n'
-            f'  say active_jobs "$(printf \'%s\\n\' "$jobs" | awk -v j={q(record.get("job_id") or "-")} '
+    query = 'jobs="$(squeue -h -u "$(id -un)" -o "%i %j %Z" 2>/dev/null)"'
+    active = (f'$(printf \'%s\\n\' "$jobs" | awk -v j={q(record.get("job_id") or "-")} '
             f'-v n={q("signet-" + record["step"] + "-" + record["run_id"])} '
             f'-v d={q(record["remote_dir"] + "/")} '
-            "'$1 == j || $2 == n || index($3, d) == 1 {print $1}')\"\n}\n")
+            "'$1 == j || $2 == n || index($3, d) == 1 {print $1}')")
+    if require_stopped:
+        return query + f' || exit 93\nactive_jobs="{active}"\n[ -z "$active_jobs" ] || exit 93\n'
+    return query + ' && {\n  say queue_checked yes\n' + f'  say active_jobs "{active}"\n}}\n'
 
 
 def _ensure_stopped(record):
@@ -1064,6 +1081,126 @@ def _ensure_stopped(record):
 
 # ---------- the four operations ----------
 
+def output_revalidation(record):
+    """Classify saved artifact-only failures without querying or changing them."""
+    if not isinstance(record, dict):
+        return {'eligible': False, 'active': False, 'reason': 'The original failed job record is unavailable.'}
+    active = bool(record.get('output_revalidation_requested_at')) and record.get('state') == 'validating'
+    result = {'eligible': False, 'active': active, 'reason': 'Only an artifact-only failed step can be checked again.'}
+    if record.get('state') != 'failed' or record.get('cancel_requested_at') or record.get('failure_hints'):
+        return result
+    if (not isinstance(record.get('job_id'), str) or not re.fullmatch(r'[0-9]+', record['job_id'])
+            or type(record.get('attempt', 1)) is not int or record.get('attempt', 1) < 1):
+        return {**result, 'reason': 'The original job and attempt identity must be known.'}
+    if record.get('slurm_state') not in (None, '', 'COMPLETED'):
+        return {**result, 'reason': 'A recorded scheduler failure, cancellation or active state cannot be recovered by checking files.'}
+    missing = record.get('missing_outputs')
+    missing_only = (record.get('exit_code') == '0' and record.get('reason') == 'Required outputs are missing.'
+                    and isinstance(missing, list) and bool(missing) and all(isinstance(path, str) for path in missing))
+    marker_only = (record.get('slurm_state') == 'COMPLETED' and record.get('exit_code') is None
+                   and record.get('reason') == 'The job did not finish its last line.')
+    if missing_only or marker_only:
+        return {'eligible': True, 'active': False, 'reason': 'Recheck this same job and attempt without submitting it again.'}
+    return result
+
+
+def _output_observation(record):
+    saved = {key: value[:1000] if isinstance(value, str) else value for key in
+             ('state', 'job_id', 'attempt', 'reason', 'exit_code', 'slurm_state', 'finished_at')
+             if isinstance(value := record.get(key), (str, int)) and not isinstance(value, bool)}
+    saved.setdefault('attempt', 1)
+    for key, limit in (('missing_outputs', 16), ('failure_hints', 20)):
+        values = record.get(key)
+        if isinstance(values, list):
+            saved[key] = [value[:512] for value in values[:limit] if isinstance(value, str)]
+            if len(values) > limit:
+                saved[key + '_total'] = len(values)
+    return saved
+
+
+def _output_check(record, response=None):
+    if not record.get('output_revalidation_requested_at'):
+        return
+    checks = record.setdefault('output_checks', [])
+    if checks:
+        checks[-1].update(checked_at=_now(), after=_output_observation(response or record),
+                          outcome='interrupted' if (response or {}).get('connection') else record['state'])
+    if record['state'] in TERMINAL:
+        record.pop('output_revalidation_requested_at', None)
+
+
+def _output_guard(root, record, *, ownership_only=False):
+    from agent.runtime.workspace_history import _json
+    config = _environment()
+    directory = record.get('remote_dir')
+    try:
+        owner, _ = _json(root / 'steps/remote.owner')
+    except (OSError, ValueError) as error:
+        raise StepError('conflict', 'The original remote output folder ownership is unavailable.') from error
+    allowed = {config['workRoot'] + '/' + record['run_id'], config['workRoot'] + '/runs/' + record['run_id']}
+    if (directory not in allowed or owner.get('remote_dir') != directory
+            or not isinstance(owner.get('token'), str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', owner['token'])):
+        raise StepError('conflict', 'Select the original remote environment and owned run folder before checking outputs.')
+    q = shlex.quote
+    guard = (f'D={q(directory)}\nJ={q(directory + "/steps/" + record["step"] + ".job")}\n'
+            f'T={q(owner["token"])}\n'
+            '[ "$(readlink -f -- "$D")" = "$D" ] && [ -f "$D/.owner" ] && [ ! -L "$D/.owner" ] '
+            '&& [ "$(head -c 129 -- "$D/.owner" 2>/dev/null)" = "$T" ] || { say output_source_mismatch owner; exit 91; }\n')
+    if ownership_only:
+        return guard
+    guard += (f'E={q(record["job_id"])}\n'
+            '[ "$(readlink -f -- "$J")" = "$J" ] && [ -f "$J" ] '
+            '&& [ "$(head -c 128 -- "$J" 2>/dev/null)" = "$E" ] || { say output_source_mismatch job; exit 92; }\n')
+    paths = [directory + '/steps/' + record['step'] + '.' + suffix for suffix in ('done', 'out', 'err')]
+    paths += [directory + '/work/' + path for path in _required(_step(record['step']), record)]
+    guard += ('for p in ' + ' '.join(q(path) for path in paths) + '; do\n'
+              '  [ ! -L "$p" ] || { say output_source_mismatch artifact; exit 91; }\n'
+              '  if [ -e "$p" ]; then [ "$(readlink -f -- "$p")" = "$p" ] && [ -f "$p" ] '
+              '|| { say output_source_mismatch artifact; exit 91; }; fi\ndone\n')
+    return guard
+
+
+@_one_at_a_time
+def revalidate(run_id, name, *, expected_job_id, expected_attempt):
+    """Recheck only this failed attempt's artifacts; never submit or cancel work."""
+    from agent.runtime.workspace_history import _json, _attempt_record
+    _step(name)
+    if (not isinstance(expected_job_id, str) or not re.fullmatch(r'[0-9]+', expected_job_id)
+            or type(expected_attempt) is not int or expected_attempt < 1):
+        raise StepError('invalid_request', 'Provide the displayed job ID and positive integer attempt number.')
+    root = _root(run_id)
+    if _load(root, name).get('reused_from'):
+        raise StepError('conflict', 'Reused results retain source evidence; revalidate in the source run.')
+    try:
+        record, _ = _json(root / 'steps' / (name + '.json'))
+        record = _attempt_record(record, run_id, name)
+    except (OSError, ValueError) as error:
+        raise StepError('not_found', 'The original failed step record is unavailable.') from error
+    if record.get('job_id') != expected_job_id or record.get('attempt', 1) != expected_attempt:
+        raise StepError('conflict', 'The job or attempt changed. Refresh its status before checking outputs.')
+    if not output_revalidation(record)['eligible']:
+        raise StepError('conflict', output_revalidation(record)['reason'])
+    guard = _output_guard(root, record)
+    try:
+        code, values, _ = _shell(_say() + guard + 'true\n')
+    except OSError as error:
+        raise StepError('remote_failed', 'Could not confirm the original remote job before checking its outputs.') from error
+    if code or values.get('output_source_mismatch'):
+        raise StepError('conflict', 'The remote run folder or job no longer matches this failed attempt.')
+    before = _output_observation(record)
+    record.setdefault('original_failure', before)
+    checks = record.get('output_checks', [])
+    checks = checks[-24:] if isinstance(checks, list) else []
+    total = record.get('output_checks_total', 0)
+    total = total if type(total) is int and total >= 0 else 0
+    requested_at = _now()
+    record.update(output_checks=[*checks, {'at': requested_at, 'before': before, 'outcome': 'validating'}],
+                  output_checks_total=total + 1, output_revalidation_requested_at=requested_at, checked_at=0)
+    record.pop('finished_at', None)
+    _change(record, 'validating')
+    _save(root, record)
+    return status(run_id, name, refresh=True)
+
 @_one_at_a_time
 def submit(run_id, name, inputs, resources=None, options=None, *, settings_override=None, clinical=None):
     """Submit one step of a run as a Slurm job and return its record (state "submitted" with job_id).
@@ -1072,6 +1209,8 @@ def submit(run_id, name, inputs, resources=None, options=None, *, settings_overr
     """
     step = _step(name)
     root = _root(run_id)
+    from agent.runtime.workspace_rerun import guard_submission
+    guard_submission(root, name)
     current = signet._settings(root)
     if current.get('cohort') != step.cohort:
         raise StepError('invalid_request', f'Step {name} needs a {step.cohort} run.')
@@ -1104,7 +1243,7 @@ def submit(run_id, name, inputs, resources=None, options=None, *, settings_overr
         _retry_environment(root, workspace_retry, previous, config)
     directory = _remote_dir(config, root, run_id)
     dataset_plan = None
-    if name == 'genotype':
+    if name == 'genotype' and not (root / 'rerun.json').exists():
         from agent.runtime.workspace_inputs import staging_plan
         dataset_plan = staging_plan(root, directory, attempt=attempt)
         if dataset_plan and inputs != dataset_plan['inputs']:
@@ -1136,6 +1275,7 @@ def submit(run_id, name, inputs, resources=None, options=None, *, settings_overr
         token = _owner(root, directory)
         record = {'step': name, 'run_id': run_id, 'flag': step.flag, 'remote_dir': directory,
                   'inputs': {key: path for key, (path, _) in checked.items()}, 'resources': request,
+                  'submission_token': secrets.token_hex(16),
                   'partition': config['partition'], 'image': config['image'], 'submitted_at': _now(),
                   'attempt': attempt}
         if answers:
@@ -1163,6 +1303,8 @@ def submit(run_id, name, inputs, resources=None, options=None, *, settings_overr
         saved_previous = False
         try:
             _upload(root, directory, token)
+            from agent.runtime.workspace_rerun import stage_remote
+            stage_remote(root, directory, token)
             if previous:   # keep the failed attempt's record before the new one replaces it
                 with archived.open('x') as stream:
                     stream.write(json.dumps(previous, indent=2) + '\n')
@@ -1181,7 +1323,7 @@ def submit(run_id, name, inputs, resources=None, options=None, *, settings_overr
             code, values, _ = _shell(_submit_script(config, run_id, name, step, directory, files, request, answers,
                                                     archive=attempt - 1 if previous else None,
                                                     needs=[_resolve(path, settings) for path in step.needs],
-                                                    settings=settings, dataset_plan=dataset_plan))
+                                                    settings=settings, dataset_plan=dataset_plan, submission_token=record['submission_token']))
             if code == 255:
                 # OpenSSH can lose the connection after the scheduler accepted the job.
                 raise OSError('OpenSSH did not confirm the submission.')
@@ -1200,6 +1342,11 @@ def submit(run_id, name, inputs, resources=None, options=None, *, settings_overr
         if code == 0:
             _change(record, 'unknown', reason='Submission returned no valid job ID; check status. Do not resubmit.')
             return _save(root, record)
+        if values.get('submission_dispatched') == 'yes':
+            _change(record, 'unknown', checked_at=0,
+                    reason='The submission client failed after contacting Slurm; acceptance is unconfirmed. Review recovery evidence before resubmitting.')
+            _save(root, record)
+            raise StepError('remote_failed', record['reason'])
         # Once remote files moved, consume this attempt even if sbatch refused it.
         # Reusing its number would archive the new script over the previous one.
         if values.get('attempt_started') == 'yes':
@@ -1295,11 +1442,10 @@ esac
 '''
 
 
-def _status_script(record, step):
+def _status_script(record, step, *, read_only=False):
     q = shlex.quote
     directory, name = record['remote_dir'], record['step']
     job = record.get('job_id')
-    job_name = f'signet-{name}-{record["run_id"]}'
     outputs = ''.join(f'[ -s {q(directory + "/work/" + path)} ] && say output_{i} yes\n'
                       for i, path in enumerate(_required(step, record)))
     pattern = '|'.join(re.escape(p) for p in FAILURE_PATTERNS + step.failures)
@@ -1307,15 +1453,12 @@ def _status_script(record, step):
     # When the control job is gone, SIGNET's own jobs still queued for this run are orphans.
     orphans = (f'if [ -n "$j" ] && parent_state="$(squeue -h -j "$j" -o %T 2>/dev/null)" '
                f'&& [ -z "$parent_state" ]; then\n{_children_script(step)}fi\n'
-               if step.children else '')
-    queue_check = _queue_check(record) if record.get('cancel_requested_at') or step.children else ''
+               if step.children and not read_only else '')
+    queue_check = _queue_check(record) if read_only or record.get('cancel_requested_at') or step.children else ''
     export_check = ('grep -Fxq SIGNET_STAGE6_EXPORTS_COMPLETED "$D/steps/visualize.out" 2>/dev/null '
                     '&& say exports_completed yes\n') if name == 'visualize' else ''
     return _say() + f'''D={q(directory)}
-j={q(job) if job else '"$(head -n 1 "$D/steps/' + name + '.job" 2>/dev/null)"'}
-# No ID recorded (connection lost around sbatch): look for this step's own job name, ours only.
-if [ -z "$j" ]; then j="$(squeue -h -u "$(id -un)" -n {q(job_name)} -o %i 2>/dev/null | head -n 1)"; fi
-if [ -z "$j" ]; then j="$(sacct -n -X -P --name={q(job_name)} -S now-7days -o JobID 2>/dev/null | tail -n 1)"; fi
+j={q(job or '')}
 say job "$j"
 if [ -n "$j" ]; then
   queue_state="$(squeue -h -j "$j" -o %T 2>/dev/null)"
@@ -1336,32 +1479,37 @@ def status(run_id, name, refresh=False):
     root = _root(run_id)
     record = _load(root, name)
     # Only reopen unconfirmed artifacts, never an observed nonzero exit or log error.
-    recheck_failure = (refresh and record['state'] == 'failed' and not record.get('failure_hints')
-                       and ((record.get('slurm_state') == 'COMPLETED' and record.get('exit_code') is None
-                             and record.get('reason') == 'The job did not finish its last line.')
-                            or (record.get('exit_code') == '0' and record.get('reason') == MISSING_OUTPUTS_REASON)))
-    if record['state'] in TERMINAL and not (recheck_failure or _legacy_visualize_output_failure(record)):
+    retry_marker = refresh and output_revalidation(record)['eligible']
+    if retry_marker:
+        return revalidate(run_id, name, expected_job_id=record['job_id'], expected_attempt=record.get('attempt', 1))
+    if record['state'] in TERMINAL and not retry_marker:
         return record
     if not refresh and time.time() - record.get('checked_at', 0) < CACHE_SECONDS:
         return record
+    if not record.get('job_id'):
+        return {**record, 'reason': 'Submission is unconfirmed. Use manual reconciliation. Do not resubmit.'}
+    checking_outputs = bool(record.get('output_revalidation_requested_at'))
     _environment()
+    guard = _output_guard(root, record) if checking_outputs else ''
     try:
-        code, values, hints = _shell(_status_script(record, step), timeout=60)
+        code, values, hints = _shell(_say() + guard + _status_script(record, step, read_only=checking_outputs), timeout=60)
     except OSError:
-        return {**record, 'connection': 'interrupted', 'reason': 'Could not reach HPC3; the job keeps running. Try again later.'}
+        reply = {**record, 'connection': 'interrupted', 'reason': 'Could not reach HPC3; the job keeps running. Try again later.'}
+        if checking_outputs:
+            reply['reason'] = 'Could not reach HPC3 to check the saved outputs. The analysis was not resubmitted.'
+            _output_check(record, reply)
+            _save(root, record)
+        return reply
     if code:
-        return {**record, 'connection': 'interrupted', 'reason': 'The status check did not complete on HPC3.'}
+        reply = {**record, 'connection': 'interrupted', 'reason': 'The status check did not complete on HPC3.'}
+        if checking_outputs:
+            if values.get('output_source_mismatch'):
+                reply['reason'] = 'The remote job or artifact path no longer matches the saved attempt; no outputs were accepted.'
+            _output_check(record, reply)
+            _save(root, record)
+        return reply
     record['checked_at'] = time.time()
     record.pop('download_pending', None)
-    if (not record.get('job_id') and record.get('previous_job_id')
-            and values.get('job') == record['previous_job_id']):
-        # A retry lost its connection before the old attempt's files were renamed on HPC3:
-        # what was found belongs to the previous attempt, so this attempt has no job yet.
-        for key in ('job', 'squeue', 'sacct', 'done'):
-            values.pop(key, None)
-        hints = []
-    if not record.get('job_id') and re.fullmatch(r'[0-9]+', values.get('job', '')):
-        record['job_id'] = values['job']   # recovered after a lost connection during submit
     queued, accounted = values.get('squeue', ''), values.get('sacct', '').split(' ')[0]
     slurm = queued or accounted
     record['slurm_state'] = slurm or None
@@ -1378,7 +1526,10 @@ def status(run_id, name, refresh=False):
     cancelling = record.get('cancel_requested_at')
     terminal = slurm == 'COMPLETED' or slurm.startswith('CANCELLED') or slurm in _SLURM_FAILED
     finishing = terminal or 'done' in values
-    if ((cancelling and not terminal)
+    if checking_outputs and (values.get('queue_checked') != 'yes' or values.get('active_jobs')):
+        record.pop('finished_at', None)
+        _change(record, 'validating', reason='Waiting to confirm that the original job and its children have stopped before checking outputs.')
+    elif ((cancelling and not terminal)
             or ((cancelling or step.children) and finishing
                 and (values.get('queue_checked') != 'yes' or values.get('active_jobs')))):
         record.pop('finished_at', None)
@@ -1405,7 +1556,45 @@ def status(run_id, name, refresh=False):
         _change(record, 'unknown', reason='Slurm has no record of this job; inspect the run folder on HPC3.')
     else:
         record.setdefault('first_seen_missing', time.time())
+    _output_check(record)
     return _save(root, record)
+
+
+def _restore_revalidated_outputs(root, data, step, record):
+    """Reuse matching local files only after comparing this job's fetched archive."""
+    pending = io.BytesIO()
+    with tarfile.open(fileobj=io.BytesIO(data), mode='r:gz') as source, tarfile.open(fileobj=pending, mode='w:gz') as target:
+        files = set()
+        for item in source.getmembers():
+            path = Path(item.name)
+            if (path.is_absolute() or '..' in path.parts or not path.is_relative_to(Path(step.download))
+                    or not (item.isdir() or item.isfile()) or str(path) in files):
+                raise ValueError('The downloaded output archive does not match this stage.')
+            destination = signet._no_links(root / path)
+            if item.isfile():
+                files.add(str(path))
+                if destination.exists():
+                    if not destination.is_file() or destination.stat().st_size != item.size:
+                        raise ValueError('Existing local outputs differ from this job; they were preserved without overwriting.')
+                    def digest(stream):
+                        result = hashlib.sha256()
+                        for block in iter(lambda: stream.read(1024 * 1024), b''):
+                            result.update(block)
+                        return result.digest()
+                    with destination.open('rb') as local, source.extractfile(item) as remote:
+                        if digest(local) != digest(remote):
+                            raise ValueError('Existing local outputs differ from this job; they were preserved without overwriting.')
+                    continue
+                target.addfile(item, source.extractfile(item))
+            else:
+                target.addfile(item)
+        required = {'work/' + path for path in _required(step, record)}
+        if not required.issubset(files):
+            raise ValueError('The downloaded archive is missing outputs required by this attempt.')
+    vm.restore_outputs(root, pending.getvalue())
+    if not all(signet._no_links(root / path).is_file() and (root / path).stat().st_size for path in required):
+        raise ValueError('Required local outputs are missing after the checked download.')
+    return sorted(files)
 
 
 def _summary_script(record, step):
@@ -1511,12 +1700,22 @@ def _finish(root, record, step, done, missing, hints):
     already_downloaded = all((root / path).is_file() and (root / path).stat().st_size for path in required)
     try:
         q = shlex.quote
-        result = ssh_transport.remote(f'cd {q(record["remote_dir"])} && tar czf - {q(step.download)}',
-                                      capture_output=True, timeout=300)
+        checking_outputs = bool(record.get('output_revalidation_requested_at'))
+        if checking_outputs:
+            guard = _output_guard(root, record) + _queue_check(record, require_stopped=True)
+            command = _say() + guard + f'cd {q(record["remote_dir"])} && tar czf - {q(step.download)} || exit $?\n' + guard
+            result = ssh_transport.remote('bash -s', input=command.encode(), capture_output=True, timeout=300)
+        else:
+            result = ssh_transport.remote(f'cd {q(record["remote_dir"])} && tar czf - {q(step.download)}',
+                                          capture_output=True, timeout=300)
         if result.returncode:
             raise OSError('tar failed')
-        record['outputs'] = vm.restore_outputs(root, result.stdout, required=required)
+        record['outputs'] = (_restore_revalidated_outputs(root, result.stdout, step, record) if checking_outputs
+                             else vm.restore_outputs(root, result.stdout, required=required))
     except (OSError, ValueError, tarfile.TarError, EOFError, subprocess.TimeoutExpired) as error:
+        if record.get('output_revalidation_requested_at'):
+            record['reason'] = f'The saved outputs could not be downloaded and verified ({error}); check status again. No analysis was resubmitted.'
+            return
         if not already_downloaded:
             record['reason'] = f'Results are ready on HPC3 but could not be downloaded yet ({error}); check status again.'
             return

@@ -989,6 +989,13 @@ def run_history(root):
                 result['reference_preparation'] = json.loads(summary.read_text())
             except (OSError, ValueError, TypeError):
                 result['result_error'] = 'The saved reference-preparation summary is incomplete or unreadable.'
+    linked = signet._no_links(root / 'rerun.json')
+    if linked.is_file():
+        plan = json.loads(linked.read_text())
+        result['rerun'] = {key: plan[key] for key in ('source_run_id', 'step', 'reuse', 'invalidated', 'created_at')}
+        target_state = result['jobs'].get(plan['step'], {}).get('state', 'not_submitted')
+        if target_state != 'completed':
+            result['status'] = target_state
     return result
 
 

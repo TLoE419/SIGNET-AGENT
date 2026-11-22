@@ -87,9 +87,85 @@
     retryReady: ["核對原檔案、設定與警示後，手動送出同一筆執行的新嘗試。", "Review the original files, settings and warnings, then manually submit a new attempt in this same run."],
     retryAcknowledge: ["我已核對原始檔案、本次設定與重試警示。", "I reviewed the original files, these settings and the retry warnings."],
     retryStale: ["重試核對已失效，請重新核對這筆執行。", "The retry review is no longer valid. Review this run again."],
+    revalidate: ["重新核對輸出", "Recheck outputs"],
+    revalidating: ["正在重新核對現有輸出…", "Checking existing outputs…"],
+    revalidatePrompt: ["只核對這次嘗試的現有輸出，不會重新送算。", "Checks this attempt’s existing outputs without submitting another analysis."],
+    revalidateConnect: ["請先連線，再重新核對這次嘗試的輸出。", "Connect before rechecking this attempt’s outputs."],
+    revalidateFailed: ["無法完成輸出核對，保留上次確認的狀態。", "Could not complete the output check. Showing the last confirmed state."],
+    revalidateCompleted: ["現有輸出已通過技術檢查，沒有重新執行分析。", "Existing outputs passed the technical checks; no analysis was rerun."],
+    revalidateWaiting: ["正在檢查或收取輸出，尚未確認完成。", "Checking or collecting outputs; completion is not yet confirmed."],
+    revalidateMissing: ["已重新核對，輸出仍未通過檢查。", "Outputs were rechecked and still did not pass the checks."],
   };
 
   const cancellationBusy = item => Boolean(item?.cancellation?.sending || item?.cancellation?.awaiting || item?.record?.state === "cancelling");
+  const revalidationBusy = item => Boolean(item?.revalidation?.pending || item?.outputRevalidationActive);
+  const outputRevalidationInfo = value => value?.item?.record?.output_revalidation ?? value?.run?.output_revalidation?.[value.step];
+  function recordedOutputTransition(previous, next, info) {
+    if (previous?.state !== "failed" || !next || next.job_id !== previous.job_id || (next.attempt ?? 1) !== (previous.attempt ?? 1)) return false;
+    return next.state === "validating" && info?.active === true || next.state === "completed" && next.original_failure?.state === "failed" &&
+      next.output_checks?.at?.(-1)?.outcome === "completed";
+  }
+  function dropStaleRevalidation(item) {
+    const target = item?.revalidation?.target;
+    if (target && (String(item.record?.job_id) !== target.jobId || (item.record?.attempt ?? 1) !== target.attempt)) item.revalidation = null;
+  }
+  const revalidationMarkup = prefix => `<button type="button" class="ml-nav-action" data-${prefix}-revalidate hidden></button>
+    <p class="ml-genotype-notice" data-${prefix}-revalidate-notice role="status" hidden></p>`;
+
+  function mountOutputRevalidation({panel, prefix, local, target, request, receive, before, render, schedule, onChanged}) {
+    const part = name => panel.querySelector(`[data-${prefix}-${name}]`);
+    let remote = {connected: false, identity: "", environmentKey: ""};
+    const scope = () => JSON.stringify(remote);
+    const workspace = value => value?.run?.source === "live" && value.run.origin === "workspace" && value.run.capabilities?.continue_analysis === true;
+    const eligible = value => Boolean(value?.visible && workspace(value) && value.item?.record?.state === "failed" &&
+      !value.item.submitting && !value.item.uncertain && !cancellationBusy(value.item) && outputRevalidationInfo(value)?.eligible === true &&
+      /^\d+$/.test(String(value.item.record.job_id ?? "")) && Number.isInteger(value.item.record.attempt ?? 1) && (value.item.record.attempt ?? 1) > 0);
+    function sync() {
+      const value = target(), state = value?.item?.revalidation, info = outputRevalidationInfo(value);
+      part("revalidate").hidden = !eligible(value);
+      part("revalidate").disabled = !remote.connected || revalidationBusy(value?.item);
+      part("revalidate").textContent = local(state?.pending ? "revalidating" : "revalidate");
+      const message = state?.pending ? local("revalidating") : state?.error ? `${local("revalidateFailed")} ${state.error}`
+        : state?.outcome === "completed" ? local("revalidateCompleted") : info?.active ? local("revalidateWaiting")
+          : state?.outcome === "failed" ? `${local("revalidateMissing")} ${value.item.record.reason ?? ""}`
+            : eligible(value) ? local(remote.connected ? "revalidatePrompt" : "revalidateConnect")
+              : workspace(value) && value.item?.record?.state === "failed" ? info?.reason ?? "" : "";
+      part("revalidate-notice").textContent = message;part("revalidate-notice").hidden = !message;
+      panel.dataset[`${prefix}RevalidationState`] = state?.pending ? "checking" : state?.error ? "error" : info?.active ? "validating" : state?.outcome ? "checked" : "idle";
+    }
+    part("revalidate").addEventListener("click", async () => {
+      const value = target(), item = value?.item;
+      if (!eligible(value) || !remote.connected || revalidationBusy(item)) return;
+      const captured = {runId: value.runId, datasetId: value.datasetId, jobId: String(item.record.job_id), attempt: item.record.attempt ?? 1, scope: scope()};
+      before(item);
+      const state = {pending: true, error: "", outcome: null, target: captured};item.revalidation = state;
+      const epoch = item.cancelEpoch = (item.cancelEpoch ?? 0) + 1;item.statusRequest = null;item.polling = false;render();
+      try {
+        const next = await request(`/signet/runs/${encodeURIComponent(captured.runId)}/steps/${prefix}/revalidate`,
+          {expected_job_id: captured.jobId, expected_attempt: captured.attempt});
+        if (scope() !== captured.scope || item.cancelEpoch !== epoch || item.revalidation !== state ||
+            item.runId && item.runId !== captured.runId || String(item.record?.job_id) !== captured.jobId ||
+            (item.record?.attempt ?? 1) !== captured.attempt) throw Error(local("cancelChanged"));
+        if (next.run_id !== captured.runId || next.step !== prefix || String(next.job_id) !== captured.jobId ||
+            (next.attempt ?? 1) !== captured.attempt || !["failed", "validating", "completed"].includes(next.state) ||
+            next.dataset_id != null && next.dataset_id !== captured.datasetId ||
+            typeof next.output_revalidation?.eligible !== "boolean" || typeof next.output_revalidation?.active !== "boolean") throw Error(local("serviceError"));
+        if (next.connection === "interrupted") throw Error(next.reason || local("interrupted"));
+        receive(value, next);state.outcome = item.record.state;
+      } catch (error) {
+        if (item.revalidation === state) {state.error = error.message;onChanged?.(value);}
+      } finally {
+        state.pending = false;render();schedule();
+        if (item.record?.state === "completed" && target()?.item === item && target()?.visible) part("history").focus();
+      }
+    });
+    window.addEventListener("workspace-remote-context", event => {
+      remote = {connected: event.detail?.connected === true, identity: event.detail?.identity ?? "", environmentKey: event.detail?.environmentKey ?? ""};
+      render();
+    });
+    window.dispatchEvent(new Event("workspace-request-remote-context"));
+    return {sync};
+  }
   const cancellationMarkup = prefix => `<button type="button" class="ml-nav-action" data-${prefix}-cancel hidden></button>
     <div class="ml-job-cancel-confirmation" data-${prefix}-cancel-confirmation hidden>
       <p data-${prefix}-cancel-target></p>
@@ -106,7 +182,7 @@
     const matches = (value, saved) => value?.runId === saved.runId && value.datasetId === saved.datasetId && String(value.item?.record?.job_id) === saved.jobId &&
       (value.item?.record?.attempt ?? 1) === saved.attempt;
     const eligible = value => Boolean(value?.item && value.visible && value.run?.source === "live" && value.run.origin === "workspace" &&
-      value.run.capabilities?.continue_analysis === true && !value.item.submitting && !value.item.uncertain && !value.item.retry &&
+      value.run.capabilities?.continue_analysis === true && !value.item.submitting && !value.item.uncertain && !value.item.retry && !revalidationBusy(value.item) &&
       /^\d+$/.test(String(value.item.record?.job_id ?? "")) && ["submitted", "pending", "running", "validating", "unknown", "cancelling"].includes(value.item.record?.state));
     function sync() {
       const value = target(), item = value?.item;
@@ -249,6 +325,7 @@
           <button type="button" class="ml-nav-action" data-genotype-new data-genotype-copy="newRun" hidden></button>
           <button type="button" class="ml-nav-action" data-genotype-back hidden></button>
           ${cancellationMarkup("genotype")}
+          ${revalidationMarkup("genotype")}
         </div>
         <div data-genotype-logs></div>
       </aside>`;
@@ -279,6 +356,7 @@
     let pollTimer;
     let cancellation;
     let logs;
+    let revalidation;
     let remote = {connected: false, identity: "", environmentKey: ""};
     const stateKey = (id, runId = context.runId) => runId ? `run:${id}:${runId}` : `dataset:${id}`;
     const current = () => datasets.get(stateKey(selectedDataset));
@@ -296,7 +374,7 @@
     function retryable(item) {
       const run = runFor(item);
       return Boolean(item?.runId && context.visible && run?.source === "live" && run.origin === "workspace" && run.capabilities?.continue_analysis === true &&
-        ["failed", "cancelled"].includes(item.record?.state) && !item.submitting && !item.uncertain && !cancellationBusy(item) &&
+        ["failed", "cancelled"].includes(item.record?.state) && !item.submitting && !item.uncertain && !cancellationBusy(item) && !revalidationBusy(item) &&
         Number.isInteger(item.record?.attempt ?? 1) && (item.record?.attempt ?? 1) > 0);
     }
     function clearRetry(item) {
@@ -349,6 +427,8 @@
     }
     function render() {
       const item = current();
+      dropStaleRevalidation(item);
+      if (item) item.outputRevalidationActive = outputRevalidationInfo({item, run: runFor(item), step: "genotype"})?.active === true;
       for (const element of panel.querySelectorAll("[data-genotype-copy]")) element.textContent = localized(element.dataset.genotypeCopy);
       const dataset = datasetValue();
       part("dataset").textContent = dataset.name?.[context.language === "en" ? 1 : 0] ?? selectedDataset;
@@ -376,12 +456,12 @@
       guidance.hidden = !eligible || Boolean(item?.runId && !retry);
       guidance.textContent = validReview ? localized(retry ? "retryReady" : "readyPrompt") : !connected ? localized("connect") : "";
       form.hidden = !eligible || !Boolean(item?.review || item?.record?.inputs);
-      for (const field of fields) field.disabled = Boolean(item?.runId && !retry || item?.reviewing || item?.submitting || retry && !validReview);
+      for (const field of fields) field.disabled = Boolean(item?.runId && !retry || item?.reviewing || item?.submitting || revalidationBusy(item) || retry && !validReview);
       submitButton.hidden = Boolean(item?.runId && !retry);
-      submitButton.disabled = !eligible || !connected || !validReview || Boolean(item?.reviewing || item?.submitting || item?.uncertain || item?.runId && !retry) || (!legacy || retry) && !item?.acknowledged;
-      statusButton.hidden = !item?.runId || terminal && !retry;statusButton.disabled = Boolean(item?.submitting || item?.polling || item?.cancellation?.sending);
+      submitButton.disabled = !eligible || !connected || !validReview || Boolean(item?.reviewing || item?.submitting || item?.uncertain || revalidationBusy(item) || item?.runId && !retry) || (!legacy || retry) && !item?.acknowledged;
+      statusButton.hidden = !item?.runId || terminal && !retry;statusButton.disabled = Boolean(item?.submitting || item?.polling || item?.cancellation?.sending || item?.revalidation?.pending);
       historyButton.hidden = !item?.record;newButton.hidden = !terminal || Boolean(context.runId);
-      newButton.disabled = cancellationBusy(item);
+      newButton.disabled = cancellationBusy(item) || revalidationBusy(item);
       part("retry").hidden = !retryable(item) || retry;
       part("retry").disabled = !remote.connected;
       part("retry-dismiss").hidden = !retry;
@@ -418,6 +498,7 @@
         return row;
       }));events.hidden = !events.children.length;
       cancellation?.sync();
+      revalidation?.sync();
       const run = context.runs?.find(run => run.run_id === item?.runId);
       logs?.setContext({historyId: run?.history_id, runId: item?.runId, source: run?.source, datasetId: selectedDataset,
         step: "genotype", number: item?.record?.attempt ?? 1, current: true, recordFile: "steps/genotype.json",
@@ -476,19 +557,22 @@
     function schedulePoll(item = current(), delay = pollInterval) {
       if (item !== current()) return;
       clearTimeout(pollTimer);
-      if (item?.runId && !item.submitting && !item.cancellation?.sending && (!terminalStates.has(item.record?.state) || item.cancellation?.awaiting)) pollTimer = setTimeout(() => void refresh(), delay);
+      if (item?.runId && !item.submitting && !item.cancellation?.sending && !item.revalidation?.pending && (!terminalStates.has(item.record?.state) || item.cancellation?.awaiting)) pollTimer = setTimeout(() => void refresh(), delay);
     }
-    const recordTime = record => Date.parse(record?.updated_at ?? record?.finished_at ?? record?.submitted_at);
+    const recordTime = record => Math.max(...[record?.updated_at, record?.history?.at?.(-1)?.at, record?.finished_at, record?.submitted_at]
+      .map(value => Date.parse(value)).filter(Number.isFinite));
     function olderRecord(next, previous) {
       if (!previous) return false;
       if ((next.attempt ?? 1) !== (previous.attempt ?? 1)) return (next.attempt ?? 1) < (previous.attempt ?? 1);
       return recordTime(next) < recordTime(previous) ||
+        previous.state === "completed" && next.state !== "completed" && next.job_id === previous.job_id ||
         previous.state === "cancelling" && !terminalStates.has(next.state) && next.state !== "cancelling" && next.job_id === previous.job_id ||
         terminalStates.has(previous.state) && !terminalStates.has(next.state) && next.job_id === previous.job_id;
     }
-    function receiveRecord(item, next, id, datasetId) {
+    function receiveRecord(item, next, id, datasetId, revalidated = false) {
       if (next.run_id !== id || next.step && next.step !== "genotype" || next.dataset_id && next.dataset_id !== datasetId || !Object.hasOwn(labels, next.state)) throw Error(localized("serviceError"));
-      if (olderRecord(next, item.record)) return;
+      const manualTransition = revalidated && item.record?.state === "failed" && next.job_id === item.record.job_id && (next.attempt ?? 1) === (item.record.attempt ?? 1);
+      if (olderRecord(next, item.record) && !manualTransition) return;
       if (item.retry && item.retryTarget && !matchesRetryRecord(next, item.retryTarget)) clearRetry(item);
       const changed = !item.record || next.state !== item.record.state || next.job_id !== item.record.job_id;
       item.record = next;item.uncertain = false;
@@ -496,16 +580,16 @@
       item.error = next.connection === "interrupted" ? localized("interrupted") : ["unknown", "validating", "failed"].includes(next.state) ? next.reason || "" : "";
       if (next.source_inputs) item.sourceInputs = next.source_inputs;
       if (item === current() && next.inputs && !item.retry) fillReview(next, item);
-      if (changed) onHistoryChanged?.(id, datasetId);
+      if (changed || revalidated) onHistoryChanged?.(id, datasetId);
     }
     async function refresh(force = false) {
       const item = current(), datasetId = selectedDataset;
-      if (!item?.runId || item.submitting || item.polling || item.cancellation?.sending) return;
+      if (!item?.runId || item.submitting || item.polling || item.cancellation?.sending || item.revalidation?.pending) return;
       const id = item.runId, statusRequest = {};item.statusRequest = statusRequest;
       const epoch = item.cancelEpoch;
       item.polling = true;clearTimeout(pollTimer);render();
       try {
-        const next = await request(`/signet/runs/${encodeURIComponent(id)}/steps/genotype${force ? "?refresh=1" : ""}`);
+        const next = await request(`/signet/runs/${encodeURIComponent(id)}/steps/genotype${force && !terminalStates.has(item.record?.state) ? "?refresh=1" : ""}`);
         if (item.runId === id && epoch === item.cancelEpoch) receiveRecord(item, next, id, datasetId);
       } catch (error) {if (item.runId === id && epoch === item.cancelEpoch) item.error = error.message;}
       finally {
@@ -526,7 +610,7 @@
     }
     function reset() {
       const item = current();
-      if (!item || cancellationBusy(item) || !terminalStates.has(item.record?.state)) return;
+      if (!item || cancellationBusy(item) || revalidationBusy(item) || !terminalStates.has(item.record?.state)) return;
       clearTimeout(pollTimer);invalidate(item, true);
       Object.assign(item, {runId: "", record: null, error: "", reviewError: "", uncertain: false,
         preparedNew: true, sourceInputs: null, polling: false, statusRequest: null, cancellation: null, retry: false, retryTarget: null});
@@ -600,6 +684,11 @@
         run: context.runs?.find(run => run.run_id === current()?.runId)}),
       receive: (value, next) => receiveRecord(value.item, next, value.runId, value.datasetId), schedule: () => schedulePoll()});
     logs = window.SignetJobLogs?.mount({host: part("logs"), token});
+    revalidation = mountOutputRevalidation({panel, prefix: "genotype", local: localized, request, render,
+      target: () => ({item: current(), runId: current()?.runId, datasetId: selectedDataset, visible: context.visible, step: "genotype", run: runFor(current())}),
+      before: item => {clearRetry(item);item.reviewError = "";},
+      receive: (value, next) => receiveRecord(value.item, next, value.runId, value.datasetId, true), schedule: () => schedulePoll(),
+      onChanged: value => onHistoryChanged?.(value.runId, value.datasetId)});
     function setContext(next) {
       const previous = current();
       const id = next.dataset?.id ?? next.datasetId ?? "";
@@ -620,11 +709,13 @@
         if (candidate) restore(candidate.run_id, candidate.jobs.genotype, id, candidate);
       }
       if (item.runId) {
-        const saved = (context.runs ?? []).find(run => run.run_id === item.runId)?.jobs?.genotype;
-        if (saved && !item.submitting && !item.uncertain && !olderRecord(saved, item.record) &&
-          (!item.record || (saved.attempt ?? 1) > (item.record.attempt ?? 1) || recordTime(saved) > recordTime(item.record))) {
+        const run = runFor(item), saved = run?.jobs?.genotype;
+        const recovery = recordedOutputTransition(item.record, saved, run?.output_revalidation?.genotype);
+        if (saved && !item.submitting && !item.uncertain && (!olderRecord(saved, item.record) || recovery) &&
+          (!item.record || recovery || (saved.attempt ?? 1) > (item.record.attempt ?? 1) || recordTime(saved) > recordTime(item.record))) {
           if (item.retry && item.retryTarget && !matchesRetryRecord(saved, item.retryTarget)) clearRetry(item);
           item.record = saved;cancellation?.observe(item, saved);
+          if (recovery && item.revalidation) {item.revalidation.error = "";item.revalidation.outcome = saved.state;}
         }
         if (item.retry && item.review) fillReview(item.review, item, Boolean(item.draft));
         else if (item.record?.inputs && !item.retry) fillReview(item.record, item);
@@ -836,6 +927,7 @@
           <button type="button" class="ml-nav-action" data-${prefix}-history data-${prefix}-copy="history" hidden></button>
           <button type="button" class="ml-nav-action" data-${prefix}-retry data-${prefix}-copy="retry" hidden></button>
           ${cancellationMarkup(prefix)}
+          ${revalidationMarkup(prefix)}
           ${visualization ? '<button type="button" class="ml-nav-action" data-visualize-results data-visualize-copy="savedResults"></button>' : ''}
           <button type="button" class="ml-nav-action" data-${prefix}-back data-${prefix}-copy="back" hidden></button>
         </div>
@@ -854,6 +946,7 @@
     let pollTimer;
     let cancellation;
     let logs;
+    let revalidation;
     const local = key => (copy[key] ?? labels[key])?.[context.language === "en" ? 1 : 0] ?? key;
     const current = () => runStates.get(selectedRun);
     const source = () => context.runs.find(run => run.run_id === selectedRun);
@@ -908,7 +1001,9 @@
     function render() {
       for (const element of panel.querySelectorAll(`[data-${prefix}-copy]`)) element.textContent = local(element.getAttribute(`data-${prefix}-copy`));
       const item = current();
+      dropStaleRevalidation(item);
       const saved = item?.record;
+      if (item) item.outputRevalidationActive = outputRevalidationInfo({item, run: source(), step})?.active === true;
       const state = item?.submitting ? "submitting" : item?.uncertain ? "unknown" : saved?.state ?? "idle";
       const hasAttempt = Boolean(saved) && !item?.retry || Boolean(item?.submitting || item?.uncertain);
       const allowed = source()?.jobs.genotype?.state === "completed" &&
@@ -932,12 +1027,12 @@
         : item.checking ? local("checking") : item.review && !hasAttempt ? local(item.review.ready === false ? "unavailable" : "ready") : "";
       part("guidance").textContent = allowed && item?.review && !hasAttempt && item.review.ready !== false ? local("readyPrompt") : "";
       part("review").hidden = !(alwaysVisible ? selectedRun : allowed) || hasAttempt;
-      part("review").disabled = Boolean(item?.checking);
+      part("review").disabled = Boolean(item?.checking || revalidationBusy(item));
       form.hidden = !alwaysVisible && (!allowed || !(hasAttempt ? saved?.inputs : item?.review));
-      for (const field of fields) field.disabled = hasAttempt || cancellationBusy(item) || !selectedRun || visualization && Boolean(item?.checking);
+      for (const field of fields) field.disabled = hasAttempt || cancellationBusy(item) || revalidationBusy(item) || !selectedRun || visualization && Boolean(item?.checking);
       if (adjustment) {
         const clinicalInput = panel.querySelector('[data-adjust-input="cli.file"]');
-        clinicalInput.disabled = hasAttempt || Boolean(item?.checking) || !selectedRun;
+        clinicalInput.disabled = hasAttempt || Boolean(item?.checking || revalidationBusy(item)) || !selectedRun;
         clinicalInput.readOnly = Boolean(item?.review?.frozen || item?.review?.frozen_inputs || source()?.input_mode === "dataset" || source()?.frozen_inputs);
         const clinical = item?.review?.clinical;
         part("clinical-summary").textContent = clinical
@@ -980,16 +1075,16 @@
         progress.hidden = !progress.childElementCount;
       }
       part("submit").hidden = hasAttempt;
-      part("submit").disabled = !allowed || !item?.review || item.review.ready === false || item.checking || item.submitting || hasAttempt || cancellationBusy(item);
+      part("submit").disabled = !allowed || !item?.review || item.review.ready === false || item.checking || item.submitting || hasAttempt || cancellationBusy(item) || revalidationBusy(item);
       part("status").textContent = local(state);
       if (item?.cancellation?.sending) part("status").textContent = local("cancelSending");
       part("identifiers").hidden = !selectedRun;
       part("run-id").textContent = selectedRun;
       part("job-id").textContent = saved?.job_id ?? "—";
       part("refresh").hidden = !hasAttempt || terminal;
-      part("refresh").disabled = Boolean(item?.polling || item?.submitting || item?.cancellation?.sending);
+      part("refresh").disabled = Boolean(item?.polling || item?.submitting || item?.cancellation?.sending || item?.revalidation?.pending);
       part("history").hidden = !saved;
-      part("retry").hidden = !saved || !["failed", "cancelled"].includes(state) || Boolean(item?.retry || item?.uncertain || cancellationBusy(item));
+      part("retry").hidden = !saved || !["failed", "cancelled"].includes(state) || Boolean(item?.retry || item?.uncertain || cancellationBusy(item) || revalidationBusy(item));
       part("back").hidden = !context.runId;
       if (visualization) part("results").disabled = !context.resultsAvailable;
       const message = [item?.uncertain ? local("uncertain") : "", item?.error].filter(Boolean).join(" ");
@@ -1010,16 +1105,19 @@
       }));
       part("events").hidden = !saved?.history?.length;
       cancellation?.sync();
+      revalidation?.sync();
       const run = source();
       logs?.setContext({historyId: run?.history_id, runId: selectedRun, source: run?.source, datasetId: context.datasetId,
         step, number: saved?.attempt ?? 1, current: true, recordFile: `steps/${step}.json`, recordIdentity: run?.record_identity,
         record: saved, language: context.language, visible: context.visible});
     }
 
-    function accept(item, value, id) {
+    function accept(item, value, id, revalidated = false) {
       if (value.run_id !== id || value.step !== step || !Object.hasOwn(labels, value.state)) throw Error(local("serviceError"));
-      if (item.record && ((value.attempt ?? 1) < (item.record.attempt ?? 1) ||
-          item.record.job_id === value.job_id && (terminalStates.has(item.record.state) && !terminalStates.has(value.state) ||
+      const sameAttempt = (value.attempt ?? 1) === (item.record?.attempt ?? 1);
+      const manualTransition = revalidated && sameAttempt && item.record?.state === "failed" && item.record.job_id === value.job_id;
+      if (item.record && !manualTransition && ((value.attempt ?? 1) < (item.record.attempt ?? 1) ||
+          sameAttempt && item.record.job_id === value.job_id && (item.record.state === "completed" && value.state !== "completed" || terminalStates.has(item.record.state) && !terminalStates.has(value.state) ||
             item.record.state === "cancelling" && !terminalStates.has(value.state) && value.state !== "cancelling"))) return;
       const changed = !item.record || value.state !== item.record.state || value.job_id !== item.record.job_id;
       item.record = value;
@@ -1028,13 +1126,13 @@
       item.retry = false;
       item.error = value.connection === "interrupted" ? local("interrupted") : value.reason ?? "";
       if (id === selectedRun && value.inputs) fillReview(value);
-      if (changed) onHistoryChanged?.(id);
+      if (changed || revalidated) onHistoryChanged?.(id);
     }
 
     function schedule() {
       clearTimeout(pollTimer);
       const item = current();
-      if (item && !item.submitting && !item.cancellation?.sending && (item.uncertain || item.cancellation?.awaiting || item.record && !terminalStates.has(item.record.state))) {
+      if (item && !item.submitting && !item.cancellation?.sending && !item.revalidation?.pending && (item.uncertain || item.cancellation?.awaiting || item.record && !terminalStates.has(item.record.state))) {
         pollTimer = setTimeout(() => void refresh(), pollInterval);
       }
     }
@@ -1042,26 +1140,26 @@
     async function refresh(force = false) {
       const id = selectedRun;
       const item = current();
-      if (!id || !item || item.polling || item.submitting || item.cancellation?.sending) return;
+      if (!id || !item || item.polling || item.submitting || item.cancellation?.sending || item.revalidation?.pending) return;
       const epoch = item.cancelEpoch;
+      const statusRequest = {};item.statusRequest = statusRequest;
       item.polling = true;
       render();
       try {
-        const next = await request(`/signet/runs/${encodeURIComponent(id)}/steps/${step}${force ? "?refresh=1" : ""}`);
+        const next = await request(`/signet/runs/${encodeURIComponent(id)}/steps/${step}${force && !terminalStates.has(item.record?.state) ? "?refresh=1" : ""}`);
         if (epoch === item.cancelEpoch) accept(item, next, id);
       } catch (error) {
         if (epoch === item.cancelEpoch) item.error = error.message;
       } finally {
-        item.polling = false;
-        render();
-        schedule();
+        if (item.statusRequest === statusRequest) {item.statusRequest = null;item.polling = false;render();schedule();}
       }
     }
 
     async function review() {
       const id = selectedRun;
       const item = current();
-      if (!id || !item || !source() || item.checking || item.submitting || item.uncertain || cancellationBusy(item) || item.record && !item.retry || !alwaysVisible && source()?.jobs.genotype?.state !== "completed") return;
+      if (!id || !item || !source() || item.checking || item.submitting || item.uncertain || cancellationBusy(item) || revalidationBusy(item) || item.record && !item.retry || !alwaysVisible && source()?.jobs.genotype?.state !== "completed") return;
+      const epoch = item.cancelEpoch;
       item.checking = item.attempted = true;
       item.error = "";
       render();
@@ -1076,6 +1174,7 @@
         }
         const query = params.size ? `?${params}` : "";
         const next = await request(`/signet/runs/${encodeURIComponent(id)}/${step}/example${query}`);
+        if (epoch !== item.cancelEpoch) return;
         const preserve = adjustment || (linkedInputs ? Boolean(item.draft) : item.review && fileKeys.every(key => item.review.inputs[key] === next.inputs[key]));
         item.review = next;
         item.error = next.issues?.join(" ") || next.reason || "";
@@ -1084,11 +1183,9 @@
           saveDraft();
         }
       } catch (error) {
-        item.review = null;
-        item.error = error.message;
+        if (epoch === item.cancelEpoch) {item.review = null;item.error = error.message;}
       } finally {
-        item.checking = false;
-        render();
+        if (epoch === item.cancelEpoch) {item.checking = false;render();}
       }
     }
 
@@ -1099,9 +1196,13 @@
       clearTimeout(pollTimer);
       const item = id ? stateFor(id) : null;
       const saved = source()?.jobs[step];
+      const recovery = recordedOutputTransition(item?.record, saved, source()?.output_revalidation?.[step]);
       const received = saved && saved.state !== "not_submitted" && !item.submitting && !item.uncertain &&
-        (!item.record || Date.parse(saved.updated_at ?? saved.submitted_at) > Date.parse(item.record.updated_at ?? item.record.submitted_at));
-      if (received) {item.record = saved;cancellation?.observe(item, saved);}
+        (!item.record || recovery || (saved.attempt ?? 1) > (item.record.attempt ?? 1) || Date.parse(saved.updated_at ?? saved.submitted_at) > Date.parse(item.record.updated_at ?? item.record.submitted_at));
+      if (received) {
+        item.record = saved;cancellation?.observe(item, saved);
+        if (recovery && item.revalidation) {item.revalidation.error = "";item.revalidation.outcome = saved.state;}
+      }
       if ((changed || received) && item?.record?.inputs && !item.retry) fillReview(item.record);
       else if (changed && item?.review) fillReview(item.review);
       else if (changed && alwaysVisible) fillReview({[parameterGroup]: Object.fromEntries(parameterDefinitions.map(({key, value}) => [key, value])), resources: initialResources});
@@ -1188,6 +1289,10 @@
       target: () => ({item: current(), runId: selectedRun, datasetId: context.datasetId, visible: context.visible, run: source()}),
       receive: (value, next) => accept(value.item, next, value.runId)});
     logs = window.SignetJobLogs?.mount({host: part("logs"), token});
+    revalidation = mountOutputRevalidation({panel, prefix, local, request, render, schedule,
+      target: () => ({item: current(), runId: selectedRun, datasetId: context.datasetId, visible: context.visible, step, run: source()}),
+      before: item => {item.retry = false;item.review = null;item.draft = null;item.checking = false;},
+      receive: (value, next) => accept(value.item, next, value.runId, true), onChanged: value => onHistoryChanged?.(value.runId)});
     part("review").addEventListener("click", () => void review());
     part("submit").addEventListener("click", () => void submit());
     part("refresh").addEventListener("click", () => void refresh(true));
@@ -1196,7 +1301,7 @@
     if (visualization) part("results").addEventListener("click", () => onShowResults?.());
     part("retry").addEventListener("click", () => {
       const item = current();
-      if (!item || item.uncertain || item.submitting || cancellationBusy(item) || !["failed", "cancelled"].includes(item.record?.state)) return;
+      if (!item || item.uncertain || item.submitting || cancellationBusy(item) || revalidationBusy(item) || !["failed", "cancelled"].includes(item.record?.state)) return;
       item.retry = true;
       item.review = null;
       void review();

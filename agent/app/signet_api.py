@@ -309,6 +309,26 @@ def list_runs(handler, url):
     return 200, {'runs': runs}
 
 
+def review_rerun(handler, url, run_id, step):
+    from agent.runtime import workspace_rerun
+    _query(url, ())
+    return 200, workspace_rerun.review(run_id, step)
+
+
+def create_rerun(handler, url, run_id, step):
+    from agent.runtime import workspace_rerun
+    _query(url, ())
+    body = _body(handler, ('new_run_id', 'revision', 'parameters'), required=('new_run_id', 'revision', 'parameters'))
+    return 201, workspace_rerun.create(run_id, step, **body)
+
+
+def submit_rerun(handler, url, run_id):
+    from agent.runtime import workspace_rerun
+    _query(url, ())
+    body = _body(handler, ('confirmed',), required=('confirmed',))
+    return 202, workspace_rerun.submit(run_id, body['confirmed'])
+
+
 def get_progress(handler, url):
     """Read compact progress for one conversation, even during an HPC3 transfer."""
     session = _query(url, ('session',)).get('session', '')
@@ -690,7 +710,23 @@ def get_step(handler, url, run_id, step):
     query = _query(url, ('refresh',))
     if query.get('refresh', '0') not in ('0', '1'):
         raise ApiError(400, 'invalid_request', 'refresh must be 0 or 1.')
-    return 200, jobs.status(run_id, step, refresh=query.get('refresh') == '1')
+    record = jobs.status(run_id, step, refresh=query.get('refresh') == '1')
+    return 200, {**record, 'output_revalidation': jobs.output_revalidation(record)}
+
+
+def revalidate_step(handler, url, run_id, step):
+    _query(url, ())
+    body = _body(handler, ('expected_job_id', 'expected_attempt'), required=('expected_job_id', 'expected_attempt'))
+    record = jobs.revalidate(run_id, step, **body)
+    return 200, {**record, 'output_revalidation': jobs.output_revalidation(record)}
+
+
+def reconcile_submission(handler, url, run_id, step):
+    from agent.runtime.submission_recovery import reconcile
+    _query(url, ())
+    body = _body(handler, ('expected_job_id', 'expected_attempt', 'action', 'confirmed'),
+                 required=('expected_job_id', 'expected_attempt', 'action'))
+    return 200, reconcile(run_id, step, **body)
 
 
 def cancel_step(handler, url, run_id, step):
@@ -780,6 +816,8 @@ ROUTES = [
      {'GET': review_network_example, 'POST': submit_network_example}),
     (re.compile(rf'/signet/runs/{_RUN}/visualize/example'),
      {'GET': review_visualize_example, 'POST': submit_visualize_example}),
+    (re.compile(rf'/signet/runs/{_RUN}/rerun/submit'), {'POST': submit_rerun}),
+    (re.compile(rf'/signet/runs/{_RUN}/steps/{_STEP}/rerun'), {'GET': review_rerun, 'POST': create_rerun}),
     (re.compile(r'/signet/runs'), {'GET': list_runs, 'POST': create_run}),
     (re.compile(r'/signet/analyses'), {'POST': start_analysis}),
     (re.compile(rf'/signet/runs/{_RUN}'), {'GET': get_run}),
@@ -791,7 +829,9 @@ ROUTES = [
     (re.compile(rf'/signet/runs/{_RUN}/results/download'), {'POST': issue_download}),
     (re.compile(rf'/signet/runs/{_RUN}/settings'), {'PATCH': update_settings}),
     (re.compile(rf'/signet/runs/{_RUN}/steps/{_STEP}'), {'GET': get_step, 'POST': submit_step}),
+    (re.compile(rf'/signet/runs/{_RUN}/steps/{_STEP}/reconcile'), {'POST': reconcile_submission}),
     (re.compile(rf'/signet/runs/{_RUN}/steps/{_STEP}/cancel'), {'POST': cancel_step}),
+    (re.compile(rf'/signet/runs/{_RUN}/steps/{_STEP}/revalidate'), {'POST': revalidate_step}),
     (re.compile(rf'/signet/runs/{_RUN}/steps/{_STEP}/log'), {'GET': get_log}),
 ]
 

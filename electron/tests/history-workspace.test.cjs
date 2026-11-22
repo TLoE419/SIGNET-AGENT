@@ -113,3 +113,81 @@ test('recorded scheduler and tool states are labeled as saved evidence, with sta
  assert.equal(h.q('[data-run-stage]'),null);
  h.click('#ml-language');assert.match(h.q('[data-history-state]').textContent,/Last recorded state: Execution start unconfirmed/);
 });
+
+test('submission recovery reviews exact live attempt then explicitly confirms without submitting analysis',async t=>{
+ const row=workspace();row.jobs.expression={state:'unknown',attempt:2,run_id:'shared',step:'expression'};
+ const archived=archive();archived.jobs.expression={state:'unknown',attempt:2};
+ const h=harness(t,[row,archived],call=>{
+  if(!call.url.endsWith('/reconcile'))return;
+  assert.equal(call.url,'/signet/runs/shared/steps/expression/reconcile');
+  const applied=call.body.action==='adopt';
+  if(applied)row.jobs.expression.state='submitted';
+  return reply({record:{...row.jobs.expression,run_id:'shared',step:'expression'},applied,
+    recovery:{outcome:'adopt',detail:'12345',evidence:{scheduler_checked:true,candidates:['12345']}}});
+ });
+ await h.ready();h.click('[data-nav-target="history"]');
+ assert.equal(h.q('#ml-run-archive--shared [data-submission-recovery]'),null);
+ const submit=value=>{const form=h.q('[data-submission-recovery]');form.dispatchEvent(new h.window.SubmitEvent('submit',
+  {bubbles:true,cancelable:true,submitter:form.querySelector(`[value="${value}"]`)}));};
+ assert.equal(h.q('[data-submission-recovery] [value="adopt"]'),null);
+ submit('review');await until(()=>h.q('[data-submission-recovery] [value="adopt"]'));
+ assert.deepEqual(h.calls.filter(c=>c.url.endsWith('/reconcile'))[0].body,
+  {expected_attempt:2,expected_job_id:null,action:'review',confirmed:false});
+ assert.match(h.q('[data-submission-recovery]').textContent,/12345/);
+ submit('adopt');await until(()=>!h.q('[data-submission-recovery]'));
+ assert.equal(h.calls.filter(c=>c.url.endsWith('/reconcile')).length,2);
+ assert.equal(h.calls.filter(c=>c.options.method==='POST'&&!c.url.endsWith('/reconcile')).length,0);
+});
+
+test('ambiguous submission evidence displays explanation and never offers confirmation',async t=>{
+ const row=workspace();row.jobs.expression={state:'unknown',attempt:1,run_id:'shared',step:'expression'};
+ const h=harness(t,[row],call=>call.url.endsWith('/reconcile')?reply({record:row.jobs.expression,applied:false,
+  recovery:{outcome:'unresolved',detail:'Two candidate jobs; do not resubmit.',evidence:{candidates:['1','2']}}}):undefined);
+ await h.ready();h.click('[data-nav-target="history"]');
+ const form=h.q('[data-submission-recovery]');form.dispatchEvent(new h.window.SubmitEvent('submit',
+  {bubbles:true,cancelable:true,submitter:form.querySelector('[value="review"]')}));
+ await until(()=>h.q('[data-submission-recovery]').textContent.includes('Two candidate'));
+ assert.equal(h.q('[data-submission-recovery] [value="adopt"]'),null);
+ assert.equal(h.q('[data-submission-recovery] [value="unsubmitted"]'),null);
+ h.click('#ml-language');assert.match(h.q('[data-submission-recovery]').textContent,/Review submission evidence/);
+});
+
+test('changing remote context invalidates an in-flight recovery review',async t=>{
+ const row=workspace();row.jobs.expression={state:'unknown',attempt:1,run_id:'shared',step:'expression'};let release;
+ const h=harness(t,[row],call=>call.url.endsWith('/reconcile')?new Promise(resolve=>release=resolve):undefined);
+ await h.ready();h.click('[data-nav-target="history"]');
+ const form=h.q('[data-submission-recovery]');form.dispatchEvent(new h.window.SubmitEvent('submit',
+  {bubbles:true,cancelable:true,submitter:form.querySelector('[value="review"]')}));
+ h.window.dispatchEvent(new h.window.CustomEvent('workspace-remote-context',{detail:{identity:'different',connected:true}}));
+ release(reply({record:row.jobs.expression,applied:false,recovery:{outcome:'adopt',detail:'foreign',evidence:{}}}));
+ await settle();await settle();
+ assert.equal(h.q('[data-submission-recovery] [value="adopt"]'),null);
+ assert.equal(h.q('[data-submission-recovery]').textContent.includes('foreign'),false);
+});
+
+test('completed live stage forks only after review, then separately confirms submission', async t=>{
+ const row=workspace('workspace--original');row.jobs={genotype:{state:'completed'}};
+ const review={source_run_id:'original',step:'genotype',revision:'rev',reuse:['expression'],invalidated:['genotype','adjust','cis','network','visualize'],parameters:{inputs:{},settings:{mind:.1},resources:{cpus:4},options:{}}};
+ const h=harness(t,[row],call=>{
+  if(call.url==='/signet/runs/original/steps/genotype/rerun')return reply(call.options.method==='POST'?{...review,new_run_id:'original-rerun'}:review);
+  if(call.url==='/signet/runs/original-rerun/rerun/submit')return reply({state:'submitted'},202);
+ });
+ await h.ready();h.click('[data-nav-target="history"]');h.click('[data-run-target="workspace--original"]');
+ h.click('[data-rerun-review]');await until(()=>h.q('[data-rerun-create]'));
+ assert.match(h.q('[data-rerun-content]').textContent,/adjust/);
+ assert.equal(h.calls.filter(call=>call.options.method==='POST').length,0);
+ h.click('[data-rerun-create]');await until(()=>h.q('[data-rerun-submit]'));
+ const creation=h.calls.find(call=>call.options.method==='POST');assert.equal(creation.body.revision,'rev');
+ assert.equal(h.calls.some(call=>call.url.endsWith('/rerun/submit')),false);
+ h.click('[data-rerun-submit]');await until(()=>h.calls.some(call=>call.url.endsWith('/rerun/submit')));
+ assert.deepEqual(h.calls.find(call=>call.url.endsWith('/rerun/submit')).body,{confirmed:true});
+});
+
+test('a saved unsubmitted linked run can resume explicit confirmation after reload',async t=>{
+ const row=workspace('workspace--pending-fork');row.jobs={genotype:{state:'not_submitted'}};row.rerun={source_run_id:'original',step:'genotype'};
+ const h=harness(t,[row],call=>call.url==='/signet/runs/pending-fork/rerun/submit'?reply({state:'submitted'},202):undefined);
+ await h.ready();h.click('[data-nav-target="history"]');h.click('[data-run-target="workspace--pending-fork"]');
+ assert.equal(h.calls.some(call=>call.url.endsWith('/rerun/submit')),false);
+ h.click('[data-rerun-run-id="pending-fork"]');await until(()=>h.calls.some(call=>call.url.endsWith('/rerun/submit')));
+ assert.deepEqual(h.calls.find(call=>call.url.endsWith('/rerun/submit')).body,{confirmed:true});
+});

@@ -150,6 +150,7 @@ Inside the API:
 | 21 | `PATCH /signet/history/{history_id}/dataset` | no | Save organizational ownership for an unclassified recorded run |
 | 22 | `GET /signet/runs/{run_id}/genotype/retry` | yes | Review the original inputs and target of a failed or cancelled Stage 1 attempt |
 | 23 | `POST /signet/runs/{run_id}/genotype/retry` | yes | Manually submit the next Stage 1 attempt in that run |
+| 24 | `POST /signet/runs/{run_id}/steps/{step}/revalidate` | yes | Recheck recoverable failed outputs for the same job and attempt without resubmitting |
 
 ### Workspace dataset metadata
 
@@ -663,7 +664,7 @@ If the connection dropped during `sbatch`, the response is 202 with `"state": "u
 | 412 | Not connected; container or `sbatch` missing |
 | 502 | Upload or `sbatch` failed |
 
-When preflight checks refuse the submission before remote files move (400, 409 or 412), the previous record and local results are restored. Once preparation starts, the new attempt number is consumed even if `sbatch` refuses the job (502): its record remains `failed` without a job ID, its script and error are kept, and the next retry gets the next number. Existing archives are never overwritten.
+When preflight checks refuse the submission before remote files move (400, 409 or 412), the previous record and local results are restored. Once preparation starts, the new attempt number is consumed and its script/error are retained. A failure proven to precede the scheduler invocation can remain `failed`; after invocation, a client failure or lost reply leaves acceptance `unknown` and blocks replay until evidence is reconciled. A nonzero client exit alone does not prove the scheduler rejected the job. Existing archives are never overwritten.
 
 ### 5.7 `GET /signet/runs/{run_id}/steps/{step}[?refresh=1]`
 
@@ -774,6 +775,39 @@ The download request accepts `{"session": "..."}` and returns a local URL with a
 ticket expiring after one minute. The browser retrieves the ZIP from that URL. Both the graph
 and ticket are scoped to the run’s linked conversation.
 
+
+### 5.15 `POST /signet/runs/{run_id}/steps/{step}/revalidate`
+
+Body: `{"expected_job_id": "12345", "expected_attempt": 1}`. The current
+record must match both fields and be eligible for output revalidation. The
+reply is the current job record plus `output_revalidation` with `eligible`,
+`reason` and `active`. History rows provide the same projection by step in
+`output_revalidation`, only for current readable live workspace attempts.
+
+Eligible failures are limited to a clean exit with missing required outputs,
+or a legacy completed job whose exit marker had not been confirmed. A known
+job ID is required. Cancellation, nonzero exit codes, scheduler failures,
+known log errors, completed jobs and unknown submissions are refused.
+
+The service checks the matching configured remote workspace, owned run folder,
+current job marker, scheduler state and stopped child jobs. It reads output
+markers and failure lines, then collects the same attempt's results if valid.
+It never submits or cancels jobs, changes settings, prepares inputs, or reruns
+SIGNET. Missing outputs stay failed; incomplete markers or interrupted result
+collection can remain validating and continue through status polling. Unknown
+or active remote state cannot be treated as successful completion.
+
+The first saved failure summary is preserved in `original_failure`. `output_checks`
+retains the latest 25 observations (`at`, `before`, `after`, `outcome`) and
+`output_checks_total` retains their count. Run history exposes this audit under
+the same attempt, without inventing a new attempt or overwriting prior attempt
+archives or original input/settings snapshots. Switching views never starts a
+recheck automatically. Evidence summaries are bounded; when a list is shortened,
+its total count is recorded and Run history explicitly labels the shortened list.
+
+400: invalid target fields. 409: stale/ineligible target, wrong remote
+environment or unmatched ownership/job. 412: disconnected. Connection or
+collection failures do not resubmit work.
 
 ## 6. Step reference
 
@@ -1061,3 +1095,42 @@ If `adjust` fails (for example because of the clinical file), fix the cause and 
 - **`network` holds a control job for hours.** It needs 1–2 CPUs while SIGNET's jobs run; a control job that hits its wall time stops SIGNET, and its remaining jobs are cancelled by the next status call.
 - **Stage 6 online dependencies.** The original visualization reads online enrichment/annotation services. A network or service failure is reported as a failed export, with its logs retained; the app does not substitute a generated graph.
 - **Cohort:** The six-stage HPC3 chat workflow currently supports TCGA.
+
+### Manual reconciliation of an uncertain submission
+
+`POST /signet/runs/{run_id}/steps/{step}/reconcile` accepts
+`expected_attempt` (positive integer), `expected_job_id` (saved ID or JSON null),
+`action` (`review`, `adopt`, `unsubmitted`), and `confirmed` (true for a change).
+The response contains `record`, `recovery` (outcome, explanation, source and
+scheduler evidence), and `applied`. The normal page token and Origin protections
+apply. The history pane exposes this flow for current workspace runs; archived
+records cannot invoke recovery controls.
+
+First send `review`. Then explicitly confirm the offered outcome with `adopt`
+or `unsubmitted`. Confirmation re-reads the owned receipt and scheduler evidence
+and requires them to match the immediately preceding review. A changed run,
+step, job or attempt is rejected. Each valid check is saved in
+`submission_checks`, including unsuccessful or ambiguous observations.
+
+New submissions save a random per-attempt receipt and pass the same token as the
+Slurm job comment. Recovery requires the original owned remote directory, an
+attempt receipt, and successful queue **and** accounting queries. Exactly one
+matching job can be adopted; a prepared receipt plus its unique scheduler comment
+also covers a connection loss before the job-ID marker was written. Adoption
+only restores a submitted record; normal status and output validation must still
+establish completion. A name-only match or a marker without scheduler evidence
+cannot adopt a job automatically through status polling.
+
+Only an owned `not_dispatched` receipt proving the script stopped before invoking
+`sbatch`, an absent job marker, and successful scheduler queries with no matching
+comment can offer `unsubmitted`. Confirming
+that outcome records a failed attempt eligible for the existing manual retry
+flow; it never submits work itself. Retrying creates a fresh attempt/token and
+keeps the earlier record and receipt. Missing receipts (including legacy runs),
+multiple matches, ownership mismatches, failed queries or a prepared receipt
+with empty scheduler results remain unresolved and blocked. Legacy `rejected`
+receipts and ambiguous nonzero scheduler-client replies also remain unresolved.
+A scheduler without
+comment/accounting support therefore needs external investigation; empty
+queries never establish safety to replay. Existing active-operation and output
+safety guards remain in force.
