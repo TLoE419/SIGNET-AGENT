@@ -81,6 +81,7 @@ RETRYABLE = ('failed', 'cancelled')   # may be submitted again in the same run
 _JOB_FILES = ('job', 'done', 'out', 'err', 'sbatch', 'sbatch.err')
 CACHE_SECONDS = 15
 VISUALIZE_OUTPUT_GRACE_SECONDS = 120
+MISSING_OUTPUTS_REASON = 'Required outputs are missing.'
 MAX_LOG_LINES = 200
 _MARKER = '@@'
 _PATH = re.compile(r'/[A-Za-z0-9_./-]+')
@@ -91,9 +92,10 @@ _SLURM_FAILED = ('FAILED', 'OUT_OF_MEMORY', 'TIMEOUT', 'NODE_FAIL', 'PREEMPTED',
 class StepError(Exception):
     """A refused or failed request; `code` is one of the API error codes in spec §10."""
 
-    def __init__(self, code, message):
+    def __init__(self, code, message, details=None):
         super().__init__(message)
         self.code = code
+        self.details = details   # counts-only context for the page, e.g. a clinical table review
 
 
 @dataclass(frozen=True)
@@ -137,8 +139,6 @@ class Step:
     # Logs (relative to work/) in which SIGNET records the Slurm jobs it submitted; those jobs
     # are cancelled with the step, but only if they run inside this run's folder.
     children: tuple = ()
-    # Folders (relative to work/) where SIGNET's ParaFly batches run, to report progress.
-    stages: tuple = ()
 
 
 STEPS = {
@@ -173,7 +173,7 @@ STEPS = {
         requires=('expression', 'genotype'),
         # script/adj_portal.sh reads the -t and -g results through rest.tcga / resg.tcga
         # (res/rest/signet, res/resg/signet); script/adj/adj_filter.sh also reads -g's
-        # temporary files in tmp/tmpg/impute, a folder no setting can move.
+        # temporary files in tmp/tmpg/impute; adj/pca_prepare.R reads clean_Genotype.fam.
         needs=('res/rest/signet_gexp', 'res/rest/signet_gexpID',
                'res/resg/signet_Geno', 'res/resg/signet_Genotype.sampleID',
                'tmp/tmpg/impute/impute_Genotype.sizes', 'tmp/tmpg/clean_Genotype.fam'),
@@ -236,7 +236,6 @@ STEPS = {
                   'ncores': 'cores', 'memory': 'gigabytes', 'walltime': 'hms'},
         host=True, child_memory='memory',
         children=('tmp/tmpn/stage1/submit1_log', 'tmp/tmpn/stage2/submit2_log'),
-        stages=('tmp/tmpn/stage1', 'tmp/tmpn/stage2'),
         # script/network/network.sh: summarize.r writes <resn>_Afreq; the last lines copy
         # CoeffMat0 and net.genepos next to it (resn = res/resn/signet).
         required=('res/resn/signet_Afreq', 'res/resn/signet_CoeffMat0', 'res/resn/signet_net.genepos'),
@@ -252,23 +251,27 @@ STEPS = {
         description='TCGA network construction (signet -n): two-stage penalized least squares on bootstrap '
                     'data; SIGNET submits its own Slurm jobs, this step drives and follows them.'),
     'visualize': Step(
-        flag='-v', cohort='TCGA', inputs=(), requires=('network',),
+        flag='-v', cohort='TCGA', inputs=(),
+        settings={'freq': 'frequency', 'ntop': 'subnetworks'},
+        requires=('network',),
         links={'Afreq': 'res/resn/signet_Afreq', 'coef': 'res/resn/signet_CoeffMat0',
                'vis.genepos': 'res/resn/signet_net.genepos'},
         needs=('res/resn/signet_Afreq', 'res/resn/signet_CoeffMat0', 'res/resn/signet_net.genepos'),
-        settings={'freq': 'frequency', 'ntop': 'subnetworks'},
-        required=('res/resv/signet_edgelist_{freq}.txt', 'res/resv/signet_count_vs_freq.pdf',
-                  'res/resv/signet_count_vs_freq.eps'),
+        required=('res/resv/signet-edges.csv', 'res/resv/signet_edgelist_{freq}.txt',
+                  'res/resv/signet_count_vs_freq.pdf', 'res/resv/signet_count_vs_freq.eps'),
         download='work/res/resv',
-        resources={'cpus': 2, 'mem_gb': 16, 'hours': 1},
+        resources={'cpus': 2, 'mem_gb': 16, 'hours': 2},
         limits={'cpus': (1, 8), 'mem_gb': (1, 64), 'hours': (0.25, 12)},
-        env={'cloud': 'T', 'OPENBLAS_NUM_THREADS': '1', 'OMP_NUM_THREADS': '1', 'MKL_NUM_THREADS': '1'},
-        failures=("doesn't exist",),
-        description='TCGA network visualization (signet -v): export the selected subnetworks, '
-                    'directed edge list and original interactive graphs without starting a Shiny server.'),
+        env={'cloud': 'T', 'OPENBLAS_NUM_THREADS': '1', 'OMP_NUM_THREADS': '1'},
+        description='Export SIGNET network graphs and tables from this run’s network results.'),
 }
 
 
+ANALYSIS_STEPS = ('genotype', 'expression', 'adjust', 'cis', 'network', 'visualize')
+# Results of -g, -t, -a and -c hold one row per person (genotypes, expression, sample IDs), so they
+# stay on HPC3, where the next steps read them. Only these steps' gene-level results (network
+# matrices, graphs and edge tables) are copied to this computer, for the chat graph, the result
+# download and the Stage 6 comparison. Every step's counts are summarized on HPC3 (_output_summary).
 DOWNLOADED_STEPS = ('network', 'visualize')
 # Raised when the counting changes, so summaries saved by an older version are counted again.
 SUMMARY_VERSION = 3
@@ -468,17 +471,119 @@ def _current_records(root):
     return [path for path in sorted(folder.glob('*.json')) if '.' not in path.stem]
 
 
+def _legacy_visualize_output_failure(record):
+    return (record.get('step') == 'visualize' and record.get('state') == 'failed'
+            and record.get('exit_code') == '0' and not record.get('failure_hints')
+            and record.get('reason') == MISSING_OUTPUTS_REASON and 'missing_outputs_since' not in record)
+
+
 def _active_step(root):
     for path in _current_records(root):
         record = json.loads(path.read_text())
-        if record.get('state') in ACTIVE:
+        if record.get('state') in ACTIVE or _legacy_visualize_output_failure(record):
             return record['step']
     return None
 
 
+def run_records(root):
+    """Read the current step records from disk without checking HPC3."""
+    records = {}
+    for path in _current_records(root):
+        try:
+            records[path.stem] = json.loads(path.read_text())
+        except FileNotFoundError:
+            continue
+    return records
+
+
 def run_steps(run_id):
     """State of every step recorded for one run, e.g. {'expression': 'running'}."""
-    return {path.stem: json.loads(path.read_text()).get('state') for path in _current_records(_root(run_id))}
+    return {name: record.get('state') for name, record in run_records(_root(run_id)).items()}
+
+
+def analysis_session(root):
+    """An older run without an explicit link is not assigned to any conversation."""
+    path = root / 'conversation.json'
+    try:
+        return json.loads(path.read_text())['session']
+    except FileNotFoundError:
+        return None
+
+
+@_one_at_a_time
+def link_conversation(run_id, session):
+    root = _root(run_id)
+    previous = analysis_session(root)
+    if previous is not None and previous != session:
+        raise StepError('conflict', 'This analysis already belongs to another conversation.')
+    if previous is None and not (root / 'rerun.json').is_file():
+        # One conversation, one analysis: its reruns join it, a new analysis needs a new conversation.
+        from agent.runtime import analysis_family
+        if analysis_family.original(session, ignore=run_id):
+            raise StepError('conflict', 'This conversation already has an analysis. '
+                                        'Start a new conversation for a new analysis.')
+    if previous is None:
+        path = root / 'conversation.json'
+        temporary = path.with_suffix('.tmp')
+        temporary.write_text(json.dumps({'session': session}) + '\n')
+        temporary.replace(path)
+    return {'run_id': run_id, 'session': session}
+
+
+def analysis_view(root, cohort, records, *, include_attempts=True):
+    """Project stored records for chat without polling, downloading or starting a job."""
+    stages = []
+    if cohort == 'TCGA':
+        for name in ANALYSIS_STEPS:
+            record = records.get(name)
+            phase = 'not_started'
+            attempts = []
+            if record is not None:
+                if include_attempts:
+                    current = record.get('attempt', 1)
+                    # A retry archives its predecessor before publishing the new current
+                    # record. Only read archives older than the snapshot's current attempt.
+                    for number in range(1, current):
+                        path = _attempt_path(root, name, number)
+                        try:
+                            attempts.append({**json.loads(path.read_text()), 'attempt': number})
+                        except FileNotFoundError:
+                            continue
+                    attempts.append({**record, 'attempt': current})
+                phase = record['state']
+                if phase == 'pending':
+                    phase = 'queued'
+                elif phase == 'validating' and record.get('download_pending'):
+                    phase = 'downloading'
+                elif _legacy_visualize_output_failure(record):
+                    phase = 'validating'
+            flag = STEPS[name].flag if name in STEPS else '-v'
+            stage = {'step': name, 'flag': flag, 'phase': phase}
+            if record and record.get('reused_from'):
+                stage['reused_from'] = record['reused_from']
+            if include_attempts:
+                stage['attempts'] = attempts
+            elif record:
+                parameters = {key: record[key] for key in ('inputs', 'settings', 'resources', 'options', 'clinical')
+                              if record.get(key)}
+                if parameters:
+                    stage['parameters'] = parameters
+                progress = dict(record.get('progress', {}))
+                if phase == 'completed' and name == 'expression':
+                    progress['expression_outputs'] = '2 2'
+                if phase == 'completed' and name == 'visualize':
+                    count = record.get('settings', {}).get('ntop')
+                    if count:
+                        progress['subnetworks'] = f'{count} {count}'
+                if progress:
+                    stage['progress'] = progress
+            stages.append(stage)
+    view = {'session': analysis_session(root), 'steps': stages,
+            'completed_steps': sum(step['phase'] == 'completed' for step in stages),
+            'total_steps': len(stages)}
+    if origin := _rerun_origin(root):
+        view['rerun'] = {key: origin[key] for key in ('source_run', 'from_step')}
+    return view
 
 
 @_one_at_a_time
@@ -488,15 +593,17 @@ def update_settings(run_id, values):
     if not isinstance(values, dict) or not values:
         raise StepError('invalid_request', 'values must be a non-empty object.')
     rules = {key: rule for step in STEPS.values() for key, rule in step.settings.items()}
-    checked = {}
-    for key, value in values.items():
-        if key not in rules:
-            raise StepError('invalid_request', f'{key} cannot be changed here.')
-        checked[key] = _setting(key, rules[key], value)
+    checked = validate_settings(rules, values)
     if _active_step(root) or (root / '.active').exists():
         raise StepError('conflict', 'A step of this run is still active; wait for it to finish.')
     signet._update(root, checked)
     return signet._settings(root)
+
+
+def validate_settings(rules, values):
+    if not isinstance(values, dict) or set(values) - set(rules):
+        raise StepError('invalid_request', 'Allowed settings: ' + ', '.join(rules) + '.')
+    return {key: _setting(key, rules[key], value) for key, value in values.items()}
 
 
 def _setting(key, rule, value):
@@ -528,6 +635,10 @@ def _setting(key, rule, value):
         if number and 0 < value <= 1:
             return str(value)
         raise StepError('invalid_request', f'{key} must be a number above 0 and at most 1.')
+    if rule == 'subnetworks':
+        if type(value) is int and 1 <= value <= 20:
+            return str(value)
+        raise StepError('invalid_request', 'ntop must be a whole number from 1 to 20.')
     if rule == 'count':      # number of permutations
         if isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 100_000:
             return str(value)
@@ -661,6 +772,18 @@ def _inputs(step, values, allowed):
     return checked
 
 
+def _rerun_origin(root):
+    try:
+        return json.loads((root / 'rerun.json').read_text())
+    except FileNotFoundError:
+        return {}
+
+
+def _input_roots(config, root, directory):
+    return (config['root'] + '/refdata', config['source'] + '/example', directory,
+            *_rerun_origin(root).get('input_roots', ()))
+
+
 def _chromosome_key(step):
     return next((key for key, rule in step.settings.items() if rule == 'chromosome'), 'the chromosome setting')
 
@@ -711,6 +834,90 @@ def _shell(script, timeout=60):
 
 def _say():
     return f"umask 077\nsay() {{ printf '{_MARKER}%s\\t%s\\n' \"$1\" \"$2\"; }}\n"
+
+
+# Input checks that run on the login node before sbatch (agent/runtime/jobs/step_inputs.py).
+_STEP_INPUTS_SOURCE = (Path(__file__).with_name('jobs') / 'step_inputs.py').read_text()
+# Where signet -a's clinical copy goes in the run's HPC3 folder (choices applied, Unix line endings).
+CLINICAL_COPY = 'clinical/clinical.signet.tsv'
+GENOTYPE_IDS = 'work/res/resg/signet_Genotype.sampleID'
+EXPRESSION_IDS = 'work/res/rest/signet_gexpID'
+
+
+def _input_check(name, files):
+    """Login-node shell that checks an input's format; on a problem it reports the checker's JSON and stops."""
+    q = shlex.quote
+    paths = {key: path for key, path, _ in files}
+    if name == 'expression':
+        args, ok = ['gtf', paths['pmap.file']], '*\'"problem": null\'*'
+    elif name == 'adjust':
+        args = ['clinical', paths['cli.file'], '$D/' + GENOTYPE_IDS, '$D/' + EXPRESSION_IDS, '{}']
+        ok = '*\'"needs_choice": []\'*\'"problems": []\'*'
+    else:
+        return ''
+    quoted = ' '.join(arg.replace('$D', '"$D"') if arg.startswith('$D/') else q(arg) for arg in args)
+    # The checker goes to a temporary file first: a here-document inside $( ) trips older bash on quotes.
+    return f'''check_py="$(mktemp)" || exit 4
+cat > "$check_py" <<'SIGNET_CHECK'
+{_STEP_INPUTS_SOURCE}SIGNET_CHECK
+checked="$(python3 "$check_py" {quoted})"; rm -f "$check_py"
+case "$checked" in {ok}) ;; *) say invalid_input "$checked"; exit 9;; esac
+'''
+
+
+CLINICAL_CHOICES = ('not_reported', 'exclude')
+
+
+def clinical_review(run_id, path, choices, write=False):
+    """Count what signet -a will meet in a clinical table, for this run's matched patients; on HPC3.
+
+    With write=True and nothing left to decide, writes the run's copy (CLINICAL_COPY) with the
+    choices applied. Returns the checker's counts-only report (agent/runtime/jobs/step_inputs.py).
+    """
+    step = STEPS['adjust']
+    root = _root(run_id)
+    if (not isinstance(choices, dict) or len(choices) > 20 or
+            any(not isinstance(key, str) or len(key) > 80 or value not in CLINICAL_CHOICES for key, value in choices.items())):
+        raise StepError('invalid_request', 'Each clinical choice must be not_reported or exclude.')
+    config = _environment()
+    directory = _remote_dir(config, root, run_id)
+    checked = _inputs(step, {'cli.file': path}, _input_roots(config, root, directory))
+    q = shlex.quote
+    args = ['clinical', checked['cli.file'][0], f'{directory}/{GENOTYPE_IDS}', f'{directory}/{EXPRESSION_IDS}',
+            json.dumps(choices)] + ([f'{directory}/{CLINICAL_COPY}'] if write else [])
+    script = _say() + f"""check_py="$(mktemp)" || exit 4
+cat > "$check_py" <<'SIGNET_CHECK'
+{_STEP_INPUTS_SOURCE}SIGNET_CHECK
+say report "$(python3 "$check_py" {' '.join(q(arg) for arg in args)})"; rm -f "$check_py"
+"""
+    try:
+        code, values, _ = _shell(script, timeout=120)
+    except OSError as error:
+        raise StepError('remote_failed', 'Could not reach HPC3 to check the clinical table.') from error
+    try:
+        report = json.loads(values.get('report', ''))
+    except ValueError:
+        report = {}
+    if code or report.get('status') != 'ok':
+        raise StepError('invalid_request', report.get('error') or
+                        'The clinical table could not be checked: genotype and expression results must be on HPC3.')
+    return report
+
+
+def _input_problem(name, report):
+    """A plain message for a failed input check (counts only; no rows or IDs)."""
+    try:
+        value = json.loads(report)
+    except ValueError:
+        return 'The input file could not be checked on HPC3.'
+    if value.get('status') != 'ok':
+        return value.get('error', 'The input file could not be checked on HPC3.')
+    if name == 'expression':
+        return value['problem']
+    if value.get('needs_choice'):
+        return ('The clinical table has race values SIGNET does not handle: ' + ', '.join(value['needs_choice']) +
+                '. Choose how to treat them on the confirmation card.')
+    return ' '.join(value.get('problems', [])) or 'The clinical table cannot be used by signet -a.'
 
 
 # Other features keep their own folders directly under workRoot (remote.py: cis/, network/);
@@ -767,17 +974,12 @@ export SINGULARITY_BIND={q(bind)} APPTAINER_BIND={q(bind)}
         env = f"--env {q(','.join(f'{k}={v}' for k, v in step.env.items()))} " if step.env else ''
         run = (f"{q(config['executor'])} exec --cleanenv --no-home {env}--bind {q(bind)} {q(config['image'])} "
                f"bash ./signet {step.flag} {stdin}")
-    if name == 'expression':
-        # Write each marker only after the corresponding audited R script ends.
-        run = """printf '\nfile.create(file.path(Sys.getenv("SIGNET_TMP_ROOT"), "tmpt", ".signet-normalized"))\n' >> script/gexp_prep/gexp_prep.R
-printf '\nfile.create(file.path(Sys.getenv("SIGNET_TMP_ROOT"), "tmpt", ".signet-annotated"))\n' >> script/gexp_prep/gpos.R
-""" + run
     if dataset_plan:
         from agent.runtime.workspace_inputs import stage_command
         run = ('(\n' + stage_command(dataset_plan)
                + 'stage_rc=$?\n[ "$stage_rc" -eq 0 ] || exit "$stage_rc"\n' + run + '\n)')
     if name == 'adjust':
-        # Keep the actual clinical input and smartpca outputs with the downloaded results.
+        # Keep the actual clinical input and smartpca outputs on HPC3 with this attempt.
         clinical = q((settings or {})['cli.file'])
         frozen = directory + '/work/res/resa/workspace-clinical.tsv'
         replacement = q('s|^cli.file *=.*|cli.file = ' + frozen + '|')
@@ -790,22 +992,45 @@ cp -- tmp/tmpg/geno_id res/resa/workspace-genotype-ids.txt &&
 cp -- tmp/tmpa/Geno.pca.evec res/resa/workspace-pca.evec &&
 cp -- tmp/tmpa/Geno.eval res/resa/workspace-pca.eval
 )'''
-    if name == 'visualize':
-        # Record each successfully rendered circular graph for measured work units.
-        run = r"""sed -i '/^[[:space:]]*dev.off()$/a\   file.create(file.path(Sys.getenv("SIGNET_TMP_ROOT"), "tmpv", paste0(".signet-network-", i)))' script/netvis/circular.R
+    if name == 'expression':
+        # Write each marker only after the corresponding audited R script ends.
+        run = """printf '\nfile.create(file.path(Sys.getenv("SIGNET_TMP_ROOT"), "tmpt", ".signet-normalized"))\n' >> script/gexp_prep/gexp_prep.R
+printf '\nfile.create(file.path(Sys.getenv("SIGNET_TMP_ROOT"), "tmpt", ".signet-annotated"))\n' >> script/gexp_prep/gpos.R
 """ + run
-        # cloud=T leaves the official exports intact and skips only the blocking Shiny app.
-        run = f'''(
-if ! grep -q SIGNET_STAGE6_EXPORTS_COMPLETED script/netvis/netshiny.R; then
-  {{ printf '%s\\n' 'Sys.setenv(freq=trimws(Sys.getenv("freq")))' &&
-     cat script/netvis/netshiny.R &&
-     printf '\\ncat("SIGNET_STAGE6_EXPORTS_COMPLETED\\\\n")\\n'; }} > script/netvis/netshiny.R.workspace-tmp &&
-  mv -- script/netvis/netshiny.R.workspace-tmp script/netvis/netshiny.R
-fi &&
-{run}
-)'''
+    if name == 'visualize':
+        # Change only the uploaded script. Use R's own frequency formatting for
+        # upstream filenames, and publish the graph CSV only after exports exist.
+        run = r"""sed -i '1i Sys.setenv(freq=trimws(Sys.getenv("freq")))' script/netvis/netshiny.R
+sed -i '/^[[:space:]]*dev.off()$/a\   file.create(file.path(Sys.getenv("SIGNET_TMP_ROOT"), "tmpv", paste0(".signet-network-", i)))' script/netvis/circular.R
+cat >> script/netvis/netshiny.R <<'SIGNET_EXPORT_CHECK'
+frequency <- as.numeric(Sys.getenv("freq"))
+prefix <- Sys.getenv("resv")
+indices <- seq_len(as.integer(Sys.getenv("ntop")))
+expected <- c(paste0(prefix, "_top", indices, "_freq", frequency, ".html"),
+              paste0(prefix, "_circular_top", indices, "_freq", Sys.getenv("freq"), ".pdf"))
+stopifnot(all(file.exists(expected)), all(file.info(expected)$size > 0))
+edges <- paste0(prefix, "_edgelist_", frequency, ".txt")
+stopifnot(file.exists(edges), file.info(edges)$size > 0)
+stopifnot(file.copy(edges, file.path(dirname(prefix), "signet-edges.csv")))
+cat("SIGNET_STAGE6_EXPORTS_COMPLETED\n")
+SIGNET_EXPORT_CHECK
+""" + run
+    after = ''
+    if name == 'visualize':
+        # SIGNET's own plots are PDFs, which the app window cannot show. Ghostscript on the
+        # HPC3 node renders a PNG copy beside each one; if it is missing, the PDFs remain.
+        after = r'''if [ "$rc" -eq 0 ] && command -v gs >/dev/null 2>&1; then
+  for pdf in res/resv/signet_circular_top*.pdf res/resv/signet_enrichment_*.pdf; do
+    if [ -f "$pdf" ]; then
+      gs -q -dSAFER -dBATCH -dNOPAUSE -sDEVICE=png16m -r150 -sOutputFile="${pdf%.pdf}.png" "$pdf" \
+        || { rm -f "${pdf%.pdf}.png"; echo "[SIGNET-AGENT] could not render $pdf as PNG"; }
+    fi
+  done
+fi
+'''
     return f'''#!/bin/bash
 #SBATCH --job-name=signet-{name}-{run_id}
+#SBATCH --chdir={directory}/work
 #SBATCH --output={directory}/steps/{name}.out
 #SBATCH --error={directory}/steps/{name}.err
 {ssh_transport.runtime_module_prelude(config)}
@@ -815,7 +1040,7 @@ echo "[SIGNET-AGENT] START step={name} job=$SLURM_JOB_ID ts=$(date -Iseconds)"
 sed -i -e 's/^forcerm *=.*/forcerm = T/' -e "s/^ncore_local *=.*/ncore_local = ${{SLURM_CPUS_PER_TASK:-1}}/" config.ini
 {run}
 rc=$?
-echo "[SIGNET-AGENT] END step={name} exit=$rc ts=$(date -Iseconds)"
+{after}echo "[SIGNET-AGENT] END step={name} exit=$rc ts=$(date -Iseconds)"
 printf '%s %s\\n' "$rc" "$(date -Iseconds)" > {q(directory + '/steps/' + name + '.done')}
 '''
 
@@ -841,7 +1066,7 @@ def _upload(root, directory, token):
                'if [ -d "$D" ]; then [ "$(cat "$D/.owner" 2>/dev/null)" = "$T" ] || exit 3; '
                'else mkdir -p "$(dirname "$D")" && mkdir "$D" && printf \'%s\\n\' "$T" > "$D/.owner" || exit 4; fi; '
                'mkdir -p "$D/steps" && tar xzf - -C "$D"')
-    result = ssh_transport.remote(command, input=vm.bundle(root, signet._settings(root), directory, input_keys=()),
+    result = ssh_transport.remote(command, input=vm.bundle(root, signet._settings(root), directory),
                                   capture_output=True, timeout=120)
     if result.returncode == 3:
         raise StepError('conflict', f'{directory} already exists on HPC3 and belongs to another run; use a new run_id.')
@@ -892,7 +1117,8 @@ def _submit_script(config, run_id, name, step, directory, files, resources, opti
     # Results of earlier steps must still be in this run's folder (nobody cleaned it up).
     needs = ''.join(f'if [ ! -s "$D/work/"{q(path)} ]; then say missing_prior {q(path)}; exit 4; fi\n'
                     for path in (step.needs if needs is None else needs))
-    checks = _input_checks(files) + _expression_input_check(name, files)
+    checks = _input_checks(files)
+    formats = _input_check(name, files)
     job = _job_script(config, run_id, name, step, directory, binds, options, settings, dataset_plan)
     receipt = f"$D/steps/{name}.submission.{submission_token}" if submission_token else "/dev/null"
     receipt_setup = ''
@@ -906,7 +1132,7 @@ def _submit_script(config, run_id, name, step, directory, files, resources, opti
     sbatch = (f'sbatch --parsable --partition={config["partition"]} --cpus-per-task={resources["cpus"]} '
               f'--mem={resources["mem_gb"]}G --time={resources["time"]}{comment} "$D/steps/{name}.sbatch"')
     return _say() + f'''D={q(directory)}
-{receipt_setup}{checks}{needs}if [ ! -s {q(config['image'])} ]; then say not_ready container; exit 5; fi
+{receipt_setup}{checks}{needs}{formats}if [ ! -s {q(config['image'])} ]; then say not_ready container; exit 5; fi
 if ! command -v sbatch >/dev/null 2>&1; then say not_ready sbatch; exit 5; fi
 {keep}if [ -e "$D/steps/{name}.job" ]; then say conflict submitted; exit 6; fi
 say attempt_started yes
@@ -1003,7 +1229,7 @@ def _output_check(record, response=None):
         record.pop('output_revalidation_requested_at', None)
 
 
-def _output_guard(root, record, *, ownership_only=False):
+def _output_guard(root, record, *, ownership_only=False, allow_mount_alias=False):
     from agent.runtime.workspace_history import _json
     config = _environment()
     directory = record.get('remote_dir')
@@ -1096,7 +1322,7 @@ def revalidate(run_id, name, *, expected_job_id, expected_attempt):
     return status(run_id, name, refresh=True)
 
 @_one_at_a_time
-def submit(run_id, name, inputs, resources=None, options=None):
+def submit(run_id, name, inputs, resources=None, options=None, *, settings_override=None, clinical=None):
     """Submit one step of a run as a Slurm job and return its record (state "submitted" with job_id).
 
     options answers the step's SIGNET prompts (see Step.prompts); missing ones take their default.
@@ -1105,7 +1331,8 @@ def submit(run_id, name, inputs, resources=None, options=None):
     root = _root(run_id)
     from agent.runtime.workspace_rerun import guard_submission
     guard_submission(root, name)
-    if signet._settings(root).get('cohort') != step.cohort:
+    current = signet._settings(root)
+    if current.get('cohort') != step.cohort:
         raise StepError('invalid_request', f'Step {name} needs a {step.cohort} run.')
     request = _resources(step, resources)
     answers = _options(step, options)
@@ -1128,7 +1355,8 @@ def submit(run_id, name, inputs, resources=None, options=None):
     if active:
         raise StepError('conflict', f'Step {active} of this run is still active.')
     _prerequisites(root, step)
-    _check_current(step, signet._settings(root))
+    overrides = validate_settings(step.settings, {} if settings_override is None else settings_override)
+    _check_current(step, {**current, **overrides})
     config = _environment()
     if workspace_retry is not None:
         from agent.runtime.workspace_genotype import _retry_environment
@@ -1140,7 +1368,7 @@ def submit(run_id, name, inputs, resources=None, options=None):
         dataset_plan = staging_plan(root, directory, attempt=attempt)
         if dataset_plan and inputs != dataset_plan['inputs']:
             raise StepError('invalid_request', 'Review the input namespace for this genotype attempt before submitting.')
-    checked = _inputs(step, inputs, (config['root'] + '/refdata', config['source'] + '/example', directory))
+    checked = _inputs(step, inputs, _input_roots(config, root, directory))
     if previous:
         _ensure_stopped(previous)  # before uploading config.ini or touching any old result
         archived = _attempt_path(root, name, attempt - 1)
@@ -1156,24 +1384,26 @@ def submit(run_id, name, inputs, resources=None, options=None):
     try:
         # Inputs, plus the keys this step reads from earlier results of the run (as local work/
         # paths; the upload rewrites them to the run's HPC3 folder).
-        current = signet._settings(root)
         fixed = {key: value.replace('{image}', config['image']).replace('{partition}', config['partition'])
                  for key, value in step.fixed.items()}
-        signet._update(root, {**{key: path for key, (path, _) in checked.items()},
+        signet._update(root, {**overrides, **{key: path for key, (path, _) in checked.items()},
                               **{key: str(root / 'work' / _resolve(rel, current)) for key, rel in step.links.items()},
                               **fixed})
         token = _owner(root, directory)
         record = {'step': name, 'run_id': run_id, 'flag': step.flag, 'remote_dir': directory,
                   'inputs': {key: path for key, (path, _) in checked.items()}, 'resources': request,
                   'submission_token': submission_token,
-                  'partition': config['partition'], 'image': config['image'], 'submitted_at': _now()}
+                  'partition': config['partition'], 'image': config['image'], 'submitted_at': _now(),
+                  'attempt': attempt}
         if answers:
             record['options'] = answers   # kept for reproducibility: the answers SIGNET was given
+        if clinical:
+            record['clinical'] = clinical   # the researcher's table and choices behind the run's clinical copy
         settings = signet._settings(root)
-        record['settings'] = {key: settings[key] for key in step.settings}
         if any('{' in path for path in step.required):
             record['required_outputs'] = [_resolve(path, settings) for path in step.required]
         if name == 'visualize':
+            record.setdefault('required_outputs', [_resolve(path, settings) for path in step.required])
             for number in range(1, int(settings['ntop']) + 1):
                 prefix = f'res/resv/signet_top{number}_freq{settings["freq"]}'
                 record['required_outputs'].extend((prefix + '.html', prefix + '_name.txt',
@@ -1181,8 +1411,8 @@ def submit(run_id, name, inputs, resources=None, options=None):
         if dataset_plan:
             from agent.runtime.workspace_inputs import REQUIRED
             record['required_outputs'] = list(step.required) + list(REQUIRED)
+        record['settings'] = {key: settings[key] for key in step.settings}
         if previous:
-            record['attempt'] = attempt
             # A refused submission has no job of its own; retain the last real ID across it.
             record['previous_job_id'] = previous.get('job_id') or previous.get('previous_job_id')
         archived = _attempt_path(root, name, attempt - 1) if previous else None
@@ -1254,6 +1484,8 @@ def submit(run_id, name, inputs, resources=None, options=None):
             hint = (f' (looked for {values.get("missing_file")}; set {_chromosome_key(step)} to the chromosome you have'
                     ' files for)') if key in step.prefixes else ''
             raise StepError('invalid_request', f'{key} is missing, empty, or reached through a link on HPC3{hint}.')
+        if 'invalid_input' in values:
+            raise StepError('invalid_request', _input_problem(name, values['invalid_input']))
         if 'missing_prior' in values:
             raise StepError('invalid_request', f'{values["missing_prior"]} from an earlier step is missing in this '
                             'run\'s HPC3 folder; compute that step again in a new run.')
@@ -1406,15 +1638,17 @@ def status(run_id, name, refresh=False):
             _save(root, record)
         return reply
     record['checked_at'] = time.time()
+    record.pop('download_pending', None)
     queued, accounted = values.get('squeue', ''), values.get('sacct', '').split(' ')[0]
     slurm = queued or accounted
     record['slurm_state'] = slurm or None
     measured = {}
     for key, value in values.items():
-        if key.startswith('progress_') and re.fullmatch(r'[0-9]+ [0-9]+', value):
-            done_count, total = map(int, value.split())
-            if 0 <= done_count <= total and total > 0:
-                measured[key.removeprefix('progress_')] = value
+        if not key.startswith('progress_') or not re.fullmatch(r'[0-9]+ [0-9]+', value):
+            continue
+        done, total = map(int, value.split())
+        if 0 <= done <= total and total > 0 and record.get('job_id'):
+            measured[key.removeprefix('progress_')] = value
     if measured:
         record.setdefault('progress', {}).update(measured)
     missing = [path for i, path in enumerate(_required(step, record)) if values.get(f'output_{i}') != 'yes']
@@ -1609,7 +1843,7 @@ def _finish(root, record, step, done, missing, hints):
         hints = [*hints, 'The official Stage 6 export completion marker is missing.']
     if exit_code != '0' or missing or hints:
         reason = (f'signet exited with {exit_code}.' if exit_code != '0' else
-                  'Required outputs are missing.' if missing else 'The log reports an error.')
+                  MISSING_OUTPUTS_REASON if missing else 'The log reports an error.')
         _change(record, 'failed', finished_at=_now(), exit_code=exit_code, missing_outputs=missing,
                 failure_hints=hints, reason=reason)
         return
@@ -1628,7 +1862,12 @@ def _finish(root, record, step, done, missing, hints):
         _change(record, 'completed', finished_at=_now(), exit_code='0', missing_outputs=[], failure_hints=[],
                 reason='Outputs present and logs clean; person-level results stay on HPC3. This is not scientific validation.')
         return
-    _change(record, 'validating', exit_code='0')
+    _change(record, 'validating', exit_code='0', download_pending=True,
+            reason='Results passed the checks on HPC3; downloading them now.')
+    _save(root, record)  # The local analysis view can see this while the transfer runs.
+    required = tuple('work/' + path for path in _required(step, record))
+    # Only recover results that were already present before this transfer.
+    already_downloaded = all((root / path).is_file() and (root / path).stat().st_size for path in required)
     try:
         q = shlex.quote
         checking_outputs = bool(record.get('output_revalidation_requested_at'))
@@ -1642,25 +1881,32 @@ def _finish(root, record, step, done, missing, hints):
         if result.returncode:
             raise OSError('tar failed')
         record['outputs'] = (_restore_revalidated_outputs(root, result.stdout, step, record) if checking_outputs
-                             else vm.restore_outputs(root, result.stdout))
-    except (OSError, ValueError, tarfile.TarError) as error:
+                             else vm.restore_outputs(root, result.stdout, required=required))
+    except (OSError, ValueError, tarfile.TarError, EOFError, subprocess.TimeoutExpired) as error:
         if record.get('output_revalidation_requested_at'):
             record['reason'] = f'The saved outputs could not be downloaded and verified ({error}); check status again. No analysis was resubmitted.'
             return
-        local = [root / 'work' / path for path in _required(step, record)]
-        if not all(path.is_file() and path.stat().st_size for path in local):
+        if not already_downloaded:
             record['reason'] = f'Results are ready on HPC3 but could not be downloaded yet ({error}); check status again.'
             return
-        # An earlier check already downloaded them (restore_outputs never overwrites).
-        folder = root / step.download
-        record['outputs'] = sorted(str(p.relative_to(root)) for p in folder.rglob('*') if p.is_file())
+        record['outputs'] = sorted(str(path.relative_to(root)) for path in
+                                   (root / step.download).rglob('*') if path.is_file())
+    if record['step'] == 'visualize':
+        from agent.runtime.visualization import read_graph
+        try:
+            read_graph(root / step.download / 'signet-edges.csv', int(record['settings']['ntop']))
+        except (OSError, ValueError, KeyError) as error:
+            record.pop('download_pending', None)
+            _change(record, 'failed', finished_at=_now(), reason=f'Invalid visualization output: {error}')
+            return
+    record.pop('download_pending', None)
     _change(record, 'completed', finished_at=_now(), missing_outputs=[], failure_hints=[],
             reason='Outputs present and logs clean. This is not scientific validation; review the results.')
 
 
 @_one_at_a_time
 def cancel(run_id, name, *, expected_job_id=None, expected_attempt=None):
-    """Cancel the step's own Slurm job (checked by job name), and for signet -n the jobs SIGNET
+    """Cancel the step's owned Slurm job (checked by token, marker, name and directory), and for signet -n the jobs SIGNET
     submitted inside this run's folder. Finished steps cannot be cancelled."""
     step = _step(name)
     root = _root(run_id)
@@ -1678,14 +1924,32 @@ def cancel(run_id, name, *, expected_job_id=None, expected_attempt=None):
         raise StepError('conflict', f'Step {name} already ended as {record["state"]}.')
     if not record.get('job_id'):
         raise StepError('conflict', 'No job ID is known yet; check status first.')
-    _environment()
+    config = _environment()
+    directory = record.get('remote_dir')
+    try:
+        owner_path = signet._no_links(root / 'steps/remote.owner')
+        owner = json.loads(owner_path.read_text())
+    except (OSError, ValueError) as error:
+        raise StepError('conflict', 'The original remote folder ownership cannot be verified.') from error
+    if (directory not in (config['workRoot'] + '/' + run_id, config['workRoot'] + '/runs/' + run_id)
+            or not isinstance(owner, dict) or owner.get('remote_dir') != directory
+            or not isinstance(owner.get('token'), str) or not re.fullmatch(r'[a-f0-9]{32}', owner['token'])
+            or not isinstance(record['job_id'], str) or not re.fullmatch(r'[0-9]+', record['job_id'])):
+        raise StepError('conflict', 'The saved job belongs to a different or unverified remote environment.')
     expected = f'signet-{name}-{run_id}'
-    script = _say() + (f'D={shlex.quote(record["remote_dir"])}\nj={shlex.quote(record["job_id"])}\n'
-                       'parent_name="$(squeue -h -j "$j" -o %j 2>/dev/null)" || { say cancel_check_failed yes; exit 9; }\n'
-                       f'if [ "$parent_name" = {shlex.quote(expected)} ]; then '
-                       'scancel "$j" && say cancel requested || { say cancel_failed yes; exit 10; }; '
-                       'else say cancel not_queued; fi\n'
-                       + _children_script(step))
+    q = shlex.quote
+    script = _say() + f'''D={q(directory)}
+j={q(record['job_id'])}
+T={q(owner['token'])}
+M="$D/steps/{name}.job"
+[ "$(readlink -f -- "$D")" = "$D" ] && [ ! -L "$D/.owner" ] && [ -f "$D/.owner" ] && [ "$(head -c 129 -- "$D/.owner")" = "$T" ] &&
+[ "$(readlink -f -- "$M")" = "$M" ] && [ -f "$M" ] && [ "$(head -c 128 -- "$M")" = "$j" ] || {{ say cancel_owner_mismatch yes; exit 11; }}
+parent="$(squeue -h -u "$(id -un)" -j "$j" -o '%j|%Z' 2>/dev/null)" || {{ say cancel_check_failed yes; exit 9; }}
+if [ -z "$parent" ]; then say cancel not_queued
+elif [ "$parent" = {q(expected + '|' + directory + '/work')} ]; then
+  scancel "$j" && say cancel requested || {{ say cancel_failed yes; exit 10; }}
+else say cancel_owner_mismatch yes; exit 11; fi
+''' + _children_script(step)
     def unconfirmed(reason):
         record.pop('finished_at', None)
         _change(record, 'cancelling', cancel_requested_at=record.get('cancel_requested_at') or _now(),
@@ -1697,6 +1961,8 @@ def cancel(run_id, name, *, expected_job_id=None, expected_attempt=None):
         reason = 'Connection interrupted while requesting cancellation; its effect is unknown. Check status before retrying.'
         unconfirmed(reason)
         raise StepError('remote_failed', reason) from error
+    if values.get('cancel_owner_mismatch') == 'yes':
+        raise StepError('conflict', 'The remote folder, job marker or scheduler job does not belong to this saved attempt; no cancellation command was sent.')
     if values.get('cancel_check_failed') == 'yes':
         raise StepError('remote_failed', 'The scheduler could not confirm the job identity; no cancellation command was sent.')
     failed_child = values.get('child_cancel_failed') or values.get('child_cancel_check_failed')

@@ -58,6 +58,15 @@ class WorkspaceDatasetsTest(unittest.TestCase):
         finally:
             connection.close()
 
+    def test_delete_http_requires_token_and_local_origin_and_preserves_data_on_rejection(self):
+        route = '/signet/datasets/example-chr1'
+        for authenticated, origin in ((False, True), (True, False), (False, False)):
+            self.assertEqual(self.request('DELETE', route, authenticated=authenticated, origin=origin)[0], 403)
+            self.assertEqual(self.request('GET')[1]['datasets'][0]['id'], 'example-chr1')
+        self.assertEqual(self.request('DELETE', route), (200, {'deleted': 'example-chr1'}))
+        self.assertEqual(self.request('GET')[1]['datasets'], [])
+        self.assertEqual(self.seed_path.read_bytes(), self.seed_bytes)
+
     def test_read_without_state_preserves_seed_and_exposes_canonical_choices(self):
         status, catalog = self.request('GET')
         self.assertEqual(status, 200)

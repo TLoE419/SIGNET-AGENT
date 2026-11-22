@@ -82,7 +82,12 @@ async function until(check,description='Local environment condition timed out',t
       out='@@workspace_path\t/home/testuser/mock-signet\n@@container\t'+outcome+'\n'
        +(containerJob?'@@container_job\t'+containerJob.id+'\n':'');
      }
+     // The Python service's installer (agent/runtime/hpc.py) starts a background install.
      else if(script.includes('SIGNET_INSTALL')){source=true;out='@@workspace_path\t/home/testuser/mock-signet\n@@signet\tstarted\n'}
+     else if(script.includes('say workspace_path "$W"'))out=Object.entries({
+      workspace_path:'/home/testuser/mock-signet',signet:'yes',signet_integrity:'verified',signet_revision:inventory.revision,
+      signet_example:'verified',file_container:'4096',
+     }).map(([key,value])=>`@@${key}\t${value}\n`).join('');
      else if(script.includes('Rscript -e')&&failVerification){err='MOCK: SIGNET settings verification failed: config.ini unreadable\n';code=1}
      setTimeout(()=>{if(stream.destroyed)return;if(out)stream.write(out);if(err)stream.stderr.write(err);stream.exit(code);stream.end()},delay);
     });
@@ -129,7 +134,7 @@ async function until(check,description='Local environment condition timed out',t
  const connectionState=async()=> (await js('window.signetDesktop.ssh.getSnapshot()')).value.connection?.status;
  const observeEnvironment=phases=>js(`window.envPhases=${JSON.stringify(phases)};window.signetDesktop.environment.subscribe(s=>window.envPhases.push(s.phase));true;`);
  const originalGeometry=await geometry();
- assert.deepEqual(originalGeometry,[1650,894,68,542]);
+ assert.deepEqual(originalGeometry,[1650,894,53,542]);
  await clickSelector('[data-nav-target="settings"]');
  await observeEnvironment([]);
  const saved=await js(`window.signetDesktop.ssh.saveProfile(${JSON.stringify({name:'Local mock',host:'127.0.0.1',port,username:'testuser',auth:{method:'private-key',privateKeyPath:keyPath}})})`);assert.ok(saved.ok);
@@ -154,6 +159,7 @@ async function until(check,description='Local environment condition timed out',t
  assert.deepEqual(setupActionCalls,[],'Automatic inspection does not submit download jobs');
  await until(()=>js(`!!document.querySelector('[data-setup-action="signet"]:not(:disabled)')`));
  await js(`(()=>{const button=document.querySelector('[data-setup-action="signet"]');button.click();button.click()})()`);
+ await until(()=>js(`document.querySelector('.ml-remote-readiness')?.dataset.phase==='needs-install'&&window.envPhases.filter(p=>p==='checking').length>=2`));
  await settled(5,{signet_source:'ok',container:'missing'});
  assert.equal(commands.filter(script=>script.includes('SIGNET_INSTALL')).length,1,'Double-clicking source installation calls the shared Python installer once');
  assert.equal(await js(`'install' in window.signetDesktop.environment`),false,'the desktop bridge has no second installer');
@@ -170,9 +176,11 @@ async function until(check,description='Local environment condition timed out',t
  await until(()=>js(`!!document.querySelector('.ssh-environment-modal[open]')`));
  assert.equal(await js(`[...document.querySelectorAll('dialog[open] button')].some(b=>b.textContent.startsWith('Install'))`),false,'settings must not offer installation');
  const {promisify}=require('node:util'),execFile=promisify(require('node:child_process').execFile),broker=running.backend.options.sshBroker;
- const pythonEnvironment=name=>execFile(running.backend.options.python,['-c',`import json; from agent.runtime import ssh_transport; print(json.dumps(ssh_transport.${name}()))`],{cwd:path.resolve(__dirname,'../..'),env:{...process.env,SIGNET_SSH_BROKER:broker.path,SIGNET_SSH_BROKER_TOKEN:broker.token},timeout:10000});
+ const pythonCall=code=>execFile(running.backend.options.python,['-c',`import json; ${code}`],{cwd:path.resolve(__dirname,'../..'),env:{...process.env,SIGNET_SSH_BROKER:broker.path,SIGNET_SSH_BROKER_TOKEN:broker.token},timeout:10000});
+ const pythonEnvironment=name=>pythonCall(`from agent.runtime import ssh_transport; print(json.dumps(ssh_transport.${name}()))`);
  assert.equal(JSON.parse((await pythonEnvironment('setup_environment')).stdout).partition,'mock','setup checks work before the container exists');
  await assert.rejects(pythonEnvironment('environment'),/Prepare the SIGNET environment/,'science stays blocked until verified');
+ assert.equal(await js(`'install' in window.signetDesktop.environment`),false,'the desktop bridge has no installer');
  assert.equal(commands.some(s=>s.includes(' pull ')||s.includes('library://')),false,'the login node must not download the container');
  assert.equal(commands.filter(script=>script.includes('SIGNET_INSTALL')).length,1,'the installer is called only by the explicit source button');
  image=true;await click('Check environment');

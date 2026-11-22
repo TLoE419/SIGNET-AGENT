@@ -19,6 +19,26 @@ class RerunTest(unittest.TestCase):
     finish_job = fixtures.StepsTest.finish_job
     genotype_inputs = fixtures.StepsTest.genotype_inputs
 
+    def test_submission_guard_accepts_both_reviewed_rerun_formats(self):
+        for plan in ({'step': 'adjust'}, {'from_step': 'adjust'}):
+            with self.subTest(plan=plan):
+                (self.root / 'rerun.json').write_text(json.dumps(plan))
+                with patch.object(rerun, 'guard_run_dataset'), patch.object(jobs, 'run_steps', return_value={}):
+                    rerun.guard_submission(self.root, 'adjust')
+                    with self.assertRaises(jobs.StepError):
+                        rerun.guard_submission(self.root, 'network')
+                with patch.object(rerun, 'guard_run_dataset'), patch.object(jobs, 'run_steps', return_value={'adjust': 'completed'}):
+                    rerun.guard_submission(self.root, 'network')
+        (self.root / 'rerun.json').write_text('{}')
+        with patch.object(rerun, 'guard_run_dataset'), self.assertRaises(jobs.StepError):
+            rerun.guard_submission(self.root, 'adjust')
+
+    def test_conversation_rerun_does_not_repeat_workspace_staging(self):
+        (self.root / 'rerun.json').write_text(json.dumps({'source_run': 'original', 'from_step': 'adjust'}))
+        with patch.object(rerun, '_stage_remote_source') as stage:
+            rerun.stage_remote(self.root, '/remote/child', 'token')
+            stage.assert_not_called()
+
     def genuine_upstream_branch(self, name='guarded_branch'):
         """Submit only fake-scheduler jobs, retaining their real recorded control files."""
         from agent.runtime import workspace_genotype as workspace

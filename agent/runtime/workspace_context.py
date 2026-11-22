@@ -1,4 +1,8 @@
 """Bounded, metadata-only chat context; never infer source from a bare run ID."""
+from contextvars import ContextVar
+
+CHAT_CONTEXT = ContextVar("workspace_navigation_context", default=None)
+
 import re
 
 

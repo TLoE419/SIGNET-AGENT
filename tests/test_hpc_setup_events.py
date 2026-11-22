@@ -99,7 +99,7 @@ class SetupWatchTest(unittest.TestCase):
         token = hpc._CONFIG.set(config)
         try:
             check = hpc._check_script(str(self.root))
-            self.assertLess(check.index('SIGNET_SETUP_WATCH'), check.index('sha256sum -c'))
+            self.assertLess(check.index('SIGNET_SETUP_WATCH'), check.index('if [ ! -e "$S" ]'))
             capture = subprocess.run(['bash', '-s'], input=hpc._setup_watch_script(str(self.root)),
                                      text=True, capture_output=True, check=True)
             cursor = hpc._parse(capture.stdout.encode())['setup_cursor']

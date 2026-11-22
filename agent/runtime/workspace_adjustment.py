@@ -1,4 +1,4 @@
-"""Read a completed workspace adjustment from the files collected with that job."""
+"""Read completed adjustment aggregates on HPC3; individual results remain there."""
 
 import csv
 import math
@@ -149,8 +149,5 @@ def _local_completed_result(run_id):
 
 
 def completed_result(run_id):
-    root = signet._run(run_id)
-    if workspace_genotype.run_history(root)['jobs']['adjust'].get('remote_outputs'):
-        from agent.runtime import workspace_projection
-        return workspace_projection.completed_result(run_id, '3')
-    return _local_completed_result(run_id)
+    from agent.runtime.workspace_projection import completed_result as project
+    return project(run_id, 3)

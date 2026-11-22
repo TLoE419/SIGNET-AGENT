@@ -1769,6 +1769,7 @@
     } else stage3RemotePlot.removeAttribute("src");
     stage3Plot.toggleAttribute("hidden", Boolean(remotePlot) || !pca?.points?.length);
     if (remotePlot) {
+      stage3Plot.querySelector('.s3-points').replaceChildren();
       const variance = new Intl.NumberFormat(locale, {maximumFractionDigits: 2});
       stage3Legend.textContent = (inEnglish ? "Rendered on HPC3 · PC1 / PC2 explained variance: " : "遠端繪圖 · 第 1／2 主成分解釋變異：") +
         (pca.variance_explained ?? []).map(value => variance.format(value) + "%").join(" / ");

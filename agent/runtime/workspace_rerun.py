@@ -198,6 +198,9 @@ def stage_remote(root, directory, token):
     if not path.exists():
         return
     plan = json.loads(path.read_text())
+    if 'source_run' in plan and plan.get('from_step') in jobs.STEPS:
+        # Conversation reruns already copy their upstream files in analysis_rerun._seed.
+        return
     return _stage_remote_source(plan['source_run_id'], root, directory, token, plan)
 
 
@@ -336,7 +339,9 @@ def guard_submission(root, name):
     if not path.exists():
         return
     plan = json.loads(path.read_text())
-    target = plan['step']
+    target = plan.get('step') or plan.get('from_step')
+    if target not in jobs.STEPS:
+        raise jobs.StepError('conflict', 'The rerun stage could not be verified; create a new reviewed run.')
     if name != target and jobs.run_steps(root.name).get(target) != 'completed':
         raise jobs.StepError('conflict', 'Complete the reviewed rerun stage before submitting downstream stages.')
 
