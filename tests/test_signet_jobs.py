@@ -22,6 +22,7 @@ from concurrent.futures import ThreadPoolExecutor
 import os
 from pathlib import Path
 import stat
+import sys
 import subprocess
 import tempfile
 import threading
@@ -270,6 +271,7 @@ class StepsTest(unittest.TestCase):
             self.assertEqual((folder / f'expression.{suffix}').read_text(), f'old {suffix}\n')
             self.assertFalse((folder / f'expression.attempt1.{suffix}').exists())
 
+    @patch.object(steps, 'DOWNLOADED_STEPS', ('network', 'visualize'))
     def test_unified_history_reads_attempts_created_by_the_existing_retry_flow(self):
         from agent.runtime import workspace_history
         self.failed_expression()
@@ -301,6 +303,7 @@ class StepsTest(unittest.TestCase):
         self.assertEqual(len(self.calls), remote_calls)
         self.assertEqual({path: path.read_bytes() for path in files}, originals)
 
+    @patch.object(steps, 'DOWNLOADED_STEPS', ('network', 'visualize'))
     def test_retry_cannot_download_previous_attempt_outputs_remote_or_local(self):
         steps.submit('step_test', 'expression', self.inputs)
         self.finish_job(err='Error in fread(x): first attempt failed\n')
@@ -389,6 +392,7 @@ class StepsTest(unittest.TestCase):
         self.assertEqual(self.code_of(steps.submit, 'step_test', 'expression', self.inputs), 'conflict')
         self.assertFalse(any('tar xzf' in call for call in self.calls[calls:]))
 
+    @patch.object(steps, 'DOWNLOADED_STEPS', ('network', 'visualize'))
     def test_missing_outputs_can_be_rechecked_without_resubmitting(self):
         steps.submit('step_test', 'expression', self.inputs)
         self.finish_job(outputs=())
@@ -437,14 +441,18 @@ class StepsTest(unittest.TestCase):
                 self.assertNotIn('missing_outputs_since', result)
         self.assertFalse(any('sbatch --parsable' in call or 'tar czf' in call for call in self.calls))
 
-    def test_saved_visualization_missing_output_failure_recovers_on_normal_poll(self):
+    def test_saved_visualization_missing_output_failure_requires_explicit_recheck(self):
         folder = self.remote_dir / 'steps'
         folder.mkdir(parents=True)
         (folder / 'visualize.done').write_text('0 2026-11-01T10:00:00\n')
         self.slurm(sacct='COMPLETED')
         record = {'step': 'visualize', 'run_id': 'step_test', 'state': 'failed', 'job_id': '12345',
                   'remote_dir': str(self.remote_dir), 'settings': {'ntop': '1'}, 'exit_code': '0',
-                  'reason': 'Required outputs are missing.'}
+                  'reason': 'Required outputs are missing.',
+                  'missing_outputs': list(steps.STEPS['visualize'].required)}
+        token = steps._owner(self.root, str(self.remote_dir))
+        (self.remote_dir / '.owner').write_text(token)
+        (folder / 'visualize.job').write_text('12345')
         steps._save(self.root, record)
         analysis = steps.analysis_view(self.root, 'TCGA', {'visualize': record}, include_attempts=False)
         self.assertEqual(analysis['steps'][-1]['phase'], 'validating')
@@ -453,7 +461,9 @@ class StepsTest(unittest.TestCase):
             path = self.remote_dir / 'work' / relative
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(edges if path.suffix == '.csv' else 'plot\n')
-        result = steps.status('step_test', 'visualize')
+        (folder / 'visualize.out').write_text('SIGNET_STAGE6_EXPORTS_COMPLETED\n')
+        self.assertEqual(steps.status('step_test', 'visualize')['state'], 'failed', 'Polling cannot silently erase a recorded failure')
+        result = steps.revalidate('step_test', 'visualize', expected_job_id='12345', expected_attempt=1)
         self.assertEqual((result['state'], result['job_id']), ('completed', '12345'))
         self.assertEqual((self.root / 'work/res/resv/signet-edges.csv').read_text(), edges)
         self.assertEqual(sum('tar czf' in call for call in self.calls), 1)
@@ -542,6 +552,7 @@ class StepsTest(unittest.TestCase):
         self.assertEqual(len(self.calls), count)
         self.assertEqual(steps.status('step_test', 'expression', refresh=True)['state'], 'running')
 
+    @patch.object(steps, 'DOWNLOADED_STEPS', ('network', 'visualize'))
     def test_completed_job_with_outputs_is_validated_and_kept_remote(self):
         steps.submit('step_test', 'expression', self.inputs)
         self.finish_job()
@@ -571,6 +582,7 @@ class StepsTest(unittest.TestCase):
             self.assertEqual(record[key], expected)
             self.assertFalse((self.project / 'runs' / run_id / 'work/res/rest/signet_gexp').exists())
 
+    @patch.object(steps, 'DOWNLOADED_STEPS', ('network', 'visualize'))
     def test_completed_job_waits_for_a_complete_exit_marker_before_downloading(self):
         for index, marker in enumerate((None, '', '0', '0 2026-11-01T10:')):
             with self.subTest(marker=marker):
@@ -595,6 +607,7 @@ class StepsTest(unittest.TestCase):
                 self.assertFalse((self.project / 'runs' / run_id / 'work/res/rest/signet_gexp').exists())
                 self.assertEqual((self.remote_dir / 'work/res/rest/signet_gexp').read_text(), 'data\n')
 
+    @patch.object(steps, 'DOWNLOADED_STEPS', ('network', 'visualize'))
     def test_refresh_recovers_a_legacy_missing_marker_failure_without_resubmitting(self):
         record = steps.submit('step_test', 'expression', self.inputs)
         self.finish_job()
@@ -781,6 +794,7 @@ class StepsTest(unittest.TestCase):
         self.assertEqual(record['state'], 'unknown')
         self.assertNotIn('job_id', record)
 
+    @patch.object(steps, 'DOWNLOADED_STEPS', ('network', 'visualize'))
     def test_simultaneous_status_checks_verify_remote_results_once(self):
         steps.submit('step_test', 'expression', self.inputs)
         self.finish_job()
@@ -820,6 +834,7 @@ class StepsTest(unittest.TestCase):
                 self.assertEqual(record['state'], 'unknown')
                 self.assertNotIn('job_id', record)
 
+    @patch.object(steps, 'DOWNLOADED_STEPS', ('network', 'visualize'))
     def test_results_already_downloaded_complete_instead_of_staying_validating(self):
         steps.submit('step_test', 'expression', self.inputs)
         self.finish_job()
@@ -1250,6 +1265,7 @@ class StepsTest(unittest.TestCase):
         self.assertEqual(record['state'], 'failed')
         self.assertIn('Some of the jobs are incomplete', record['failure_hints'][0])
 
+    @patch.object(steps, 'DOWNLOADED_STEPS', ('network', 'visualize'))
     def test_genotype_completed_keeps_resg_remote(self):
         steps.update_settings('step_test', {'restrict.tcga.geno': 1})
         steps.submit('step_test', 'genotype', self.genotype_inputs())
@@ -1479,6 +1495,7 @@ class StepsTest(unittest.TestCase):
         self.assertIn('tmp/tmpg/clean_Genotype.fam', str(caught.exception))
         self.assertFalse((self.fake / 'sbatch_args').exists())
 
+    @patch.object(steps, 'DOWNLOADED_STEPS', ('network', 'visualize'))
     def test_adjust_completed_keeps_resa_remote(self):
         steps.submit('step_test', 'adjust', self.adjust_ready())
         for relative in steps.STEPS['adjust'].required:
@@ -1668,6 +1685,7 @@ class StepsTest(unittest.TestCase):
         self.assertEqual(record['state'], 'failed')
         self.assertIn("doesn't exist", record['failure_hints'][0])
 
+    @patch.object(steps, 'DOWNLOADED_STEPS', ('network', 'visualize'))
     def test_cis_result_name_follows_alpha_and_is_fixed_at_submit(self):
         self.cis_ready()
         steps.update_settings('step_test', {'alpha.cis': 0.01, 'nperms': 200, 'upstream': 0, 'downstream': 5000})
@@ -2161,6 +2179,25 @@ class StepsTest(unittest.TestCase):
         executor = self.fake / 'bin/apptainer'
         executor.write_text('#!/bin/bash\ntrue\n')
         executor.chmod(0o700)
+        # This fixed batch script targets GNU sed on Linux; macOS sed has a different -i API.
+        sed = self.fake / 'bin/sed'
+        sed.write_text('#!' + sys.executable + '\n' + r'''import pathlib, subprocess, sys
+args = sys.argv[1:]
+if len(args) == 3 and args[0] == '-i':
+    command, filename = args[1:]
+    path = pathlib.Path(filename)
+    text = path.read_text()
+    if command.startswith('1i '):
+        path.write_text(command[3:] + '\n' + text)
+    elif command.startswith('/^[[:space:]]*dev.off()$/a\\'):
+        addition = command.split('a\\', 1)[1].strip()
+        path.write_text(''.join(line + (addition + '\n' if line.strip() == 'dev.off()' else '') for line in text.splitlines(True)))
+    else:
+        raise ValueError('Unexpected fixture sed command')
+else:
+    sys.exit(subprocess.run(['/usr/bin/sed', *args]).returncode)
+''')
+        sed.chmod(0o700)
         self.assertEqual(self.remote('bash ' + str(job)).returncode, 0)
         patched = (self.remote_dir / 'work/script/netvis/netshiny.R').read_text()
         self.assertTrue(patched.startswith('Sys.setenv(freq=trimws(Sys.getenv("freq")))\n'))
@@ -2222,17 +2259,18 @@ class StepsTest(unittest.TestCase):
         self.assertEqual(step_report.report('step_test', '-t')['state'], 'not_started')
         steps.submit('step_test', 'expression', self.inputs)
         running = step_report.report('step_test', 'expression')
-        self.assertEqual((running['flag'], running['state'], running['job_id']), ('-t', 'submitted', '12345'))
-        self.assertEqual(running['inputs'], {'gexp.file': 'example_gexp', 'pmap.file': 'gencode.v22.annotation.gtf'})
+        self.assertEqual((running['flag'], running['state']), ('-t', 'submitted'))
+        self.assertNotIn('job_id', running)
+        self.assertNotIn('inputs', running, 'The assistant receives aggregate facts, not selected file paths')
         self.assertNotIn('log_tail', running, 'logs are read only for a failed step')
         self.finish_job(exit_code='1', outputs=(), err=f'Error in fread({self.gexp}): sample TCGA-95-7947-01C-01D missing\n')
         (self.remote_dir / 'steps/expression.out').write_text('Removed 1 samples: TCGA-44-2668-01C\n')
         self.assertEqual(steps.status('step_test', 'expression', refresh=True)['state'], 'failed')  # as the card sees it
-        failed = dispatch_tool('get_step_report', {'run_id': 'step_test', 'step': '-t'})
+        failed = step_report.report('step_test', '-t')
         self.assertEqual(failed['state'], 'failed')
         text = json.dumps(failed, ensure_ascii=False)
-        self.assertIn('Error in fread(…/example_gexp)', text)
-        self.assertIn('TCGA-[masked]', text)
+        self.assertIn('scientific_runtime_error', failed['failure']['classifications'])
+        self.assertNotIn('Error in fread', text, 'Original diagnostic text stays private')
         self.assertNotIn('TCGA-95', text)
         self.assertNotIn('TCGA-44', text)
         self.assertNotIn(str(self.hpc), text, 'no HPC3 folder reaches the model')
@@ -2253,7 +2291,7 @@ class StepsTest(unittest.TestCase):
         self.assertEqual((outputs['signet_gexp']['rows'], outputs['signet_gexp']['columns']), (2, 3))
         self.assertEqual(outputs['signet_gexp']['columns_are'], 'genes')
         self.assertEqual(done['summary']['inputs']['gexp.file'],
-                         {'file': 'example_gexp', 'samples': 3, 'genes_after_dropping_the_last_5_rows': 3})
+                         {'file': 'gexp.file', 'samples': 3, 'genes_after_dropping_the_last_5_rows': 3})
         self.assertNotIn('TCGA-', json.dumps(done))
         self.assertNotIn('1.5', json.dumps(done['summary']), 'no values, only counts')
         steps.link_conversation('step_test', 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee')

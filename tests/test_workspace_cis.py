@@ -1,5 +1,6 @@
 import http.client
 import json
+import subprocess
 from pathlib import Path
 import tempfile
 import threading
@@ -86,6 +87,29 @@ class WorkspaceCisTest(unittest.TestCase):
             workspace_cis.summary(self.root, self.job)
 
     def test_live_route_keeps_authentication_and_recorded_settings(self):
+        from agent.runtime import signet_jobs as jobs, ssh_transport
+        config = {'root': str(self.project), 'workRoot': str(self.root.parent),
+                  'source': str(self.project / 'source'), 'image': str(self.project / 'image.sif'),
+                  'executor': '/bin/echo', 'partition': 'fixture'}
+        self.job.update(job_id='12345', attempt=1, remote_dir=str(self.root),
+                        image=config['image'], partition=config['partition'])
+        record_path = self.root / 'steps/cis.json'
+        record_path.write_text(json.dumps(self.job))
+        (self.root / '.owner').write_text('cis-route-fixture')
+        (self.root / 'steps/remote.owner').write_text(json.dumps({'remote_dir': str(self.root), 'token': 'cis-route-fixture'}))
+        (self.root / 'steps/cis.job').write_text('12345')
+        (self.root / 'steps/cis.done').write_text('0 2026-11-18T01:02:03Z\n')
+        for name in ('genotype', 'cis'):
+            (self.root / ('workspace-' + name + '.json')).write_text(json.dumps({'run_id': self.run_id}))
+
+        def execute(command, **kwargs):
+            self.assertEqual(command, 'bash -s')
+            return subprocess.run(['bash', '-s'], input=kwargs['input'], capture_output=True, timeout=10)
+
+        for mocked in (patch.object(jobs, '_environment', return_value=config),
+                       patch.object(ssh_transport, 'remote', side_effect=execute)):
+            mocked.start()
+            self.addCleanup(mocked.stop)
         server = ChatServer(('127.0.0.1', 0), Mock())
         self.addCleanup(server.server_close)
         worker = threading.Thread(target=server.serve_forever, kwargs={'poll_interval': 0.01}, daemon=True)
@@ -112,6 +136,7 @@ class WorkspaceCisTest(unittest.TestCase):
         self.assertEqual(result['summary']['counts'], {'common': 4, 'low': 1, 'rare': 1})
         self.assertEqual(len(result['summary']['pairs']), 6)
         self.job['state'] = 'running'
+        record_path.write_text(json.dumps(self.job))
         self.assertEqual(request(query)[0], 404)
 
 

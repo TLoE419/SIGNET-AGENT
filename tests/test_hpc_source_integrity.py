@@ -88,7 +88,7 @@ class SourceIntegrityTest(unittest.TestCase):
         failed = next(c for c in hpc._checks({'signet': 'no', 'step_signet': 'failed'}, self.inventory['revision'])
                       if c['item'] == 'signet_source')
         self.assertEqual(failed['status'], 'problem')
-        self.assertIn('read_hpc_setup_log("signet")', failed['detail'])
+        self.assertIn('SIGNET installation failed', failed['detail'])
 
 if __name__ == '__main__':
     unittest.main()
