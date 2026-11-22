@@ -1,8 +1,8 @@
 # Optional Electron shell
 
 Electron is the only supported UI. `renderer/` owns the application shell,
-styles, translations, chat and Stage 6 controllers. One React entry renders the
-shell and SSH controls. Existing chat/graph DOM controllers remain isolated in
+styles, translations and chat controllers. One React entry renders the
+shell and SSH controls. Existing chat DOM controllers remain isolated in
 `workspace.js` to preserve their behavior during integration.
 Python remains a separate API service and can be developed without Electron.
 
@@ -90,14 +90,14 @@ of the chromosome 1 example, check the four prepared input files. Review the
 fixed chromosome, thresholds, and resource settings, then select **Submit Stage 1**.
 The application tracks the saved job through the queue, execution, and output
 validation. From **Run history**, open the new run and select its Stage 1 result
-to read the collected data and the settings actually submitted.
+to read remotely computed aggregate statistics and the settings actually submitted.
 
 After Stage 1 completes, open the same run from **Run history** and select
 **Stage 2**. Confirm the example expression file, gene annotation, chromosome
 and resources, then select **Submit Stage 2**. Its queue and execution status
 update automatically. The completed run retains both stages, their input
 files and the settings submitted for each step. Reopening Stage 2 after completion
-shows its collected expression distribution and gene summary.
+shows its remotely computed expression distribution and gene summary.
 
 Once both steps complete, open **Stage 3** of the same run. Its review keeps the
 clinical path, principal component count (0–10, default 3) and resources visible.
@@ -107,11 +107,11 @@ path uses the existing chromosome 1 example from earlier saved runs when present
 with the current selected clinical file taking precedence. You can enter another
 allowed remote clinical path and check it before submission.
 
-Stage 3 collects the clinical data actually used and the official PCA outputs
-with its results. The saved view shows the original component count, matching
-and excluded sample counts, retained individuals at their SIGNET PCA coordinates,
-and expression variation on the same retained individuals before adjustment,
-after clinical covariates, and after clinical covariates plus the selected PCs.
+Stage 3 preserves the actual clinical input and PCA outputs inside its remote
+run folder. Counts, expression comparison statistics and a raster PCA plot are
+computed there. Individual matrices, clinical rows, sample identifiers and PCA
+coordinates remain on HPC3; only approved summaries and the plot reach this
+workspace. Historical locally supplied archives remain read-only.
 
 After Stage 3 completes, open **Stage 4** of the same run. Its review keeps the
 significance threshold, range before the gene start and after the gene end,
@@ -150,7 +150,7 @@ from another stage restores the selection for the same run. Archived graphs
 remain available in the completed-result selector.
 
 The local installation needs the audited SIGNET source, as described under
-[installation](../docs/INSTALL.md). The existing desktop SSH environment
+[user guide](../docs/USER_GUIDE.md). The existing desktop SSH environment
 supplies the prepared files and scheduler for the submission.
 
 Archived HPC3 exports remain local. The application reads these records under
@@ -175,17 +175,10 @@ the ignored `data/` directory:
   that matrix before the separate Stage 6 display threshold. Settings and
   resources come from `verification.json`.
 
-The November 11 archives preserve genotype and expression matrices but omit the
-original PCA score files. The Stage 3 scatter uses the archived retained
-genotypes, centered by mean dosage and scaled by genotype variance under the
-observed allele frequencies. The two plotted coordinates are the leading
-principal component scores of that standardized matrix. The inspector records
-the component count from the original job. The comparison uses the median
-per-gene sample standard deviation across the same retained individuals.
-Pre-adjustment expression is aligned by matching each retained genotype row
-uniquely and in order to the matched genotype matrix. The other columns use
-the two archived expression outputs, adjusted for sex and race and then for
-those covariates plus the original genotype components.
+The viewer reads supplied archive summaries; it does not compute them or
+copy person-level outputs from HPC3. New analyses retain the current main
+branch's remote-only execution and person-level data handling. Historical
+archives are read-only and are not model-callable evidence or execution inputs.
 
 Dataset additions and current file selections are saved atomically in
 `data/workspace-datasets.json`. The existing `data/datasets/*.json` files supply
@@ -198,8 +191,9 @@ The authenticated `/signet/datasets` routes manage this metadata only; saving a
 file path neither opens that file nor submits a scientific job. For an isolated
 test profile, `SIGNET_DATASETS_STATE_FILE` overrides the state-file location.
 
-Use **View → Classic Interface** for model setup, existing Stage 6 tools, and
-the development terminal. **View → Workspace** returns to the new interface.
+Use **View → Classic Interface** for model and SSH setup, current HPC3 confirmation
+cards and results, and the development terminal when started with `--dev`. **View → Workspace** returns to the new
+interface.
 Both interfaces share the same HPC3 connection.
 
 ## Development terminal
@@ -337,7 +331,7 @@ Standalone Python has no broker variables and continues to use its configured
 system OpenSSH transport.
 
 SSH UI lives in `renderer/features/ssh`, native SSH services in `main/ssh`,
-and their contracts in `shared/ssh`. Chat and Stage 6 retain their existing
+and their contracts in `shared/ssh`. Chat retains its existing
 JavaScript controllers under `renderer/features`.
 `npm start` builds the renderer and SSH Main/worker bundles automatically. A missing or corrupt SSH
 configuration is reported by the SSH controls without preventing chat startup.
@@ -363,10 +357,10 @@ Private key files and host pins are not migrated.
   mode adds the bounded PTY operations described above. Requests are restricted to the owned origin, permissions are denied,
   subframe navigation and popup windows are blocked. Existing Host, Origin, token
   and CSP protections remain in effect (with dev-only inline styles for xterm). Only the two official RCIC login/key guidance links open in the system browser.
-- Result downloads from `/stage6/file` retain the native save dialog. No generic
+- Result downloads from `/signet/result-download` retain the native save dialog. No generic
   filesystem or local shell API is exposed to the page.
 - Closing the window, quitting, or losing the renderer requests backend shutdown.
-  Python stops accepting requests, lets existing request/Stage 6 workers finish
+  Python stops accepting requests, lets existing request workers finish
   and save, then exits. After five seconds the native dialog offers waiting or
   explicit force quit. No tool is automatically replayed or retried.
 - If Main crashes, the Python control pipe reaches EOF and follows the same
@@ -386,7 +380,7 @@ Private key files and host pins are not migrated.
 
 ## State
 
-Desktop chat and Stage 6 session files live under `state/` within Electron's
+Desktop chat session files live under `state/` within Electron's
 `SIGNET Research Assistant` userData directory (normally
 `~/Library/Application Support/SIGNET Research Assistant/state/` on macOS).
 The last viewed saved conversation is restored on startup. Use the Saved conversations
@@ -410,7 +404,7 @@ work through separate processes (the turn lock is per process).
   `npm start --prefix electron`.
 - `python -m agent.app.chat_ui` still starts a standalone API. `/bootstrap` returns JSON with
   `token`, `model`, and `initial`; it replaces the former HTML bootstrap response.
-  `/chat`, `/stage6`, and file downloads retain their contracts and protections.
+  `/chat`, the `/signet/` routes, and file downloads retain their contracts and protections.
 - No stored-data migration is required. Preserve existing state files when
   switching revisions; returning to the previous revision restores its browser
   launcher without requiring a data conversion.
@@ -467,7 +461,6 @@ electron/
     app/          React root, application shell and feature composition
     features/
       chat/       Chat, streaming progress and Markdown controller
-      stage6/     Parameters, network graphs and comparisons
       ssh/        connection/, auth/, keys/, state/ and feature composition
       devtools/   Diagnostics and interactive terminal UI
     components/   Shared modal, confirmation, actions and icons
@@ -489,9 +482,10 @@ and root launcher files; no stored data or wire protocol changed.
 
 ## Remote environment setup
 
-After SSH connects, the status block shows environment checks and installation
-progress. The **Workflow** panel lists what is ready or missing, even before the
-environment is verified, and offers the SIGNET install and container download.
+After SSH connects, the status block shows environment checks. The **Workflow**
+panel lists what is ready or missing, even before the environment is verified, and
+offers the SIGNET install and container download; both run through the Python service,
+which the assistant also uses. After SIGNET is installed, the panel re-runs this check.
 **HPC3 settings** (or the status block's environment row) chooses the installation
 root and partition. The default root is `/pub/<user>/signet-agent` when that folder
 is writable, otherwise `~/.local/share/signet-agent`.

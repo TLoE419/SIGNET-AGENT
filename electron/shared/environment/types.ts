@@ -4,7 +4,6 @@ export interface EnvironmentSnapshot {phase:EnvironmentPhase;message:string;conf
 export interface EnvironmentBridge {
  getSnapshot():Promise<{ok:boolean;value?:EnvironmentSnapshot;error?:string}>;
  check(root?:string,partition?:string):Promise<{ok:boolean;value?:EnvironmentSnapshot;error?:string}>;
- install():Promise<{ok:boolean;value?:EnvironmentSnapshot;error?:string}>;
  subscribe(listener:(snapshot:EnvironmentSnapshot)=>void):()=>void;
 }
 export const environmentLabels:Record<EnvironmentPhase,string>={disconnected:'Disconnected',checking:'Checking environment…','needs-install':'Setup required',blocked:'Setup blocked','installing-source':'Installing SIGNET…',verifying:'Verifying environment…',ready:'Environment ready',error:'Setup failed'};
