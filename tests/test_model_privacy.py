@@ -26,6 +26,13 @@ def call(name, args):
 
 
 class ModelPrivacyTest(unittest.TestCase):
+    def test_chat_confirmation_status_is_public_without_exposing_run_names(self):
+        result = safe_tool_result('propose_hpc3_genotype', {
+            'status': 'awaiting_confirmation', 'executed': False, 'run_id': PRIVATE})
+        self.assertEqual(result['status'], 'awaiting_confirmation')
+        self.assertFalse(result['executed'])
+        self.assertNotIn(PRIVATE, json.dumps(result))
+
     def test_current_tool_evidence_is_projected_for_each_provider_transport(self):
         for transport in ('cli', 'gemini', 'groq'):
             with self.subTest(transport=transport):

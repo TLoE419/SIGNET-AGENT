@@ -192,6 +192,14 @@ class ChatHandler(BaseHTTPRequestHandler):
             return self._error(404, '找不到此操作。')
         return signet_api.handle(self, 'PATCH', url)
 
+    def do_DELETE(self):
+        if not self._app_request():
+            return self._error(403, '請從本機聊天頁面送出。')
+        url = urlsplit(self.path)
+        if not url.path.startswith('/signet/'):
+            return self._error(404, '找不到此操作。')
+        return signet_api.handle(self, 'DELETE', url)
+
     def do_POST(self):
         if not self._app_request():
             return self._error(403, '請從本機聊天頁面送出。')
@@ -415,10 +423,8 @@ class ChatHandler(BaseHTTPRequestHandler):
                     or not 1 <= len(body['paths']) <= hpc_files.MAX_INSPECT_PATHS):
                 return self._error(400, 'Provide only a paths list containing between 1 and 128 files.')
             return self.json_response(hpc_files.inspect(body['paths']))
-        actions = {'/hpc/files/shortcuts': hpc_files.shortcuts, '/hpc/files/selected': hpc_files.selected,
-                   '/hpc/files/list': lambda: hpc_files.list_folder(body.get('path')),
-                   '/hpc/files/select': lambda: hpc_files.select(body.get('key'), body.get('path')),
-                   '/hpc/files/clear': lambda: hpc_files.clear(body.get('key'))}
+        actions = {'/hpc/files/shortcuts': hpc_files.shortcuts,
+                   '/hpc/files/list': lambda: hpc_files.list_folder(body.get('path'))}
         action = actions.get(self.path)
         if action is None:
             return self._error(404, '找不到此操作。')

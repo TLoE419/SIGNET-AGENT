@@ -216,12 +216,6 @@ def _history_text(value, limit=4096):
     return value
 
 
-def _history_name(value):
-    if not isinstance(value, list) or len(value) != 2:
-        raise ValueError('Archive names require a Chinese and an English label.')
-    return [_history_text(label, 240) for label in value]
-
-
 def _history_inputs(value):
     if not isinstance(value, dict):
         raise ValueError('Input snapshots require a list for each input type.')
@@ -397,9 +391,10 @@ class Workspace:
             raise ValueError('Archived edge list counts do not match the verification record.')
         return {**summary, 'graph': result}
 
-    def archived_history(self):
+    def archived_history(self, catalog=None):
         datasets = {}
-        for record in workspace_datasets.list_datasets():
+        catalog = workspace_datasets.list_datasets() if catalog is None else catalog
+        for record in catalog:
             dataset = {key: record[key] for key in ('id', 'name', 'inputs')}
             if record['folder']:
                 dataset['folder'] = record['folder']
@@ -427,7 +422,7 @@ class Workspace:
                 else:
                     issues.append('Original dataset, input and setting metadata was not recorded with this archive.')
                 dataset_id = None
-                name = [run_id, run_id]
+                name = run_id
                 inputs = {'genotype': [], 'expression': [], 'clinical': []}
                 if saved:
                     try:
@@ -435,7 +430,7 @@ class Workspace:
                     except (ValueError, KeyError, TypeError):
                         issues.append('The archive does not record a valid dataset identity.')
                     try:
-                        name = _history_name(saved['name'])
+                        name = workspace_datasets.display_name(saved['name'])
                         inputs = _history_inputs(saved['inputs'])
                     except (ValueError, KeyError, TypeError):
                         issues.append('Some original archive labels or input files were not recorded reliably.')
@@ -456,7 +451,8 @@ class Workspace:
         return {'datasets': list(datasets.values()), 'runs': runs}
 
     def history(self):
-        history = self.archived_history()
+        catalog, deleted = workspace_datasets.catalog_snapshot()
+        history = self.archived_history(catalog)
         live = []
         for snapshot in sorted((st.PROJECT / 'runs').glob(f'*/{workspace_genotype.SNAPSHOT}')):
             try:
@@ -465,10 +461,10 @@ class Workspace:
                 continue
         dataset_ids = {entry['id'] for entry in history['datasets']}
         for run in live:
-            if run['dataset_id'] not in dataset_ids:
-                fallback_name = (['第 1 號染色體範例', 'Chromosome 1 example']
+            if run['dataset_id'] not in dataset_ids and run['dataset_id'] not in deleted:
+                fallback_name = ('Chromosome 1 example'
                                  if run['dataset_id'] == workspace_genotype.DATASET_ID
-                                 else [run['dataset_id'], run['dataset_id']])
+                                 else run['dataset_id'])
                 history['datasets'].append({
                     'id': run['dataset_id'],
                     'name': run.get('dataset_name', fallback_name),
@@ -477,7 +473,7 @@ class Workspace:
                 dataset_ids.add(run['dataset_id'])
         history['runs'].extend(live)
         from agent.runtime import workspace_history
-        return workspace_history.merge(history)
+        return workspace_history.merge(history, deleted_dataset_ids=deleted)
 
     def _archived_history_run(self, run_id):
         run_id = st._name(run_id)

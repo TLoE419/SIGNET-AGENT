@@ -701,6 +701,7 @@ def _checks(values, revision):
 
 def _unreachable(error):
     return {'status': 'unavailable', 'executed': False,
+            **({'code': 'remote_timeout'} if ssh_transport.is_timeout(error) else {}),
             'reason': f'HPC3 is not reachable or too slow: {error}. Connect with the SSH panel, '
                       'then run check_hpc_environment to see the current state.'}
 

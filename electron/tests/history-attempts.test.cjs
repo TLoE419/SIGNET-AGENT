@@ -47,7 +47,12 @@ function harness(t, rows) {
   window.eval(code);
   const q = selector => window.document.querySelector(selector);
   const click = selector => {assert.ok(q(selector), 'Missing ' + selector); q(selector).click();};
-  return {window, q, click, calls, ready: async () => {await until(() => q('[data-run-target]')); click('[data-nav-target="history"]');}};
+  const chooseAttempt = (selector, entry) => {
+    const select = q(selector + ' [data-history-attempt-select]');
+    select.value = entry.dataset.attemptRecord;
+    select.dispatchEvent(new window.Event('change', {bubbles: true}));
+  };
+  return {window, q, click, chooseAttempt, calls, ready: async () => {await until(() => q('[data-run-target]')); click('[data-nav-target="history"]');}};
 }
 
 test('output checks retain the original failure and per-check evidence without adding attempts or making requests', async t => {
@@ -60,20 +65,19 @@ test('output checks retain the original failure and per-check evidence without a
   const h = harness(t, [row]); await h.ready();
   const section = h.q('[data-history-output-checks]');
   assert.ok(section);
-  assert.match(section.textContent, /同一個工作、同一次嘗試/);
+  assert.match(section.textContent, /same job and attempt/);
   assert.match(section.querySelector('[data-history-original-failure]').textContent, /Required outputs are missing.*res\/late\.txt/s);
   assert.equal(section.querySelectorAll('[data-history-output-check]').length, 1);
   assert.equal(section.querySelector('script'), null);
   assert.match(section.textContent, /<script>never execute<\/script>/);
   assert.equal(h.window.document.querySelectorAll('[data-history-attempt]').length, 1);
   const calls = [...h.calls];
-  section.open = true; h.click('#ml-language');
-  assert.match(section.textContent, /Output recheck history.*Original recorded failure/s);
+    assert.match(section.textContent, /Output recheck history.*Original recorded failure/s);
   assert.deepEqual(h.calls, calls);
   assert.equal(JSON.stringify(row), original);
 });
 
-test('each attempt keeps its own settings, times, failure and saved output evidence in both languages', async t => {
+test('each attempt keeps its own settings, times, failure and saved output evidence in English', async t => {
   const old = {state: 'failed', job_id: 'job-101', submitted_at: '2026-11-01T10:00:00Z', finished_at: '2026-11-01T10:05:00Z',
     settings: {mind: '0.1'}, resources: {cpus: 2}, inputs: {'ped.file': '/old/study.ped'}, options: {npc: 2},
     reason: 'Required output missing', exit_code: '1', missing_outputs: ['res/old.txt'], failure_hints: ['Saved error hint'],
@@ -91,22 +95,28 @@ test('each attempt keeps its own settings, times, failure and saved output evide
   assert.deepEqual([...h.q(parent).querySelectorAll('[data-history-attempt]')].map(node => node.dataset.historyAttempt), ['2', '1']);
   const first = h.q(parent + ' [data-history-attempt="1"]');
   const second = h.q(parent + ' [data-history-attempt="2"]');
-  first.open = second.open = true;
-  assert.equal(first.open && second.open, true);
-  assert.equal(first.hasAttribute('name') || second.hasAttribute('name'), false);
+  assert.equal(first.hidden, true);
+  assert.equal(second.hidden, false);
+  h.chooseAttempt(parent, first);
+  h.click(parent + ' [data-history-detail-tab="settings"]');
+  assert.equal(first.hidden, false);
+  assert.equal(second.hidden, true);
+  assert.equal(first.querySelector('[data-history-detail-view="settings"]').hidden, false);
   assert.equal(second.dataset.attemptCurrent, 'true');
   assert.match(first.querySelector('[data-history-saved="settings"]').textContent, /mind0\.1/);
   assert.match(second.querySelector('[data-history-saved="settings"]').textContent, /mind0\.2/);
   assert.match(first.textContent, /job-101/); assert.doesNotMatch(first.textContent, /job-102|new\/study/);
   assert.match(second.textContent, /job-102/); assert.doesNotMatch(second.textContent, /job-101|old\/study/);
-  assert.match(first.querySelector('[data-history-attempt-result]').textContent, /Saved error hint.*res\/old\.txt.*紀錄顯示缺少/s);
-  assert.match(second.querySelector('[data-history-attempt-result]').textContent, /紀錄顯示已下載/);
-  assert.match(first.querySelector('[data-history-attempt-events]').textContent, /2026-11-01T10:00:00Z/);
-  assert.match(second.textContent, /送出時間2026-11-02T10:00:00Z\s+開始時間2026-11-02T10:01:00Z/);
-  h.click('#ml-language');
-  assert.match(first.textContent, /Attempt 1.*Last recorded state: Failed/s);
-  assert.match(second.textContent, /Attempt 2 · Current record/);
+  assert.match(first.querySelector('[data-history-attempt-result]').textContent, /Saved error hint.*res\/old\.txt.*Recorded as missing/s);
   assert.match(second.querySelector('[data-history-attempt-result]').textContent, /Recorded as downloaded/);
+  const firstEvent = first.querySelector('[data-history-attempt-events] time');
+  assert.equal(firstEvent.textContent, '2026-11-01 10:00:00');
+  assert.equal(firstEvent.dateTime, old.history[0].at);
+  assert.match(second.textContent, /Submitted at2026-11-02 10:00:00\s+Started at2026-11-02 10:01:00/);
+  assert.match(first.textContent, /Last recorded state: Failed/);
+  const picker = h.q(parent + ' [data-history-attempt-select]');
+  assert.match(picker.selectedOptions[0].textContent, /Attempt 1 · Failed/);
+  assert.match(picker.options[0].textContent, /Attempt 2 · Completed · Current record/);
   assert.equal(JSON.stringify(row), originals);
   assert.equal(h.q(parent + ' [data-run-stage]'), null);
   assert.deepEqual(h.calls.sort(), ['/signet/datasets', '/stage6/history'].sort());
@@ -126,42 +136,51 @@ test('gaps and invalid snapshots never borrow current settings or create result 
     assert.equal(detail.querySelector('button,a'), null);
   }
   assert.match(h.q('[data-history-attempt="1"]').textContent, /Snapshot was not saved/);
-  assert.match(h.q('[data-history-attempt="2"]').textContent, /保存的紀錄無法讀取/);
+  const missing = h.q('[data-history-attempt="2"]');
+  const job = '[data-history-job="genotype"]';
+  h.chooseAttempt(job, missing);
+  assert.match(h.q(job + ' [data-history-attempt-select]').selectedOptions[0].textContent, /Saved record unreadable/);
+  assert.equal(missing.hidden, false);
 });
 
 test('unnumbered archive attempts and current-less archived attempts stay readable without invented numbers', async t => {
   const record = {state: 'completed', settings: {mind: '0.4'}};
   const h = harness(t, [run('archive--shared', {genotype: record}, {genotype: [attempt(null, true, record)],
     expression: [attempt(1, false, {state: 'failed', reason: 'Archived expression failure'})]}, {source: 'archive', origin: 'archive'})]); await h.ready();
-  const detail = h.q('[data-history-attempt="unknown"]');
-  assert.match(detail.textContent, /嘗試次數未記錄/); assert.doesNotMatch(detail.textContent, /第 1 次嘗試/);
+  const unnumbered = '[data-history-job="genotype"] [data-history-attempt-single]';
+  assert.equal(h.q('[data-history-attempt-select]'), null);
+  assert.match(h.q(unnumbered).textContent, /Attempt number not recorded/);
+  assert.doesNotMatch(h.q(unnumbered).textContent, /Attempt 1/);
+  h.click('[data-history-select-stage="2"]');
+  assert.match(h.q('[data-history-job="expression"] [data-history-attempt-single]').textContent, /Attempt 1/);
   assert.match(h.q('[data-history-job="expression"] [data-history-attempt="1"]').textContent, /Archived expression failure/);
   assert.equal(h.q('[data-run-stage]'), null);
 });
 
-test('expanded attempts survive rerender without opening same-number attempts in other steps or sources', async t => {
+test('stage, attempt and section selections survive rerender independently across sources', async t => {
   const record = {state: 'failed', settings: {mind: '0.1'}};
-  const attempts = {genotype: [attempt(1, true, record)], expression: [attempt(1, true, record)]};
+  const attempts = {genotype: [attempt(1, true, record)], expression: [attempt(1, false, record), attempt(2, true, record)]};
   const row = run('recorded--shared', {genotype: record, expression: record}, attempts, {dataset_id: null,
     association: {status: 'unclassified', method: null}, capabilities: {continue_analysis: false, stage_results: [], stage6_graph: false, assign_dataset: true}});
   const other = run('archive--shared', {genotype: record}, {genotype: [attempt(1, true, record)]}, {source: 'archive', origin: 'archive'});
   const h = harness(t, [row, other]); await h.ready();
-  const selected = '#ml-run-recorded--shared [data-history-job="genotype"]';
-  h.q(selected).open = true; h.q(selected + ' [data-history-attempt="1"]').open = true;
+  const selected = '#ml-run-recorded--shared [data-history-job="expression"]';
+  h.click('#ml-run-recorded--shared [data-history-select-stage="2"]');
+  h.chooseAttempt(selected, h.q(selected + ' [data-history-attempt="1"]'));
+  h.click(selected + ' [data-history-detail-tab="settings"]');
   // Missing assignment selection triggers the same real rerender used while saving.
   h.click('#ml-run-recorded--shared [data-history-assign]');
-  assert.equal(h.q(selected).open, true);
-  assert.equal(h.q(selected + ' [data-history-attempt="1"]').open, true);
-  assert.equal(h.q('#ml-run-recorded--shared [data-history-job="expression"] [data-history-attempt="1"]').open, false);
-  assert.equal(h.q('#ml-run-archive--shared [data-history-attempt="1"]').open, false);
+  assert.equal(h.q('#ml-run-recorded--shared [data-history-stage-panel="2"]').hidden, false);
+  assert.equal(h.q(selected + ' [data-history-attempt="2"]').hidden, true);
+  assert.equal(h.q(selected + ' [data-history-attempt="1"] [data-history-detail-view="settings"]').hidden, false);
+  assert.equal(h.q('#ml-run-recorded--shared [data-history-stage-panel="1"]').hidden, true);
+  assert.equal(h.q('#ml-run-archive--shared [data-history-attempt="1"] [data-history-detail-view="settings"]').hidden, true);
 });
 
 test('unreadable event entries cannot hide valid history or imply an invented event', async t => {
   const record = {state: 'failed', settings: {}, history: [null, 'legacy-note', {}, {state: 'failed', at: '2026-11-01T10:00:00Z'}]};
   const h = harness(t, [run('recorded--shared', {genotype: record}, {genotype: [attempt(1, true, record)]})]); await h.ready();
-  assert.match(h.q('[data-history-attempt-event-warning]').textContent, /部分保存的時間線無法讀取/);
-  assert.equal(h.q('[data-history-attempt-events]').children.length, 1);
-  assert.match(h.q('[data-history-attempt-events]').textContent, /2026-11-01T10:00:00Z/);
-  h.click('#ml-language');
   assert.match(h.q('[data-history-attempt-event-warning]').textContent, /Part of the recorded timeline is unreadable/);
+  assert.equal(h.q('[data-history-attempt-events]').children.length, 1);
+  assert.equal(h.q('[data-history-attempt-events] time').textContent, '2026-11-01 10:00:00');
 });

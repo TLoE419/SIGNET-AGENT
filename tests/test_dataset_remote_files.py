@@ -176,8 +176,10 @@ class DatasetRemoteFilesTest(unittest.TestCase):
         self.assertEqual(self.post(server, 'not json', raw=True)[0], 400)
         self.assertEqual(self.post(server, 'x' * 32769, raw=True)[0], 400)
         self.assertEqual(self.scripts, [])
-        with patch.object(hpc_files, 'select', side_effect=AssertionError('Dataset inspection cannot select a reference')):
-            status, result = self.post(server, body)
+        self.assertEqual(self.post(server, {'key': 'clinical', 'path': str(file)},
+                                   path='/hpc/files/select')[0], 404)
+        self.assertEqual(self.scripts, [])
+        status, result = self.post(server, body)
         self.assertEqual((status, result['files'][0]['path']), (200, str(file)))
         self.assertEqual(len(self.scripts), 1)
         self.assertEqual(self.post(server, json.dumps(body) + ' ' * 5000, raw=True)[0], 200)

@@ -152,6 +152,8 @@ Inside the API:
 | 22 | `GET /signet/runs/{run_id}/genotype/retry` | yes | Review the original inputs and target of a failed or cancelled Stage 1 attempt |
 | 23 | `POST /signet/runs/{run_id}/genotype/retry` | yes | Manually submit the next Stage 1 attempt in that run |
 | 24 | `POST /signet/runs/{run_id}/steps/{step}/revalidate` | yes | Recheck recoverable failed outputs for the same job and attempt without resubmitting |
+| 25 | `GET /signet/references` | no | Read the connected environment's default reference paths |
+| 26 | `DELETE /signet/datasets/{dataset_id}` | no | Remove a dataset from the active catalog |
 
 ### Workspace dataset metadata
 
@@ -160,7 +162,7 @@ step routes. They store metadata locally and never read the named input files,
 contact HPC3, change a run's configuration, or submit work.
 
 `GET /signet/datasets` returns `{"datasets": [...]}`. Each record has a stable
-`id`, a two-label Chinese/English `name`, a `folder`, and `inputs` grouped into
+`id`, a display `name` string, a `folder`, and `inputs` grouped into
 `genotype`, `expression`, and `clinical` filename arrays. `default_inputs`,
 `alternative_inputs`, and `selections` retain the stored defaults and legacy
 alternative choices across application restarts. The workspace remote browser
@@ -168,15 +170,27 @@ updates `inputs` directly; new datasets start with empty inputs.
 
 `POST /signet/datasets` accepts `name` and optional `folder`, `inputs`, and
 `alternative_inputs`. The server creates a unique dataset ID and returns the
-saved record. `PATCH /signet/datasets/{dataset_id}` accepts `{"inputs": {...}}`;
-only the supplied input types change, and original defaults remain available.
-Both writes return the canonical saved dataset record.
+saved record. `PATCH /signet/datasets/{dataset_id}` accepts `inputs` and/or
+`references`. Set any of `ref`, `gmap`, or `gtf` in `references` to an absolute
+remote path or send `null` for that role to restore the environment default.
+Only supplied entries change. Both writes return the canonical saved record,
+with `references` present when the dataset has overrides.
+
+`DELETE /signet/datasets/{dataset_id}` returns `{"deleted": "<dataset_id>"}`.
+Existing runs remain available in **Run history → All runs** with their
+original input snapshots.
+
+`GET /signet/references` reads configured paths for the connected environment.
+It returns `{"references":{"ref": "...", "gmap": "...", "gtf": "..."}}`. This
+metadata read does not check file contents or submit work. Dataset review
+resolves the effective paths before checking sources for a new run.
 
 Initial definitions remain in `data/datasets/*.json`. Additions and overrides
 are written atomically to `data/workspace-datasets.json`, separately from all
 run snapshots. A malformed or linked state file is reported as a conflict and
 is never silently replaced. The trusted process environment variable
 `SIGNET_DATASETS_STATE_FILE` can isolate this state in tests.
+Existing two-entry dataset and archive names use the second label for display.
 
 `/stage6/history` includes the saved datasets while keeping each run's input,
 settings, and dataset ID from its original snapshots. Changing current dataset
@@ -307,8 +321,11 @@ regular files. It checks shared-path restrictions without reading contents,
 writing remote selection state, converting references, or scheduling jobs.
 The UI then saves those paths through the dataset PATCH route. This is a
 metadata check; the separate dataset validation action below checks structure.
-Custom dataset execution uses the separate review and submission routes below. The legacy reference-specific
-`/hpc/files/select` route keeps its own validation and preparation behavior.
+Custom dataset execution uses the separate review and submission routes below.
+The environment readiness report covers the connection, workspace, scheduler,
+container runtime, SIGNET source and container image. Study files and
+run-specific imputation preparation are handled by dataset and stage review,
+including when the user supplies all reference paths.
 
 `POST /signet/datasets/{dataset_id}/validate` requires `{"inputs": {...}}`
 containing all three current saved input arrays. The service compares this
@@ -319,6 +336,12 @@ report contains `dataset_id`, `inputs`, `checked_at`, `status`, per-category
 message, paths, metrics, and bounded issue codes with optional line numbers.
 No sample identifiers, genotype calls, expression values, or clinical values
 are returned to the browser or conversation.
+
+Data submits an optional `kind` (`genotype`, `expression`, or `clinical`).
+With this field, the service compares and scans the selected category's files
+and the reply identifies that category in `kind`. The single check, scan
+records, and `resolved_inputs` cover that category. Genotype checks both
+files as a pair. The full dataset report is available by omitting `kind`.
 
 The TCGA check verifies the PED/MAP structure, expression matrix shape and
 numeric cells, clinical columns, and preliminary patient overlap using the

@@ -19,6 +19,7 @@ from unittest.mock import patch
 from zipfile import ZipFile
 
 import agent.app.chat_ui as chat_ui
+from agent.runtime import signet_jobs
 import agent.runtime.ssh_transport as ssh_transport
 from agent.runtime import signet_jobs as jobs
 from agent.tools import signet
@@ -69,6 +70,24 @@ class SignetApiTest(unittest.TestCase):
 
     def submit(self, run_id='step_test'):
         return self.call('POST', f'/signet/runs/{run_id}/steps/expression', {'inputs': self.inputs})
+
+    def test_each_stage_review_reports_timeouts_and_can_be_read_again(self):
+        routes = [('GET', '/signet/genotype/example', 'review_example'),
+                  ('POST', '/signet/datasets/example-chr1/genotype/review', 'review_dataset'),
+                  ('GET', '/signet/runs/step_test/genotype/retry?expected_job_id=123&expected_attempt=1', 'review_genotype_retry')]
+        routes += [('GET', f'/signet/runs/step_test/{step}/example', f'review_{step}')
+                   for step in ('expression', 'adjust', 'cis', 'network', 'visualize')]
+        for method, url, reviewer in routes:
+            with self.subTest(reviewer=reviewer):
+                failure = signet_jobs.StepError('remote_failed', 'A remote review did not finish.')
+                failure.__cause__ = ssh_transport.SshRemoteError('Remote command timed out.', code='CONNECTION_TIMEOUT')
+                body = {'inputs': {}} if method == 'POST' else None
+                with patch(f'agent.runtime.workspace_genotype.{reviewer}', side_effect=[failure, {'ready': True}]) as review:
+                    code, response = self.call(method, url, body)
+                    self.assertEqual((code, response['code']), (504, 'read_timeout'))
+                    self.assertEqual(self.call(method, url, body), (200, {'ready': True}))
+                    self.assertEqual(review.call_args_list[0], review.call_args_list[1])
+        self.assertFalse((self.fake / 'sbatch_args').exists())
 
     def test_every_route_needs_the_page_token_and_writes_need_the_origin(self):
         routes = [('GET', '/signet/progress'), ('GET', '/signet/catalog'), ('GET', '/signet/runs'), ('POST', '/signet/runs'),
@@ -195,7 +214,7 @@ class SignetApiTest(unittest.TestCase):
             bypass = dispatch_tool('genotype_tcga', {})
             self.assertEqual((proposed['status'], proposed['executed']), ('awaiting_confirmation', False))
             # The local genotype tool is gone, so nothing can bypass the card.
-            self.assertEqual((bypass['status'], bypass['executed']), ('invalid', False))
+            self.assertEqual((bypass['status'], bypass['executed']), ('needs_review', False))
             return 'Review the genotype settings.'
 
         with patch.object(chat_ui, 'run_conversation', side_effect=conversation):
@@ -253,11 +272,11 @@ class SignetApiTest(unittest.TestCase):
         progress = self.call('GET', '/signet/progress?session=' + body['session'])[1]['analyses'][0]
         card = progress['genotype_proposal']
         self.assertEqual(card['state'], 'submission_error')
-        self.assertEqual(card['error'], {'code': 'remote_failed',
-                                         'message': 'HPC3 connection failed before anything was submitted.'})
+        self.assertEqual(card['error']['code'], 'remote_failed')
+        self.assertIn('no job was submitted', card['error']['message'])
         report = step_report.report('step_test', '-g')
         self.assertEqual((report['state'], report['card']['state']), ('not_started', 'submission_error'))
-        self.assertIn('before anything was submitted', report['card']['error']['message'])
+        self.assertNotIn('error', report['card'], 'Private submission details stay on the card, not in the model report')
         self.assertNotIn('sbatch --parsable', ' '.join(self.calls))
 
     def test_unknown_genotype_submission_cannot_reuse_approval(self):
@@ -312,7 +331,7 @@ class SignetApiTest(unittest.TestCase):
                 rules = jobs.STEPS[step].settings
                 parameters['settings'] = {
                     name: value if value == 'no' or rules[name] == 'hms' else
-                    float(value) if rules[name] in ('alpha', 'fraction') else int(value)
+                    float(value) if rules[name] in ('alpha', 'fraction', 'frequency') else int(value)
                     for name, value in parameters['settings'].items()
                 }
                 body = {'session': session, 'proposal_id': draft['id'], **parameters}
@@ -375,6 +394,7 @@ class SignetApiTest(unittest.TestCase):
             (self.remote_dir / f'steps/{step}.done').write_text('0 2026-11-01T10:00:00\n')
             self.slurm(sacct='COMPLETED')
             if step == 'visualize':
+                (self.remote_dir / 'steps/visualize.out').write_text('SIGNET_STAGE6_EXPORTS_COMPLETED\n')
                 edge_file = self.remote_dir / 'work/res/resv/signet-edges.csv'
                 edge_file.unlink()
                 status, waiting = self.call('GET', base)
@@ -463,7 +483,7 @@ class SignetApiTest(unittest.TestCase):
             parameters = draft['parameters']
             rules = jobs.STEPS[name].settings
             settings = {key: value if value == 'no' or rules[key] == 'hms' else
-                        float(value) if rules[key] in ('alpha', 'fraction') else int(value)
+                        float(value) if rules[key] in ('alpha', 'fraction', 'frequency') else int(value)
                         for key, value in parameters['settings'].items()}
             if name == 'visualize':
                 settings['freq'] = .5
@@ -822,6 +842,7 @@ class SignetApiTest(unittest.TestCase):
         self.assertNotEqual(record['state'], 'completed')
         self.assertFalse((self.root / 'work' / test_signet_jobs.OUTPUTS[0]).exists())
 
+    @patch.object(jobs, 'DOWNLOADED_STEPS', ('network', 'visualize'))
     def test_refresh_verifies_later_visible_remote_outputs_over_http_without_new_job(self):
         self.submit()
         path = '/signet/runs/step_test/steps/expression'
@@ -855,6 +876,7 @@ class SignetApiTest(unittest.TestCase):
         self.assertEqual(self.call('GET', path)[1]['attempt'], 2)
         self.assertIn('temporarily-refused', (self.remote_dir / 'steps/expression.sbatch.err').read_text())
 
+    @patch.object(jobs, 'DOWNLOADED_STEPS', ('network', 'visualize'))
     def test_refresh_recovers_a_saved_missing_marker_failure_with_remote_results(self):
         status, record = self.submit()
         self.assertEqual(status, 202)

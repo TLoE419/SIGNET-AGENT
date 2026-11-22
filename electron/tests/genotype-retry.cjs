@@ -55,7 +55,7 @@ function tree(folder) {
 }
 
 async function verify() {
-  running = await launch({provider: 'codex', visible: false, userData: path.join(temporary, 'app'),
+  running = await launch({provider: 'none', visible: false, userData: path.join(temporary, 'app'),
     stateFile: path.join(temporary, 'chat.json')});
   const {window} = running;
   const fixturePath = path.join(temporary, 'fixture.json');
@@ -108,7 +108,8 @@ async function verify() {
   };
   const openStage = async () => {
     await openRun();
-    await click(`[data-history-id="workspace--${runId}"][data-run-stage="1"]`);
+    await click(`#ml-run-workspace--${runId} [data-history-select-stage="1"]`);
+    await click(`#ml-run-workspace--${runId} [data-run-stage="1"]`);
   };
   const retryURL = (job, attempt) => `/signet/runs/${runId}/genotype/retry?` + new URLSearchParams({expected_job_id: job, expected_attempt: String(attempt)});
   const setValue = (selector, value) => js(`(() => {const input=document.querySelector(${JSON.stringify(selector)});input.value=${JSON.stringify(value)};
@@ -153,15 +154,16 @@ async function verify() {
     assert.equal(await js(`document.querySelector('#lens-stage1').dataset.genotypeRunId`), runId);
   };
 
-  await until(() => js(`!!document.querySelector('#ml-language')`), 'Workspace did not mount');
-  await click('#ml-language'); await connection();
-  assert.deepEqual(await geometry(), [1650, 894, 53, 542]);
+  await until(() => js(`!!document.querySelector('#ml-stage-tab')`), 'Workspace did not mount');
+  await connection();
+  assert.deepEqual(await geometry(), [1650, 894, 68, 542]);
   assert.deepEqual(submissions(), ['submitted']);
   assert.equal(firstRecord.state, 'failed');
   const changed = await request('/signet/datasets/' + datasetA.id, {inputs: datasetB.inputs}, 'PATCH');
   assert.equal(changed.status, 200);
   const loadedCatalog = once(window.webContents, 'did-finish-load'); window.webContents.reload(); await loadedCatalog;
-  await click('#ml-language'); await connection(); await selectDataset(datasetA.id);
+  await until(() => js(`!!document.querySelector('#ml-stage-tab')`), 'Workspace did not remount');
+  await connection(); await selectDataset(datasetA.id);
   for (const filename of datasetB.inputs.genotype) assert.ok(await js(`document.querySelector('#ml-input-genotype [data-current-files]').textContent.includes(${JSON.stringify(filename)})`));
   await openStage();
   assert.equal(await state(), 'failed');
@@ -246,8 +248,12 @@ async function verify() {
   writeFileSync(path.join(remote, 'steps/genotype.err'), executed.stderr);
   writeFileSync(path.join(fixture.slurm, 'squeue'), ''); writeFileSync(path.join(fixture.slurm, 'sacct'), 'COMPLETED\n');
   await refresh('completed');
-  assert.ok(!readFileSync(path.join(local, 'work/res/resg/signet_Geno'), 'utf8').includes('PARTIAL'));
-  const manifest = JSON.parse(readFileSync(path.join(local, 'work/res/resg/workspace-inputs.json')));
+  const genotypeOutput = 'work/res/resg/signet_Geno';
+  const inputManifest = 'work/res/resg/workspace-inputs.json';
+  assert.equal(existsSync(path.join(local, genotypeOutput)), false, 'Person-level results must stay remote');
+  assert.equal(existsSync(path.join(local, inputManifest)), false, 'The staged input manifest must stay remote');
+  assert.ok(!readFileSync(path.join(remote, genotypeOutput), 'utf8').includes('PARTIAL'));
+  const manifest = JSON.parse(readFileSync(path.join(remote, inputManifest)));
   assert.equal(manifest.dataset_id, datasetA.id);
   assert.ok(manifest.source_files.every(item => item.frozen_path.includes('/inputs/attempt3/')));
   assert.ok(manifest.source_files.every(item => !item.path.includes('/cohorts/b/')));
@@ -271,11 +277,18 @@ async function verify() {
   assert.deepEqual(row.attempts.genotype.map(attempt => [attempt.number, attempt.record.state, attempt.record.job_id]),
     [[1, 'failed', '12345'], [2, 'cancelled', '222'], [3, 'completed', '333']]);
   assert.ok(row.frozen_inputs.expression[0].includes('/inputs/attempt3/'));
-  const details = `#ml-run-workspace--${runId} [data-history-job="genotype"]`;
-  await click(details + ' > summary');
+  const article = `#ml-run-workspace--${runId}`;
+  const panel = article + ' [data-history-stage-panel]:not([hidden])';
+  await click(article + ' [data-history-select-stage="1"]');
+  await click(panel + ' [data-history-detail-tab="settings"]');
   for (const number of [1, 2, 3]) {
-    const attempt = details + ` [data-history-attempt="${number}"]`;
-    await click(attempt + ' > summary');
+    const attempt = panel + ` [data-history-job="genotype"] [data-history-attempt="${number}"]`;
+    const recordFile = row.attempts.genotype.find(entry => entry.number === number).record_file;
+    await js(`(() => {
+      const select = document.querySelector(${JSON.stringify(panel + ' [data-history-attempt-select]')});
+      select.value = ${JSON.stringify(recordFile)};
+      select.dispatchEvent(new Event('change', {bubbles: true}));
+    })()`);
     assert.ok(await js(`document.querySelector(${JSON.stringify(attempt)}).textContent.includes('0.${number}')`));
   }
   const restarted = JSON.parse(readFileSync(fixturePath, 'utf8'));
@@ -284,7 +297,7 @@ async function verify() {
   assert.deepEqual(readFileSync(path.join(local, 'workspace-genotype.json')), initialSnapshot);
   assert.deepEqual(submissions(), ['submitted', 'submitted', 'submitted']);
   assert.equal(existsSync(path.join(temporary, 'forbidden.ndjson')), false, 'Retry invoked another run or downstream stage');
-  assert.deepEqual(await geometry(), [1650, 894, 53, 542]);
+  assert.deepEqual(await geometry(), [1650, 894, 68, 542]);
   await replacement.stop(); replacement = undefined;
   await running.quit();
   console.log('PASS: failed/cancelled Stage1 same-run manual retry with original files/settings, parameter/resource edits, warning confirmation, stale/active/unknown/draining/completed refusals, exact local+remote attempt/log/result retention, fresh per-attempt frozen/reference namespaces, changed catalog ignored, latest Stage2 frozen-input review without submission, Python restart and fixed geometry; local fake scheduler/container only, no real HPC/science');

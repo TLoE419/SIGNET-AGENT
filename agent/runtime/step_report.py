@@ -94,7 +94,8 @@ def safe_clinical_review(review):
     result = {'available': True, **_counts(review, ('rows', 'matched', 'clinical_matched',
               'missing_gender', 'missing_race', 'retained', 'excluded')), 'diagnostics': []}
     columns = review.get('columns')
-    if isinstance(columns, list) and any(columns.count(key) != 1 for key in ('submitter_id', 'race', 'gender')):
+    if review.get('schema_valid') is False or (
+            isinstance(columns, list) and any(columns.count(key) != 1 for key in ('submitter_id', 'race', 'gender'))):
         # The checker returns before measuring coverage or covariates when columns are invalid.
         return {'available': True, **_counts(review, ('rows', 'matched')),
                 'diagnostics': [{'code': 'clinical_columns', 'stage': 3, 'severity': 'error'}]}

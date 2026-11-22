@@ -205,10 +205,13 @@ class CustomGenotypeRetryTest(unittest.TestCase):
         return review, current
 
     def test_custom_completed_freeze_is_preserved_and_retry_freezes_original_catalog_sources_again(self):
+        workspace_datasets.update_dataset(self.c.dataset['id'], references=self.c.custom_references())
         self.seed()
+        references = workspace.run_history(self.root)['reference_sources']
         initial = (self.root / workspace.SNAPSHOT).read_bytes()
         originals = {path: path.read_bytes() for path in (self.remote / 'inputs').rglob('*') if path.is_file()}
-        workspace_datasets.update_dataset(self.c.dataset['id'], {'expression': ['/different/expression'], 'clinical': ['/different/clinical']})
+        workspace_datasets.update_dataset(self.c.dataset['id'], {'expression': ['/different/expression'], 'clinical': ['/different/clinical']},
+                                          references={'ref': '/different/reference', 'gtf': '/different/annotation'})
         (self.f.hpc / 'ws/refdata/selected.tsv').write_text('ref\t/different/reference\n')
         review, current = self.retry()
         self.assertEqual(review['source_inputs'], self.c.inputs)
@@ -228,6 +231,8 @@ class CustomGenotypeRetryTest(unittest.TestCase):
         expression = workspace.review_expression('custom-study')
         self.assertIn('/inputs/attempt2/frozen/', expression['inputs']['gexp.file'])
         self.assertEqual(workspace.run_history(self.root)['frozen_inputs'], workspace_inputs.frozen_paths(current['remote_dir'], 2))
+        self.assertEqual(workspace.run_history(self.root)['reference_sources'], references)
+        self.assertEqual(Path(expression['inputs']['pmap.file']).read_bytes(), self.c.paths['annotation.gtf'].read_bytes())
         # Recorded Stage 2 fixtures let us check Stage 3's clinical selection
         # without submitting or running any later analysis.
         ids = ['TCGA-AA-A00' + str(n) for n in range(1, 7)]
@@ -248,12 +253,19 @@ class CustomGenotypeRetryTest(unittest.TestCase):
         self.assertTrue(adjustment['ready'], adjustment['issues'])
         self.assertIn('/inputs/attempt2/frozen/clinical', adjustment['inputs']['cli.file'])
 
-    def test_custom_partial_freeze_is_not_reused_or_overwritten(self):
+    def test_retry_accepts_cross_node_devices_without_overwriting_partial_freeze(self):
         self.seed(prepare=False)
         old = self.remote / 'inputs/frozen/partial-first'
+        snapshot = self.root / workspace.SNAPSHOT
+        saved = json.loads(snapshot.read_text())
+        for item in saved['source_files']:
+            item['identity'][0] += 1  # The earlier login node mounted the same files under a different device ID.
+        snapshot.write_text(json.dumps(saved))
+        original = snapshot.read_bytes()
         _, current = self.retry()
         result = subprocess.run(['bash', '-s'], input=workspace_inputs.stage_command(workspace_inputs.staging_plan(self.root, current['remote_dir'])).encode(), capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertEqual(snapshot.read_bytes(), original)
         self.assertEqual(old.read_text(), 'preserve partial freeze')
         self.assertTrue((self.remote / 'inputs/attempt2/prepared/ref/chr2.gen').is_file())
 

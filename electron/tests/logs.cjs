@@ -59,7 +59,7 @@ function fingerprints(folders) {
 }
 
 async function verify() {
-  running = await launch({provider: 'codex', visible: false, userData: path.join(temporary, 'app'),
+  running = await launch({provider: 'none', visible: false, userData: path.join(temporary, 'app'),
     stateFile: path.join(temporary, 'chat.json')});
   const {window} = running;
   const fixturePath = path.join(temporary, 'fixture.json');
@@ -109,19 +109,31 @@ async function verify() {
   const closeLogs = selector => js(`(() => {const host=document.querySelector(${JSON.stringify(selector)});
     const details=host.matches('[data-job-logs]')?host:host.querySelector('[data-job-logs]');
     if(details.open)details.querySelector('summary').click();})()`);
+  const selectStage = id => click(`#ml-run-${id} [data-history-select-stage="2"]`);
+  const panel = id => `#ml-run-${id} [data-history-stage-panel]:not([hidden])`;
+  const selectTab = (id, tab) => click(`${panel(id)} [data-history-detail-tab="${tab}"]`);
   const openAttempt = async (id, number) => {
     await openRun(id);
-    const job = `#ml-run-${id} [data-history-job="expression"]`;
-    await js(`(() => {for(const selector of [${JSON.stringify(job)},${JSON.stringify(job + ` [data-history-attempt="${number}"]`)}]){
-      const details=document.querySelector(selector);if(!details)throw Error('Missing saved attempt '+selector);
-      if(!details.open)details.querySelector('summary').click();}})()`);
+    await selectStage(id);
+    await selectTab(id, 'summary');
+    const record = response.value.runs.find(row => row.history_id === id);
+    const attempt = record.attempts.expression.find(entry => entry.number === number);
+    assert.ok(attempt, 'Missing saved attempt ' + number);
+    await js(`(() => {
+      const select = document.querySelector(${JSON.stringify(panel(id) + ' [data-history-attempt-select]')});
+      if (select) {
+        select.value = ${JSON.stringify(attempt.record_file)};
+        select.dispatchEvent(new Event('change', {bubbles: true}));
+      }
+    })()`);
+    const selected = panel(id) + ` [data-history-attempt="${number}"]:not([hidden])`;
+    assert.ok(await js(`document.querySelector(${JSON.stringify(selected)})?.getClientRects().length > 0`));
     return host(id, number);
   };
   const stream = (selector, value) => click(selector + ` [data-job-log-stream="${value}"]`);
   const frames = () => js(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
 
-  await until(() => js(`!!document.querySelector('#ml-language')`), 'Workspace did not mount');
-  await click('#ml-language');
+  await until(() => js(`!!document.querySelector('#ml-history-scope')`), 'Workspace did not mount');
   await context(true);
   const response = await request('/stage6/history');
   assert.equal(response.status, 200);
@@ -130,10 +142,11 @@ async function verify() {
   const archived = response.value.runs.find(row => row.history_id === archive);
   const logURL = (row, number, job, output = 'err') => `/signet/history/${row.history_id}/steps/expression/log?` + new URLSearchParams({
     attempt: String(number), job_id: job, identity: row.record_identity, stream: output, lines: '50'});
-  assert.deepEqual(await geometry(), [1650, 894, 53, 542]);
+  assert.deepEqual(await geometry(), [1650, 894, 68, 542]);
   assert.equal(requests().length, 0, 'Initial workspace fetched a log before a manual request');
   await openRun(shared);
-  await click(`[data-history-id="${shared}"][data-run-stage="2"]`);
+  await selectStage(shared);
+  await click(`#ml-run-${shared} [data-run-stage="2"]`);
   const live = '#lens-stage2 [data-expression-logs]';
   await until(() => js(`!!document.querySelector(${JSON.stringify(live)})`), 'Live stage log control did not mount');
   assert.equal(requests().length, 0, 'Opening a stage fetched its still-closed log');
@@ -174,17 +187,16 @@ async function verify() {
   writeFileSync(localMarker, savedLocalMarker); writeFileSync(localError, savedLocalError);
   await closeLogs(live);
   const closedCount = requests().length;
-  await click('#ml-language'); await click('#ml-language');
   await frames();
-  assert.equal(requests().length, closedCount, 'Language changes fetched a closed log');
+  assert.equal(requests().length, closedCount, 'Closing the log fetched it again');
 
   const beforeStale = remoteRequests().length;
   assert.equal((await request(logURL(run, 3, '1001'))).status, 409, 'A stale job ID selected a current log');
   assert.equal((await request(logURL(run, 3, '1003').replace(run.record_identity, '0'.repeat(64)))).status, 409);
   assert.equal(remoteRequests().length, beforeStale, 'Stale guards contacted remote files');
   const old = await openAttempt(shared, 1);
-  assert.equal(requests().length, closedCount + 2, 'Expanding an attempt fetched its still-closed log');
-  await openLogs(old);
+  assert.equal(requests().length, closedCount + 2, 'Choosing an attempt fetched a log before opening the Logs tab');
+  await selectTab(shared, 'logs');
   // The unreadable stdout must produce an error rather than a ready/empty log.
   await until(async () => await logState(old) === 'error', 'Unreadable stdout did not report a reason');
   assert.equal(await text(old), '');
@@ -193,7 +205,7 @@ async function verify() {
   await until(async () => (await text(old)).includes('OLD attempt1 stderr'), 'Prior-attempt stderr did not load');
   assert.ok(!(await text(old)).includes('CURRENT attempt3'), 'Prior attempt borrowed the latest stderr');
   const empty = await openAttempt(shared, 2);
-  await openLogs(empty);
+  await selectTab(shared, 'logs');
   await until(async () => /empty|no.*lines/i.test(await status(empty)), 'Empty stdout was not distinguished');
   assert.equal(await text(empty), '');
   await stream(empty, 'err');
@@ -202,7 +214,7 @@ async function verify() {
 
   const archiveHost = await openAttempt(archive, 3);
   const beforeArchive = remoteRequests().length;
-  await openLogs(archiveHost);
+  await selectTab(archive, 'logs');
   await until(async () => /missing|not.*record|not.*found|unavailable/i.test(await status(archiveHost)), 'Missing archive stdout was not reported');
   assert.equal(await text(archiveHost), '');
   await stream(archiveHost, 'err');
@@ -210,15 +222,15 @@ async function verify() {
   assert.equal(remoteRequests().length, beforeArchive, 'Archive logs fell back to the same-ID live remote run');
   assert.ok(!(await text(archiveHost)).includes('CURRENT attempt3'));
   const archiveOld = await openAttempt(archive, 1);
-  await openLogs(archiveOld); await stream(archiveOld, 'err');
+  await selectTab(archive, 'logs'); await stream(archiveOld, 'err');
   await until(async () => (await text(archiveOld)).includes('ARCHIVE attempt1 stderr'), 'Archived old attempt did not select its own file');
   assert.equal(remoteRequests().length, beforeArchive);
 
   const recorded = await openAttempt(generic, 4);
-  await openLogs(recorded); await stream(recorded, 'err');
+  await selectTab(generic, 'logs'); await stream(recorded, 'err');
   await until(async () => (await text(recorded)).includes('RECORDED attempt4 stderr'), 'Recorded local error log did not load');
   assert.equal(remoteRequests().length, beforeArchive);
-  await closeLogs(recorded);
+  await selectTab(generic, 'summary');
 
   const agentId = 'recorded--' + fixture.agent;
   const agentRecord = response.value.runs.find(row => row.history_id === agentId);
@@ -262,7 +274,8 @@ async function verify() {
   setControl({connected: false});
   await context(false);
   await openRun(shared);
-  await click(`[data-history-id="${shared}"][data-run-stage="2"]`);
+  await selectStage(shared);
+  await click(`#ml-run-${shared} [data-run-stage="2"]`);
   await openLogs(live);
   await until(async () => await logState(live) === 'error', 'Disconnected remote log did not report an error');
   assert.match(await status(live), /disconnected/);
@@ -293,7 +306,7 @@ async function verify() {
   assert.notEqual(restarted.starts[0], restarted.starts[1]);
   assert.deepEqual(fingerprints(frozenFolders), original);
   assert.equal(existsSync(path.join(temporary, 'forbidden.ndjson')), false, 'A log reader attempted a mutation, unrelated path or analysis operation');
-  assert.deepEqual(await geometry(), [1650, 894, 53, 542]);
+  assert.deepEqual(await geometry(), [1650, 894, 68, 542]);
   await replacement.stop(); replacement = undefined;
   await running.quit();
   console.log('PASS: explicit live-stage and saved-attempt stdout/stderr, bounded text, empty/missing/unreadable/disconnected distinctions, exact source/job/attempt and stale identity guards, same-ID archives without remote fallback, revision-bound Agent operations ignoring hostile log pointers, prepared plans without log requests, safe HTML text, closed-panel no requests, Python restart, immutable files and fixed geometry; read-only owned fixture only, no actual SSH/jobs/analysis');

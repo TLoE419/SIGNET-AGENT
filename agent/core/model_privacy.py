@@ -11,7 +11,7 @@ import threading
 
 _OMIT = object()
 _STATES = {'ok', 'invalid', 'error', 'failed', 'blocked', 'unavailable', 'prepared', 'created',
-           'needs_review', 'needs_choice', 'not_started', 'not_submitted', 'submitting', 'submitted',
+           'awaiting_confirmation', 'needs_review', 'needs_choice', 'not_started', 'not_submitted', 'submitting', 'submitted',
            'pending', 'queued', 'running', 'validating', 'completed', 'cancelled', 'cancelling',
            'unknown', 'interrupted', 'skipped', 'passed', 'warning', 'incomplete', 'unchecked',
            'stale', 'missing', 'problem', 'in_progress', 'ready', 'not_ready', 'requires_review'}

@@ -1,15 +1,18 @@
-import {useCallback,useEffect,useRef,useState} from 'react';
+import {useCallback,useEffect,useId,useRef,useState} from 'react';
 import {createPortal} from 'react-dom';
 import {Modal,DialogActions} from '../../components/Modal';
 
 interface Entry {name:string;path:string;kind:'file'|'folder';size:number;supported:boolean}
 interface Place {label:string;path:string}
 type InputKind='genotype'|'expression'|'clinical';
-export interface RemoteFilesTarget {
- key:string;label:string;current:string;datasetId?:string;inputKind?:InputKind;
- currentPaths?:string[];multiple?:boolean;language?:string;
+type ReferenceKind='ref'|'gmap'|'gtf';
+export type RemoteFilesTarget = {
+ key:string;label:string;current:string;datasetId:string;
+ currentPaths?:string[];multiple?:boolean;
+} & ({inputKind:InputKind;referenceKind?:never}|{referenceKind:ReferenceKind;inputKind?:never});
+export interface DatasetRecord {
+ id:string;inputs:Partial<Record<InputKind,string[]>>;references?:Partial<Record<ReferenceKind,string>>;[key:string]:unknown;
 }
-export interface DatasetRecord {id:string;inputs:Partial<Record<InputKind,string[]>>;[key:string]:unknown}
 type Reply={status?:string;error?:string;reason?:string;path?:string;kind?:string;entries?:Entry[];truncated?:boolean;shortcuts?:Place[];files?:{path:string;size:number}[]};
 
 /** File metadata stays on these local routes and never enters the conversation. */
@@ -28,14 +31,52 @@ function size(bytes:number){
 }
 const parent=(path:string)=>path.slice(0,path.lastIndexOf('/'))||'/';
 
+function FileIcon({folder=false}:{folder?:boolean}){
+ return <svg className="remote-files-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+  {folder?<path d="M3 19V5h6l2 2h10v12z"/>:<path d="M6 3h8l4 4v14H6z M14 3v5h4 M9 13h6 M9 17h6"/>}
+ </svg>;
+}
+
+function SelectedFileLocation({path,filename}:{path:string;filename:string}){
+ const panelId=useId();
+ const [status,setStatus]=useState('');
+ const directory=parent(path);
+ const lastFolder=directory.lastIndexOf('/');
+ const label=`Full path for ${filename}`;
+
+ async function copyPath(){
+  const desktop=(window as Window & {signetDesktop?:{copyFilePath(path:string):Promise<void>}}).signetDesktop;
+  try{
+   if(!desktop)throw Error('Clipboard unavailable.');
+   await desktop.copyFilePath(path);
+   setStatus('Path copied.');
+  }catch{
+   setStatus('Could not copy the path. You can select and copy it above.');
+  }
+ }
+
+ return <div className="ml-file-location">
+  <code className="ml-file-directory" dir="ltr"><span className="ml-file-directory-prefix">{directory.slice(0,lastFolder)}</span><span className="ml-file-directory-tail"><bdi dir="ltr">{directory.slice(lastFolder)}</bdi></span></code>
+  <button type="button" className="ml-file-path-trigger" aria-label={label} popoverTarget={panelId}>Full path</button>
+  <div id={panelId} className="ml-file-path-panel" popover="auto" role="region" aria-label={label}
+   onBeforeToggle={()=>setStatus('')}>
+   <header>
+    <strong>Full path</strong>
+    <button type="button" data-copy-file-path onClick={()=>void copyPath()}>Copy path</button>
+   </header>
+   <code data-full-file-path dir="ltr">{path}</code>
+   <p data-file-path-status role="status">{status}</p>
+  </div>
+ </div>;
+}
+
 export function RemoteFilesModal({target,onClose,onSelected,connected=true,connectionIdentity='',isCurrent=()=>true}:{
- target:RemoteFilesTarget;onClose:()=>void;onSelected:(record?:DatasetRecord)=>void;connected?:boolean;connectionIdentity?:string;isCurrent?:()=>boolean;
+ target:RemoteFilesTarget;onClose:()=>void;onSelected:(record:DatasetRecord)=>void;connected?:boolean;connectionIdentity?:string;isCurrent?:()=>boolean;
 }){
- const dataset=Boolean(target.datasetId&&target.inputKind);
- const multiple=dataset&&Boolean(target.multiple);
- const english=target.language!=='zh-Hant';
- const label=(zh:string,en:string)=>english?en:zh;
- const targetKey=JSON.stringify([target.key,target.datasetId,target.inputKind,target.current,target.currentPaths,multiple]);
+ const {datasetId,inputKind,referenceKind}=target;
+ const multiple=inputKind==='genotype'&&Boolean(target.multiple);
+ const pathId=useId(),selectedTitleId=useId();
+ const targetKey=JSON.stringify([target.key,datasetId,inputKind,referenceKind,target.current,target.currentPaths,multiple]);
  const scope=JSON.stringify([targetKey,connected,connectionIdentity]);
  const latest=useRef(scope);latest.current=scope;
  const closed=useRef(false);
@@ -72,7 +113,7 @@ export function RemoteFilesModal({target,onClose,onSelected,connected=true,conne
     if(!valid(controller))return;
     if(reply.status!=='ok'){setError(failure(reply));return}
    }
-   if(reply.kind!=='folder'||typeof reply.path!=='string'||!Array.isArray(reply.entries))throw Error(label('無法讀取這個遠端目錄。','Could not read this remote folder.'));
+   if(reply.kind!=='folder'||typeof reply.path!=='string'||!Array.isArray(reply.entries))throw Error('Could not read this remote folder.');
    setFolder(reply.path);setTyped(reply.path);setEntries(reply.entries);setTruncated(Boolean(reply.truncated));
   }catch(e){if(valid(controller))setError((e as Error).message)}
   finally{if(browse.current===controller){browse.current=null;if(valid(controller))setLoading(false)}}
@@ -80,7 +121,7 @@ export function RemoteFilesModal({target,onClose,onSelected,connected=true,conne
 
  useEffect(()=>{
   closed.current=false;persisting.current=false;setPlaces([]);setFolder('');setTyped('');setEntries([]);setError('');setChecking(false);setSaving(false);setTruncated(false);
-  const initial=(dataset?target.currentPaths??[target.current]:[target.current]).filter(path=>typeof path==='string'&&path.startsWith('/'));
+  const initial=(referenceKind?[target.current]:target.currentPaths??[target.current]).filter(path=>typeof path==='string'&&path.startsWith('/'));
   setChosen(multiple?[...new Set(initial)].slice(0,128):initial.slice(0,1));
   if(!connected){setLoading(false);return()=>{closed.current=true;cancelRequests()}}
   const controller=new AbortController();bootstrap.current=controller;setLoading(true);
@@ -104,85 +145,148 @@ export function RemoteFilesModal({target,onClose,onSelected,connected=true,conne
   const paths=[...chosen],controller=new AbortController();save.current=controller;
   setChecking(true);setSaving(false);setError('');
   try{
-   if(dataset){
-    const checked=await request('/hpc/files/inspect',{paths},controller.signal);
-    if(!valid(controller))return;
-    if(checked.status!=='ok'){setError(failure(checked));return}
-    const files=checked.files;
-    if(!Array.isArray(files)||files.length!==paths.length||files.some(file=>!file||typeof file.path!=='string'||!file.path.startsWith('/')||!Number.isFinite(file.size)||file.size<=0)||new Set(files.map(file=>file.path)).size!==files.length){
-     throw Error(label('檔案核對結果不完整，請重新選擇。','The file inspection result is incomplete. Choose the files again.'));
-    }
-    const canonical=files.map(file=>file.path);
-    persisting.current=true;setChecking(false);setSaving(true);
-    const record=await request<DatasetRecord>(`/signet/datasets/${encodeURIComponent(target.datasetId!)}`,{inputs:{[target.inputKind!]:canonical}},controller.signal,'PATCH');
-    if(!valid(controller))return;
-    if(record?.id!==target.datasetId||JSON.stringify(record.inputs?.[target.inputKind!])!==JSON.stringify(canonical))throw Error(label('儲存結果與這組資料或檔案不一致。','The saved result does not match this dataset and file selection.'));
-    onSelected(record);
-   }else{
-    const reply=await request('/hpc/files/select',{key:target.key,path:paths[0]},controller.signal);
-    if(!valid(controller))return;
-    if(reply.status==='ok')onSelected();else setError(failure(reply));
+   const checked=await request('/hpc/files/inspect',{paths},controller.signal);
+   if(!valid(controller))return;
+   if(checked.status!=='ok'){setError(failure(checked));return}
+   const files=checked.files;
+   if(!Array.isArray(files)||files.length!==paths.length||files.some(file=>!file||typeof file.path!=='string'||!file.path.startsWith('/')||!Number.isFinite(file.size)||file.size<=0)||new Set(files.map(file=>file.path)).size!==files.length){
+    throw Error('The file inspection result is incomplete. Choose the files again.');
    }
+   const canonical=files.map(file=>file.path);
+   persisting.current=true;setChecking(false);setSaving(true);
+   const selection=referenceKind
+    ?{references:{[referenceKind]:canonical[0]}}
+    :{inputs:{[inputKind!]:canonical}};
+   const record=await request<DatasetRecord>(`/signet/datasets/${encodeURIComponent(datasetId)}`,selection,controller.signal,'PATCH');
+   if(!valid(controller))return;
+   const matchesSelection=referenceKind?record?.references?.[referenceKind]===canonical[0]
+    :JSON.stringify(record?.inputs?.[inputKind!])===JSON.stringify(canonical);
+   if(record?.id!==datasetId||!matchesSelection)throw Error('The saved result does not match this dataset and file selection.');
+   onSelected(record);
   }catch(e){if(valid(controller))setError((e as Error).message)}
   finally{if(save.current===controller){save.current=null;persisting.current=false;if(valid(controller)){setChecking(false);setSaving(false)}}}
  }
  const busy=loading||checking||saving||!connected;
- return createPortal(<Modal title={label(`選擇${target.label}`,`Choose ${target.label}`)} onClose={close} dismissDisabled={saving} className="remote-files-modal">
-  <div className="remote-files" data-mode={dataset?'dataset':'reference'}>
-   <nav className="remote-files-places" aria-label={label('位置','Locations')}>
-    {places.map(place=><button key={place.path} type="button" disabled={busy} title={place.path} data-remote-shortcut={place.path} onClick={()=>void open(place.path)}>{place.label}</button>)}
-   </nav>
-   <div>
-    <form className="remote-files-path" onSubmit={event=>{event.preventDefault();void open(typed.trim())}}>
-     <button type="button" data-remote-up disabled={busy||!folder||folder==='/'} onClick={()=>void open(parent(folder))}>{label('上一層','Up')}</button>
-     <input aria-label="HPC3 path" data-remote-path value={typed} disabled={busy} placeholder="/dfs7/your-lab/references" onChange={event=>setTyped(event.target.value)}/>
-     <button type="submit" data-remote-go disabled={busy||!typed.trim()}>{label('前往','Go')}</button>
-    </form>
-    <ul className="remote-files-list" aria-label={label('檔案','Files')}>
-     {entries.map(entry=><li key={entry.path}><button type="button" className="remote-files-row" disabled={busy||!entry.supported||multiple&&chosen.length>=128&&!chosen.includes(entry.path)&&entry.kind==='file'} aria-selected={chosen.includes(entry.path)}
-       data-remote-entry-path={entry.path} data-entry-kind={entry.kind} title={entry.supported?entry.path:label('檔案路徑僅支援英文字母、數字、底線、連字號、句點及斜線。','Not supported: use only letters, numbers, _, -, . and / in the path.')}
-       onClick={()=>entry.kind==='folder'?void open(entry.path):choose(entry.path)}>
-      <span className="remote-files-name">{entry.kind==='folder'?`${entry.name}/`:entry.name}</span>
-      {entry.kind==='file'&&<span className="remote-files-size" data-remote-size>{size(entry.size)}</span>}
-     </button></li>)}
-     {!loading&&!entries.length&&connected&&<li className="remote-files-note">{label('這裡沒有可見檔案。','No visible files here.')}</li>}
-     {loading&&<li className="remote-files-note">{label('正在載入…','Loading…')}</li>}
-     {truncated&&<li className="remote-files-note">{label('目前顯示前 2000 個項目，請輸入更完整的路徑。','Showing the first 2000 items. Type a longer path to narrow it down.')}</li>}
-    </ul>
+ const targetName=target.label.charAt(0).toLowerCase()+target.label.slice(1);
+ const selectionHint=multiple?'Choose one matching PED and MAP file pair.':'Choose one file.';
+ return createPortal(<Modal title={`Choose ${targetName}`} onClose={close} dismissDisabled={saving} className="remote-files-modal">
+  <div className="remote-files" data-mode="dataset">
+   {places.length>0&&<nav className="remote-files-places" aria-label="Quick locations">
+    <span aria-hidden="true">Quick locations</span>
+    {places.map(place=><button key={place.path} type="button" disabled={busy} title={place.path}
+     aria-current={folder===place.path?'location':undefined} data-remote-shortcut={place.path}
+     onClick={()=>void open(place.path)}>{place.label}</button>)}
+   </nav>}
+   <form className="remote-files-path" onSubmit={event=>{event.preventDefault();void open(typed.trim())}}>
+    <label htmlFor={pathId}>Remote path</label>
+    <div>
+     <button type="button" data-remote-up disabled={busy||!folder||folder==='/'} onClick={()=>void open(parent(folder))}>
+      <svg className="remote-files-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M12 19V5m-6 6 6-6 6 6"/></svg>
+      Up
+     </button>
+     <input id={pathId} data-remote-path value={typed} disabled={busy} placeholder="/pub/username" spellCheck={false} onChange={event=>setTyped(event.target.value)}/>
+     <button type="submit" data-remote-go disabled={busy||!typed.trim()}>Go</button>
+    </div>
+   </form>
+   <div className="remote-files-grid">
+    <div className="remote-files-browser">
+     <div className="remote-files-list-header" aria-hidden="true">
+      <span>Name</span><span>Size</span>
+     </div>
+     <ul className="remote-files-list" aria-label="Folder contents" aria-busy={loading}>
+      {entries.map(entry=>{
+       const isFolder=entry.kind==='folder';
+       const selected=chosen.includes(entry.path);
+       return <li key={entry.path}><button type="button" className="remote-files-row"
+        disabled={busy||!entry.supported||multiple&&chosen.length>=128&&!selected&&!isFolder}
+        aria-pressed={isFolder?undefined:selected} data-remote-entry-path={entry.path} data-entry-kind={entry.kind}
+        title={entry.supported?entry.path:'Not supported: use only letters, numbers, _, -, . and / in the path.'}
+        onClick={()=>isFolder?void open(entry.path):choose(entry.path)}>
+        <FileIcon folder={isFolder}/>
+        <span className="remote-files-name">{entry.name}{isFolder?"/":""}</span>
+        {!isFolder&&<span className="remote-files-size" data-remote-size>{size(entry.size)}</span>}
+        <span className="remote-files-marker" aria-hidden="true"/>
+       </button></li>;
+      })}
+      {!loading&&!entries.length&&connected&&<li className="remote-files-note">No visible files here.</li>}
+      {loading&&<li className="remote-files-note" role="status">Loading…</li>}
+      {truncated&&<li className="remote-files-note">Showing the first 2000 items. Type a longer path to narrow it down.</li>}
+     </ul>
+    </div>
+    <section className="remote-files-selected" aria-labelledby={selectedTitleId}>
+     <div className="remote-files-selected-heading">
+      <h3 id={selectedTitleId}>Selected files</h3>
+      <span aria-live="polite">{`${chosen.length} selected`}</span>
+     </div>
+     <p className="remote-files-hint">{selectionHint}</p>
+     {chosen.length>0?<ul>{chosen.map(path=>{
+      const filename=path.slice(path.lastIndexOf('/')+1);
+      return <li key={path} data-remote-selected-path={path}>
+       <FileIcon/>
+       <strong>{filename}</strong>
+       <button type="button" data-remote-remove disabled={checking||saving} aria-label={`Remove ${path}`}
+        onClick={()=>{setChosen(previous=>previous.filter(value=>value!==path));setError('')}}>Remove</button>
+       <SelectedFileLocation path={path} filename={filename}/>
+      </li>;
+     })}</ul>:<div className="remote-files-empty">
+      <FileIcon/><span>No files selected</span>
+     </div>}
+    </section>
    </div>
+   {!connected&&<p role="alert" data-remote-error>Connect to the remote server before choosing files.</p>}
+   {(checking||saving)&&<p role="status" data-remote-state={saving?'saving':'checking'}>{saving?'Saving the dataset file selection…':'Checking file availability…'}</p>}
+   {error&&<p role="alert" data-remote-error>{error}</p>}
   </div>
-  <section className="remote-files-selected" aria-label={label('已選檔案','Selected files')}>
-   <h3>{label('已選檔案','Selected files')} ({chosen.length}{multiple?'/128':''})</h3>
-   <ul>{chosen.map(path=><li key={path} data-remote-selected-path={path}><code>{path}</code><button type="button" data-remote-remove disabled={checking||saving} aria-label={label(`移除 ${path}`,`Remove ${path}`)} onClick={()=>setChosen(previous=>previous.filter(value=>value!==path))}>{label('移除','Remove')}</button></li>)}</ul>
-   {dataset&&<p>{label('此步驟僅核對路徑與檔案是否可讀。','This checks paths and file readability only.')}</p>}
-  </section>
-  {!connected&&<p role="alert" data-remote-error>{label('請先連線到遠端，再選擇檔案。','Connect to the remote server before choosing files.')}</p>}
-  {(checking||saving)&&<p role="status" data-remote-state={saving?'saving':'checking'}>{saving?label('正在儲存資料組的檔案選擇…','Saving the dataset file selection…'):dataset?label('正在核對檔案是否可用…','Checking file availability…'):label('正在檢查檔案格式…','Checking the file format…')}</p>}
-  {error&&<p role="alert" data-remote-error>{error}</p>}
-  <DialogActions><button type="button" data-remote-cancel disabled={saving} onClick={close}>{label('取消','Cancel')}</button><button type="button" data-remote-apply className="ssh-primary" disabled={busy||!chosen.length} onClick={()=>void select()}>{dataset?label('套用檔案選擇','Apply file selection'):label('使用這個檔案','Use this file')}</button></DialogActions>
+  <DialogActions>
+   <p className="remote-files-apply-note">Files are checked for readability before saving.</p>
+   <button type="button" data-remote-cancel disabled={saving} onClick={close}>Cancel</button>
+   <button type="button" data-remote-apply className="ssh-primary" disabled={busy||!chosen.length} onClick={()=>void select()}>Apply file selection</button>
+  </DialogActions>
  </Modal>,document.body);
 }
 
-/** Bridges dataset and legacy reference controls to the same scoped dialog. */
+/** Opens a file picker scoped to the active dataset. */
 export function RemoteFilesHost({connected=true,connectionIdentity=''}:{connected?:boolean;connectionIdentity?:string}={}){
- const [selection,setSelection]=useState<{target:RemoteFilesTarget;id:number}|null>(null);
+ const [selection,setSelection]=useState<{target:RemoteFilesTarget;id:number;trigger:HTMLElement|null}|null>(null);
  const sequence=useRef(0);
  const current=useRef<typeof selection>(null);
+ const returnFocus=useRef<HTMLElement|null>(null);
  useEffect(()=>{
-  const listen=(event:Event)=>{const target=(event as CustomEvent<RemoteFilesTarget>).detail;if(target&&typeof target.key==='string'&&typeof target.label==='string'){current.current={target,id:++sequence.current};setSelection(current.current)}};
-  const closeDataset=()=>{if(current.current?.target.datasetId){current.current=null;setSelection(null)}};
+  const listen=(event:Event)=>{
+   const target=(event as CustomEvent<RemoteFilesTarget>).detail;
+   if(!target||typeof target.key!=='string'||typeof target.label!=='string'||!target.datasetId||
+     !(target.inputKind||target.referenceKind))return;
+   const active=document.activeElement;
+   returnFocus.current=null;
+   current.current={target,id:++sequence.current,trigger:active instanceof HTMLElement?active:null};
+   setSelection(current.current);
+  };
+  const closeDataset=()=>{current.current=null;setSelection(null)};
   window.addEventListener('open-remote-files',listen);window.addEventListener('close-dataset-remote-files',closeDataset);
   return()=>{current.current=null;window.removeEventListener('open-remote-files',listen);window.removeEventListener('close-dataset-remote-files',closeDataset)};
  },[]);
- useEffect(()=>{current.current=null;setSelection(null)},[connectionIdentity]);
+ useEffect(()=>{returnFocus.current=null;current.current=null;setSelection(null)},[connectionIdentity]);
+ useEffect(()=>{
+  if(selection)return;
+  const trigger=returnFocus.current;
+  returnFocus.current=null;
+  if(document.activeElement===document.body&&trigger?.isConnected&&trigger.getClientRects().length){
+   trigger.focus({preventScroll:true});
+  }
+ },[selection]);
  if(!selection)return null;
  const target=selection.target;
- return <RemoteFilesModal key={selection.id} target={target} connected={connected} connectionIdentity={connectionIdentity}
-  isCurrent={()=>current.current?.id===selection.id} onClose={()=>{if(current.current?.id===selection.id){current.current=null;setSelection(null)}}} onSelected={record=>{
-  if(current.current?.id!==selection.id)return;
+ const dismiss=()=>{
+  if(current.current?.id!==selection.id)return false;
+  returnFocus.current=selection.trigger;
   current.current=null;
   setSelection(null);
-  if(target.datasetId&&target.inputKind&&record)window.dispatchEvent(new CustomEvent('dataset-files-selected',{detail:{datasetId:target.datasetId,inputKind:target.inputKind,record}}));
-  else window.dispatchEvent(new Event('remote-file-selected'));
+  return true;
+ };
+ return <RemoteFilesModal key={selection.id} target={target} connected={connected} connectionIdentity={connectionIdentity}
+  isCurrent={()=>current.current?.id===selection.id} onClose={dismiss} onSelected={record=>{
+  if(!dismiss())return;
+  if(target.referenceKind)window.dispatchEvent(new CustomEvent('dataset-reference-selected',{detail:{datasetId:target.datasetId,referenceKind:target.referenceKind,record}}));
+  else window.dispatchEvent(new CustomEvent('dataset-files-selected',{detail:{datasetId:target.datasetId,inputKind:target.inputKind,record}}));
  }}/>;
 }

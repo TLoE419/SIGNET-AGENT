@@ -54,7 +54,7 @@ function fingerprint(folders) {
 }
 
 async function verify() {
-  running = await launch({provider: 'codex', visible: false, userData: path.join(temporary, 'app'),
+  running = await launch({provider: 'none', visible: false, userData: path.join(temporary, 'app'),
     stateFile: path.join(temporary, 'chat.json')});
   const {window} = running;
   const fixturePath = path.join(temporary, 'fixture.json');
@@ -99,6 +99,11 @@ async function verify() {
     await click(`[data-run-target="${id}"]`);
     await until(() => js(`!!document.querySelector('#ml-run-${id}')?.getClientRects().length`), 'History detail did not open: ' + id);
   };
+  const selectStage = (id, stage) => click(`#ml-run-${id} [data-history-select-stage="${stage}"]`);
+  const openStage = async (id, stage) => {
+    await selectStage(id, stage);
+    await click(`#ml-run-${id} [data-run-stage="${stage}"]`);
+  };
   const detailText = id => js(`document.querySelector('#ml-run-${id}').textContent`);
   const geometry = () => js(`(() => {const root=document.querySelector('.ml-app');return [root.offsetWidth,root.offsetHeight,
     root.querySelector('.ml-rail').offsetWidth,root.querySelector('.ml-chat').offsetWidth];})()`);
@@ -106,9 +111,8 @@ async function verify() {
     configured: 'recorded--' + fixture.configured, visualization: 'recorded--' + fixture.visualization,
     live: 'workspace--' + fixture.shared, archive: 'archive--' + fixture.shared, orphan: 'archive--' + fixture.orphan};
 
-  await until(() => js(`!!document.querySelector('#ml-language')`), 'Workspace did not mount');
-  assert.deepEqual(await geometry(), [1650, 894, 53, 542]);
-  await click('#ml-language');
+  await until(() => js(`!!document.querySelector('#ml-chat-title').textContent`), 'Workspace did not mount');
+  assert.deepEqual(await geometry(), [1650, 894, 68, 542]);
   await selectDataset(datasetA.id);
   const initial = await history();
   assert.deepEqual(initial.runs.map(run => run.history_id).sort(), Object.values(ids).sort());
@@ -143,17 +147,21 @@ async function verify() {
   assert.deepEqual(await rows(), Object.values(ids).sort(), 'All history lost a source or a retired dataset archive');
 
   await open(ids.generic);
-  for (const step of ['genotype', 'expression']) {
+  for (const [stage, step, setting, jobId] of [[1, 'genotype', '0.2', 'fixture-31'], [2, 'expression', '2', 'fixture-32']]) {
+    await selectStage(ids.generic, stage);
     const job = `#ml-run-${ids.generic} [data-history-job="${step}"]`;
-    await click(job + ' > summary');
-    const current = job + ' [data-attempt-current="true"]';
-    if (await js(`!!document.querySelector(${JSON.stringify(current)})`)) await click(current + ' > summary');
+    await click(`#ml-run-${ids.generic} [data-history-stage-panel]:not([hidden]) [data-history-detail-tab="settings"]`);
+    const settings = job + ' [data-attempt-current="true"] [data-history-saved="settings"]';
+    assert.equal(await js(`(() => {
+      const control = document.querySelector(${JSON.stringify(settings)});
+      return Boolean(control?.getClientRects().length && control.textContent.includes(${JSON.stringify(setting)}));
+    })()`), true, 'The selected current attempt must display its saved settings');
+    assert.ok((await detailText(ids.generic)).includes(jobId));
   }
   const genericText = await detailText(ids.generic);
   assert.ok(genericText.includes('0.2') && genericText.includes('fixture-31') && genericText.includes('fixture-32'));
   for (const filename of datasetA.inputs.genotype) assert.ok(genericText.includes(filename));
   assert.equal(await js(`document.querySelectorAll('#ml-run-${ids.generic} [data-run-stage]').length`), 0);
-  assert.equal(await js(`!!document.querySelector('#ml-run-${ids.generic} [data-history-job="genotype"] [data-history-saved="settings"]').getClientRects().length`), true);
   await open(ids.agent);
   for (const operation of ['genotype_tcga', 'network']) await click(`#ml-run-${ids.agent} [data-history-operation="${operation}"] summary`);
   const agentText = await detailText(ids.agent);
@@ -169,22 +177,22 @@ async function verify() {
 
   // The same canonical ID must retain two distinct source-specific viewers.
   await open(ids.live);
-  await click(`[data-history-id="${ids.live}"][data-run-stage="1"]`);
+  await openStage(ids.live, 1);
   await until(() => js(`document.querySelector('#lens-history-stage')?.dataset.runState==='ready'`), 'Workspace result did not reopen');
   assert.equal(await js(`document.querySelector('#lens-history-stage [data-stage-setting="mind"]').textContent`), '0.2');
   await open(ids.archive);
-  await click(`[data-history-id="${ids.archive}"][data-run-stage="1"]`);
+  await openStage(ids.archive, 1);
   await until(() => js(`document.querySelector('#lens-history-stage')?.dataset.runState==='ready'&&document.querySelector('#lens-history-stage').dataset.historyId===${JSON.stringify(ids.archive)}`),
     'The same-ID archived Stage 1 did not select its explicit source');
   assert.equal(await js(`document.querySelector('#lens-history-stage [data-stage-setting="mind"]').textContent`), '0.1');
   await open(ids.archive);
-  await click(`[data-history-id="${ids.archive}"][data-run-stage="3"]`);
+  await openStage(ids.archive, 3);
   await until(() => js(`document.querySelector('#lens-history-stage3')?.dataset.runState==='ready'&&document.querySelector('#lens-history-stage3').dataset.historyId===${JSON.stringify(ids.archive)}`),
     'Archived Stage 3 did not use its explicit source');
   assert.equal(await js(`document.querySelector('#lens-history-stage3 [data-s3-components]').textContent`), '2');
   for (const id of [ids.archive, ids.visualization]) {
     await open(id);
-    await click(`[data-history-id="${id}"][data-run-stage="6"]`);
+    await openStage(id, 6);
     await until(() => js(`document.querySelector('#lens-stage6')?.dataset.runState==='ready'&&document.querySelector('#lens-stage6').dataset.runId===${JSON.stringify(id===ids.archive ? fixture.shared : fixture.visualization)}`),
       'Source-specific Stage 6 result did not reopen: ' + id);
     assert.equal(await js(`document.querySelectorAll('#lens-stage6 tbody tr').length`), 3);
@@ -230,7 +238,7 @@ async function verify() {
   assert.deepEqual(readFileSync(overlay), savedOverlay, 'Reopening rewrote the saved organization metadata');
   assert.deepEqual(fingerprint(originals), frozen, 'Reopening history changed frozen provenance or results');
   assert.equal(existsSync(path.join(temporary, 'forbidden-remote.ndjson')), false, 'Read-only history attempted a remote operation');
-  assert.deepEqual(await geometry(), [1650, 894, 53, 542]);
+  assert.deepEqual(await geometry(), [1650, 894, 68, 542]);
   await replacement.stop(); replacement = undefined;
   await running.quit();
   console.log('PASS: workspace/Slurm/Agent/configured/archive history, source-scoped duplicate IDs, retired datasets, honest saved settings and execution states, capability-only result links with MEGF6 filtering, manual assignment across Python restart, immutable originals and fixed geometry; local records only, no SSH/jobs/analysis');

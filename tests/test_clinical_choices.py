@@ -67,6 +67,29 @@ class ClinicalChoicesTest(unittest.TestCase):
         result = review(self.clinical, self.genotype, self.expression, {'other': 'exclude'})
         self.assertTrue(any('missing' in issue for issue in result['issues']))
 
+    def test_missing_gender_requires_an_explicit_column_or_a_corrected_file(self):
+        original = self.clinical.read_bytes().replace(b'\tgender\r', b'\tdemographic.gender\r')
+        self.clinical.write_bytes(original)
+        blocked = review(self.clinical, self.genotype, self.expression)
+        self.assertEqual(blocked['missing_columns'], ['gender'])
+        self.assertEqual(blocked['gender_column_candidates'], ['demographic.gender'])
+        self.assertTrue(blocked['issues'])
+        out = self.folder / 'copy/clinical.tsv'
+        for column in ('submitter_id', 'race', 'absent'):
+            invalid = review(self.clinical, self.genotype, self.expression, out=out, gender_column=column)
+            self.assertTrue(invalid['issues'])
+            self.assertFalse(out.exists())
+        resolved = review(self.clinical, self.genotype, self.expression, {'other': 'exclude'},
+                          out, gender_column='demographic.gender')
+        self.assertFalse(resolved['issues'])
+        self.assertEqual(resolved['clinical_matched'], 4)
+        self.assertTrue(out.read_text().startswith('submitter_id\trace\tgender\n'))
+        self.assertEqual(self.clinical.read_bytes(), original)
+        self.clinical.write_bytes(original.replace(b'demographic.gender', b'unrelated'))
+        no_candidate = review(self.clinical, self.genotype, self.expression)
+        self.assertEqual(no_candidate['gender_column_candidates'], [])
+        self.assertTrue(no_candidate['issues'])
+
     def test_linked_parent_is_refused_before_any_foreign_directory_is_created(self):
         owner, foreign = self.folder / 'owned', self.folder / 'foreign'
         owner.mkdir()
@@ -129,7 +152,10 @@ class ClinicalChoicesTest(unittest.TestCase):
     def clinical_shell(self, script):
         args = shlex.split(next(line for line in script.splitlines() if line.startswith('python3 - ')))
         arguments = [arg for arg in args[2:] if not arg.startswith('<<')]
-        value = review(*arguments[:3], json.loads(arguments[3]), arguments[4] if len(arguments) > 4 else None)
+        destination = arguments[4]
+        if destination.startswith('${C:?}/'):
+            destination = str(self.remote.resolve() / destination.removeprefix('${C:?}/'))
+        value = review(*arguments[:3], json.loads(arguments[3]), destination or None, arguments[5] or None)
         return 0, {'clinical': json.dumps(value)}, []
 
     def checked_review(self, source=None, choices=None):
@@ -161,6 +187,53 @@ class ClinicalChoicesTest(unittest.TestCase):
         unknown = workspace.review_adjust(self.run_id, str(self.source))
         self.assertFalse(unknown['ready'])
         self.assertNotIn('review_token', unknown)
+
+    def test_review_and_submit_bind_the_selected_gender_column_to_the_copy(self):
+        self.review_fixture()
+        original = self.source.read_text().replace('\tgender\n', '\tGender\tdemographic.gender\n')
+        original = '\n'.join([original.splitlines()[0]] + [
+            line + '\t' + line.split('\t')[-1] for line in original.splitlines()[1:]
+        ]) + '\n'
+        self.source.write_text(original)
+        inputs, choices = {'cli.file': str(self.source)}, {'other': 'exclude'}
+        def checked(column):
+            return workspace.review_adjust(self.run_id, str(self.source), choices, gender_column=column)
+        def submit(selection, token):
+            return workspace.submit_adjust(self.run_id, inputs, {'npc': 3}, jobs.STEPS['adjust'].resources,
+                                           choices, token, gender_column=selection)
+        self.assertFalse(checked(None)['ready'])
+        chosen = checked('Gender')
+        other = checked('demographic.gender')
+        self.assertNotEqual(chosen['review_token'], other['review_token'])
+        with self.assertRaises(jobs.StepError) as caught:
+            submit('demographic.gender', chosen['review_token'])
+        self.assertEqual(caught.exception.code, 'review_required')
+        self.submitted.assert_not_called()
+        result = submit('Gender', chosen['review_token'])
+        self.submitted.assert_called_once()
+        prepared = Path(self.submitted.call_args.args[2]['cli.file'])
+        self.assertTrue(prepared.read_text().startswith('submitter_id\trace\tgender\tdemographic.gender\n'))
+        self.assertEqual(self.source.read_text(), original)
+        self.assertEqual(result['clinical']['gender_column'], 'Gender')
+        from agent.runtime.step_report import safe_clinical_review
+        public = safe_clinical_review(result['clinical']['review'])
+        self.assertEqual(public['clinical_matched'], 4)
+        self.assertNotIn('demographic.gender', json.dumps(public))
+        self.assertNotIn('TCGA-', json.dumps(public))
+
+    def test_prepare_uses_the_owned_canonical_directory_under_a_mount_alias(self):
+        self.review_fixture()
+        alias = self.folder / 'mount-alias'
+        alias.symlink_to(self.remote.parent, target_is_directory=True)
+        alias_run = str(alias / self.run_id)
+        for job in self.history['jobs'].values():
+            job['remote_dir'] = alias_run
+        with patch.object(jobs, '_remote_dir', return_value=alias_run):
+            token = self.checked_review()['review_token']
+            self.checked_submit(token)
+        prepared = Path(self.submitted.call_args.args[2]['cli.file'])
+        self.assertTrue(prepared.is_file())
+        self.assertEqual(prepared.parent.parent.resolve(), self.remote / 'inputs/clinical')
 
     def test_stale_review_token_refuses_before_copy_or_scheduler_submission(self):
         self.review_fixture()
@@ -317,7 +390,7 @@ class ClinicalChoicesTest(unittest.TestCase):
         (root / 'steps').mkdir(parents=True)
         source = '/remote/refdata/clinical.tsv'
         checks = []
-        def checked(run_id, clinical=None, choices=None, out=None):
+        def checked(run_id, clinical=None, choices=None, out=None, *, gender_column=None):
             checks.append((clinical, choices, out))
             return {'ready': True, 'inputs': {'cli.file': source}, 'reason': '', 'clinical': {'written': bool(out)}}
         def submit(run_id, step, inputs, resources, options):

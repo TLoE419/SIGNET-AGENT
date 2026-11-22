@@ -102,8 +102,8 @@ class WorkspaceVisualizationTest(unittest.TestCase):
     def test_history_recovers_the_saved_custom_dataset_name_without_a_catalog_entry(self):
         workspace = Workspace(Mock(state_file=None))
         run = {'run_id': self.run_id, 'dataset_id': 'dataset-study-a',
-               'dataset_name': ['研究 A', 'Study A'],
-               'source': 'live', 'name': ['研究 A', 'Study A'], 'jobs': {}, 'graph': None,
+               'dataset_name': 'Study A',
+               'source': 'live', 'name': 'Study A', 'jobs': {}, 'graph': None,
                'inputs': {'genotype': ['/frozen/a.ped', '/frozen/a.map'], 'expression': [], 'clinical': []}}
         for relative in (workspace_genotype.SNAPSHOT, workspace_genotype.VISUALIZE_SNAPSHOT,
                          'steps/genotype.json', 'steps/visualize.json'):

@@ -43,7 +43,7 @@ async function until(check, description, timeoutMs = 20000) {
 }
 
 async function verify() {
-  running = await launch({provider: 'codex', visible: false, userData: path.join(temp, 'app'),
+  running = await launch({provider: 'none', visible: false, userData: path.join(temp, 'app'),
     stateFile: path.join(temp, 'chat', 'state.json')});
   assert.ok(running);
   const {window} = running;
@@ -68,11 +68,14 @@ async function verify() {
   })()`);
   assert.deepEqual(frame, [1650, 894, 542]);
   await until(() => js(`!!document.querySelector('[data-stage="1"]')`), 'Stage timeline is missing');
+  assert.equal(await js('document.documentElement.lang'), 'en');
+  assert.equal(await js(`Boolean(document.querySelector('#ml-language'))`), false);
   await click('#ml-stage-tab');
   await click('[data-stage="1"]');
   await until(() => js(`Boolean(document.querySelector(${JSON.stringify(review)}))`), 'Review control did not mount');
   await until(() => js(`document.querySelector(${JSON.stringify(submit)})?.disabled === false`),
     'Prepared chr1 input review did not enable submit');
+  assert.equal(await js(`document.querySelector(${JSON.stringify(submit)}).textContent`), 'Submit Stage 1');
 
   for (const [key, file] of Object.entries(fixture.inputs)) {
     const selector = `#lens-stage1 [data-genotype-input="${key}"]`;
@@ -133,7 +136,14 @@ async function verify() {
   assert.equal(readStep().state, 'completed');
   assert.equal(existsSync(path.join(localRun, 'work/res/resg/signet_Geno')), false);
 
-  const runDetail = `#ml-run-${runId}`;
+  const historyId = 'workspace--' + runId;
+  const runDetail = `#ml-run-${historyId}`;
+  const selectStage = stage => click(`${runDetail} [data-history-select-stage="${stage}"]`);
+  const stageAction = stage => `${runDetail} [data-run-stage="${stage}"]`;
+  const openStage = async stage => {
+    await selectStage(stage);
+    await click(stageAction(stage));
+  };
   await click('#lens-stage1 [data-genotype-history]');
   await until(() => js(`Boolean(document.querySelector(${JSON.stringify(runDetail)})?.getClientRects().length)`),
     'The live completion action did not open the saved run');
@@ -147,12 +157,11 @@ async function verify() {
   await load;
   await until(() => js(`!!document.querySelector(${JSON.stringify(history)})`), 'Could not reopen the workspace');
   await click(history);
-  const row = `[data-run-target="${runId}"]`;
+  const row = `[data-run-target="${historyId}"]`;
   await until(() => js(`Boolean(document.querySelector(${JSON.stringify(row)})?.getClientRects().length)`),
     'The completed run was missing from history after reload');
   await click(row);
-  const stage = `[data-run-stage="1"][data-run-id="${runId}"]`;
-  await click(stage);
+  await openStage(1);
   await until(() => js(`(() => {
     const panel = document.querySelector('#lens-history-stage');
     return panel?.dataset.runId === ${JSON.stringify(runId)} && panel.dataset.runState === 'ready';
@@ -175,13 +184,14 @@ async function verify() {
   writeFileSync(genotypeIntermediate, '4 samples, 3 retained variants\n');
   const expressionPanel = '#lens-stage2';
   const expressionSubmit = `${expressionPanel} [data-expression-submit]`;
-  const expressionStage = `[data-run-stage="2"][data-run-id="${runId}"]`;
+  const expressionStage = stageAction(2);
   const expressionState = () => js(`document.querySelector(${JSON.stringify(expressionPanel)})?.dataset.expressionState`);
   const openExpression = async () => {
     await click(history);
     await until(() => js(`Boolean(document.querySelector(${JSON.stringify(row)})?.getClientRects().length)`),
       'The original run did not reappear in history');
     await click(row);
+    await selectStage(2);
     await until(() => js(`Boolean(document.querySelector(${JSON.stringify(expressionStage)})?.getClientRects().length)`),
       'The same run did not offer its next expression stage');
     await click(expressionStage);
@@ -277,7 +287,7 @@ async function verify() {
   await until(() => js(`Boolean(document.querySelector(${JSON.stringify(row)})?.getClientRects().length)`),
     'The completed Stage 2 run was missing after reload');
   await click(row);
-  await click(expressionStage);
+  await openStage(2);
   await until(() => js(`(() => {
     const panel = document.querySelector('#lens-history-stage');
     return panel?.dataset.runId === ${JSON.stringify(runId)} && panel.dataset.stage === '2' && panel.dataset.runState === 'ready';
@@ -291,14 +301,13 @@ async function verify() {
   assert.equal(existsSync(path.join(localRun, 'work/res/resg/signet_Geno')), false, 'Individual genotype results must remain remote');
   const originalExpressionRecord = readFileSync(expressionJson, 'utf8');
   const adjustmentPanel = '#lens-stage3';
-  const adjustmentStage = `[data-run-stage="3"][data-run-id="${runId}"]`;
   const adjustmentState = () => js(`document.querySelector(${JSON.stringify(adjustmentPanel)})?.dataset.adjustState`);
   async function openAdjustment() {
     await click(history);
     await until(() => js(`Boolean(document.querySelector(${JSON.stringify(row)})?.getClientRects().length)`),
       'The original run was missing while opening Stage 3');
     await click(row);
-    await click(adjustmentStage);
+    await openStage(3);
   }
   await openAdjustment();
   await until(() => js(`document.querySelector('${adjustmentPanel} [data-adjust-submit]')?.disabled === false`),
@@ -382,14 +391,13 @@ async function verify() {
   const originalAdjustmentRecord = readFileSync(adjustmentJson, 'utf8');
   const originalAdjustedExpression = readFileSync(path.join(remoteRun, 'work/res/resa/signet_gexp_rmpc.data'), 'utf8');
   const cisPanel = '#lens-stage4';
-  const cisStage = `[data-run-stage="4"][data-run-id="${runId}"]`;
   const cisState = () => js(`document.querySelector('${cisPanel}')?.dataset.cisState`);
   async function openCis() {
     await click(history);
     await until(() => js(`Boolean(document.querySelector(${JSON.stringify(row)})?.getClientRects().length)`),
       'The original run was missing while opening Stage 4');
     await click(row);
-    await click(cisStage);
+    await openStage(4);
   }
   await openCis();
   await until(() => js(`document.querySelector('${cisPanel} [data-cis-submit]')?.disabled === false`),
@@ -467,14 +475,13 @@ async function verify() {
   assert.deepEqual(readdirSync(path.join(fixture.project, 'runs')).sort(), ['step_test', runId].sort());
   const originalCisRecord = readFileSync(cisJson, 'utf8');
   const networkPanel = '#lens-stage5';
-  const networkStage = `[data-run-stage="5"][data-run-id="${runId}"]`;
   const networkState = () => js(`document.querySelector('${networkPanel}')?.dataset.networkState`);
   async function openNetwork() {
     await click(history);
     await until(() => js(`Boolean(document.querySelector(${JSON.stringify(row)})?.getClientRects().length)`),
       'The original run was missing while opening Stage 5');
     await click(row);
-    await click(networkStage);
+    await openStage(5);
   }
   await openNetwork();
   await until(() => js(`document.querySelector('${networkPanel} [data-network-submit]')?.disabled === false`),
@@ -553,14 +560,13 @@ async function verify() {
   assert.deepEqual(readdirSync(path.join(fixture.project, 'runs')).sort(), ['step_test',runId].sort());
   const originalNetworkRecord = readFileSync(networkJson, 'utf8');
   const visualizationPanel = '#lens-stage6-run';
-  const visualizationStage = `[data-run-stage="6"][data-run-id="${runId}"]`;
   const visualizationState = () => js(`document.querySelector('${visualizationPanel}')?.dataset.visualizeState`);
   async function openVisualization() {
     await click(history);
     await until(() => js(`Boolean(document.querySelector(${JSON.stringify(row)})?.getClientRects().length)`),
       'The original run was missing while opening Stage 6');
     await click(row);
-    await click(visualizationStage);
+    await openStage(6);
   }
   await openVisualization();
   await until(() => js(`!!document.querySelector('${visualizationPanel} [data-visualize-review]:not(:disabled)')`),
@@ -628,11 +634,11 @@ async function verify() {
   assert.ok(megf6Rows.every(cells => cells.includes('MEGF6')));
 
   await click('#ml-stage6-back');
-  await click(adjustmentStage);
+  await openStage(3);
   await until(() => js(`document.querySelector('#lens-history-stage3')?.dataset.runState === 'ready'`),
     'Earlier Stage 3 did not reopen after viewing the live Stage 6 graph');
   await click('#ml-stage3-back');
-  await click(visualizationStage);
+  await openStage(6);
   await until(graphReady, 'Stage 6 graph did not reopen after an earlier stage');
   assert.equal(await js(`document.querySelector('#lens-stage6').dataset.selectedGene`), 'MEGF6');
   assert.equal(await js(`document.querySelectorAll('#lens-stage6 tbody tr').length`), 2);

@@ -12,7 +12,7 @@ async function until(check) {for (let i = 0; i < 80; i++) {if (check()) return; 
 const reply = (value, status = 200) => ({ok: status < 400, status, json: async () => clone(value)});
 const context = overrides => ({historyId: 'workspace--shared', runId: 'shared', source: 'live', datasetId: 'dataset-a',
   step: 'expression', number: 2, current: true, recordFile: 'steps/expression.json', recordIdentity: 'saved-identity',
-  language: 'en', visible: true, record: {job_id: '123', state: 'failed', reason: 'Saved failure reason', exit_code: '1',
+  visible: true, record: {job_id: '123', state: 'failed', reason: 'Saved failure reason', exit_code: '1',
     missing_outputs: ['res/expression.txt'], failure_hints: ['Saved R error']}, ...overrides});
 function result(call, target, overrides = {}) {
   const query = new URL('http://localhost' + call.url).searchParams;
@@ -156,7 +156,7 @@ test('current stage controller passes the normalized run identity into the share
   const panel = h.window.document.createElement('section'); h.window.document.body.append(panel);
   h.window.eval(readFileSync(path.join(folder, 'genotype-run.js'), 'utf8'));
   const controller = h.window.mountExpressionRun({panel, token: 'test-token'});
-  controller.setContext({datasetId: 'dataset-a', visible: true, language: 'en', runId: 'shared', runs: [{history_id: target.historyId,
+  controller.setContext({datasetId: 'dataset-a', visible: true, runId: 'shared', runs: [{history_id: target.historyId,
     run_id: 'shared', source: 'live', origin: 'workspace', record_identity: 'saved-identity', capabilities: {continue_analysis: true},
     jobs: {genotype: {state: 'completed'}, expression: target.record}}]});
   const logs = panel.querySelector('[data-expression-logs] [data-job-logs]');
