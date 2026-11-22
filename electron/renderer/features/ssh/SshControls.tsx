@@ -33,6 +33,15 @@ export function SshControls({renderStatus}:{renderStatus?:(props:SshControlStatu
  async function connect(input:FormInput){setDraft(null);if(input.auth.method==='duo'){await ssh.save(input);setOpen(false);setAccount(true);return}try{await ssh.connect(input)}catch(e){credentialRequest(e)}}
  async function toggle(){if(connection?.phase==='slow'&&liveStatus==='error'){await ssh.connectSaved();return}if(liveStatus==='connected'||liveStatus==='connecting'){await ssh.disconnect();return}if(!p){setOpen(true);return}if(p.auth.method==='duo'){setAccount(true);return}try{await ssh.connectSaved()}catch(e){credentialRequest(e)}}
  const connection=ssh.snapshot.connection,identity=connectionIdentity(p,keys);
+ const remoteConnected=liveStatus==='connected'&&connection?.phase!=='slow';
+ const remoteIdentity=`${identity.endpoint}|${connection?.connectedAt||''}`;
+ const environmentKey=JSON.stringify([environment.config?.root||'',environment.config?.source||'']);
+ useEffect(()=>{
+  const publish=()=>window.dispatchEvent(new CustomEvent('workspace-remote-context',{detail:{connected:remoteConnected,identity:remoteIdentity,environmentKey}}));
+  window.addEventListener('workspace-request-remote-context',publish);
+  publish();
+  return()=>window.removeEventListener('workspace-request-remote-context',publish);
+ },[remoteConnected,remoteIdentity,environmentKey]);
  const statusProps:SshControlStatus={environment,onEnvironment:()=>setEnvironmentOpen(true),
   onInstallEnvironment:async()=>{
    const token=document.querySelector<HTMLMetaElement>('meta[name="chat-token"]')?.content??'';

@@ -41,6 +41,8 @@ from agent.runtime import analysis_family, analysis_rerun, step_proposal
 from agent.runtime import signet_jobs as jobs
 from agent.runtime import workspace_genotype
 from agent.runtime import workspace_datasets
+from agent.runtime import workspace_validation
+from agent.runtime import workspace_history
 from agent.runtime.visualization import read_graph, threshold_counts
 import agent.tools.signet as signet
 
@@ -159,6 +161,13 @@ def list_datasets(handler, url):
     return 200, {'datasets': workspace_datasets.list_datasets()}
 
 
+def assign_history_dataset(handler, url, history_id):
+    _query(url, ())
+    return 200, workspace_history.assign_dataset(
+        history_id, **_body(handler, ('dataset_id', 'revision'), required=('dataset_id', 'revision')),
+        history_loader=handler.server.stage6.history)
+
+
 def create_dataset(handler, url):
     _query(url, ())
     return 201, workspace_datasets.create_dataset(**_body(
@@ -168,6 +177,22 @@ def create_dataset(handler, url):
 def update_dataset(handler, url, dataset_id):
     _query(url, ())
     return 200, workspace_datasets.update_dataset(dataset_id, **_body(handler, ('inputs',), required=('inputs',)))
+
+
+def validate_dataset(handler, url, dataset_id):
+    _query(url, ())
+    return 200, workspace_validation.validate(dataset_id, **_body(handler, ('inputs',), required=('inputs',)))
+
+
+def review_dataset_genotype(handler, url, dataset_id):
+    _query(url, ())
+    return 200, workspace_genotype.review_dataset(dataset_id, **_body(handler, ('inputs',), required=('inputs',)))
+
+
+def submit_dataset_genotype(handler, url, dataset_id):
+    _query(url, ())
+    fields = ('run_id', 'inputs', 'settings', 'resources', 'review_token', 'acknowledge_warnings')
+    return 202, workspace_genotype.submit_dataset(dataset_id, **_body(handler, fields, required=fields))
 
 
 def review_genotype_example(handler, url):
@@ -687,8 +712,13 @@ def get_log(handler, url, run_id, step):
 ROUTES = [
     (re.compile(r'/signet/progress'), {'GET': get_progress}),
     (re.compile(r'/signet/catalog'), {'GET': get_catalog}),
+    (re.compile(rf'/signet/history/(?P<history_id>{workspace_history.HISTORY_ID})/dataset'),
+     {'PATCH': assign_history_dataset}),
     (re.compile(r'/signet/datasets'), {'GET': list_datasets, 'POST': create_dataset}),
     (re.compile(rf'/signet/datasets/(?P<dataset_id>{_RUN_NAME})'), {'PATCH': update_dataset}),
+    (re.compile(rf'/signet/datasets/(?P<dataset_id>{_RUN_NAME})/validate'), {'POST': validate_dataset}),
+    (re.compile(rf'/signet/datasets/(?P<dataset_id>{_RUN_NAME})/genotype/review'), {'POST': review_dataset_genotype}),
+    (re.compile(rf'/signet/datasets/(?P<dataset_id>{_RUN_NAME})/genotype'), {'POST': submit_dataset_genotype}),
     (re.compile(r'/signet/genotype/example'), {'GET': review_genotype_example, 'POST': submit_genotype_example}),
     (re.compile(rf'/signet/runs/{_RUN}/expression/example'),
      {'GET': review_expression_example, 'POST': submit_expression_example}),

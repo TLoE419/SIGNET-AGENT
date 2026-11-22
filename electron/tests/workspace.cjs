@@ -24,11 +24,27 @@ const remote = {root: remoteRoot, folder: path.join(remoteRoot, 'cohorts/chr2'),
   genotype: [path.join(remoteRoot, 'cohorts/chr2/study.ped'), path.join(remoteRoot, 'cohorts/chr2/study.map')],
   expression: [path.join(remoteRoot, 'cohorts/chr2/expression.tsv')],
   clinical: [path.join(remoteRoot, 'cohorts/chr2/clinical.tsv')],
-  invalid: [path.join(remoteRoot, 'cohorts/chr2/empty.tsv')]};
+  invalid: [path.join(remoteRoot, 'cohorts/chr2/empty.tsv')],
+  invalidExpression: [path.join(remoteRoot, 'cohorts/chr2/bad-expression.tsv')],
+  duplicateExpression: [path.join(remoteRoot, 'cohorts/chr2/duplicate-expression.tsv')],
+  invalidClinical: [path.join(remoteRoot, 'cohorts/chr2/bad-clinical.tsv')]};
 mkdirSync(path.join(remoteRoot, 'home'), {recursive: true});
 mkdirSync(remote.nested, {recursive: true});
-for (const [filename, content] of [[remote.genotype[0], 'F1 P1 0 0 1 -9 A A\n'], [remote.genotype[1], '1 rs1 0 101\n'],
-  [remote.expression[0], 'gene\tS1\nMEGF6\t2\n'], [remote.clinical[0], 'submitter_id\trace\tgender\nP1\tasian\tfemale\n'],
+const patients = Array.from({length: 6}, (_, index) => `TCGA-AA-A00${index + 1}`);
+const expressionHeader = ['Ensembl_ID', ...patients.map(patient => patient + '-01A')];
+const geneRows = Array.from({length: 4}, (_, gene) => [`ENSG0000010000${gene + 1}.1`,
+  ...patients.map((_, sample) => (20 + gene / 10 + sample / 100).toFixed(2))].join(' '));
+const trailers = Array.from({length: 5}, () => Array(7).fill('0').join(' '));
+const expressionText = [expressionHeader.join(' '), ...geneRows, ...trailers, ''].join('\n');
+const clinicalRows = patients.map((patient, index) => [patient,
+  ['asian', 'black or african american', 'white'][Math.floor(index / 2)], index % 2 ? 'male' : 'female'].join('\t'));
+for (const [filename, content] of [[remote.genotype[0], patients.map((patient, index) =>
+  `${patient}-NT ${patient}-NT 0 0 ${index % 2 + 1} -9 A A C T G G`).join('\n') + '\n'],
+  [remote.genotype[1], '1 rs1 0 101\n1 rs2 0 202\n1 rs3 0 303\n'],
+  [remote.expression[0], expressionText], [remote.clinical[0], ['submitter_id\trace\tgender', ...clinicalRows, ''].join('\n')],
+  [remote.invalidExpression[0], [expressionHeader.join(' '), 'PRIVATE_GENE_MUST_NOT_RENDER 20 20 20 20 20', ...geneRows.slice(1), ...trailers, ''].join('\n')],
+  [remote.duplicateExpression[0], [[...expressionHeader.slice(0, -1), expressionHeader[1]].join(' '), ...geneRows, ...trailers, ''].join('\n')],
+  [remote.invalidClinical[0], 'submitter_id\trace\n' + patients.map(patient => patient + '\tPRIVATE_CLINICAL_MUST_NOT_RENDER').join('\n') + '\n'],
   [remote.invalid[0], '']]) {
   writeFileSync(filename, content);
   remote.sizes[filename] = Buffer.byteLength(content);
@@ -434,6 +450,58 @@ async function chooseRemoteFiles({type, remote, paths = [], cancel = false, insp
     'Saved remote files did not update the current dataset');
 }
 
+async function verifyDatasetValidation({remote}) {
+  const report = () => document.querySelector('[data-input-validation]');
+  const check = (condition, message) => { if (!condition) throw Error(message); };
+  const waitFor = async (condition, description) => {
+    const end = Date.now() + 10000;
+    while (!condition()) {
+      check(Date.now() < end, typeof description === 'function' ? description() : description);
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+  };
+  const state = () => report()?.dataset.validationState;
+  const format = kind => report()?.querySelector(`[data-validation-check="${kind}_format"]`)?.dataset.status;
+  async function validate(expected) {
+    const button = document.querySelector('[data-input-validate]');
+    check(button && !button.disabled, 'The dataset-wide input check must be manually available');
+    button.click();
+    await waitFor(() => state() === expected, () => 'Input validation did not settle as ' + expected +
+      ': ' + JSON.stringify({state: state(), text: report()?.textContent}));
+    check(report().getClientRects().length > 0, 'The dataset input report is hidden');
+    check(!report().textContent.includes('PRIVATE_GENE_MUST_NOT_RENDER') &&
+      !report().textContent.includes('PRIVATE_CLINICAL_MUST_NOT_RENDER'), 'Input validation exposed a research cell value');
+  }
+  const changed = () => waitFor(() => !['passed', 'warning'].includes(state()),
+    'Changing input paths retained an active success report');
+
+  check(!['checking', 'passed', 'warning'].includes(state()), 'Input validation must not run automatically when files are selected');
+  await validate('warning');
+  check(format('genotype') === 'passed' && format('clinical') === 'passed' &&
+    ['passed', 'warning'].includes(format('expression')), 'Source-compatible inputs did not pass structural checks');
+  for (const [key, expected] of Object.entries({genotype_patients: 6, expression_patients: 6,
+    matched_patients: 6, clinical_matched: 6, unmatched_genotype: 0, unmatched_expression: 0})) {
+    check(Number(report().querySelector(`[data-pairing-count="${key}"]`)?.textContent.replaceAll(',', '')) === expected,
+      'The validation report has the wrong preliminary pairing count: ' + key);
+  }
+  check(report().querySelectorAll('[data-validation-file]').length === 4, 'The input report did not identify all four inspected files');
+  for (const paths of [remote.invalidExpression, remote.duplicateExpression]) {
+    await window.workspaceChooseRemoteFiles({type: 'expression', remote, paths});
+    await changed();
+    await validate('failed');
+    check(format('expression') === 'failed', 'Malformed rows or duplicate sample identifiers must fail expression validation');
+    check(report().querySelectorAll('[data-validation-issue]').length > 0, 'An invalid file needs a visible explanation');
+  }
+  await window.workspaceChooseRemoteFiles({type: 'expression', remote, paths: remote.expression});
+  await window.workspaceChooseRemoteFiles({type: 'clinical', remote, paths: remote.invalidClinical});
+  await changed();
+  await validate('failed');
+  check(format('clinical') === 'failed', 'Missing clinical columns must fail the clinical format check');
+  await window.workspaceChooseRemoteFiles({type: 'clinical', remote, paths: remote.clinical});
+  await changed();
+  await validate('warning');
+}
+
 async function verifyWorkspace({groups, runs, remote}) {
   const find = selector => {
     const element = document.querySelector(selector);
@@ -464,9 +532,9 @@ async function verifyWorkspace({groups, runs, remote}) {
     datasetPicker.value = id;
     datasetPicker.dispatchEvent(new Event('change', {bubbles: true}));
   };
-  const resultIds = () => [...resultPicker.options].map(option => option.value).filter(Boolean).sort();
+  const resultIds = () => [...resultPicker.options].filter(option => option.value).map(option => option.dataset.runId).sort();
   const historyIds = () => [...document.querySelectorAll('#ml-run-list [data-run-target]')]
-    .filter(button => button.getClientRects().length).map(button => button.dataset.runTarget).sort();
+    .filter(button => button.getClientRects().length).map(button => button.dataset.runId).sort();
   const countRows = () => stage6.querySelectorAll('tbody tr').length;
   const expectedList = group => runs.filter(run => run.dataset_id === group.id);
   const stageButton = (stage) => `[data-stage="${stage}"]`;
@@ -502,8 +570,8 @@ async function verifyWorkspace({groups, runs, remote}) {
     }
 
     for (const run of groupRuns) {
-      click(`[data-run-target="${run.run_id}"]`);
-      const detail = `#ml-run-${run.run_id}`;
+      click(`[data-run-target="archive--${run.run_id}"]`);
+      const detail = `#ml-run-archive--${run.run_id}`;
       const archive = find(`${detail} .ml-run-inputs`);
       if (!archive.open) archive.querySelector('summary').click();
       const names = [...archive.querySelectorAll('code')].map(file => file.textContent);
@@ -513,7 +581,7 @@ async function verifyWorkspace({groups, runs, remote}) {
 
 
       for (const stage of [1, 2, 4, 5]) {
-        click(`[data-run-stage="${stage}"][data-run-id="${run.run_id}"]`);
+        click(`[data-run-stage="${stage}"][data-history-id="archive--${run.run_id}"]`);
         await waitFor(() => savedStage.dataset.runState === 'ready' && savedStage.dataset.runId === run.run_id &&
           savedStage.dataset.stage === String(stage), 'Could not load archived Stage ' + stage + ' for ' + run.run_id);
         check(visible('#lens-history-stage .ml-count-chart') && visible('#lens-history-stage [data-stage-table]') &&
@@ -534,7 +602,7 @@ async function verifyWorkspace({groups, runs, remote}) {
         check(visible(detail) && !visible('#lens-history-stage'), 'Back from Stage ' + stage + ' lost the timeline');
       }
 
-      const adjustment = `[data-run-adjustment="${run.run_id}"]`;
+      const adjustment = `[data-run-stage="3"][data-history-id="archive--${run.run_id}"]`;
       click(adjustment);
       await waitFor(() => stage3.dataset.runState === 'ready' && stage3.dataset.runId === run.run_id,
         'Could not load Stage 3 from history: ' + run.run_id);
@@ -557,7 +625,7 @@ async function verifyWorkspace({groups, runs, remote}) {
       click('#lens-history-stage3 [data-run-back]');
       check(visible(detail) && !visible('#lens-history-stage3'), 'Back from Stage 3 did not restore the run detail');
 
-      click(`[data-run-network="${run.run_id}"]`);
+      click(`[data-run-stage="6"][data-history-id="archive--${run.run_id}"]`);
       await waitFor(() => stage6.dataset.runState === 'ready' && stage6.dataset.runId === run.run_id,
         'Could not load Stage 6 from history: ' + run.run_id);
       check(visible('#lens-stage6') && stage6.querySelectorAll('[data-gene]').length === run.genes &&
@@ -580,7 +648,7 @@ async function verifyWorkspace({groups, runs, remote}) {
   go('analysis');
   showStage(6);
   const first = runs.find(run => run.dataset_id === groups[0].id);
-  resultPicker.value = first.run_id;
+  resultPicker.value = 'archive--' + first.run_id;
   resultPicker.dispatchEvent(new Event('change', {bubbles: true}));
   await waitFor(() => stage6.dataset.runId === first.run_id && stage6.dataset.runState === 'ready',
     'Stage 6 picker did not reopen the original run');
@@ -592,7 +660,9 @@ async function verifyWorkspace({groups, runs, remote}) {
     check(visible('#lens-stage6') && stage6.dataset.runId === first.run_id &&
       stage6.dataset.selectedGene === 'MEGF6' && countRows() === first.incident, 'Stage 6 lost the selected run or gene');
   } else {
-    check(!visible(stageButton(3)), 'Another dataset inherited the example Stage 3 preview');
+    showStage(3);
+    check(!visible('#lens-history-stage3') && !visible('#lens-stage6'),
+      'The dataset’s manual stages inherited another run’s displayed results');
   }
 
   go('data');
@@ -608,9 +678,16 @@ async function verifyWorkspace({groups, runs, remote}) {
   check(Boolean(created), 'New dataset was missing from the backend catalog');
   check(['genotype', 'expression', 'clinical'].every(type => created.inputs[type].length === 0),
     'A newly created dataset must start with empty file selections');
+  go('analysis');
+  if (!visible(stageButton(1))) click('#ml-stage-tab');
+  showStage(1);
+  check(visible('#lens-stage1') && !visible('#lens-stage6') && !resultIds().length,
+    'A new dataset should start with its manual Stage 1 review and no inherited result');
+  go('data');
   for (const type of ['genotype', 'expression', 'clinical']) {
     await window.workspaceChooseRemoteFiles({type, remote, paths: remote[type], exerciseNavigation: type === 'genotype'});
   }
+  await window.workspaceVerifyDatasetValidation({remote});
   const readRecord = async () => (await fetch('/signet/datasets', {headers: {'X-Chat-Token': token}})
     .then(reply => reply.json())).datasets.find(dataset => dataset.id === id);
   const beforeCancel = await readRecord();
@@ -622,6 +699,8 @@ async function verifyWorkspace({groups, runs, remote}) {
   click('#ml-input-clinical [data-input-reset]');
   await waitFor(() => find('#ml-input-clinical .ml-current-input').dataset.saveState === 'default',
     'Resetting clinical files to their default was not saved');
+  check(!['passed', 'warning'].includes(find('[data-input-validation]').dataset.validationState),
+    'Restoring default files retained an active validation result for the old inputs');
   click('#ml-language');
   check(datasetPicker.selectedOptions[0]?.textContent === 'Third workspace dataset', 'Language change lost the new dataset');
   go('history');
@@ -662,7 +741,7 @@ async function verifyPersistedWorkspace({saved, groups, runs, live, remote, chan
     check(picker.value === id, 'A saved dataset disappeared after backend restart: ' + id);
   };
   const visibleHistory = () => [...document.querySelectorAll('#ml-run-list [data-run-target]')]
-    .filter(button => button.getClientRects().length).map(button => button.dataset.runTarget).sort();
+    .filter(button => button.getClientRects().length).map(button => button.dataset.runId).sort();
   const token = document.querySelector('meta[name="chat-token"]').content;
   await waitFor(() => [...picker.options].some(option => option.value === saved.created.id),
     'The persisted dataset catalog did not reload');
@@ -701,12 +780,12 @@ async function verifyPersistedWorkspace({saved, groups, runs, live, remote, chan
   go('data');
   selectDataset(archived.dataset_id);
   go('history');
-  click(`[data-run-target="${archived.run_id}"]`);
-  const archivedFiles = [...find(`#ml-run-${archived.run_id}`).querySelectorAll('.ml-run-inputs code')].map(node => node.textContent);
+  click(`[data-run-target="archive--${archived.run_id}"]`);
+  const archivedFiles = [...find(`#ml-run-archive--${archived.run_id}`).querySelectorAll('.ml-run-inputs code')].map(node => node.textContent);
   check(JSON.stringify(archivedFiles) === JSON.stringify(['genotype', 'expression', 'clinical'].flatMap(type => archived.inputs[type])),
     'Editing current files replaced an archived run’s original inputs');
   for (const stage of [1, 2, 4, 5, 3, 6]) {
-    click(`[data-run-stage="${stage}"][data-run-id="${archived.run_id}"]`);
+    click(`[data-run-stage="${stage}"][data-history-id="archive--${archived.run_id}"]`);
     const panel = find(stage === 3 ? '#lens-history-stage3' : stage === 6 ? '#lens-stage6' : '#lens-history-stage');
     await waitFor(() => panel.dataset.runState === 'ready' && panel.dataset.runId === archived.run_id,
       'A saved stage did not reopen after backend restart: ' + stage);
@@ -731,10 +810,10 @@ async function verifyPersistedWorkspace({saved, groups, runs, live, remote, chan
     await window.workspaceChooseRemoteFiles({type: 'genotype', remote, paths: remote.genotype});
   }
   go('history');
-  click(`[data-run-target="${live.run_id}"]`);
-  const liveFiles = [...find(`#ml-run-${live.run_id}`).querySelectorAll('.ml-run-inputs code')].map(node => node.textContent);
+  click(`[data-run-target="workspace--${live.run_id}"]`);
+  const liveFiles = [...find(`#ml-run-workspace--${live.run_id}`).querySelectorAll('.ml-run-inputs code')].map(node => node.textContent);
   check(JSON.stringify(liveFiles) === JSON.stringify(live.inputs.genotype), 'Current dataset files replaced the live run’s frozen input snapshot');
-  click(`[data-run-stage="1"][data-run-id="${live.run_id}"]`);
+  click(`[data-run-stage="1"][data-history-id="workspace--${live.run_id}"]`);
   const panel = find('#lens-history-stage');
   await waitFor(() => panel.dataset.runState === 'ready' && panel.dataset.runId === live.run_id,
     'The completed live Stage 1 result did not reopen');
@@ -850,7 +929,7 @@ app.once('browser-window-created', (_event, window) => {
       assert.deepEqual(stored.histories[stored.active_session].map(message => message.parts[0].text),
         [firstMessage, 'Provider replied to: ' + firstMessage, nextMessage, 'Provider replied to: ' + nextMessage]);
       assert.deepEqual(stored.events[existingSession], [[existingActivity]]);
-      const remoteHelper = `window.workspaceChooseRemoteFiles = (${chooseRemoteFiles.toString()});`;
+      const remoteHelper = `window.workspaceChooseRemoteFiles = (${chooseRemoteFiles.toString()});window.workspaceVerifyDatasetValidation = (${verifyDatasetValidation.toString()});`;
       let saved = await window.webContents.executeJavaScript(remoteHelper + `(${verifyWorkspace.toString()})(${JSON.stringify({...history, remote})})`);
       const persistenceInputs = () => JSON.stringify({saved, ...history, live: liveHistory, remote});
       saved = await window.webContents.executeJavaScript(`(${verifyPersistedWorkspace.toString()})(${JSON.stringify({saved, ...history, live: liveHistory, remote, changeLive: true})})`);
@@ -879,7 +958,9 @@ app.once('browser-window-created', (_event, window) => {
       assert.deepEqual(frozenFiles([archiveDir, liveHistory.root, remoteRoot]), originalFiles,
         'Reopening stage results mutated archived or live analysis snapshots');
       const fileCalls = readFileSync(remoteCalls, 'utf8').trim().split('\n').map(line => JSON.parse(line));
-      assert.deepEqual([...new Set(fileCalls.map(call => call.kind))].sort(), ['inspect', 'list', 'shortcuts']);
+      assert.deepEqual([...new Set(fileCalls.map(call => call.kind))].sort(), ['inspect', 'list', 'shortcuts', 'validation']);
+      assert.equal(fileCalls.filter(call => call.kind === 'validation').length, 5,
+        'Only the five explicit input-validation clicks may read scientific input contents');
       assert.ok(fileCalls.some(call => call.kind === 'inspect' && JSON.stringify(call.paths) === JSON.stringify(remote.genotype)),
         'The PED and MAP files must be inspected together through the production metadata endpoint');
       assert.ok(fileCalls.some(call => call.kind === 'inspect' && call.paths.includes(remote.invalid[0])),
@@ -890,7 +971,7 @@ app.once('browser-window-created', (_event, window) => {
         [1650, 894, 53, 542]);
       await replacementBackend.stop();
       replacementBackend = undefined;
-      console.log(`PASS: workspace geometry, Agent chat, real metadata-backed remote folders/path/up/sizes and PED+MAP selection, cancel and failed-inspection preservation, dataset/file/default persistence across a Python restart, scoped history, immutable files and analysis snapshots, all six archived stages (${history.runs.map(run => `${run.connections}/${run.incident}`).join(', ')} total/MEGF6 edges); isolated files and localhost SSH only, no HPC/jobs`);
+      console.log(`PASS: workspace geometry, Agent chat, real remote-file selection, manual scientific format and six-patient pairing checks with malformed/duplicate/clinical failures and no research-cell disclosure, cancel/default preservation, persistence across a Python restart, scoped history, immutable files and analysis snapshots, all six archived stages (${history.runs.map(run => `${run.connections}/${run.incident}`).join(', ')} total/MEGF6 edges); isolated files and localhost SSH only, no HPC/jobs`);
       window.close();
     } catch (error) { fail(error); }
   }));

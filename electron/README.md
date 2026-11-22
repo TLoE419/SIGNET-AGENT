@@ -55,8 +55,69 @@ typed paths, and file sizes. Genotype files can be selected across folders;
 expression and clinical inputs each select one file. Applying checks canonical
 paths, readability, regular-file type, and nonempty size before saving. Cancel
 does not save, and **Use default** restores the dataset's saved defaults.
-This metadata selection does not validate scientific formats or change the
-inputs of the chromosome 1 execution controls.
+**Validate input files** checks the saved dataset on demand: the PED/MAP pair,
+the genes-by-samples expression matrix, required clinical columns, and
+preliminary matching by TCGA patient identifier. It reports file-specific
+errors and counts without returning sample identifiers or data values.
+Expression scale and the meaning of its final five rows require researcher
+confirmation; the pinned SIGNET code transforms the matrix and discards those
+rows. Warnings and incomplete scans are displayed explicitly. Changing files,
+datasets, remote accounts, or environments invalidates the previous report.
+These checks do not start an analysis.
+
+To run the saved dataset, open **Analysis → Stage 1 → Review dataset files**.
+Review all study files, the inferred chromosome, reference resources, settings,
+and compute resources. The submission requires explicit acknowledgement of the
+input and reference-preparation warnings. It queues one genotype job, which
+first copies and fingerprints the reviewed inputs into its owned run folder,
+prepares study-specific imputation references, and then runs the original
+SIGNET workflow. It never borrows another study's prepared reference files.
+Current support is TCGA data on one autosome, a matching raw VCF reference, and
+a genetic map covering the study markers. Missing or incompatible resources
+block submission with a reason; selecting a dataset does not install or run it.
+
+Stages 2–6 use that run's prerequisites and snapshots. Expression, annotation,
+and clinical inputs are frozen at Stage 1, so later changes in Data or reference
+settings apply to new runs. Custom-run clinical paths are read-only in Stage 3.
+Run history retains the dataset name, original source paths, frozen paths,
+settings, and reference-preparation summary. The unchanged built-in chromosome 1
+example keeps its existing execution path.
+
+### Complete run history
+
+**Run history** defaults to the current dataset. Its scope selector also shows
+unclassified records or all runs, including archives whose dataset is no longer
+in the current catalog. The list combines workspace snapshots, generic Slurm
+step records, old Agent operation/plan records, and saved archives. A run folder
+already represented by workspace snapshots keeps its old operation evidence in
+that same entry. Identical run names from different sources stay separate.
+
+Details show the original files, recorded settings/resources, job identifiers,
+and recorded execution states. A prepared plan is distinct from an executed
+process, and process completion is distinct from verified scientific output.
+Legacy records without saved settings show **Not recorded**; history never
+reads today's mutable configuration as historical settings. Result links only
+appear when the corresponding local reader has the required artifacts. History
+listing does not poll SSH or the scheduler.
+
+An unclassified record can be assigned to a saved dataset. That organizational
+assignment survives restarts in `data/workspace-history.json`; it does not edit
+original records, establish sample compatibility, or enable legacy execution.
+Explicit original dataset ownership cannot be replaced. Source changes reject
+stale assignments, and a replaced run folder does not inherit an old assignment.
+Current dataset file changes do not alter saved run inputs or settings.
+
+Each stage's saved-job disclosure also lists its individual submission attempts.
+Open an attempt to inspect its own inputs, settings, prompt options, compute
+resources, job identifier, timestamps, recorded state changes, failure reason,
+and output-check evidence. The latest attempt is marked separately. Earlier
+attempts come from the immutable `steps/<step>.attempt<N>.json` records; current
+configuration and current result folders never fill gaps in an older attempt.
+Missing or unreadable attempt records are identified explicitly. Archives that
+did not preserve attempt numbers show that limitation instead of inventing a
+first attempt. Output paths describe saved evidence; they are not links to
+today's result folders. These disclosures do not submit, retry, cancel, or poll
+remote work.
 
 ### Submit the chromosome 1 example
 
@@ -415,6 +476,8 @@ work through separate processes (the turn lock is per process).
 npm test --prefix electron
 npm run test:smoke --prefix electron
 npm run test:startup --prefix electron
+npm run test:history --prefix electron
+npm run test:attempts --prefix electron
 .venv/bin/python -m unittest discover -s tests -p 'test_desktop_server.py' -v
 ```
 

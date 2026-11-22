@@ -1,0 +1,173 @@
+"""Dataset-owned runs reuse the production step service against a local fake HPC folder."""
+import json
+from pathlib import Path
+import subprocess
+import unittest
+from unittest.mock import patch
+
+from agent.runtime import hpc, ssh_transport, workspace_datasets, workspace_genotype as workspace, workspace_inputs, workspace_validation
+from agent.runtime.jobs import stage_dataset
+import agent.runtime.signet_jobs as jobs
+import test_signet_jobs as step_fixtures
+
+
+class DatasetRunTest(unittest.TestCase):
+    def setUp(self):
+        self.f = step_fixtures.StepsTest()
+        self.f.setUp()
+        self.addCleanup(self.f.doCleanups)
+        config = {**self.f.config, 'revision': hpc.SOURCE_INVENTORY['revision']}
+        item = patch.object(ssh_transport, 'setup_environment', return_value=config)
+        item.start()
+        self.addCleanup(item.stop)
+        # Local temporary folders stand in for shared HPC storage, including on Linux CI.
+        for module, name in ((workspace_validation, '_SOURCE'), (workspace_inputs, '_REVIEW')):
+            source = getattr(module, name).replace("BLOCKED = ('/tmp', '/var/tmp', '/dev/shm', '/run')", 'BLOCKED = ()')
+            item = patch.object(module, name, source)
+            item.start()
+            self.addCleanup(item.stop)
+        self.files = self.f.hpc / 'outside-selected-study'
+        self.files.mkdir()
+        ids = ['TCGA-AA-A00' + str(n) for n in range(1, 7)]
+        self.paths = {name: self.files / name for name in ('study.ped', 'study.map', 'expression.txt', 'clinical.tsv', 'reference.vcf', 'genetic-map.txt', 'annotation.gtf')}
+        self.paths['study.ped'].write_text(''.join(value + '-NT ' + value + '-NT 0 0 1 -9 A G A A C C\n' for value in ids))
+        self.paths['study.map'].write_text('2 rs1 0 101\n2 rs2 0 202\n2 rs3 0 303\n')
+        self.paths['expression.txt'].write_text('Ensembl_ID ' + ' '.join(value + '-01A' for value in ids) + '\n'
+            + ''.join('ENSG' + str(n) + '.1 ' + ' '.join(['20'] * 6) + '\n' for n in range(4))
+            + ('0 ' + ' '.join(['0'] * 6) + '\n') * 5)
+        self.paths['clinical.tsv'].write_text('submitter_id\trace\tgender\n' + ''.join(
+            value + '\t' + ['asian', 'black or african american', 'white'][n % 3] + '\t' + ['female', 'male'][n % 2] + '\n'
+            for n, value in enumerate(ids)))
+        self.paths['reference.vcf'].write_text('##fileformat=VCFv4.2\n#CHROM POS ID REF ALT QUAL FILTER INFO FORMAT D1\n'
+            + '\n'.join('2\t' + str(pos) + '\trs' + str(n) + '\t' + ref + '\t' + alt + '\t.\tPASS\t.\tGT\t0/1'
+                         for n, (pos, ref, alt) in enumerate(((101, 'A', 'G'), (202, 'A', 'G'), (303, 'C', 'T')), 1)) + '\n')
+        self.paths['genetic-map.txt'].write_text('pos chr cM\n0 2 0\n1000 2 1\n')
+        self.paths['annotation.gtf'].write_text('annotation snapshot\n')
+        selected = self.f.hpc / 'ws/refdata/selected.tsv'
+        selected.write_text(''.join(key + '\t' + str(self.paths[name]) + '\n' for key, name in (
+            ('ref', 'reference.vcf'), ('gmap', 'genetic-map.txt'), ('gtf', 'annotation.gtf'))))
+        self.inputs = {'genotype': [str(self.paths['study.ped']), str(self.paths['study.map'])],
+                       'expression': [str(self.paths['expression.txt'])], 'clinical': [str(self.paths['clinical.tsv'])]}
+        self.dataset = workspace_datasets.create_dataset(['自訂資料', 'Custom study'], inputs=self.inputs)
+
+    def review(self):
+        return workspace.review_dataset(self.dataset['id'], self.inputs)
+
+    def submit(self, review, run_id='custom-study', **changes):
+        body = {'run_id': run_id, 'inputs': review['inputs'], 'settings': review['settings'],
+                'resources': review['resources'], 'review_token': review['review_token'], 'acknowledge_warnings': True}
+        body.update(changes)
+        return workspace.submit_dataset(self.dataset['id'], **body)
+
+    def test_review_submit_freeze_and_frozen_continuation_ignore_later_catalog_changes(self):
+        review = self.review()
+        self.assertTrue(review['ready'], review['issues'])
+        self.assertEqual(review['settings']['restrict.tcga.geno'], 2)
+        self.assertTrue(review['warnings'])
+        self.assertEqual(self.review()['review_token'], review['review_token'])
+        record = self.submit(review)
+        root = self.f.project / 'runs/custom-study'
+        directory = Path(record['remote_dir'])
+        self.assertEqual(record['inputs']['ped.file'], str(directory / 'inputs/prepared/study.ped'))
+        self.assertEqual(len(record['required_outputs']), 4)
+        batch = directory / 'steps/genotype.sbatch'
+        self.assertEqual(subprocess.run(['bash', '-n', str(batch)]).returncode, 0)
+        self.assertIn('SIGNET_DATASET_STAGE', batch.read_text())
+        self.assertIn('bash ./signet -g', batch.read_text())
+        plan = workspace_inputs.staging_plan(root, str(directory))
+        with patch.object(stage_dataset, 'PREPARE_SOURCE', hpc._PREPARE_SOURCE, create=True):
+            stage_dataset.stage(plan)
+        manifest = json.loads((directory / 'work/res/resg/workspace-inputs.json').read_text())
+        self.assertEqual(manifest['dataset_id'], self.dataset['id'])
+        self.assertEqual(manifest['preparation']['matched_markers'], 3)
+        self.assertTrue((directory / 'inputs/prepared/ref/chr2.gen').is_file())
+        self.assertFalse((directory / 'inputs/prepared/ref/chr1.gen').exists())
+        for role in ('expression', 'clinical', 'annotation'):
+            self.assertTrue((directory / 'inputs/frozen' / role).is_file())
+        (directory / 'work/res/resg/signet_Geno').write_text('0 1 2\n' * 6)
+        ids = ['TCGA-AA-A00' + str(n) for n in range(1, 7)]
+        (directory / 'work/res/resg/signet_Genotype.sampleID').write_text('\n'.join(value + '-NT' for value in ids) + '\n')
+        (directory / 'steps/genotype.done').write_text('0 2026-11-17T10:00:00-08:00\n')
+        self.f.slurm(squeue='', sacct='COMPLETED')
+        self.assertEqual(jobs.status('custom-study', 'genotype', refresh=True)['state'], 'completed')
+        snapshot = (root / workspace.SNAPSHOT).read_bytes()
+        workspace_datasets.update_dataset(self.dataset['id'], {'expression': ['/different/expression'], 'clinical': ['/different/clinical']})
+        (self.f.hpc / 'ws/refdata/selected.tsv').write_text('gtf\t/different/annotation\n')
+        expression = workspace.review_expression('custom-study')
+        self.assertTrue(expression['frozen'])
+        self.assertEqual(expression['inputs'], {'gexp.file': str(directory / 'inputs/frozen/expression'),
+                                                'pmap.file': str(directory / 'inputs/frozen/annotation')})
+        self.assertEqual(expression['settings'], {'restrict.tcga': 2})
+        history = workspace.run_history(root)
+        self.assertEqual(history['dataset_id'], self.dataset['id'])
+        self.assertEqual(history['input_mode'], 'dataset')
+        self.assertEqual(history['inputs'], self.inputs)
+        self.assertEqual(history['reference_preparation']['matched_markers'], 3)
+        self.assertEqual((root / workspace.SNAPSHOT).read_bytes(), snapshot)
+        with self.assertRaises(jobs.StepError):
+            workspace.review_adjust('custom-study', '/different/clinical')
+
+    def test_stale_tokens_acknowledgement_chromosome_and_reference_mismatch_submit_nothing(self):
+        review = self.review()
+        for changes in ({'review_token': 'stale'}, {'acknowledge_warnings': False},
+                        {'acknowledge_warnings': 'yes'}, {'settings': {**review['settings'], 'restrict.tcga.geno': 1}}):
+            with self.subTest(changes=changes), self.assertRaises(jobs.StepError):
+                self.submit(review, **changes)
+        self.assertFalse((self.f.project / 'runs/custom-study').exists())
+        self.assertFalse((self.f.fake / 'sbatch_args').exists())
+        broken = self.f.project / 'runs/broken-link'
+        broken.symlink_to(self.f.project / 'missing-target')
+        with patch.object(workspace_inputs, 'review', side_effect=AssertionError('Reject names before remote review')):
+            for run_id in ('cis', 'network', 'runs', 'broken-link'):
+                with self.subTest(run_id=run_id), self.assertRaises(jobs.StepError):
+                    self.submit(review, run_id=run_id)
+        self.paths['reference.vcf'].write_text(self.paths['reference.vcf'].read_text().replace('2\t101', '1\t101'))
+        mismatch = self.review()
+        self.assertFalse(mismatch['ready'])
+        self.assertIn('matching', ' '.join(mismatch['issues']))
+        self.paths['reference.vcf'].write_text('snp rs1 101 A G 0 1 0\n')
+        self.assertIn('raw VCF', ' '.join(self.review()['issues']))
+
+    def test_later_stage_reviews_and_snapshots_bind_custom_initial_dataset(self):
+        self.f.visualize_ready()
+        root = self.f.root
+        snapshots = (workspace.SNAPSHOT, workspace.EXPRESSION_SNAPSHOT, workspace.ADJUST_SNAPSHOT,
+                     workspace.CIS_SNAPSHOT, workspace.NETWORK_SNAPSHOT)
+        for filename in snapshots:
+            path = root / filename
+            value = json.loads(path.read_text())
+            value['dataset_id'] = self.dataset['id']
+            path.write_text(json.dumps(value))
+        self.assertEqual(workspace.run_history(root)['dataset_id'], self.dataset['id'])
+        self.assertTrue(workspace.review_cis('step_test')['ready'])
+        self.assertTrue(workspace.review_network('step_test')['ready'])
+        self.assertTrue(workspace.review_visualize('step_test', .45, 1)['ready'])
+        prior = {path: path.read_bytes() for path in (root / name for name in snapshots)}
+        record = workspace.submit_visualize('step_test', {}, {'freq': .45, 'ntop': 1}, jobs.STEPS['visualize'].resources)
+        saved = json.loads((root / workspace.VISUALIZE_SNAPSHOT).read_text())
+        self.assertEqual(saved['dataset_id'], self.dataset['id'])
+        self.assertEqual(record['run_id'], 'step_test')
+        for path, content in prior.items():
+            self.assertEqual(path.read_bytes(), content)
+        saved['dataset_id'] = 'another-dataset'
+        (root / workspace.VISUALIZE_SNAPSHOT).write_text(json.dumps(saved))
+        with self.assertRaises(ValueError):
+            workspace.run_history(root)
+
+    def test_preparation_failure_explains_no_marker_overlap_without_exposing_paths(self):
+        source = self.paths['reference.vcf'].read_text()
+        self.paths['reference.vcf'].write_text(source.replace('\t101\t', '\t901\t').replace('\t202\t', '\t902\t').replace('\t303\t', '\t903\t'))
+        review = self.review()
+        self.assertTrue(review['ready'], review['issues'])
+        record = self.submit(review)
+        root = self.f.project / 'runs/custom-study'
+        plan = workspace_inputs.staging_plan(root, record['remote_dir'])
+        result = subprocess.run(['bash', '-s'], input=workspace_inputs.stage_command(plan).encode(), capture_output=True)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('No study marker matches the reference by position and alleles', result.stderr.decode())
+        self.assertNotIn(str(self.files), result.stderr.decode())
+        self.assertNotIn('Traceback', result.stderr.decode())
+
+
+if __name__ == '__main__':
+    unittest.main()

@@ -26,22 +26,33 @@ def install_file_fixture():
 
     def local_metadata(build, timeout):
         script = build(str(root))
-        if 'python3 - ' not in script or " <<'SIGNET_PY'\n" not in script:
+        validating = " <<'SIGNET_DATASET_VALIDATION'\n" in script
+        marker = 'SIGNET_DATASET_VALIDATION' if validating else 'SIGNET_PY'
+        if 'python3 - ' not in script or f" <<'{marker}'\n" not in script:
             return {'status': 'failed', 'error': 'Only fixture file metadata commands are allowed.'}
-        prelude, body = script.split(" <<'SIGNET_PY'\n", 1)
+        prelude, body = script.split(f" <<'{marker}'\n", 1)
         command = prelude.rsplit('\n', 1)[-1]
         if not command.startswith('python3 - '):
             return {'status': 'failed', 'error': 'The fixture accepts only Python metadata commands.'}
-        body, end = body.split('\nSIGNET_PY', 1)
+        body, end = body.split('\n' + marker, 1)
         arguments = shlex.split(command)[2:]
-        if end.strip() or any(not Path(value).resolve().is_relative_to(root) for value in arguments):
+        paths = arguments
+        if validating:
+            trusted = (REPO / 'agent/runtime/jobs/validate_dataset.py').read_text()
+            if body.strip() != trusted.strip() or len(arguments) != 1:
+                return {'status': 'failed', 'error': 'The fixture accepts only the production validation script.'}
+            inputs = json.loads(arguments[0])
+            if not isinstance(inputs, dict) or set(inputs) != {'genotype', 'expression', 'clinical'}:
+                return {'status': 'failed', 'error': 'The fixture requires the complete input snapshot.'}
+            paths = [value for files in inputs.values() for value in files]
+        if end.strip() or any(not Path(value).resolve().is_relative_to(root) for value in paths):
             return {'status': 'failed', 'error': 'File metadata requests must stay in the fixture folder.'}
-        if any(token in body for token in ('subprocess', 'exec(', 'open(', 'os.remove', 'os.unlink',
+        if not validating and any(token in body for token in ('subprocess', 'exec(', 'open(', 'os.remove', 'os.unlink',
                                            'os.mkdir', 'os.rename', 'shutil')):
             return {'status': 'failed', 'error': 'The fixture permits names and metadata only.'}
-        kind = 'inspect' if 'import stat' in body else 'list' if arguments else 'shortcuts'
+        kind = 'validation' if validating else 'inspect' if 'import stat' in body else 'list' if arguments else 'shortcuts'
         with trace.open('a') as stream:
-            stream.write(json.dumps({'kind': kind, 'paths': arguments}) + '\n')
+            stream.write(json.dumps({'kind': kind, 'paths': paths}) + '\n')
         completed = subprocess.run([sys.executable, '-', *arguments], input=body + '\n', text=True,
                                    capture_output=True, timeout=min(timeout, 10))
         values = hpc._parse(completed.stdout.encode())

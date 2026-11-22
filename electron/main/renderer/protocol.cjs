@@ -8,6 +8,7 @@ const assets=new Map([
  ['/workspace/workspace.css',['workspace/workspace.css','text/css']],
  ['/workspace/workspace.js',['workspace/workspace.js','text/javascript']],
  ['/workspace/genotype-run.js',['workspace/genotype-run.js','text/javascript']],
+ ['/workspace/input-validation.js',['workspace/input-validation.js','text/javascript']],
  ['/workspace/icons.js',['workspace/icons.js','text/javascript']],
  ['/workspace/interaction.js',['workspace/interaction.js','text/javascript']],
  ['/renderer.js',['renderer.js','text/javascript']],

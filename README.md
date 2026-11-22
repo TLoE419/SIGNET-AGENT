@@ -11,8 +11,31 @@ restart. Each dataset shows only its own run history, whose original files and
 settings remain preserved when current selections change. **Choose remote files**
 browses HPC3 folders after connecting and saves readable, nonempty file paths
 to that dataset. Genotype selections can include multiple files. This selection
-checks file metadata only; scientific format validation and running another
-dataset are separate integration steps.
+checks file metadata only. **Validate input files** separately reads the saved
+remote files without changing them, checks the TCGA input structure, and
+reports preliminary sample overlap and compatibility warnings. It does not
+establish scientific validity. In **Analysis → Stage 1**, **Review dataset
+files** checks the saved inputs and selected reference resources. After you
+confirm the warnings and submit, that run freezes its inputs, prepares its own
+imputation references, and starts the original SIGNET genotype workflow in one
+Slurm job. Stages 2–6 continue that same run manually. Stages 2 and 3 use its
+frozen expression, annotation, and clinical files, even if current Data settings
+change. Custom execution currently supports TCGA data for one autosome with a
+matching raw VCF reference and genetic map. The unchanged built-in chromosome 1
+example retains its existing path.
+
+**Run history** also lists recorded local Agent operations, generic Slurm run
+records, and archived results. Filter by the current dataset, unclassified
+records, or all runs. Same-named runs from different sources remain separate.
+Open a record to inspect its saved files, settings, and execution evidence;
+missing historical settings are labeled rather than filled from today's
+configuration. Unclassified records can be assigned to a dataset for
+organization, with that assignment saved separately from the original records.
+This does not validate sample compatibility or enable a legacy run to continue.
+History reads local records without querying remote jobs or rerunning analysis.
+Each stage can expand its individual submission attempts, showing that attempt's
+saved settings, job ID, times, failure reason and result evidence. Earlier
+attempts remain separate from the latest one; missing records stay explicit.
 
 ## Replacing the Former Desktop Workbench
 

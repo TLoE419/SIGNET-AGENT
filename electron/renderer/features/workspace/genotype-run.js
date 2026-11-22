@@ -3,6 +3,9 @@
 
   const exampleDataset = "example-chr1";
   const examplePath = "/signet/genotype/example";
+  const sourceKinds = ["genotype", "expression", "clinical"];
+  const exampleInputs = {genotype: ["study.ped", "study.map"], expression: ["example_gexp"], clinical: ["official-demo-chr1-restart-clinical.tsv"]};
+  const sourceKey = inputs => JSON.stringify(sourceKinds.map(kind => inputs?.[kind] ?? []));
   const terminalStates = new Set(["completed", "failed", "cancelled"]);
   const pollInterval = 15_000;
   const inputKeys = ["ped.file", "map.file", "ref", "gmap"];
@@ -22,6 +25,15 @@
     readyPrompt: ["確認檔案與設定後，按「送出第 1 階段」。", "Review the files and settings, then select Submit Stage 1."],
     connect: ["請先到「設定 → 遠端運算」連線並確認環境就緒，再回來檢查範例。", "Connect and verify the environment in Settings → Remote compute, then check the example again."],
     inputs: ["範例輸入檔案", "Example inputs"],
+    sourceInputs: ["這筆執行會保存的資料組檔案", "Dataset files saved with this run"],
+    genotype: ["基因型資料", "Genotype data"], expression: ["基因表現量資料", "Expression data"], clinical: ["臨床資料", "Clinical data"],
+    warnings: ["執行前需要確認", "Review before running"],
+    acknowledge: ["我已核對以上檔案與警示，並確認表現量尺度及最後五列的處理方式。", "I reviewed these files and warnings, including the expression scale and treatment of its final five rows."],
+    customReview: ["核對資料組檔案", "Review dataset files"],
+    customChecking: ["正在核對資料組檔案…", "Reviewing dataset files…"],
+    customUnavailable: ["資料組尚未就緒", "The dataset is not ready"],
+    customInputs: ["第 1 階段輸入檔案", "Stage 1 input files"],
+    stale: ["檔案或遠端環境已變更，請重新核對後再送出。", "The files or remote context changed. Review again before submitting."],
     settings: ["設定", "Settings"],
     resources: ["運算資源", "Resources"],
     submit: ["送出第 1 階段", "Submit Stage 1"],
@@ -65,7 +77,7 @@
         <header>
           <p class="ml-genotype-eyebrow" data-genotype-copy="stage"></p>
           <h2 id="lens-stage1-title" data-genotype-copy="title"></h2>
-          <p data-genotype-copy="example"></p>
+          <p data-genotype-dataset></p>
         </header>
         <p data-genotype-readiness role="status"></p>
         <p data-genotype-guidance hidden></p>
@@ -75,6 +87,13 @@
           <dl class="ml-key-values">
             ${inputKeys.map(key => `<dt data-genotype-copy="${key}"></dt><dd><code data-genotype-input="${key}"></code></dd>`).join("")}
           </dl>
+          <section data-genotype-source-section hidden>
+            <h3 data-genotype-copy="sourceInputs"></h3><dl class="ml-key-values" data-genotype-source-inputs></dl>
+          </section>
+          <section data-genotype-warning-section hidden>
+            <h3 data-genotype-copy="warnings"></h3><ul data-genotype-warnings></ul>
+            <label><input type="checkbox" data-genotype-acknowledge><span data-genotype-copy="acknowledge"></span></label>
+          </section>
           <fieldset data-genotype-fields>
             <legend data-genotype-copy="settings"></legend>
             <div class="ml-genotype-controls">
@@ -136,249 +155,260 @@
     const resourceInputs = new Map(resources.map(key => [key, panel.querySelector(`[data-genotype-resource="${key}"]`)]));
     const fields = [...panel.querySelectorAll("[data-genotype-fields]")];
 
-    let context = {visible: false, datasetId: "", language: "zh-Hant"};
-    let review;
-    let reviewing = false;
-    let reviewAttempted = false;
-    let runId = "";
-    let record;
-    let submitting = false;
-    let polling = false;
+    let context = {visible: false, datasetId: "", language: "zh-Hant", runs: []};
+    const datasets = new Map();
+    let selectedDataset = "";
     let pollTimer;
-    let reviewError = "";
-    let connectToReview = false;
-    let runError = "";
-    let submissionUnconfirmed = false;
-
+    let remote = {connected: false, identity: "", environmentKey: ""};
+    const current = () => datasets.get(selectedDataset);
     const localized = (key) => labels[key]?.[context.language === "en" ? 1 : 0] ?? key;
     const authToken = () => typeof token === "function" ? token() : token;
-
-    async function request(path, body) {
+    const cloneInputs = value => Object.fromEntries(sourceKinds.map(kind => [kind, [...(value?.[kind] ?? [])]]));
+    const isLegacy = dataset => dataset.id === exampleDataset && (
+      sourceKey(dataset.inputs) === sourceKey(exampleInputs) || !dataset.persisted &&
+      sourceKey(dataset.inputs) === sourceKey({genotype: exampleInputs.genotype, expression: [], clinical: []}));
+    const datasetValue = () => context.dataset ?? {id: context.datasetId, name: labels.example,
+      inputs: cloneInputs(exampleInputs), persisted: false, ready: true};
+    const scopeFor = dataset => JSON.stringify([dataset.id, sourceKey(dataset.inputs), remote.connected, remote.identity, remote.environmentKey]);
+    function stateFor(id) {
+      if (!datasets.has(id)) datasets.set(id, {review: null, reviewing: false, attempted: false, runId: "", record: null,
+        submitting: false, polling: false, error: "", reviewError: "", uncertain: false, acknowledged: false,
+        draft: null, preparedNew: false, reviewRequest: null, statusRequest: null, sourceInputs: null, legacy: false, scope: "", inputKey: ""});
+      return datasets.get(id);
+    }
+    function saveDraft(item = current()) {
+      if (!item || item.runId || item.reviewing || !item.review && !item.draft) return;
+      item.draft = {settings: Object.fromEntries([...settingsInputs].map(([key, input]) => [key, input.value])),
+        resources: Object.fromEntries([...resourceInputs].map(([key, input]) => [key, input.value]))};
+    }
+    function invalidate(item, clearDraft = false) {
+      item.reviewRequest?.abort();item.reviewRequest = null;
+      item.review = null;item.reviewing = false;item.attempted = false;item.acknowledged = false;
+      item.reviewError = localized("stale");
+      if (clearDraft) item.draft = null;
+    }
+    async function request(path, body, signal) {
       const headers = {"X-Chat-Token": authToken()};
-      const options = {headers};
-      if (body) {
-        headers["Content-Type"] = "application/json";
-        Object.assign(options, {method: "POST", body: JSON.stringify(body)});
-      }
+      const options = {headers, signal};
+      if (body) {headers["Content-Type"] = "application/json";Object.assign(options, {method: "POST", body: JSON.stringify(body)});}
       const response = await fetch(path, options);
       const value = await response.json().catch(() => null);
-      if (!response.ok || !value) {
-        throw Object.assign(new Error(value?.error || localized("serviceError")), {
-          status: response.status, code: value?.code,
-        });
-      }
+      if (!response.ok || !value) throw Object.assign(new Error(value?.error || value?.reason || localized("serviceError")), {status: response.status, code: value?.code});
       return value;
     }
-
-    function fillReview({inputs: paths, settings, resources: available, limits}, keepDraft) {
+    function fillReview(value, item, keepDraft = false) {
+      const paths = value.inputs ?? {};
+      const chromosome = value.settings?.["restrict.tcga.geno"] ?? "1";
       for (const [key, element] of inputs) {
-        const suffix = key === "ref" ? "1.gen" : key === "gmap" ? "1.map" : "";
+        const prefix = item.runId || item.legacy;
+        const suffix = prefix && key === "ref" ? `${chromosome}.gen` : prefix && key === "gmap" ? `${chromosome}.map` : "";
         element.textContent = paths[key] ? paths[key] + suffix : "—";
       }
       for (const [key, input] of settingsInputs) {
-        if (!keepDraft) input.value = settings?.[key] ?? "";
+        input.value = keepDraft && key !== "restrict.tcga.geno" && item.draft ? item.draft.settings[key] : value.settings?.[key] ?? "";
+        if (key === "restrict.tcga.geno" && Number.isFinite(Number(chromosome))) input.min = input.max = chromosome;
       }
       for (const [key, input] of resourceInputs) {
-        if (limits?.[key]) {
-          [input.min, input.max] = limits[key];
-        }
-        if (!keepDraft) input.value = available?.[key] ?? "";
+        if (value.limits?.[key]) [input.min, input.max] = value.limits[key];
+        input.value = keepDraft && item.draft ? item.draft.resources[key] : value.resources?.[key] ?? "";
       }
     }
-
     function render() {
-      for (const element of panel.querySelectorAll("[data-genotype-copy]")) {
-        element.textContent = localized(element.dataset.genotypeCopy);
-      }
-      const state = record?.state || (submitting ? "submitting" : runId ? "unknown" : "idle");
+      const item = current();
+      for (const element of panel.querySelectorAll("[data-genotype-copy]")) element.textContent = localized(element.dataset.genotypeCopy);
+      const dataset = datasetValue();
+      part("dataset").textContent = dataset.name?.[context.language === "en" ? 1 : 0] ?? selectedDataset;
+      const legacy = item?.runId ? item.runLegacy : isLegacy(dataset);
+      reviewButton.textContent = localized(legacy ? "review" : "customReview");
+      form.querySelector('h3[data-genotype-copy="inputs"]').textContent = localized(legacy ? "inputs" : "customInputs");
+      const state = item?.submitting ? "submitting" : item?.uncertain ? "unknown" : item?.record?.state ?? (item?.runId ? "unknown" : "idle");
       panel.dataset.genotypeState = state;
-      if (runId) panel.dataset.genotypeRunId = runId;
-      else delete panel.dataset.genotypeRunId;
-
-      const eligible = context.datasetId === exampleDataset;
+      panel.dataset.genotypeDatasetId = selectedDataset;
+      if (item?.runId) panel.dataset.genotypeRunId = item.runId;else delete panel.dataset.genotypeRunId;
+      const eligible = Boolean(item?.runId) || Boolean(dataset.ready && (legacy || dataset.persisted));
+      const connected = legacy || remote.connected;
       const terminal = terminalStates.has(state);
+      const validReview = Boolean(item?.review) && item.review.ready !== false &&
+        (legacy || item.review.ready === true && typeof item.review.review_token === "string" && item.review.review_token.length > 0);
       statusLine.textContent = localized(state);
-      reviewButton.hidden = !eligible || Boolean(runId);
-      reviewButton.disabled = reviewing;
-      readiness.hidden = !eligible || Boolean(runId);
-      readiness.textContent = localized(reviewing ? "checking" : review ? "ready" : reviewAttempted ? "unavailable" : "review");
-      guidance.hidden = !eligible || Boolean(runId);
-      guidance.textContent = review ? localized("readyPrompt") : connectToReview && !reviewing ? localized("connect") : "";
-
-      const hasFiles = Boolean(review || record?.inputs);
-      form.hidden = !eligible || !hasFiles;
-      for (const field of fields) field.disabled = Boolean(runId);
-      submitButton.hidden = Boolean(runId);
-      submitButton.disabled = !eligible || !review || reviewing || submitting || Boolean(runId);
-      statusButton.hidden = !runId || terminal;
-      statusButton.disabled = submitting || polling;
-      historyButton.hidden = !record;
-      newButton.hidden = !terminal;
-
-      identifiers.hidden = !runId;
-      runLabel.textContent = runId;
-      jobLabel.textContent = record?.job_id ?? "—";
-      notice.textContent = [submissionUnconfirmed ? localized("uncertain") : "", runError || reviewError]
-        .filter(Boolean).join(" ");
-      notice.hidden = !notice.textContent;
-
-      events.replaceChildren(...(record?.history ?? []).map(({state: eventState, at}) => {
-        const item = document.createElement("li");
-        item.dataset.state = eventState;
-        item.textContent = localized(eventState);
-        if (at) {
-          const time = document.createElement("time");
-          time.dateTime = at;
-          const date = new Date(at);
-          time.textContent = Number.isNaN(date.valueOf()) ? at : date.toLocaleString(context.language);
-          item.append(time);
-        }
-        return item;
-      }));
-      events.hidden = !events.children.length;
+      reviewButton.hidden = !eligible || Boolean(item?.runId);
+      reviewButton.disabled = !connected || Boolean(item?.reviewing || item?.submitting);
+      readiness.hidden = !eligible || Boolean(item?.runId);
+      readiness.textContent = localized(item?.reviewing ? legacy ? "checking" : "customChecking" : validReview ? "ready" : item?.attempted ? legacy ? "unavailable" : "customUnavailable" : legacy ? "review" : "customReview");
+      guidance.hidden = !eligible || Boolean(item?.runId);
+      guidance.textContent = validReview ? localized("readyPrompt") : !connected ? localized("connect") : "";
+      form.hidden = !eligible || !Boolean(item?.review || item?.record?.inputs);
+      for (const field of fields) field.disabled = Boolean(item?.runId || item?.reviewing);
+      submitButton.hidden = Boolean(item?.runId);
+      submitButton.disabled = !eligible || !connected || !validReview || Boolean(item?.reviewing || item?.submitting || item?.runId) || !legacy && !item?.acknowledged;
+      statusButton.hidden = !item?.runId || terminal;statusButton.disabled = Boolean(item?.submitting || item?.polling);
+      historyButton.hidden = !item?.record;newButton.hidden = !terminal;
+      identifiers.hidden = !item?.runId;runLabel.textContent = item?.runId ?? "";jobLabel.textContent = item?.record?.job_id ?? "—";
+      notice.textContent = [item?.uncertain ? localized("uncertain") : "", item?.error || item?.reviewError].filter(Boolean).join(" ");notice.hidden = !notice.textContent;
+      const sourceInputs = item?.sourceInputs ?? item?.review?.source_inputs;
+      part("source-section").hidden = !sourceInputs;
+      const sourceList = part("source-inputs");sourceList.replaceChildren();
+      if (sourceInputs) for (const kind of sourceKinds) {
+        const title = document.createElement("dt"), paths = document.createElement("dd");
+        title.textContent = localized(kind);paths.dataset.genotypeSourceInput = kind;
+        for (const path of sourceInputs[kind] ?? []) {const code = document.createElement("code");code.textContent = path;paths.append(code, document.createElement("br"));}
+        if (!paths.childElementCount) paths.textContent = "—";
+        sourceList.append(title, paths);
+      }
+      const warningList = part("warnings");warningList.replaceChildren();
+      for (const message of item?.review?.warnings ?? []) {
+        const row = document.createElement("li");row.dataset.genotypeWarning = "";row.textContent = message;warningList.append(row);
+      }
+      part("warning-section").hidden = legacy || !item?.review || Boolean(item?.runId);
+      const acknowledge = part("acknowledge");acknowledge.checked = Boolean(item?.acknowledged);acknowledge.disabled = Boolean(item?.runId || item?.reviewing || item?.submitting);
+      events.replaceChildren(...(item?.record?.history ?? []).map(({state: eventState, at}) => {
+        const row = document.createElement("li");row.dataset.state = eventState;row.textContent = localized(eventState);
+        if (at) {const time = document.createElement("time");time.dateTime = at;const date = new Date(at);time.textContent = Number.isNaN(date.valueOf()) ? at : date.toLocaleString(context.language);row.append(time);}
+        return row;
+      }));events.hidden = !events.children.length;
     }
-
-    async function checkExample() {
-      if (reviewing || runId || context.datasetId !== exampleDataset) return;
-      reviewing = true;
-      reviewAttempted = true;
-      reviewError = "";
-      connectToReview = false;
-      const previous = review;
-      render();
+    async function review() {
+      const dataset = datasetValue(), item = current(), id = selectedDataset;
+      const legacy = isLegacy(dataset);
+      if (!item || item.reviewing || item.runId || !dataset.ready || !(legacy || dataset.persisted && remote.connected)) return;
+      saveDraft(item);
+      const captured = {id, inputs: cloneInputs(dataset.inputs), scope: scopeFor(dataset)};
+      const controller = new AbortController();item.reviewRequest = controller;
+      item.reviewing = item.attempted = true;item.reviewError = "";item.review = null;item.acknowledged = false;render();
       try {
-        const next = await request(examplePath);
-        if (!runId) {
-          review = next;
-          fillReview(review, Boolean(previous) && inputKeys.every(key => previous.inputs[key] === review.inputs[key]));
-        }
+        const next = legacy ? await request(examplePath, undefined, controller.signal)
+          : await request(`/signet/datasets/${encodeURIComponent(id)}/genotype/review`, {inputs: captured.inputs}, controller.signal);
+        if (controller.signal.aborted || item.reviewRequest !== controller || item.scope !== captured.scope || item.runId) return;
+        if (!legacy && (next.dataset_id !== id || sourceKey(next.source_inputs) !== sourceKey(captured.inputs))) throw Error(localized("stale"));
+        item.review = next;item.legacy = legacy;item.sourceInputs = next.source_inputs ?? (legacy ? null : captured.inputs);
+        item.reviewError = next.issues?.join(" ") || next.reason || "";
+        if (id === selectedDataset) fillReview(next, item, Boolean(item.draft));
       } catch (error) {
-        if (!runId) {
-          review = null;
-          reviewError = error.message;
-          connectToReview = error.status === 412 || error.code === "remote_failed";
-        }
+        if (!controller.signal.aborted && item.reviewRequest === controller) {item.review = null;item.reviewError = error.message;}
       } finally {
-        reviewing = false;
-        render();
+        if (item.reviewRequest === controller) {item.reviewRequest = null;item.reviewing = false;if (id === selectedDataset) render();}
       }
     }
-
-    function schedulePoll(delay = pollInterval) {
+    function schedulePoll(item = current(), delay = pollInterval) {
+      if (item !== current()) return;
       clearTimeout(pollTimer);
-      if (runId && !submitting && !terminalStates.has(record?.state)) {
-        pollTimer = setTimeout(() => void refresh(), delay);
-      }
+      if (item?.runId && !item.submitting && !terminalStates.has(item.record?.state)) pollTimer = setTimeout(() => void refresh(), delay);
     }
-
-    function receiveRecord(next, id) {
-      if (next.run_id !== id || !Object.hasOwn(labels, next.state)) {
-        throw new Error(localized("serviceError"));
-      }
-      const changed = !record || next.state !== record.state || next.job_id !== record.job_id;
-      record = next;
-      submissionUnconfirmed = false;
-      if (next.inputs) fillReview(next, false);
-      runError = next.connection === "interrupted" ? localized("interrupted")
-        : ["unknown", "validating", "failed"].includes(next.state) ? next.reason || "" : "";
-      if (changed) onHistoryChanged?.(id);
+    const recordTime = record => Date.parse(record?.updated_at ?? record?.finished_at ?? record?.submitted_at);
+    function olderRecord(next, previous) {
+      if (!previous) return false;
+      return recordTime(next) < recordTime(previous) ||
+        terminalStates.has(previous.state) && !terminalStates.has(next.state) && next.job_id === previous.job_id;
     }
-
+    function receiveRecord(item, next, id, datasetId) {
+      if (next.run_id !== id || next.step && next.step !== "genotype" || next.dataset_id && next.dataset_id !== datasetId || !Object.hasOwn(labels, next.state)) throw Error(localized("serviceError"));
+      if (olderRecord(next, item.record)) return;
+      const changed = !item.record || next.state !== item.record.state || next.job_id !== item.record.job_id;
+      item.record = next;item.uncertain = false;
+      item.error = next.connection === "interrupted" ? localized("interrupted") : ["unknown", "validating", "failed"].includes(next.state) ? next.reason || "" : "";
+      if (next.source_inputs) item.sourceInputs = next.source_inputs;
+      if (item === current() && next.inputs) fillReview(next, item);
+      if (changed) onHistoryChanged?.(id, datasetId);
+    }
     async function refresh(force = false) {
-      if (!runId || submitting || polling) return;
-      const id = runId;
-      polling = true;
-      clearTimeout(pollTimer);
-      render();
+      const item = current(), datasetId = selectedDataset;
+      if (!item?.runId || item.submitting || item.polling) return;
+      const id = item.runId, statusRequest = {};item.statusRequest = statusRequest;
+      item.polling = true;clearTimeout(pollTimer);render();
       try {
-        const path = `/signet/runs/${encodeURIComponent(id)}/steps/genotype`;
-        const next = await request(path + (force ? "?refresh=1" : ""));
-        if (runId === id) receiveRecord(next, id);
-      } catch (error) {
-        if (runId === id) runError = error.message;
-      } finally {
-        polling = false;
-        render();
-        schedulePoll();
-      }
-    }
-
-    function restore(id, saved) {
-      if (runId || !id) return;
-      runId = id;
-      if (saved?.run_id === id) {
-        record = saved;
-        if (record.inputs) fillReview(record, false);
-      }
-      render();
-      if (!terminalStates.has(record?.state)) void refresh();
-    }
-
-    function reset() {
-      if (!terminalStates.has(record?.state)) return;
-      clearTimeout(pollTimer);
-      runId = "";
-      record = null;
-      runError = "";
-      submissionUnconfirmed = false;
-      void checkExample();
-    }
-
-    function readNumbers(elements) {
-      return Object.fromEntries([...elements].map(([key, input]) => [key, input.valueAsNumber]));
-    }
-
-    async function submit() {
-      if (submitButton.disabled || !form.reportValidity()) return;
-      const id = `chr1-${crypto.randomUUID()}`;
-      const body = {run_id: id, inputs: review.inputs, settings: readNumbers(settingsInputs), resources: readNumbers(resourceInputs)};
-      runId = id;
-      submitting = true;
-      runError = "";
-      render();
-      try {
-        receiveRecord(await request(examplePath, body), id);
-      } catch (error) {
-        runError = error.message;
-        const needsReview = error.status === 400 || error.status === 412;
-        const refused = error.status === 502 && error.code === "remote_failed";
-        if (needsReview || refused) {
-          runId = "";
-          onHistoryChanged?.(id);
-          if (needsReview) {
-            review = null;
-            reviewError = runError;
-            connectToReview = error.status === 412;
-            runError = "";
-          }
-        } else {
-          submissionUnconfirmed = true;
+        const next = await request(`/signet/runs/${encodeURIComponent(id)}/steps/genotype${force ? "?refresh=1" : ""}`);
+        if (item.runId === id) receiveRecord(item, next, id, datasetId);
+      } catch (error) {if (item.runId === id) item.error = error.message;}
+      finally {
+        if (item.statusRequest === statusRequest) {
+          item.statusRequest = null;item.polling = false;
+          if (item === current()) {render();schedulePoll(item);}
         }
-      } finally {
-        submitting = false;
-        render();
-        schedulePoll(1_000);
       }
     }
-
-    form.addEventListener("submit", (event) => event.preventDefault());
-    reviewButton.addEventListener("click", () => void checkExample());
+    function restore(id, saved, datasetId = selectedDataset, run) {
+      const item = stateFor(datasetId);
+      if (item.runId || !id || saved?.dataset_id && saved.dataset_id !== datasetId) return;
+      item.reviewError = "";item.error = "";
+      item.runId = id;item.runLegacy = run?.input_mode !== "dataset" && datasetId === exampleDataset;
+      item.sourceInputs = run?.source_inputs ?? (run?.input_mode === "dataset" ? run.inputs : null) ?? saved?.source_inputs ?? null;
+      if (saved?.run_id === id) item.record = saved;
+      if (item === current()) {if (item.record?.inputs) fillReview(item.record, item);render();if (!terminalStates.has(item.record?.state)) void refresh();}
+    }
+    function reset() {
+      const item = current();
+      if (!item || !terminalStates.has(item.record?.state)) return;
+      clearTimeout(pollTimer);invalidate(item, true);
+      Object.assign(item, {runId: "", record: null, error: "", reviewError: "", uncertain: false,
+        preparedNew: true, sourceInputs: null, polling: false, statusRequest: null});
+      render();if (isLegacy(datasetValue())) void review();
+    }
+    const readNumbers = elements => Object.fromEntries([...elements].map(([key, input]) => [key, input.valueAsNumber]));
+    async function submit() {
+      const item = current(), datasetId = selectedDataset;
+      if (!item || !datasetValue().ready || submitButton.disabled || !form.reportValidity()) return;
+      if (item.scope !== scopeFor(datasetValue())) {invalidate(item);render();return;}
+      const legacy = item.legacy;
+      const id = `${legacy ? "chr1" : "analysis"}-${crypto.randomUUID()}`;
+      const body = {run_id: id, inputs: item.review.inputs, settings: readNumbers(settingsInputs), resources: readNumbers(resourceInputs)};
+      if (!legacy) Object.assign(body, {review_token: item.review.review_token, acknowledge_warnings: item.acknowledged});
+      item.runId = id;item.runLegacy = legacy;item.submitting = true;item.error = "";item.preparedNew = false;render();
+      try {
+        const next = await request(legacy ? examplePath : `/signet/datasets/${encodeURIComponent(datasetId)}/genotype`, body);
+        receiveRecord(item, next, id, datasetId);
+      } catch (error) {
+        item.error = error.message;
+        const refused = [400, 409, 412].includes(error.status) || error.status === 502 && error.code === "remote_failed";
+        if (refused) {item.runId = "";item.review = null;item.acknowledged = false;item.reviewError = error.message;onHistoryChanged?.(id, datasetId);}
+        else item.uncertain = true;
+      } finally {item.submitting = false;if (item === current()) {render();schedulePoll(item, 1000);}}
+    }
+    form.addEventListener("submit", event => event.preventDefault());
+    reviewButton.addEventListener("click", () => void review());
     submitButton.addEventListener("click", () => void submit());
     statusButton.addEventListener("click", () => void refresh(true));
-    historyButton.addEventListener("click", () => onOpenHistory?.(runId));
+    historyButton.addEventListener("click", () => onOpenHistory?.(current()?.runId));
     newButton.addEventListener("click", reset);
+    part("acknowledge").addEventListener("change", () => {if (current()) current().acknowledged = part("acknowledge").checked;render();});
+    for (const input of [...settingsInputs.values(), ...resourceInputs.values()]) input.addEventListener("input", () => saveDraft());
+    function setContext(next) {
+      const previous = current();
+      const id = next.dataset?.id ?? next.datasetId ?? "";
+      if (id !== selectedDataset) {
+        saveDraft(previous);clearTimeout(pollTimer);
+        if (previous?.reviewing) {previous.reviewRequest?.abort();previous.reviewRequest = null;previous.reviewing = false;}
+      }
+      context = next;selectedDataset = id;
+      const item = stateFor(id), dataset = datasetValue();
+      const inputKey = sourceKey(dataset.inputs), scope = scopeFor(dataset);
+      if (!item.runId && item.scope && item.scope !== scope) invalidate(item, item.inputKey !== inputKey);
+      item.scope = scope;item.inputKey = inputKey;
+      if (!item.runId && !item.preparedNew) {
+        const runs = (context.runs ?? []).filter(run => (!run.dataset_id || run.dataset_id === id) && run.jobs?.genotype?.state !== "not_submitted");
+        const candidate = runs.find(run => run.jobs?.genotype && !terminalStates.has(run.jobs.genotype.state)) ?? runs.find(run => run.jobs?.genotype);
+        if (candidate) restore(candidate.run_id, candidate.jobs.genotype, id, candidate);
+      }
+      if (item.runId) {
+        const saved = (context.runs ?? []).find(run => run.run_id === item.runId)?.jobs?.genotype;
+        if (saved && !item.submitting && !item.uncertain && !olderRecord(saved, item.record) &&
+          (!item.record || recordTime(saved) > recordTime(item.record))) item.record = saved;
+        if (item.record?.inputs) fillReview(item.record, item);
+      } else if (item.review) fillReview(item.review, item, Boolean(item.draft));
+      render();
+      if (context.visible && dataset.ready && isLegacy(dataset) && !item.attempted && !item.runId) void review();
+      if (item.runId && !terminalStates.has(item.record?.state)) schedulePoll(item);
+    }
+    window.addEventListener("workspace-remote-context", event => {
+      const value = event.detail ?? {};
+      const next = {connected: value.connected === true, identity: value.identity ?? "", environmentKey: value.environmentKey ?? ""};
+      const changed = JSON.stringify(next) !== JSON.stringify(remote);
+      remote = next;
+      if (changed) for (const item of datasets.values()) if (!item.runId && item.scope) invalidate(item);
+      if (selectedDataset) setContext(context);
+    });
+    window.dispatchEvent(new Event("workspace-request-remote-context"));
     render();
-
-    return {
-      setContext(next) {
-        context = next;
-        render();
-        if (context.visible && context.datasetId === exampleDataset && !reviewAttempted && !runId) {
-          void checkExample();
-        }
-      },
-      restore,
-    };
+    return {setContext, restore};
   };
 
   const expressionCopy = {
@@ -611,7 +641,12 @@
         if (adjustment) element.value = value.inputs?.[key] ?? "";
         else element.textContent = value.inputs?.[key] ?? "—";
       }
-      for (const [key, element] of parameterInputs) if (!keepDraft) element.value = value[parameterGroup]?.[key] ?? "";
+      for (const [key, element] of parameterInputs) {
+        if (!keepDraft) element.value = value[parameterGroup]?.[key] ?? "";
+        if (key === "restrict.tcga" && value.settings?.[key] != null && Number.isFinite(Number(value.settings[key]))) {
+          element.value = element.min = element.max = String(value.settings[key]);
+        }
+      }
       for (const [key, element] of resourceInputs) {
         if (value.limits?.[key]) [element.min, element.max] = value.limits[key];
         if (!keepDraft) element.value = value.resources?.[key] ?? "";
@@ -659,7 +694,9 @@
       form.hidden = !alwaysVisible && (!allowed || !(hasAttempt ? saved?.inputs : item?.review));
       for (const field of fields) field.disabled = hasAttempt || !selectedRun || visualization && Boolean(item?.checking);
       if (adjustment) {
-        panel.querySelector('[data-adjust-input="cli.file"]').disabled = hasAttempt || Boolean(item?.checking) || !selectedRun;
+        const clinicalInput = panel.querySelector('[data-adjust-input="cli.file"]');
+        clinicalInput.disabled = hasAttempt || Boolean(item?.checking) || !selectedRun;
+        clinicalInput.readOnly = Boolean(item?.review?.frozen || item?.review?.frozen_inputs || source()?.input_mode === "dataset" || source()?.frozen_inputs);
         const clinical = item?.review?.clinical;
         part("clinical-summary").textContent = clinical
           ? (context.language === "en" ? `${clinical.rows ?? 0} clinical rows · ${(clinical.columns ?? []).join(", ")}`
@@ -775,7 +812,8 @@
       item.error = "";
       render();
       try {
-        const clinicalPath = adjustment ? panel.querySelector('[data-adjust-input="cli.file"]').value.trim() : "";
+        const frozen = adjustment && (item.review?.frozen || item.review?.frozen_inputs || source()?.input_mode === "dataset" || source()?.frozen_inputs);
+        const clinicalPath = adjustment && !frozen ? panel.querySelector('[data-adjust-input="cli.file"]').value.trim() : "";
         const params = new URLSearchParams();
         if (clinicalPath) params.set("clinical", clinicalPath);
         if (visualization && item.draft) {

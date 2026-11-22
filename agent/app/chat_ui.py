@@ -269,11 +269,11 @@ class ChatHandler(BaseHTTPRequestHandler):
         query = parse_qs(url.query, keep_blank_values=True)
         if (set(query) - {'run', 'stage', 'source'} or len(query.get('run', [])) != 1 or not query['run'][0]
                 or len(query.get('stage', [])) != 1 or query['stage'][0] not in ARCHIVED_STEP_JOBS
-                or ('source' in query and (query['source'] != ['live'] or query['stage'][0] not in ('1', '2', '4', '5')))):
-            return self._error(400, 'Provide a run ID and stage number (1, 2, 4, or 5). A live result requires stage 1, 2, 4, or 5.')
+                or ('source' in query and query['source'] not in (['live'], ['archive']))):
+            return self._error(400, 'Provide a run ID and stage number (1, 2, 4, or 5).')
         run_id, stage = query['run'][0], query['stage'][0]
         try:
-            result = (workspace_genotype.completed_result(run_id, stage) if 'source' in query
+            result = (workspace_genotype.completed_result(run_id, stage) if query.get('source') == ['live']
                       else self.server.stage6.archived_stage_result(run_id, stage))
         except (OSError, ValueError, KeyError, TypeError, OverflowError):
             return self._error(404, 'No readable archived result for this stage.')
@@ -286,10 +286,10 @@ class ChatHandler(BaseHTTPRequestHandler):
             return self._error(403, 'Workspace token required.')
         query = parse_qs(url.query, keep_blank_values=True)
         if (set(query) - {'run', 'source'} or len(query.get('run', [])) != 1 or not query['run'][0]
-                or ('source' in query and query['source'] != ['live'])):
-            return self._error(400, 'Provide a single run ID and an optional live source.')
+                or ('source' in query and query['source'] not in (['live'], ['archive']))):
+            return self._error(400, 'Provide a single run ID and an optional live or archive source.')
         try:
-            if 'source' in query:
+            if query.get('source') == ['live']:
                 from agent.runtime import workspace_adjustment
                 result = workspace_adjustment.completed_result(query['run'][0])
             else:
@@ -307,13 +307,13 @@ class ChatHandler(BaseHTTPRequestHandler):
         if not query:
             return self.json_response({'runs': self.server.stage6.completed_runs()})
         if (set(query) - {'run', 'source'} or len(query.get('run', [])) != 1
-                or ('source' in query and query['source'] not in (['archive'], ['live']))):
-            return self._error(400, 'Provide a single run ID and, optionally, the archive or live source.')
+                or ('source' in query and query['source'] not in (['archive'], ['live'], ['recorded']))):
+            return self._error(400, 'Provide a single run ID and, optionally, the archive, live or recorded source.')
         try:
             return self.json_response(self.server.stage6.completed_result(
                 query['run'][0], archive_only=query.get('source') == ['archive'],
-                live_only=query.get('source') == ['live']))
-        except (OSError, ValueError, KeyError, TypeError, csv.Error):
+                live_only=query.get('source') == ['live'], recorded_only=query.get('source') == ['recorded']))
+        except (OSError, ValueError, KeyError, TypeError, OverflowError, csv.Error):
             return self._error(400, 'No readable completed Stage 6 result for this run.')
 
 

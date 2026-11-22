@@ -210,6 +210,37 @@ class StepsTest(unittest.TestCase):
         self.assertEqual(caught.exception.code, 'conflict')
         self.assertIn('already completed', str(caught.exception))
 
+    def test_unified_history_reads_attempts_created_by_the_existing_retry_flow(self):
+        from agent.runtime import workspace_history
+        self.failed_expression()
+        first = json.loads((self.root / 'steps/expression.json').read_text())
+        steps.update_settings('step_test', {'restrict.tcga': 2})
+        steps.submit('step_test', 'expression', self.inputs, {'cpus': 2, 'hours': 1.5})
+        self.finish_job()
+        latest = steps.status('step_test', 'expression', refresh=True)
+        self.assertEqual(latest['state'], 'completed')
+        files = list(self.root.rglob('*.json')) + [self.root / 'work/config.ini']
+        originals = {path: path.read_bytes() for path in files}
+        remote_calls = len(self.calls)
+        with patch.object(st, '_settings', side_effect=AssertionError('History must use the attempt snapshots')):
+            history = workspace_history.merge({'datasets': [], 'runs': []})
+        row = next(item for item in history['runs'] if item['run_id'] == 'step_test')
+        old, current = row['attempts']['expression']
+        self.assertEqual((old['number'], current['number']), (1, 2))
+        self.assertEqual((old['current'], current['current']), (False, True))
+        self.assertEqual(old['record'], first)
+        self.assertEqual(current['record'], latest)
+        self.assertEqual((old['record']['job_id'], current['record']['job_id']), ('12345', '222'))
+        self.assertEqual(current['record']['settings']['restrict.tcga'], '2')
+        self.assertNotEqual(old['record']['settings'], current['record']['settings'])
+        self.assertEqual(current['record']['resources']['cpus'], 2)
+        self.assertEqual((old['result']['status'], current['result']['status']),
+                         ('recorded_failed', 'recorded_completed'))
+        self.assertTrue(any(item['status'] == 'missing' for item in old['result']['outputs']))
+        self.assertTrue(any(item['status'] == 'downloaded' for item in current['result']['outputs']))
+        self.assertEqual(len(self.calls), remote_calls)
+        self.assertEqual({path: path.read_bytes() for path in files}, originals)
+
     def test_retry_cannot_download_previous_attempt_outputs_remote_or_local(self):
         steps.submit('step_test', 'expression', self.inputs)
         self.finish_job(err='Error in fread(x): first attempt failed\n')

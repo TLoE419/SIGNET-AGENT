@@ -22,6 +22,9 @@ test('Electron serves its renderer with escaped bootstrap data and strict produc
  });
  const script=await handler(new Request(origin+'/workspace/workspace.js'));
  assert.equal(script.status,200);assert.match(script.headers.get('content-type'),/javascript/);
+ const validation=await handler(new Request(origin+'/workspace/input-validation.js'));
+ assert.equal(validation.status,200);assert.match(await validation.text(),/SignetInputValidation/);
+ assert.ok(html.indexOf('/workspace/input-validation.js')<html.indexOf('/workspace/workspace.js'));
  const classic=await (await handler(new Request(origin+'/classic'))).text();
  assert.match(classic,/\/renderer.js/);
  assert.doesNotMatch(classic,/ssh-ui.js/);

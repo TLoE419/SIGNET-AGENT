@@ -507,6 +507,22 @@ code:not(pre code) {
 #signet-lens-left-preview .ml-input-button:disabled { opacity: .55; cursor: default; }
 #signet-lens-left-preview .ml-input-status { margin: 0; color: #276554; }
 #signet-lens-left-preview .ml-input-status:has(span:not([hidden])) { margin-top: 8px; }
+#signet-lens-left-preview .ml-input-validation { padding-top: 0; }
+#signet-lens-left-preview .ml-input-validation h2 { margin: 0 0 8px; font-size: 16px; }
+#signet-lens-left-preview .ml-input-validation h3 { margin: 0; font-size: 14px; }
+#signet-lens-left-preview .ml-validation-check { margin-top: 14px; padding: 14px; border: 1px solid var(--ml-rule); border-radius: 7px; }
+#signet-lens-left-preview .ml-validation-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+#signet-lens-left-preview .ml-validation-status { padding: 2px 6px; border-radius: 4px; background: #eef1f3; color: var(--ml-muted); white-space: nowrap; }
+#signet-lens-left-preview .ml-validation-status[data-status="passed"] { background: #e9f5ec; color: #2c6941; }
+#signet-lens-left-preview .ml-validation-status[data-status="warning"] { background: #fff3d8; color: #795616; }
+#signet-lens-left-preview .ml-validation-status[data-status="failed"] { background: #fbeceb; color: var(--ml-red); }
+#signet-lens-left-preview .ml-input-validation :is(p, ul) { margin: 9px 0; overflow-wrap: anywhere; }
+#signet-lens-left-preview .ml-input-validation code { overflow-wrap: anywhere; }
+#signet-lens-left-preview .ml-input-validation [data-validation-issue] { color: var(--ml-red); }
+#signet-lens-left-preview .ml-validation-check[data-status="warning"] [data-validation-issue] { color: #795616; }
+#signet-lens-left-preview .ml-input-validation [data-status="warning"] [data-validation-issue] { color: #795616; }
+#signet-lens-left-preview .ml-validation-files { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 12px; }
+#signet-lens-left-preview .ml-validation-files :is(th, td) { padding: 7px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--ml-rule); overflow-wrap: anywhere; }
 #signet-lens-left-preview .ml-key-values {
   display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
   margin: 0; overflow: hidden; border: 1px solid var(--ml-rule); border-radius: 5px;
@@ -522,6 +538,26 @@ code:not(pre code) {
 }
 #signet-lens-left-preview .ml-nav-action:hover { background: #eaf3fa; }
 #signet-lens-left-preview .ml-run-overview { margin: 0 0 18px; color: var(--ml-muted); }
+#signet-lens-left-preview .ml-history-scope { display: grid; gap: 5px; margin: 0 0 12px; color: var(--ml-muted); }
+#signet-lens-left-preview .ml-history-scope select,
+#signet-lens-left-preview .ml-history-assignment select { width: 100%; min-width: 0; padding: 6px 8px; border: 1px solid var(--ml-rule); border-radius: 5px; background: #fff; color: var(--ml-ink); font: inherit; }
+#signet-lens-left-preview .ml-history-assignment { margin-bottom: 16px; padding: 12px; border: 1px solid var(--ml-rule); border-radius: 5px; }
+#signet-lens-left-preview .ml-history-assignment label { display: grid; gap: 6px; }
+#signet-lens-left-preview .ml-history-assignment p,
+#signet-lens-left-preview .ml-history-record-note { margin: 8px 0; color: var(--ml-muted); overflow-wrap: anywhere; }
+#signet-lens-left-preview [data-save-state="error"] [data-history-assignment-status] { color: var(--ml-red); }
+#signet-lens-left-preview .ml-history-saved-job { margin-bottom: 8px; }
+#signet-lens-left-preview .ml-history-job-content { padding: 10px; }
+#signet-lens-left-preview .ml-history-job-content h4 { margin: 12px 0 6px; font-size: 13px; }
+#signet-lens-left-preview .ml-history-job-content p { margin: 0 0 9px; color: var(--ml-muted); }
+#signet-lens-left-preview .ml-history-attempt-count { margin-left: auto; color: var(--ml-muted); font-size: 12px; }
+#signet-lens-left-preview .ml-history-attempts { display: grid; gap: 8px; padding: 10px; }
+#signet-lens-left-preview .ml-history-attempt { min-width: 0; border: 1px solid var(--ml-rule); border-radius: 5px; overflow: hidden; }
+#signet-lens-left-preview .ml-history-attempt > summary { display: list-item; list-style: revert; list-style-position: inside; min-height: 0; background: #f8fafb; }
+#signet-lens-left-preview .ml-history-attempt > summary::-webkit-details-marker { display: revert; }
+#signet-lens-left-preview .ml-history-attempt-state { display: block; margin: 3px 0 0 16px; color: var(--ml-muted); font-size: 12px; }
+#signet-lens-left-preview .ml-history-attempt :is(.ml-history-attempt-events, .ml-history-attempt-outputs) { margin: 7px 0; padding-left: 20px; overflow-wrap: anywhere; }
+#signet-lens-left-preview .ml-history-attempt-events time { font-variant-numeric: tabular-nums; }
 #signet-lens-left-preview .ml-run-inputs { margin-bottom: 12px; }
 #signet-lens-left-preview .ml-run-inputs summary { color: #24618f; cursor: pointer; }
 #signet-lens-left-preview .ml-run-inputs[open] summary { margin-bottom: 8px; }
