@@ -1,4 +1,5 @@
 import {useEffect,useId,useRef,useState} from 'react';
+import {createPortal} from 'react-dom';
 
 export type Provider='codex'|'gemini'|'groq';
 export interface ModelStatus {provider:Provider;geminiConfigured:boolean;encryptionAvailable:boolean}
@@ -45,7 +46,7 @@ export function GeminiKeyModal({open,status,onSave,onClear,onClose,english=true,
   }finally{lock.current=false;setWorking(null)}
  }
  const unavailable=!status||status.encryptionAvailable===false;
- return <dialog ref={dialog} className="ssh-modal model-key-modal" aria-labelledby={id} onClose={()=>{setKey('');onClose()}} onCancel={e=>{if(working)e.preventDefault();else close()}}><form onSubmit={e=>{e.preventDefault();void run('saving')}}>
+ return createPortal(<dialog ref={dialog} className="ssh-modal model-key-modal" aria-labelledby={id} onClose={()=>{setKey('');onClose()}} onCancel={e=>{if(working)e.preventDefault();else close()}}><form onSubmit={e=>{e.preventDefault();void run('saving')}}>
   <button type="button" className="ssh-modal-close" aria-label={t("關閉","Close")} title={t("關閉","Close")} disabled={!!working} onClick={close}><svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
   <h2 id={id}>{t("聊天模型設定","Gemini API")}</h2>
   {model&&<p>{t("目前模型：","Current model: ")}<strong>{model}</strong></p>}
@@ -57,10 +58,10 @@ export function GeminiKeyModal({open,status,onSave,onClear,onClose,english=true,
   </fieldset>
   {status?.encryptionAvailable===false&&<p role="alert">{t("系統安全儲存無法使用，無法儲存金鑰。", "System keychain encryption is unavailable, so a key cannot be saved here.")}</p>}
   {notice&&<p role="status">{notice}</p>}{error&&<p role="alert">{error}</p>}
-  <footer>{status?.geminiConfigured&&<button type="button" className="ssh-danger" disabled={!!working} onClick={()=>void run('clearing')}>{working==='clearing'?t('移除中…','Removing…'):t('移除金鑰','Remove key')}</button>}
+  <footer className="ssh-dialog-actions">{status?.geminiConfigured&&<button type="button" className="ssh-danger" disabled={!!working} onClick={()=>void run('clearing')}>{working==='clearing'?t('移除中…','Removing…'):t('移除金鑰','Remove key')}</button>}
    <button type="button" disabled={!!working} onClick={close}>{t("取消","Cancel")}</button>
    <button type="submit" className="ssh-primary" disabled={!!working||unavailable||!key.trim()}>{working==='saving'?t('驗證金鑰中…','Verifying key…'):t('儲存並使用 Gemini','Save and use Gemini')}</button></footer>
- </form></dialog>;
+ </form></dialog>,document.body);
 }
 
 export function ModelControls({bridge,english=true,model,workspace=false}:{bridge:ModelBridge;english?:boolean;model?:string;workspace?:boolean}){

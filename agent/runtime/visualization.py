@@ -68,3 +68,58 @@ def threshold_counts(path):
         genes = {i for i, _ in kept} | {j for _, j in kept}
         counts.append({'cutoff': cutoff, 'connections': len(kept), 'genes': len(genes)})
     return counts
+
+
+INPUT_KEYS = ('Afreq', 'coef', 'vis.genepos')
+
+
+def validate_inputs(settings):
+    matrices = []
+    for key in INPUT_KEYS[:2]:
+        rows = []
+        for line in Path(settings[key]).read_text().splitlines():
+            if line.strip():
+                row = [float(value) for value in line.replace(',', ' ').split()]
+                if not all(math.isfinite(value) for value in row):
+                    raise ValueError('Visualization matrices must contain finite numbers.')
+                if key == 'Afreq' and not all(0 <= value <= 1 for value in row):
+                    raise ValueError('Bootstrap frequencies must be between zero and one.')
+                rows.append(row)
+        matrices.append(rows)
+    positions = [line.split() for line in Path(settings['vis.genepos']).read_text().splitlines() if line.strip()]
+    n = len(positions)
+    if not n or any(len(row) != 4 for row in positions):
+        raise ValueError('Gene positions require name, chromosome, start and end.')
+    if len({row[0] for row in positions}) != n:
+        raise ValueError('Gene names must be unique and ordered as in the matrices.')
+    for row in positions:
+        if int(row[2]) < 0 or int(row[3]) < int(row[2]):
+            raise ValueError('Invalid gene coordinates.')
+    # Official examples are rectangular: rows are targets; columns index source genes.
+    width = len(matrices[0][0]) if matrices[0] else 0
+    if not 0 < width <= n or any(len(matrix) != n or any(len(row) != width for row in matrix) for matrix in matrices):
+        raise ValueError('Matrix shapes must match, with one target row per gene and source columns covered by gene positions.')
+    threshold = float(settings['freq'])
+    edges = [(i, j) for i, row in enumerate(matrices[0]) for j, value in enumerate(row)
+             if value > threshold - 2.220446049250313e-16]
+    if not edges:
+        raise ValueError('No edges pass the frequency threshold; select a supported threshold.')
+    neighbors = {}
+    for i, j in edges:
+        neighbors.setdefault(i, set()).add(j)
+        neighbors.setdefault(j, set()).add(i)
+    seen, components = set(), 0
+    for node in neighbors:
+        if node in seen:
+            continue
+        components += 1
+        stack = [node]
+        while stack:
+            current = stack.pop()
+            if current not in seen:
+                seen.add(current)
+                stack.extend(neighbors[current] - seen)
+    if int(settings['ntop']) > components:
+        raise ValueError(f'Only {components} connected subnetworks pass the threshold; reduce top_networks.')
+    return {'genes': n, 'edges_at_threshold': len(edges), 'connected_subnetworks': components,
+            'limitation': 'Dimensions and coordinate checks do not establish biological identity.'}

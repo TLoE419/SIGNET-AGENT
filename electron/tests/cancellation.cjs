@@ -73,14 +73,26 @@ async function verify() {
   };
   const click = selector => js(`(() => {const control=document.querySelector(${JSON.stringify(selector)});
     if(!control?.getClientRects().length)throw Error('Missing visible cancellation control: '+${JSON.stringify(selector)});
+    if(control.matches(':disabled'))throw Error('Disabled cancellation control: '+${JSON.stringify(selector)});
     control.click();})()`);
   const request = (url, body) => js(`fetch(${JSON.stringify(url)},{method:'POST',
     headers:{'Content-Type':'application/json','X-Chat-Token':document.querySelector('meta[name="chat-token"]').content},
     body:${JSON.stringify(JSON.stringify(body))}}).then(async response=>({status:response.status,value:await response.json()}))`);
   const geometry = () => js(`(() => {const root=document.querySelector('.ml-app');return [root.offsetWidth,root.offsetHeight,
     root.querySelector('.ml-rail').offsetWidth,root.querySelector('.ml-chat').offsetWidth];})()`);
-  const context = connected => js(`window.dispatchEvent(new CustomEvent('workspace-remote-context',{detail:{connected:${connected},
-    identity:'isolated-cancellation',environmentKey:'local-scheduler-only'}}))`);
+  const context = connected => js(`(() => {
+    window.__cancellationRemoteContext={connected:${connected},identity:'isolated-cancellation',environmentKey:'local-scheduler-only'};
+    if(!window.__cancellationContextInstalled){
+      window.__cancellationContextInstalled=true;
+      // The scheduler fixture owns connection state, including responses to later log/history mounts.
+      window.addEventListener('workspace-remote-context',event=>{
+        if(event.detail?.identity==='isolated-cancellation')return;
+        event.stopImmediatePropagation();
+        window.dispatchEvent(new CustomEvent('workspace-remote-context',{detail:window.__cancellationRemoteContext}));
+      },true);
+    }
+    window.dispatchEvent(new CustomEvent('workspace-remote-context',{detail:window.__cancellationRemoteContext}));
+  })()`);
   const selectDataset = async id => {
     await click('[data-nav-target="data"]');
     await until(() => js(`[...document.querySelector('#ml-dataset-select').options].some(option=>option.value===${JSON.stringify(id)})`), 'Cancellation dataset did not mount');
@@ -195,7 +207,10 @@ async function verify() {
   assert.equal(await visible(selector(5, 'network', 'cancel-confirmation')), false, 'Changing dataset retained a stale confirmation');
   await click(selector(5, 'network', 'cancel'));
   await context(false);
+  await js(`window.dispatchEvent(new Event('workspace-request-remote-context'))`);
   assert.equal(await visible(selector(5, 'network', 'cancel-confirmation')), false, 'Disconnect left a usable cancellation confirmation');
+  assert.equal(await js(`document.querySelector(${JSON.stringify(selector(5, 'network', 'cancel'))}).disabled`), true,
+    'A later context request lost the fixture disconnection');
   assert.equal(await state(5, 'network'), 'running', 'Disconnect invented a terminal state');
   await context(true);
 

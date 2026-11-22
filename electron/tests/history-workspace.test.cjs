@@ -175,9 +175,13 @@ test('completed live stage forks only after review, then separately confirms sub
  await h.ready();h.click('[data-nav-target="history"]');h.click('[data-run-target="workspace--original"]');
  h.click('[data-rerun-review]');await until(()=>h.q('[data-rerun-create]'));
  assert.match(h.q('[data-rerun-content]').textContent,/adjust/);
+ assert.equal(h.q('[data-rerun-parameters]'),null,'Researchers edit labelled fields instead of raw parameter objects');
+ const missingness=h.q('[data-rerun-group="settings"][data-rerun-field="mind"]');
+ assert.match(missingness.closest('label').textContent,/樣本缺失率上限/);missingness.value='0.2';
  assert.equal(h.calls.filter(call=>call.options.method==='POST').length,0);
  h.click('[data-rerun-create]');await until(()=>h.q('[data-rerun-submit]'));
  const creation=h.calls.find(call=>call.options.method==='POST');assert.equal(creation.body.revision,'rev');
+ assert.equal(creation.body.parameters.settings.mind,0.2);assert.equal(review.parameters.settings.mind,0.1);
  assert.equal(h.calls.some(call=>call.url.endsWith('/rerun/submit')),false);
  h.click('[data-rerun-submit]');await until(()=>h.calls.some(call=>call.url.endsWith('/rerun/submit')));
  assert.deepEqual(h.calls.find(call=>call.url.endsWith('/rerun/submit')).body,{confirmed:true});
@@ -219,4 +223,22 @@ test('analysis chat context uses only the currently selected stage run from the 
  h.choose('#ml-dataset-select','dataset-b');
  assert.equal(snapshot().dataset_id,'dataset-b');assert.equal(snapshot().history_id,null);
  assert.deepEqual(snapshot().selected_genes,[]);
+});
+
+test('model toolbar opens settings without submitting and removes unsupported controls',async t=>{
+ const h=harness(t,[workspace()]);await h.ready();
+ const button=h.q('#ml-open-model-settings');
+ assert.equal(button.tagName,'BUTTON');assert.equal(button.type,'button');
+ assert.equal(button.closest('[aria-hidden="true"]'),null);
+ let opened=0,submitted=0;
+ h.window.addEventListener('workspace-open-model-settings',()=>opened++);
+ h.q('#ml-composer').addEventListener('submit',()=>submitted++);
+ h.q('#ml-input').value='Keep this draft';button.click();
+ assert.equal(opened,1);assert.equal(submitted,0);
+ assert.equal(h.q('#ml-input').value,'Keep this draft');
+ assert.equal(h.q('.ml-mention'),null);
+ assert.equal(h.q('.ml-chip-icon'),null);
+ assert.equal(h.q('.ml-chips').textContent.includes('Code Mode'),false);
+ assert.equal(button.getAttribute('aria-label'),'模型設定');
+ h.click('#ml-language');assert.equal(button.getAttribute('aria-label'),'Model settings');
 });

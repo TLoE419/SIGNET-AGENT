@@ -740,8 +740,11 @@ class SignetApiTest(unittest.TestCase):
         self.lose_connection_on = None
         path = '/signet/runs/step_test/steps/expression/reconcile'
         body = {'expected_attempt': 1, 'expected_job_id': None, 'action': 'review'}
+        # This test covers HTTP confirmation and attempt routing; real receipt and
+        # atomic marker adoption are exercised by test_submission_recovery.
         with patch('agent.runtime.submission_recovery._probe', return_value=(
-                'adopt', '12345', {'scheduler_checked': True, 'candidates': ['12345']})):
+                'adopt', '12345', {'scheduler_checked': True, 'candidates': ['12345']})), \
+             patch('agent.runtime.submission_recovery._confirm_job_marker', return_value=True):
             self.assertEqual(self.call('POST', path, {**body, 'expected_attempt': 2})[0], 409)
             self.assertEqual(self.call('POST', path, {**body, 'action': 'adopt'})[0], 400)
             status, review = self.call('POST', path, body)

@@ -23,7 +23,7 @@
     ready: ["可以核對並送出", "Ready to review and submit"],
     unavailable: ["範例尚未就緒", "The example is not ready"],
     readyPrompt: ["確認檔案與設定後，按「送出第 1 階段」。", "Review the files and settings, then select Submit Stage 1."],
-    connect: ["請先到「設定 → 遠端運算」連線並確認環境就緒，再回來檢查範例。", "Connect and verify the environment in Settings → Remote compute, then check the example again."],
+    connect: ["請先到「設定 → 遠端運算」連線並確認環境就緒，再回來核對輸入檔案。", "Connect and verify the environment in Settings → Remote compute, then review the input files again."],
     inputs: ["範例輸入檔案", "Example inputs"],
     sourceInputs: ["這筆執行會保存的資料組檔案", "Dataset files saved with this run"],
     genotype: ["基因型資料", "Genotype data"], expression: ["基因表現量資料", "Expression data"], clinical: ["臨床資料", "Clinical data"],

@@ -80,13 +80,10 @@
         <form class="ml-composer" id="ml-composer" aria-label="Write a message">
           <textarea id="ml-input" rows="1" maxlength="8000" aria-label="Type your message" placeholder="Type your message..."></textarea>
           <div class="ml-composer-toolbar">
-            <div class="ml-chips" aria-hidden="true">
-              <span class="ml-chip"><i data-lucide="code"></i>Code Mode (beta)<i class="ml-chip-chevron" data-lucide="chevron-down"></i></span>
-              <span class="ml-chip"><i data-lucide="bot"></i><span id="ml-model-chip" data-live-language></span><i class="ml-chip-chevron" data-lucide="chevron-down"></i></span>
-              <span class="ml-chip ml-chip-icon"><i data-lucide="sliders-horizontal"></i></span>
+            <div class="ml-chips">
+              <button type="button" id="ml-open-model-settings" class="ml-chip" aria-label="Model settings" data-zh-aria-label="模型設定"><i data-lucide="bot" aria-hidden="true"></i><span id="ml-model-chip" data-live-language></span><i class="ml-chip-chevron" data-lucide="settings" aria-hidden="true"></i></button>
             </div>
             <div class="ml-composer-actions">
-              <span class="ml-mention" aria-hidden="true"><i data-lucide="at-sign"></i></span>
               <button id="ml-send" class="ml-icon-button ml-send" type="submit" aria-label="Send message"><i data-lucide="send" aria-hidden="true"></i></button>
             </div>
           </div>

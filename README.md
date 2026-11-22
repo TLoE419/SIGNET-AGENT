@@ -62,6 +62,25 @@ is bound to its own source, run, stage and attempt. Missing files, empty files
 and disconnected remote access are distinct states; opening logs never retries
 analysis or adds the log text to the conversation.
 
+Unknown submissions have a manual reconciliation review. Only evidence bound to
+the original run and attempt can adopt an existing scheduler job or prove that
+submission never began; an empty scheduler query or a failed submission client
+does not permit replay. Completed stages can instead create a **new linked run**:
+review editable parameters and downstream impact, reuse compatible upstream
+outputs, then submit from the new run's manual review form. Original results and
+settings remain unchanged.
+
+Chat receives the selected dataset, source-bound run, stage and gene identifiers
+and can open the corresponding results or propose a stage review. It cannot
+submit, retry or cancel scientific work. Activity shows each tool's public status
+and preserves failures and partial answers across saved conversations. The stage
+timeline uses saved results and labels missing evidence explicitly. Network
+nodes can be dragged; the background can be panned or zoomed, and selecting an
+edge reveals its saved values. The model chip opens secure Gemini key settings.
+**Settings → Advanced: remote terminal** opens a disabled terminal that requires
+an explicit enable action after connection; opening the settings never starts a
+shell or runs a command.
+
 ## Replacing the Former Desktop Workbench
 
 This version replaces the desktop workbench with the local chat research assistant. The retired `desktop/` implementation, former `tools/` setup and execution entry points, desktop architecture documents, and historical validation records have been removed. Use the Python installation and startup steps below; the former desktop `npm start` and `tools/setup-dev.sh` are no longer entry points. The current Electron client is the supported UI described below.
@@ -112,7 +131,7 @@ scientific inputs/results are not moved or rewritten by the frontend migration.
 | Run scientific analysis | An HPC3 account and the environment prepared in the Workflow panel | Each stage runs as a Slurm job after you confirm its card; completion does not establish biological validity |
 | Change settings | A completed analysis | **Rerun stage** starts a new run from that stage and keeps the original for comparison |
 
-There are **5 SIGNET tools, 3 general file tools, 8 HPC3 setup tools and 1 page control, for a total of 17 model tools**. None of them runs a SIGNET stage; only a confirmed card does. See [signet_inventory.json](signet_inventory.json) for the complete scientific-source inventory. Scientific code is pinned to the [official SIGNET commit](https://github.com/signet4grn/SIGNET/tree/bed55b3e121de0edf5fd43da683dc59850ff82d3); the assistant does not execute arbitrary scripts.
+The model has tools for analysis review, aggregate evidence, environment preparation and workspace navigation. None of them runs a SIGNET stage; only a confirmed card does. See [signet_inventory.json](signet_inventory.json) for the complete scientific-source inventory. Scientific code is pinned to the [official SIGNET commit](https://github.com/signet4grn/SIGNET/tree/bed55b3e121de0edf5fd43da683dc59850ff82d3); the assistant does not execute arbitrary scripts.
 
 ## Usage and Data
 

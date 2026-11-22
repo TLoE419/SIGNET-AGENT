@@ -9,9 +9,14 @@ from google import genai
 from google.genai import types
 import agent.core.conversation as main
 import agent.tools.signet as st
+from agent.tools.registry import ALL_TOOLS
+from agent.tools.workspace import LEGACY_EXECUTION
 
 
 class ToolsTest(unittest.TestCase):
+    def call(self, name, **arguments):
+        return st.dispatch_tool(name, arguments)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.project = Path(self.temp.name).resolve()
@@ -25,11 +30,8 @@ class ToolsTest(unittest.TestCase):
         self.patch_project.stop()
         self.temp.cleanup()
 
-    def call(self, name, **args):
-        return st.dispatch_tool(name, args)
-
     def configure(self, cohort='TCGA', run_id='test'):
-        result = self.call('configure_signet', run_id=run_id, cohort=cohort)
+        result = st.configure_signet(run_id=run_id, cohort=cohort)
         self.assertEqual(result['status'], 'created', result)
         return self.project / 'runs' / run_id
 
@@ -39,7 +41,7 @@ class ToolsTest(unittest.TestCase):
         self.assertEqual(len(st.SIGNET_TOOLS),5)
         self.assertIn(st.propose_hpc3_genotype, st.SIGNET_TOOLS)
         st._verify_source()
-        self.assertEqual(self.call('signet_catalog')['internal_scripts'],121)
+        self.assertEqual(st.signet_catalog()['internal_scripts'],121)
 
     def test_local_execution_tools_were_replaced_by_the_hpc3_cards(self):
         # Every SIGNET step runs on HPC3 after a confirmation card; the model cannot run one itself.
@@ -48,7 +50,8 @@ class ToolsTest(unittest.TestCase):
                         'run_pca', 'cis_eqtl', 'submit_network', 'get_network_status', 'cancel_network',
                         'run_visualization', 'get_visualization_workspace', 'propose_visualization_change'):
             self.assertNotIn(removed, names)
-            self.assertEqual(self.call(removed, run_id='test')['status'], 'invalid')
+            self.assertEqual(self.call(removed, run_id='test')['status'],
+                             'needs_review' if removed in LEGACY_EXECUTION else 'invalid')
 
     def test_catalog_describes_setup_and_six_stages_for_the_assistant(self):
         catalog = self.call('signet_catalog')
@@ -73,17 +76,20 @@ class ToolsTest(unittest.TestCase):
     def test_settings_and_no_overwrite(self):
         root = self.configure()
         self.assertFalse((st.SOURCE / 'data').exists() and root == st.SOURCE)
-        settings = self.call('get_signet_settings',run_id='test')['settings']
+        settings = st.get_signet_settings(run_id='test')['settings']
         self.assertEqual(settings['forcerm'],'F')
         self.assertEqual(settings['email'],'F')
         original = (root / 'work/config.ini').read_bytes()
-        self.assertEqual(self.call('configure_signet',run_id='test')['status'],'invalid')
+        self.assertEqual(st.configure_signet(run_id='test')['status'],'invalid')
         self.assertEqual((root / 'work/config.ini').read_bytes(),original)
-        self.assertEqual(self.call('configure_signet',run_id='../escape')['status'],'invalid')
+        self.assertEqual(st.configure_signet(run_id='../escape')['status'],'invalid')
 
     def test_dispatch_trust_boundary(self):
         for name,args in [
             ('system',{'cmd':'pwd'}),('get_signet_settings',{'run_id':'x','extra':True}),
+            ('get_workspace_stage',{'run_id':'x','stage':True}),
+            ('get_workspace_stage',{'run_id':'x','stage':2.5}),
+            ('get_workspace_stage',{'run_id':'x','stage':2,'source':True}),
             ('configure_signet',{'run_id':'x','ncores':True}),
             ('configure_signet',{'run_id':'x','ncores':2.5}),
             ('configure_signet',{'run_id':'x','cohort':'other'}),
@@ -92,12 +98,25 @@ class ToolsTest(unittest.TestCase):
             self.assertEqual(st.dispatch_tool(name,args)['status'],'invalid',(name,args))
         self.assertEqual(st.dispatch_tool('signet_catalog',[])['status'],'invalid')
 
+    def test_legacy_model_dispatch_requires_manual_review_without_effects(self):
+        self.assertFalse({function.__name__ for function in ALL_TOOLS} & LEGACY_EXECUTION)
+        before = {path: path.read_bytes() for path in self.project.rglob('*') if path.is_file()}
+        with patch('subprocess.Popen') as popen:
+            for name in LEGACY_EXECUTION:
+                with self.subTest(name=name):
+                    result = st.dispatch_tool(name, {'run_id': 'blocked', 'confirmed': True})
+                    self.assertEqual(result['status'], 'needs_review')
+                    self.assertFalse(result['executed'])
+            popen.assert_not_called()
+        self.assertEqual(before, {path: path.read_bytes() for path in self.project.rglob('*') if path.is_file()})
+        self.assertFalse((self.project / 'runs').exists())
+
     def test_recorded_status_queries_do_not_infer_success(self):
         root=self.configure()
         (root/'partial.json').write_text(json.dumps({'operation':'partial','status':'starting','executed':False}))
         (root/'failed.json').write_text(json.dumps({'operation':'failed','status':'failed','executed':True,'returncode':2}))
         (root/'network.plan.json').write_text(json.dumps({'operation':'network'}))
-        result=self.call('get_signet_settings',run_id='test')
+        result=st.get_signet_settings(run_id='test')
         operations={x['operation']:x for x in result['operations']}
         self.assertEqual(operations['partial']['executed'],'unknown')
         self.assertEqual(operations['failed']['status'],'failed')
@@ -111,7 +130,7 @@ class ToolsTest(unittest.TestCase):
             st._verify_source(root/'work')
         (root/'work/config.ini').unlink()
         (root/'work/config.ini').symlink_to(self.input)
-        self.assertEqual(self.call('get_signet_settings',run_id='test')['status'],'invalid')
+        self.assertEqual(st.get_signet_settings(run_id='test')['status'],'invalid')
 
 
 class ConversationTest(unittest.TestCase):

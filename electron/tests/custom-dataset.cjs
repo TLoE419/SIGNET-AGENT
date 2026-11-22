@@ -54,7 +54,13 @@ async function verify() {
   const originalFingerprints = fingerprints(originalFiles);
   const callsFile = path.join(fixture.slurm, 'sbatch_calls');
   const calls = () => existsSync(callsFile) ? readFileSync(callsFile, 'utf8').trim().split('\n') : [];
-  const js = source => window.webContents.executeJavaScript(source);
+  const js = async source => {
+    const result = await window.webContents.executeJavaScript(`(async () => {
+      try {return {value:await (${source})};} catch(error) {return {error:error.stack||String(error)};}
+    })()`);
+    if (result.error) throw Error(result.error + '\nCustom dataset expression: ' + source.slice(0, 800));
+    return result.value;
+  };
   const click = selector => js(`(() => {
     const control = document.querySelector(${JSON.stringify(selector)});
     if (!control) throw Error('Missing custom dataset control: ' + ${JSON.stringify(selector)});
@@ -66,8 +72,8 @@ async function verify() {
     await until(() => js(`!!document.querySelector('#ml-remote-status')`), 'The workspace connection controller did not mount');
     // SSH authentication is covered by the separate loopback native tests. Here
     // the backend transport is already bound to StepsTest's local-only runner.
-    await js(`window.dispatchEvent(new CustomEvent('workspace-remote-context',{detail:{connected:true,
-      identity:'isolated-custom-pipeline',environmentKey:'local-scheduler-fixture'}}));true`);
+    await js(`(() => {window.dispatchEvent(new CustomEvent('workspace-remote-context',{detail:{connected:true,
+      identity:'isolated-custom-pipeline',environmentKey:'local-scheduler-fixture'}}));return true;})()`);
   };
   const selectDataset = async id => {
     await click('[data-nav-target="data"]');
