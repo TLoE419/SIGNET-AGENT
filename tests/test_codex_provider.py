@@ -82,7 +82,7 @@ class CodexProviderTest(unittest.TestCase):
             args[1](None)
             create_client.assert_called_once_with(timing=None)
 
-    def test_answer_keeps_22_tools_and_history_without_groq_budget_or_provider_keys(self):
+    def test_answer_keeps_all_tools_and_history_without_groq_budget_or_provider_keys(self):
         text = '不能刪除的研究條件。' * 1000
         events = []
         with patch.dict(os.environ, {key: 'fake-secret-credential' for key in
@@ -92,7 +92,7 @@ class CodexProviderTest(unittest.TestCase):
         self.assertEqual(answer, '已連線。')
         captured = json.loads(self.capture.read_text())
         self.assertEqual(captured['payload']['messages'][-1]['content'], text)
-        self.assertEqual(len(captured['payload']['available_tools']), 33)
+        self.assertEqual(len(captured['payload']['available_tools']), 17)
         self.assertEqual(captured['keys_present'], [])
         self.assertNotIn('PRIVATE-REASONING', '\n'.join(events))
         for feature in DISABLED_FEATURES:

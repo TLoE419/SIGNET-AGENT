@@ -169,6 +169,11 @@ def _write_genetic_map(source, kind, target, low, high):
     return 'converted from pos/chr/cM'
 
 
+def _file_record(path):
+    info = os.stat(path)
+    return {'path': os.path.realpath(path), 'size': info.st_size, 'mtime_ns': info.st_mtime_ns}
+
+
 def prepare(study_ped, study_map, reference, genetic_map, out):
     kinds = {'reference': reference_format(reference), 'genetic_map': genetic_map_format(genetic_map)}
     if kinds['reference'] is None:
@@ -209,6 +214,12 @@ def prepare(study_ped, study_map, reference, genetic_map, out):
                 dest.write(' '.join(row[:6] + [a for i in chosen for a in row[6 + 2 * i:8 + 2 * i]]) + '\n')
     gmap_note = _write_genetic_map(genetic_map, kinds['genetic_map'], os.path.join(partial, 'gmap', 'chr{}.map'.format(chromosome)),
                                    min(selected), max(selected))
+    # Which files this result came from, so a later check can tell when they change. Kept apart
+    # from the summary, which is printed to the log: a path the user chose stays off the log.
+    inputs = {name: _file_record(path) for name, path in (('reference', reference), ('genetic_map', genetic_map),
+                                                          ('study_ped', study_ped), ('study_map', study_map))}
+    with open(os.path.join(partial, 'inputs.json'), 'w') as dest:
+        json.dump(inputs, dest, indent=2)
     rate = len(selected) / len(markers)
     summary = {'status': 'ok', 'chromosome': chromosome, 'formats': kinds, 'genetic_map': gmap_note,
                'study_samples': samples, 'study_markers': len(markers), 'matched_markers': len(selected),

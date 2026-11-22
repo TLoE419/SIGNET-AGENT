@@ -64,14 +64,17 @@ class StepsTest(unittest.TestCase):
         self.gexp = self.hpc / 'ws/signet/example/example_gexp'
         self.gtf = self.hpc / 'ws/refdata/gencode.v22.annotation.gtf'
         self.gexp.write_text('counts')
-        self.gtf.write_text('genes')
+        self.gtf.write_text('chr1\tHAVANA\tgene\t1\t2\t.\t+\t.\tgene_id "A"; transcript_type "protein_coding";\n')
         self.config = {'root': str(self.hpc / 'ws'), 'source': str(self.hpc / 'ws/signet'),
                        'image': str(self.hpc / 'signet.sif'), 'executor': 'apptainer',
                        'workRoot': str(self.hpc / 'ws/work'), 'partition': 'standard'}
         self.remote_dir = self.hpc / 'ws/work/step_test'
         self.calls = []
         self.lose_connection_on = None
+        # Most tests use -t to exercise the transfer of results itself; by default only -n and -v
+        # results are copied here (see test_person_level_results_stay_on_hpc3).
         patches = [patch.object(st, 'PROJECT', self.project),
+                   patch.object(steps, 'DOWNLOADED_STEPS', steps.ANALYSIS_STEPS),
                    patch.object(ssh_transport, 'available', return_value=True),
                    patch.object(ssh_transport, 'environment', side_effect=lambda: dict(self.config)),
                    patch.object(ssh_transport, 'remote', side_effect=self.remote)]
@@ -88,7 +91,7 @@ class StepsTest(unittest.TestCase):
         self.calls.append(command if command != 'bash -s' else input.decode())
         if self.lose_connection_on and self.lose_connection_on in self.calls[-1]:
             raise OSError('Electron SSH transport is unavailable.')
-        env = {'PATH': f'{self.fake}/bin:/usr/bin:/bin', 'FAKE': str(self.fake), 'LANG': 'C'}
+        env = {'PATH': f'{self.fake}/bin:/usr/bin:/bin', 'FAKE': str(self.fake), 'LANG': 'C', 'COPYFILE_DISABLE': '1'}
         return subprocess.run(['bash', '-c', command], input=input or b'', capture_output=True,
                               timeout=timeout, env=env)
 
@@ -155,7 +158,7 @@ class StepsTest(unittest.TestCase):
         self.assertFalse((self.fake / 'sbatch_args').exists())
         self.assertEqual(steps.run_steps('step_test'), {})
         self.gtf.unlink()
-        self.gtf.write_text('genes')
+        self.gtf.write_text('chr1\tHAVANA\tgene\t1\t2\t.\t+\t.\tgene_id "A"; transcript_type "protein_coding";\n')
         self.assertEqual(steps.submit('step_test', 'expression', self.inputs)['state'], 'submitted')
 
     def test_one_attempt_per_step_and_wrong_cohort_or_unknown_step(self):
@@ -163,7 +166,7 @@ class StepsTest(unittest.TestCase):
         self.assertEqual(self.code_of(steps.submit, 'step_test', 'expression', self.inputs), 'conflict')
         st.configure_signet('gtex_run', cohort='GTEx')
         self.assertEqual(self.code_of(steps.submit, 'gtex_run', 'expression', self.inputs), 'invalid_request')
-        self.assertEqual(self.code_of(steps.submit, 'step_test', 'unknown_step', self.inputs), 'not_found')
+        self.assertEqual(self.code_of(steps.submit, 'step_test', 'unknown_step', {}), 'not_found')
         self.assertEqual(self.code_of(steps.status, 'missing_run', 'expression'), 'not_found')
 
     # ---------- retrying a failed step in the same run ----------
@@ -347,6 +350,54 @@ class StepsTest(unittest.TestCase):
         self.finish_job()
         record = steps.status('step_test', 'expression', refresh=True)
         self.assertEqual((record['state'], record['job_id']), ('completed', '12345'))
+
+    def test_visualization_only_waits_for_missing_outputs_after_a_clean_exit(self):
+        folder = self.remote_dir / 'steps'
+        folder.mkdir(parents=True)
+        record = {'step': 'visualize', 'run_id': 'step_test', 'state': 'running', 'job_id': '12345',
+                  'remote_dir': str(self.remote_dir), 'settings': {'ntop': '1'}}
+        self.slurm(sacct='COMPLETED')
+        (folder / 'visualize.done').write_text('0 2026-11-01T10:00:00\n')
+        steps._save(self.root, record)
+        with patch.object(steps.time, 'time', return_value=1000):
+            self.assertEqual(steps.status('step_test', 'visualize')['state'], 'validating')
+        with patch.object(steps.time, 'time', return_value=1000 + steps.VISUALIZE_OUTPUT_GRACE_SECONDS):
+            result = steps.status('step_test', 'visualize')
+            self.assertEqual((result['state'], result['reason']), ('failed', 'Required outputs are missing.'))
+            calls = len(self.calls)
+            self.assertEqual(steps.status('step_test', 'visualize')['state'], 'failed')
+            self.assertEqual(len(self.calls), calls)
+        for exit_code, log in [('1', ''), ('0', 'Error in export: failed\n')]:
+            with self.subTest(exit_code=exit_code, log=log):
+                steps._save(self.root, record)
+                (folder / 'visualize.done').write_text(f'{exit_code} 2026-11-01T10:00:00\n')
+                (folder / 'visualize.err').write_text(log)
+                result = steps.status('step_test', 'visualize')
+                self.assertEqual(result['state'], 'failed')
+                self.assertNotIn('missing_outputs_since', result)
+        self.assertFalse(any('sbatch --parsable' in call or 'tar czf' in call for call in self.calls))
+
+    def test_saved_visualization_missing_output_failure_recovers_on_normal_poll(self):
+        folder = self.remote_dir / 'steps'
+        folder.mkdir(parents=True)
+        (folder / 'visualize.done').write_text('0 2026-11-01T10:00:00\n')
+        self.slurm(sacct='COMPLETED')
+        record = {'step': 'visualize', 'run_id': 'step_test', 'state': 'failed', 'job_id': '12345',
+                  'remote_dir': str(self.remote_dir), 'settings': {'ntop': '1'}, 'exit_code': '0',
+                  'reason': 'Required outputs are missing.'}
+        steps._save(self.root, record)
+        analysis = steps.analysis_view(self.root, 'TCGA', {'visualize': record}, include_attempts=False)
+        self.assertEqual(analysis['steps'][-1]['phase'], 'validating')
+        edges = 'source_gene_symbol,target_gene_symbol,frequency,coefficient\nA,B,0.75,0.2\n'
+        for relative in steps.STEPS['visualize'].required:
+            path = self.remote_dir / 'work' / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(edges if path.suffix == '.csv' else 'plot\n')
+        result = steps.status('step_test', 'visualize')
+        self.assertEqual((result['state'], result['job_id']), ('completed', '12345'))
+        self.assertEqual((self.root / 'work/res/resv/signet-edges.csv').read_text(), edges)
+        self.assertEqual(sum('tar czf' in call for call in self.calls), 1)
+        self.assertFalse(any('sbatch --parsable' in call for call in self.calls))
 
     def test_retry_does_not_overwrite_existing_remote_archive(self):
         self.failed_expression()
@@ -898,7 +949,7 @@ class StepsTest(unittest.TestCase):
         self.gexp.parent.mkdir()
         self.gexp.write_text('counts')
         annotation = self.hpc / 'ws/refdata/gencode.v22.genes.gtf'
-        annotation.write_text('genes')
+        annotation.write_text('chr1\tHAVANA\tgene\t1\t2\t.\t+\t.\tgene_id "A"; transcript_type "protein_coding";\n')
         self.assertEqual(request('GET', route.replace(run_id, 'step_test'))[0], 404)
         status, review = request('GET', route)
         self.assertEqual(status, 200, review)
@@ -961,7 +1012,7 @@ class StepsTest(unittest.TestCase):
             self.assertEqual(path.read_bytes(), data, f'Stage 2 changed the Stage 1 artifact {path.name}')
 
         # Invalid collected values must never become a chart with fabricated counts.
-        (root / 'work/res/rest/signet_gexp').write_text('nan 2\n3 4\n5 6\n7 8\n')
+        (self.remote_dir / 'work/res/rest/signet_gexp').write_text('nan 2\n3 4\n5 6\n7 8\n')
         self.assertEqual(request('GET', detail)[0], 404)
 
     def test_genotype_on_one_chromosome_checks_its_files_and_queues_signet_g(self):
@@ -1061,7 +1112,7 @@ class StepsTest(unittest.TestCase):
         gexp.parent.mkdir(parents=True, exist_ok=True)
         gexp.write_text('counts')
         annotation = self.hpc / 'ws/refdata/gencode.v22.genes.gtf'
-        annotation.write_text('genes')
+        annotation.write_text('chr1\tHAVANA\tgene\t1\t2\t.\t+\t.\tgene_id "A"; transcript_type "protein_coding";\n')
         review = workspace.review_expression(run_id)
         workspace.submit_expression(run_id, review['inputs'], review['settings'], review['resources'])
         self.finish_job()
@@ -1071,6 +1122,7 @@ class StepsTest(unittest.TestCase):
         intermediate = self.remote_dir / 'work/tmp/tmpg/impute/impute_Genotype.sizes'
         intermediate.parent.mkdir(parents=True, exist_ok=True)
         intermediate.write_text('4 3\n')
+        (self.remote_dir / 'work/tmp/tmpg/clean_Genotype.fam').write_text(sample_ids)
         preserved = {path: path.read_bytes() for path in (
             root / workspace.SNAPSHOT, root / workspace.EXPRESSION_SNAPSHOT,
             root / 'steps/genotype.json', root / 'steps/expression.json',
@@ -1159,8 +1211,13 @@ class StepsTest(unittest.TestCase):
             path = self.remote_dir / 'work' / relative
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text('data\n')
+        # Three matched patients covering the three races signet -a requires (the input check counts them).
+        patients = (('0001', 'white', 'female'), ('0002', 'asian', 'male'), ('0003', 'black or african american', 'female'))
+        if needs is None:
+            for relative in ('res/resg/signet_Genotype.sampleID', 'res/rest/signet_gexpID'):
+                (self.remote_dir / 'work' / relative).write_text(''.join(f'TCGA-AA-{p}-01A\n' for p, _, _ in patients))
         clinical = self.hpc / 'ws/refdata/clinical.tsv'
-        clinical.write_text('submitter_id\trace\tgender\n')
+        clinical.write_text('submitter_id\trace\tgender\n' + ''.join(f'TCGA-AA-{p}\t{r}\t{g}\n' for p, r, g in patients))
         return {'cli.file': str(clinical)}
 
     def test_catalog_describes_adjust_prerequisites_and_options(self):
@@ -1228,6 +1285,14 @@ class StepsTest(unittest.TestCase):
         self.assertIn('tmp/tmpg/impute/impute_Genotype.sizes', str(caught.exception))
         self.assertFalse((self.fake / 'sbatch_args').exists())
         self.assertFalse((self.root / 'steps/adjust.json').exists())   # nothing queued: may retry
+
+    def test_adjust_refused_when_genotype_family_file_is_missing_on_hpc3(self):
+        inputs = self.adjust_ready(needs=[p for p in steps.STEPS['adjust'].needs
+                                         if p != 'tmp/tmpg/clean_Genotype.fam'])
+        with self.assertRaises(steps.StepError) as caught:
+            steps.submit('step_test', 'adjust', inputs)
+        self.assertIn('tmp/tmpg/clean_Genotype.fam', str(caught.exception))
+        self.assertFalse((self.fake / 'sbatch_args').exists())
 
     def test_adjust_completed_downloads_resa(self):
         steps.submit('step_test', 'adjust', self.adjust_ready())
@@ -1636,6 +1701,57 @@ class StepsTest(unittest.TestCase):
         self.assertEqual(steps.update_settings('step_test', {'walltime': '12:00:00', 'cor': 0.3})['walltime'],
                          '12:00:00')
 
+    def test_reports_measured_progress_for_each_supported_stage(self):
+        cases = {
+            'genotype': ({'tmp/tmpg/impute_params.txt': 'a\nb\nc\n',
+                          'tmp/tmpg/impute_params.txt.completed': 'a\na\nnot in the manifest\n'},
+                         {'imputation': '1 3'}),
+            'expression': ({'tmp/tmpt/.signet-normalized': ''}, {'expression_outputs': '1 2'}),
+            'adjust': ({'tmp/tmpg/qsub.sh': 'x\ny\n',
+                        'tmp/tmpg/qsub.sh.completed': 'y\n'}, {'variant_filter': '1 2'}),
+            'cis': ({'tmp/tmpc/low.qsub.sh': 'low1\nlow2\n',
+                     'tmp/tmpc/low.qsub.sh.completed': 'low2\n',
+                     'tmp/tmpc/rare.qsub.sh': 'rare1\n'}, {'low_frequency': '1 2', 'rare_variants': '0 1'}),
+            'visualize': ({'tmp/tmpv/.signet-network-2': ''}, {'subnetworks': '1 2'}),
+        }
+        for name, (files, expected) in cases.items():
+            with self.subTest(step=name):
+                folder = self.remote_dir / name
+                for relative, content in files.items():
+                    path = folder / 'work' / relative
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text(content)
+                record = {'step': name, 'remote_dir': str(folder), 'run_id': 'step_test',
+                          'job_id': '12345', 'state': 'submitted', 'settings': {'ntop': '2'}}
+                steps._save(self.root, record)
+                self.slurm(squeue='PENDING')
+                self.assertNotIn('progress', steps.status('step_test', name, refresh=True))
+                self.slurm(squeue='RUNNING')
+                result = steps.status('step_test', name, refresh=True)
+                self.assertEqual(result.get('progress'), expected)
+
+    def test_retry_progress_rejects_previous_command_list(self):
+        directory = self.remote_dir
+        old = directory / 'work/tmp/tmpg/impute_params.txt'
+        old.parent.mkdir(parents=True)
+        old.write_text('a\nb\n')
+        complete = old.with_name(old.name + '.completed')
+        complete.write_text('a\n')
+        script = directory / 'steps/genotype.sbatch'
+        script.parent.mkdir()
+        script.touch()
+        os.utime(old, (100, 100))
+        os.utime(complete, (100, 100))
+        os.utime(script, (200, 200))
+        steps._save(self.root, {'step': 'genotype', 'remote_dir': str(directory), 'run_id': 'step_test',
+                                'job_id': '12345', 'state': 'submitted', 'attempt': 2})
+        self.slurm(squeue='RUNNING')
+        self.assertNotIn('progress', steps.status('step_test', 'genotype', refresh=True))
+        os.utime(old, (300, 300))
+        self.assertEqual(steps.status('step_test', 'genotype', refresh=True)['progress'], {'imputation': '0 2'})
+        os.utime(complete, (301, 301))
+        self.assertEqual(steps.status('step_test', 'genotype', refresh=True)['progress'], {'imputation': '1 2'})
+
     def test_network_reports_progress_and_completes(self):
         self.network_ready()
         steps.submit('step_test', 'network', {})
@@ -1781,7 +1897,7 @@ class StepsTest(unittest.TestCase):
         for relative in record['required_outputs']:
             path = self.remote_dir / 'work' / relative
             path.parent.mkdir(parents=True, exist_ok=True)
-            if '_edgelist_' in relative:
+            if '_edgelist_' in relative or relative.endswith('signet-edges.csv'):
                 path.write_text('source_gene_symbol,target_gene_symbol,frequency,coefficient\n'
                                 'MEGF6,GENE1,0.5,0.2\nGENE1,MEGF6,1,-0.4\n')
             elif relative.endswith('_name.txt'):
@@ -1848,7 +1964,7 @@ class StepsTest(unittest.TestCase):
         self.assertEqual((status, record['state'], record['run_id']), (202, 'submitted', 'step_test'))
         self.assertEqual(record['settings'], {'freq': '0.45', 'ntop': '1'})
         self.assertEqual(record['remote_dir'], str(self.remote_dir))
-        self.assertEqual(len(record['required_outputs']), 6)
+        self.assertEqual(len(record['required_outputs']), 7)
         job = self.remote_dir / 'steps/visualize.sbatch'
         self.assertEqual(subprocess.run(['bash', '-n', str(job)]).returncode, 0)
         self.assertIn('--env cloud=T,', job.read_text())
@@ -1910,6 +2026,76 @@ class StepsTest(unittest.TestCase):
         for stream, lines in (('both', 5), ('out', 0), ('out', 201), ('out', True)):
             self.assertEqual(self.code_of(steps.read_log, 'step_test', 'expression', stream, lines), 'invalid_request')
 
+
+    def test_step_report_for_the_assistant_masks_ids_and_paths(self):
+        from agent.runtime import step_report
+        from agent.tools.signet import dispatch_tool
+        self.assertEqual(step_report.report('step_test', '-t')['state'], 'not_started')
+        steps.submit('step_test', 'expression', self.inputs)
+        running = step_report.report('step_test', 'expression')
+        self.assertEqual((running['flag'], running['state'], running['job_id']), ('-t', 'submitted', '12345'))
+        self.assertEqual(running['inputs'], {'gexp.file': 'example_gexp', 'pmap.file': 'gencode.v22.annotation.gtf'})
+        self.assertNotIn('log_tail', running, 'logs are read only for a failed step')
+        self.finish_job(exit_code='1', outputs=(), err=f'Error in fread({self.gexp}): sample TCGA-95-7947-01C-01D missing\n')
+        (self.remote_dir / 'steps/expression.out').write_text('Removed 1 samples: TCGA-44-2668-01C\n')
+        self.assertEqual(steps.status('step_test', 'expression', refresh=True)['state'], 'failed')  # as the card sees it
+        failed = dispatch_tool('get_step_report', {'run_id': 'step_test', 'step': '-t'})
+        self.assertEqual(failed['state'], 'failed')
+        text = json.dumps(failed, ensure_ascii=False)
+        self.assertIn('Error in fread(…/example_gexp)', text)
+        self.assertIn('TCGA-[masked]', text)
+        self.assertNotIn('TCGA-95', text)
+        self.assertNotIn('TCGA-44', text)
+        self.assertNotIn(str(self.hpc), text, 'no HPC3 folder reaches the model')
+        self.assertEqual(self.code_of(step_report.report, 'step_test', '-x'), 'not_found')
+        # A completed step reports counts computed on HPC3 (inputs and outputs), never their contents.
+        self.slurm(sbatch_reply='222')
+        steps.submit('step_test', 'expression', self.inputs)
+        # The input matrix: header, 3 genes, and the 5 HTSeq summary rows SIGNET drops; 3 samples.
+        self.gexp.write_text('Ensembl_ID TCGA-AA-0001-01A TCGA-AA-0002-01A TCGA-AA-0003-01A\n'
+                             + 'ENSG1 1 2 3\n' * 3 + '0 0 0 0\n' * 5)
+        self.finish_job()
+        (self.remote_dir / 'work/res/rest/signet_gexpID').write_text('TCGA-95-7947-01C\nTCGA-44-2668-01C\n')
+        (self.remote_dir / 'work/res/rest/signet_gexp').write_text('1.5 2.5 3.5\n4.5 5.5 6.5\n')
+        self.assertEqual(steps.status('step_test', 'expression', refresh=True)['state'], 'completed')
+        done = step_report.report('step_test', '-t')
+        outputs = {item['file']: item for item in done['summary']['outputs']}
+        self.assertEqual((outputs['signet_gexpID']['rows'], outputs['signet_gexpID']['rows_are']), (2, 'samples'))
+        self.assertEqual((outputs['signet_gexp']['rows'], outputs['signet_gexp']['columns']), (2, 3))
+        self.assertEqual(outputs['signet_gexp']['columns_are'], 'genes')
+        self.assertEqual(done['summary']['inputs']['gexp.file'],
+                         {'file': 'example_gexp', 'samples': 3, 'genes_after_dropping_the_last_5_rows': 3})
+        self.assertNotIn('TCGA-', json.dumps(done))
+        self.assertNotIn('1.5', json.dumps(done['summary']), 'no values, only counts')
+        steps.link_conversation('step_test', 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee')
+        self.assertEqual(self.code_of(step_report.report, 'step_test', '-t', '12345678-1234-1234-1234-123456789abc'),
+                         'not_found', 'another conversation cannot read this analysis')
+
+    def test_person_level_results_stay_on_hpc3(self):
+        # The default: only -n and -v results come to this computer.
+        with patch.object(steps, 'DOWNLOADED_STEPS', ('network', 'visualize')):
+            steps.submit('step_test', 'expression', self.inputs)
+            self.finish_job()
+            record = steps.status('step_test', 'expression', refresh=True)
+        self.assertEqual(record['state'], 'completed')
+        self.assertEqual(record['outputs'], [])
+        self.assertEqual(record['remote_outputs'], ['work/' + path for path in OUTPUTS])
+        self.assertFalse((self.root / 'work/res/rest').exists() and any((self.root / 'work/res/rest').iterdir()),
+                         'nothing of -t was copied here')
+        self.assertFalse(any('tar czf' in command for command in self.calls), 'no transfer was started')
+        self.assertEqual([item['rows'] for item in record['summary']['outputs']], [1, 1, 1, 1])
+        self.assertIn('stay on HPC3', record['reason'])
+
+    def test_summary_counts_comma_separated_matrices_and_recounts_older_summaries(self):
+        steps.submit('step_test', 'expression', self.inputs)
+        self.finish_job()
+        (self.remote_dir / 'work/res/rest/signet_gexp').write_text('0.1,0.2,0.3\n0.4,0.5,0.6\n')
+        record = steps.status('step_test', 'expression', refresh=True)
+        self.assertEqual(record['summary']['outputs'][0]['columns'], 3, 'commas without spaces separate fields')
+        self.assertEqual(record['summary']['version'], steps.SUMMARY_VERSION)
+        record['summary'] = {'outputs': [{'file': 'signet_gexp', 'rows': 2, 'columns': 1}], 'inputs': {}}
+        steps._save(self.root, record)
+        self.assertEqual(steps.ensure_summary('step_test', 'expression')['outputs'][0]['columns'], 3)
 
 if __name__ == '__main__':
     unittest.main()

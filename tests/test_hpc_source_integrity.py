@@ -23,7 +23,9 @@ class SourceIntegrityTest(unittest.TestCase):
         self.config = {'root': str(self.root), 'source': str(self.source), 'image': str(self.root / 'image.sif'),
                        'executor': '/bin/echo', 'partition': 'test', 'revision': self.inventory['revision']}
 
-    def check(self):
+    def check(self, example=True):
+        if example:
+            (self.source / 'example').mkdir(exist_ok=True)
         before = {str(p.relative_to(self.root)): hashlib.sha256(p.read_bytes()).hexdigest()
                   for p in self.root.rglob('*') if p.is_file()}
         token = hpc._CONFIG.set(self.config)
@@ -40,26 +42,19 @@ class SourceIntegrityTest(unittest.TestCase):
         self.assertEqual(before, after)
         return item
 
-    def test_hash_audited_archive_without_git_is_ready(self):
-        self.assertFalse((self.source / '.git').exists())
+    def test_installed_source_is_ready_without_hashing_it_again(self):
         result = self.check()
         self.assertEqual(result['status'], 'ok', result)
-        self.assertIn('hash', result['detail'].lower())
+        self.assertIn('HPC3 settings check', result['detail'])
+        token = hpc._CONFIG.set(self.config)
+        try:
+            with patch.object(hpc, 'SOURCE_INVENTORY', self.inventory):
+                self.assertNotIn('sha256sum', hpc._check_script(str(self.root)))
+        finally:
+            hpc._CONFIG.reset(token)
 
-    def test_missing_or_modified_audited_files_fail(self):
-        for name in self.files:
-            with self.subTest(file=name, case='modified'):
-                (self.source / name).write_bytes(b'modified\n')
-                self.assertEqual(self.check()['status'], 'problem')
-            with self.subTest(file=name, case='missing'):
-                (self.source / name).unlink()
-                self.assertEqual(self.check()['status'], 'problem')
-            (self.source / name).write_bytes(self.files[name])
-
-    def test_git_metadata_cannot_override_a_hash_failure(self):
-        (self.source / '.git').mkdir()
-        (self.source / 'signet').write_bytes(b'modified\n')
-        self.assertEqual(self.check()['status'], 'problem')
+    def test_missing_example_data_is_missing(self):
+        self.assertEqual(self.check(example=False)['status'], 'missing')
 
     def test_existing_user_config_and_untracked_files_are_preserved(self):
         (self.source / 'config.ini').write_text('user settings\n')
@@ -86,10 +81,14 @@ class SourceIntegrityTest(unittest.TestCase):
         finally:
             hpc._CONFIG.reset(token)
 
-    def test_unknown_integrity_result_cannot_be_reported_ready(self):
-        result = next(c for c in hpc._checks({'signet': 'yes'}, self.inventory['revision']) if c['item'] == 'signet_source')
-        self.assertEqual(result['status'], 'problem')
-
+    def test_a_running_installation_is_in_progress_and_a_failed_one_points_to_its_log(self):
+        running = next(c for c in hpc._checks({'signet': 'no', 'step_signet': 'running', 'step_signet_host': 'login-i15'},
+                                              self.inventory['revision']) if c['item'] == 'signet_source')
+        self.assertEqual(running['status'], 'in_progress')
+        failed = next(c for c in hpc._checks({'signet': 'no', 'step_signet': 'failed'}, self.inventory['revision'])
+                      if c['item'] == 'signet_source')
+        self.assertEqual(failed['status'], 'problem')
+        self.assertIn('read_hpc_setup_log("signet")', failed['detail'])
 
 if __name__ == '__main__':
     unittest.main()

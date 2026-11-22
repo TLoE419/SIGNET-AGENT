@@ -5,7 +5,7 @@ import {randomUUID} from 'node:crypto';
 import type {SshConnectionService} from '../ssh/SshConnectionService';
 import type {EnvironmentConfig,EnvironmentSnapshot,EnvironmentPhase} from '../../shared/environment/types';
 import {validRuntimeModule} from './runtimeModules';
-import {probe,sourceCheck,exampleCheck,installSource,installExample,verify,validRemotePath,type Inventory} from './scripts';
+import {probe,sourceCheck,exampleCheck,verify,validRemotePath,type Inventory} from './scripts';
 
 export class EnvironmentService extends EventEmitter {
  private snapshot:EnvironmentSnapshot={phase:'disconnected',message:'Connect SSH to prepare the remote environment.'};
@@ -29,7 +29,8 @@ export class EnvironmentService extends EventEmitter {
   const saved=this.settings[this.sessionKey];void this.check(saved?.root,saved?.partition).catch(()=>{});
  };
  private active(token:number){if(token!==this.generation||this.ssh.getSnapshot().connection?.status!=='connected')throw Error('SSH connection changed. Reconnect and check the environment again.')}
- private async command(script:string,token:number,step:string,timeout=30000){
+ // HPC3 login nodes are shared; module discovery and source hashing can take over 30 s when busy.
+ private async command(script:string,token:number,step:string,timeout=90000){
   this.active(token);const start=Date.now();this.log(step,'Started.');
   const result=await this.ssh.exec('bash -s',Buffer.from(script),timeout).catch(error=>{this.log(step,`Failed after ${Date.now()-start} ms: ${(error as Error).message}`);throw error});this.active(token);
   this.log(step,`Finished in ${Date.now()-start} ms; exit=${result.returncode}.`);
@@ -73,18 +74,6 @@ export class EnvironmentService extends EventEmitter {
   const settings={...this.settings,[sessionKey]:{root:config.root,partition:config.partition}},temporary=this.file+'.'+randomUUID()+'.tmp';
   try{await writeFile(temporary,JSON.stringify(settings,null,2)+'\n',{mode:0o600,flag:'wx'});this.active(token);await rename(temporary,this.file);this.active(token);this.settings=settings}finally{await unlink(temporary).catch(()=>{})}
   this.set('ready','SIGNET environment verified. Analysis inputs and job resources are checked separately.',{config,missing:[],checkedAt:new Date().toISOString()});
- }
- install(){
-  if(this.running)return Promise.reject(Error('An environment operation is already running.'));
-  if(this.snapshot.phase!=='needs-install'||!this.snapshot.config)return Promise.reject(Error('Check the remote environment before installing.'));
-  const source=this.snapshot.missing?.includes('SIGNET source'),example=this.snapshot.missing?.includes('SIGNET example data');
-  if(!source&&!example)return Promise.reject(Error('SIGNET source is already installed. Download the container from the environment readiness list.'));
-  const c=structuredClone(this.snapshot.config);
-  return this.run(async token=>{
-   if(source){this.set('installing-source','Downloading and verifying the pinned SIGNET source and example data.');await this.command(installSource(c,this.inventory),token,'install-source',600000)}
-   else{this.set('installing-source','Downloading and verifying the SIGNET example data.');await this.command(installExample(c,this.inventory),token,'install-example',600000)}
-   await this.inspect(c.root,c.partition,token);
-  });
  }
  dispose(){this.generation++;this.ssh.off('snapshot',this.observe);this.removeAllListeners()}
 }
