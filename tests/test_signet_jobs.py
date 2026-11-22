@@ -38,6 +38,7 @@ FAKE_SLURM = {
     'squeue': ('case "$*" in *"%i %j %Z"*) '
                'if [ -s "$FAKE/squeue" ]; then printf "12345 %s /login\\n" "$(cat "$FAKE/name" 2>/dev/null)"; fi; '
                'for f in "$FAKE"/workdir_*; do [ ! -f "$f" ] || printf "%s child %s\\n" "${f##*workdir_}" "$(cat "$f")"; done;; '
+               '*"%j|%Z"*) if [ -s "$FAKE/squeue" ]; then printf "%s|%s\\n" "$(cat "$FAKE/name")" "$(cat "$FAKE/parent_workdir")"; fi;; '
                '*%j*) cat "$FAKE/name";; *%i*) cat "$FAKE/queued_id";; *%Z*) cat "$FAKE/workdir_$3";; '
                '*) cat "$FAKE/squeue";; '
                'esac 2>/dev/null; true'),
@@ -69,6 +70,7 @@ class StepsTest(unittest.TestCase):
                        'image': str(self.hpc / 'signet.sif'), 'executor': 'apptainer',
                        'workRoot': str(self.hpc / 'ws/work'), 'partition': 'standard'}
         self.remote_dir = self.hpc / 'ws/work/step_test'
+        (self.fake / 'parent_workdir').write_text(str(self.remote_dir / 'work'))
         self.calls = []
         self.lose_connection_on = None
         # Most tests use -t to exercise the transfer of results itself; by default only -n and -v
@@ -648,9 +650,42 @@ class StepsTest(unittest.TestCase):
         self.remote_dir = self.hpc / 'ws/work/other_job'
         steps.submit('other_job', 'expression', self.inputs)
         (self.fake / 'scancel').unlink()
-        self.slurm(name='someone-elses-job', squeue='', sacct='RUNNING')
-        self.assertEqual(steps.cancel('other_job', 'expression')['state'], 'running')
+        self.slurm(name='someone-elses-job', squeue='RUNNING', sacct='RUNNING')
+        self.assertEqual(self.code_of(steps.cancel, 'other_job', 'expression'), 'conflict')
+        self.assertEqual(steps._load(self.project / 'runs/other_job', 'expression')['state'], 'submitted')
         self.assertFalse((self.fake / 'scancel').exists())
+
+    def test_cancel_rejects_changed_environment_or_remote_ownership_before_scancel(self):
+        steps.submit('step_test', 'expression', self.inputs)
+        self.slurm(squeue='RUNNING', name='signet-expression-step_test')
+        original = (self.root / 'steps/expression.json').read_bytes()
+        work_root = self.config['workRoot']
+        self.config['workRoot'] += '-other'
+        calls = len(self.calls)
+        self.assertEqual(self.code_of(steps.cancel, 'step_test', 'expression'), 'conflict')
+        self.assertEqual(len(self.calls), calls)
+        self.config['workRoot'] = work_root
+        for target, replacement in ((self.fake / 'parent_workdir', '/other/work'),
+                                    (self.remote_dir / '.owner', 'other-owner'),
+                                    (self.remote_dir / 'steps/expression.job', '99999')):
+            with self.subTest(target=target):
+                saved = target.read_bytes()
+                target.write_text(replacement)
+                self.assertEqual(self.code_of(steps.cancel, 'step_test', 'expression'), 'conflict')
+                self.assertFalse((self.fake / 'scancel').exists())
+                self.assertEqual((self.root / 'steps/expression.json').read_bytes(), original)
+                target.write_bytes(saved)
+
+    def test_cancel_rejects_parent_directory_mismatch_before_cancelling_children(self):
+        self.network_ready()
+        steps.submit('step_test', 'network', {})
+        self.signet_children()
+        self.slurm(squeue='RUNNING', name='signet-network-step_test')
+        (self.fake / 'parent_workdir').write_text('/unrelated/work')
+        original = (self.root / 'steps/network.json').read_bytes()
+        self.assertEqual(self.code_of(steps.cancel, 'step_test', 'network'), 'conflict')
+        self.assertFalse((self.fake / 'scancel').exists())
+        self.assertEqual((self.root / 'steps/network.json').read_bytes(), original)
 
     def test_cancel_guard_rejects_stale_or_invalid_targets_without_remote_or_record_changes(self):
         record = steps.submit('step_test', 'expression', self.inputs)
@@ -684,7 +719,7 @@ class StepsTest(unittest.TestCase):
 
     def test_cancel_connection_loss_keeps_effect_unconfirmed_and_blocks_retry(self):
         record = steps.submit('step_test', 'expression', self.inputs)
-        self.lose_connection_on = 'parent_name='
+        self.lose_connection_on = 'parent="$(squeue'
         with self.assertRaisesRegex(steps.StepError, 'effect is unknown'):
             steps.cancel('step_test', 'expression', expected_job_id=record['job_id'], expected_attempt=1)
         saved = steps._load(self.root, 'expression')

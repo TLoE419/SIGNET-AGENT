@@ -741,6 +741,9 @@ class SignetApiTest(unittest.TestCase):
         record = {'step': 'network', 'run_id': 'step_test', 'remote_dir': str(self.remote_dir),
                   'job_id': '12345', 'state': 'running'}
         (self.root / 'steps/network.json').write_text(json.dumps(record))
+        token = test_signet_jobs.steps._owner(self.root, str(self.remote_dir))
+        (self.remote_dir / '.owner').write_text(token + '\n')
+        (self.remote_dir / 'steps/network.job').write_text('12345\n')
         test_signet_jobs.StepsTest.signet_children(self)
         self.slurm(squeue='', sacct='CANCELLED')
         path = '/signet/runs/step_test/steps/network'

@@ -968,8 +968,16 @@ Only eligible live workspace jobs can expose this control. Changing the run,
 dataset or remote environment invalidates an unsubmitted confirmation. A POST
 does not itself establish cancellation: `cancelling` remains active, with
 settings and retry blocked, until the scheduler confirms that the parent and
-its owned children have stopped. Job-name and child working-directory checks
-continue to restrict cancellation to the recorded analysis. Scheduler lookup
+its owned children have stopped. Before any cancellation, the current work root must match the saved run directory.
+The remote directory must be canonical, its owner token and current-attempt job
+marker must match the saved local records, and the scheduler must report the
+expected parent job name and exact `<run-directory>/work` directory for the
+connected user. A mismatch rejects cancellation without changing the saved
+state or cancelling parent or child jobs. New parent jobs set that working
+directory explicitly with `#SBATCH --chdir`. Older jobs with a different or
+unverifiable scheduler working directory require manual inspection and cannot
+be cancelled through this route. Child working-directory checks continue to
+restrict cancellation to the recorded analysis. Scheduler lookup
 failures, partial failures and connection loss must remain unconfirmed, with
 their reason visible. If a job completed first, its actual terminal state is
 retained. Cancellation does not remove inputs, saved outputs or attempt records.

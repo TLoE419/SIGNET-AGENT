@@ -940,6 +940,7 @@ fi
 '''
     return f'''#!/bin/bash
 #SBATCH --job-name=signet-{name}-{run_id}
+#SBATCH --chdir={directory}/work
 #SBATCH --output={directory}/steps/{name}.out
 #SBATCH --error={directory}/steps/{name}.err
 {ssh_transport.runtime_module_prelude(config)}
@@ -1536,7 +1537,7 @@ def _finish(root, record, step, done, missing, hints):
 
 @_one_at_a_time
 def cancel(run_id, name, *, expected_job_id=None, expected_attempt=None):
-    """Cancel the step's own Slurm job (checked by job name), and for signet -n the jobs SIGNET
+    """Cancel the step's owned Slurm job (checked by token, marker, name and directory), and for signet -n the jobs SIGNET
     submitted inside this run's folder. Finished steps cannot be cancelled."""
     step = _step(name)
     root = _root(run_id)
@@ -1554,14 +1555,32 @@ def cancel(run_id, name, *, expected_job_id=None, expected_attempt=None):
         raise StepError('conflict', f'Step {name} already ended as {record["state"]}.')
     if not record.get('job_id'):
         raise StepError('conflict', 'No job ID is known yet; check status first.')
-    _environment()
+    config = _environment()
+    directory = record.get('remote_dir')
+    try:
+        owner_path = signet._no_links(root / 'steps/remote.owner')
+        owner = json.loads(owner_path.read_text())
+    except (OSError, ValueError) as error:
+        raise StepError('conflict', 'The original remote folder ownership cannot be verified.') from error
+    if (directory not in (config['workRoot'] + '/' + run_id, config['workRoot'] + '/runs/' + run_id)
+            or not isinstance(owner, dict) or owner.get('remote_dir') != directory
+            or not isinstance(owner.get('token'), str) or not re.fullmatch(r'[a-f0-9]{32}', owner['token'])
+            or not isinstance(record['job_id'], str) or not re.fullmatch(r'[0-9]+', record['job_id'])):
+        raise StepError('conflict', 'The saved job belongs to a different or unverified remote environment.')
     expected = f'signet-{name}-{run_id}'
-    script = _say() + (f'D={shlex.quote(record["remote_dir"])}\nj={shlex.quote(record["job_id"])}\n'
-                       'parent_name="$(squeue -h -j "$j" -o %j 2>/dev/null)" || { say cancel_check_failed yes; exit 9; }\n'
-                       f'if [ "$parent_name" = {shlex.quote(expected)} ]; then '
-                       'scancel "$j" && say cancel requested || { say cancel_failed yes; exit 10; }; '
-                       'else say cancel not_queued; fi\n'
-                       + _children_script(step))
+    q = shlex.quote
+    script = _say() + f'''D={q(directory)}
+j={q(record['job_id'])}
+T={q(owner['token'])}
+M="$D/steps/{name}.job"
+[ "$(readlink -f -- "$D")" = "$D" ] && [ ! -L "$D/.owner" ] && [ -f "$D/.owner" ] && [ "$(head -c 129 -- "$D/.owner")" = "$T" ] &&
+[ "$(readlink -f -- "$M")" = "$M" ] && [ -f "$M" ] && [ "$(head -c 128 -- "$M")" = "$j" ] || {{ say cancel_owner_mismatch yes; exit 11; }}
+parent="$(squeue -h -u "$(id -un)" -j "$j" -o '%j|%Z' 2>/dev/null)" || {{ say cancel_check_failed yes; exit 9; }}
+if [ -z "$parent" ]; then say cancel not_queued
+elif [ "$parent" = {q(expected + '|' + directory + '/work')} ]; then
+  scancel "$j" && say cancel requested || {{ say cancel_failed yes; exit 10; }}
+else say cancel_owner_mismatch yes; exit 11; fi
+''' + _children_script(step)
     def unconfirmed(reason):
         record.pop('finished_at', None)
         _change(record, 'cancelling', cancel_requested_at=record.get('cancel_requested_at') or _now(),
@@ -1573,6 +1592,8 @@ def cancel(run_id, name, *, expected_job_id=None, expected_attempt=None):
         reason = 'Connection interrupted while requesting cancellation; its effect is unknown. Check status before retrying.'
         unconfirmed(reason)
         raise StepError('remote_failed', reason) from error
+    if values.get('cancel_owner_mismatch') == 'yes':
+        raise StepError('conflict', 'The remote folder, job marker or scheduler job does not belong to this saved attempt; no cancellation command was sent.')
     if values.get('cancel_check_failed') == 'yes':
         raise StepError('remote_failed', 'The scheduler could not confirm the job identity; no cancellation command was sent.')
     failed_child = values.get('child_cancel_failed') or values.get('child_cancel_check_failed')
