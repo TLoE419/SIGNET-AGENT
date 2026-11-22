@@ -33,7 +33,7 @@ export function WorkspaceSshSettings({workspace, readiness, pane, sidebar}: {
     return () => observer.disconnect();
   }, [workspace, pane, sidebar]);
 
-  return <SshControls terminalActive={active} english={english} renderStatus={({host, status, phase, error, busy, environment, onEdit, onToggle, onEnvironment, onInstallEnvironment, onVerifyEnvironment}) => {
+  return <SshControls terminalActive={active} english={english} renderStatus={({host, status, phase, error, busy, environment, onEdit, onToggle, onEnvironment, onVerifyEnvironment}) => {
     const connected = status === 'connected';
     const connecting = status === 'connecting';
     const slow = phase === 'slow';
@@ -62,7 +62,7 @@ export function WorkspaceSshSettings({workspace, readiness, pane, sidebar}: {
       </div>
       {error && <p className="ml-settings-note" role="alert">{error.message}</p>}
       {createPortal(<RemoteReadiness {...{english, active, connected, environment, onEnvironment}} connectionIdentity={host}
-        onInstall={onInstallEnvironment} onVerify={onVerifyEnvironment}/>, readiness)}
+        onVerify={onVerifyEnvironment}/>, readiness)}
     </>;
   }}/>;
 }

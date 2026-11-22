@@ -8,6 +8,24 @@
   const sourceKey = inputs => JSON.stringify(sourceKinds.map(kind => inputs?.[kind] ?? []));
   const terminalStates = new Set(["completed", "failed", "cancelled"]);
   const pollInterval = 15_000;
+  const workLabels = {
+    imputation: ["補值分段", "Imputation chunks"], expression_outputs: ["表現量前處理", "Expression preparation"],
+    variant_filter: ["變異篩選", "Variant filtering"], low_frequency: ["低頻變異工作", "Low-frequency jobs"],
+    rare_variants: ["罕見變異工作", "Rare-variant jobs"], stage1: ["建網第一部分", "Network phase 1"],
+    stage2: ["建網第二部分", "Network phase 2"], subnetworks: ["子網路輸出", "Subnetwork exports"],
+  };
+  function renderWorkProgress(container, progress, english) {
+    container.replaceChildren();
+    for (const [key, label] of Object.entries(workLabels)) {
+      const match = typeof progress?.[key] === "string" ? progress[key].match(/^(\d+)\s+(\d+)$/) : null;
+      if (!match || !Number.isSafeInteger(Number(match[2])) || Number(match[2]) <= 0 || Number(match[1]) > Number(match[2])) continue;
+      const term = document.createElement("dt"), count = document.createElement("dd"), bar = document.createElement("progress");
+      term.textContent = label[english ? 1 : 0];count.textContent = `${match[1]} / ${match[2]} `;
+      bar.max = Number(match[2]);bar.value = Number(match[1]);bar.setAttribute("aria-label", term.textContent);
+      count.append(bar);container.append(term, count);
+    }
+    container.hidden = !container.childElementCount;
+  }
   const inputKeys = ["ped.file", "map.file", "ref", "gmap"];
   const parameters = [
     ["restrict.tcga.geno", 1, 1, 1], ["mind", 0, 1, "any"], ["geno", 0, 1, "any"],
@@ -316,6 +334,7 @@
           <dt data-genotype-copy="jobID"></dt><dd data-genotype-job-id></dd>
         </dl>
         <ol class="ml-genotype-events" data-genotype-events hidden></ol>
+        <dl class="ml-key-values" data-genotype-work-progress hidden></dl>
         <p class="ml-genotype-notice" data-genotype-notice role="status" hidden></p>
         <div class="ml-genotype-actions">
           <button type="button" class="ml-nav-action" data-genotype-refresh data-genotype-copy="refresh" hidden></button>
@@ -497,6 +516,7 @@
         if (at) {const time = document.createElement("time");time.dateTime = at;const date = new Date(at);time.textContent = Number.isNaN(date.valueOf()) ? at : date.toLocaleString(context.language);row.append(time);}
         return row;
       }));events.hidden = !events.children.length;
+      renderWorkProgress(part("work-progress"), item?.record?.progress, context.language === "en");
       cancellation?.sync();
       revalidation?.sync();
       const run = context.runs?.find(run => run.run_id === item?.runId);
@@ -894,7 +914,7 @@
             <dd>${adjustment
               ? `<input class="ml-clinical-input" type="text" data-${prefix}-input="${key}" maxlength="2048" required>`
               : `<code data-${prefix}-input="${key}"></code>`}</dd>`).join("")}</dl>
-          ${adjustment ? '<p class="ml-settings-note" data-adjust-clinical-summary role="status"></p>' : ''}
+          ${adjustment ? '<div class="ml-settings-note" data-adjust-clinical-summary></div><div data-adjust-clinical-choices></div>' : ''}
           <fieldset data-${prefix}-fields><legend data-${prefix}-copy="settings"></legend>
             <div class="ml-genotype-controls">${parameterMarkup(network ? parameterDefinitions.slice(0, 2) : parameterDefinitions)}</div>
             ${network ? '<input type="number" data-network-setting="ncis" value="3" readonly hidden><p class="ml-settings-note" data-network-copy="correlationNote"></p>' : ''}
@@ -920,7 +940,7 @@
           <dt data-${prefix}-copy="jobID"></dt><dd data-${prefix}-job-id></dd>
         </dl>
         <ol class="ml-genotype-events" data-${prefix}-events hidden></ol>
-        ${network ? '<dl class="ml-key-values" data-network-work-progress hidden></dl>' : ''}
+        <dl class="ml-key-values" data-${prefix}-work-progress hidden></dl>
         <p class="ml-genotype-notice" data-${prefix}-notice role="status" hidden></p>
         <div class="ml-genotype-actions">
           <button type="button" class="ml-nav-action" data-${prefix}-refresh data-${prefix}-copy="refresh" hidden></button>
@@ -971,6 +991,7 @@
     }
 
     function fillReview(value, keepDraft = false) {
+      if (adjustment && !keepDraft && current()) current().clinicalChoices = {...(value.clinical?.choices ?? value.choices ?? {})};
       for (const key of fileKeys) {
         const element = panel.querySelector(`[data-${prefix}-input="${key}"]`);
         if (adjustment) element.value = value.inputs?.[key] ?? "";
@@ -993,6 +1014,7 @@
       if (!alwaysVisible || !item || item.record && !item.retry) return;
       item.draft = {
         clinical: adjustment ? panel.querySelector('[data-adjust-input="cli.file"]').value : "",
+        choices: adjustment ? {...(item.clinicalChoices ?? {})} : {},
         parameters: Object.fromEntries([...parameterInputs].map(([key, input]) => [key, input.value])),
         resources: Object.fromEntries([...resourceInputs].map(([key, input]) => [key, input.value])),
       };
@@ -1034,10 +1056,43 @@
         const clinicalInput = panel.querySelector('[data-adjust-input="cli.file"]');
         clinicalInput.disabled = hasAttempt || Boolean(item?.checking || revalidationBusy(item)) || !selectedRun;
         clinicalInput.readOnly = Boolean(item?.review?.frozen || item?.review?.frozen_inputs || source()?.input_mode === "dataset" || source()?.frozen_inputs);
-        const clinical = item?.review?.clinical;
+        const clinical = hasAttempt ? saved?.clinical?.review : item?.review?.clinical;
+        const english = context.language === "en";
         part("clinical-summary").textContent = clinical
-          ? (context.language === "en" ? `${clinical.rows ?? 0} clinical rows · ${(clinical.columns ?? []).join(", ")}`
-            : `${clinical.rows ?? 0} 筆臨床資料 · ${(clinical.columns ?? []).join("、")}`) : "";
+          ? (english ? `${clinical.rows ?? 0} clinical rows · ${clinical.matched ?? 0} matched · ${clinical.retained ?? 0} retained · ${clinical.excluded ?? 0} excluded`
+            : `${clinical.rows ?? 0} 筆臨床資料 · 配對 ${clinical.matched ?? 0} · 保留 ${clinical.retained ?? 0} · 排除 ${clinical.excluded ?? 0}`) : "";
+        const choices = part("clinical-choices");
+        choices.replaceChildren();
+        if (clinical) {
+          const counts = document.createElement("p");
+          counts.textContent = Object.entries(clinical.race ?? {}).map(([name, count]) => `${name}: ${count}`).join(" · ");
+          choices.append(counts);
+        }
+        for (const [value, count] of Object.entries(clinical?.unrecognized_race ?? {})) {
+          const group = document.createElement("fieldset");
+          const legend = document.createElement("legend");
+          legend.textContent = `${value} (${count})`;
+          group.append(legend);
+          group.disabled = hasAttempt || Boolean(item?.checking || item?.submitting);
+          for (const [answer, zh, en] of [["not_reported", "依原流程視為未回報（再歸入白人組）", "Treat as not reported (SIGNET groups as white)"],
+            ["exclude", "排除這些樣本", "Exclude these samples"]]) {
+            const label = document.createElement("label");
+            const input = document.createElement("input");
+            input.type = "radio";input.name = `clinical-${value}`;input.value = answer;input.required = true;
+            input.checked = item?.clinicalChoices?.[value] === answer;
+            input.addEventListener("change", () => {
+              item.clinicalChoices = {...(item.clinicalChoices ?? {}), [value]: answer};
+              item.review.ready = false;
+              delete item.review.review_token;
+              item.error = english ? "Check the clinical file again to confirm these choices before submission." : "請再次檢查臨床資料，確認選擇後再送出。";
+              saveDraft();
+              part("submit").disabled = true;
+              part("notice").textContent = item.error;part("notice").hidden = false;
+            });
+            label.append(input, document.createTextNode(english ? en : zh));group.append(label);
+          }
+          choices.append(group);
+        }
       }
       if (linkedInputs) {
         const inputSources = saved?.input_sources ?? item?.review?.input_sources ?? source()?.jobs[step]?.input_sources ?? {};
@@ -1060,22 +1115,10 @@
         part("defaults").hidden = !defaults.length || hasAttempt;
         part("defaults").textContent = defaults.length ? local("defaultsApplied") : "";
         part("defaults").title = defaults.join("\n");
-        const progress = part("work-progress");
-        progress.replaceChildren();
-        for (const [key, label] of [["stage1", "phase1"], ["stage2", "phase2"]]) {
-          const value = saved?.progress?.[key];
-          const match = typeof value === "string" ? value.match(/^(\d+)\s+(\d+)$/) : null;
-          if (!match || Number(match[1]) > Number(match[2])) continue;
-          const term = document.createElement("dt");
-          const count = document.createElement("dd");
-          term.textContent = local(label);
-          count.textContent = `${match[1]} / ${match[2]}`;
-          progress.append(term, count);
-        }
-        progress.hidden = !progress.childElementCount;
       }
+      renderWorkProgress(part("work-progress"), saved?.progress, context.language === "en");
       part("submit").hidden = hasAttempt;
-      part("submit").disabled = !allowed || !item?.review || item.review.ready === false || item.checking || item.submitting || hasAttempt || cancellationBusy(item) || revalidationBusy(item);
+      part("submit").disabled = !allowed || !item?.review || item.review.ready === false || adjustment && !item.review.review_token || item.checking || item.submitting || hasAttempt || cancellationBusy(item) || revalidationBusy(item);
       part("status").textContent = local(state);
       if (item?.cancellation?.sending) part("status").textContent = local("cancelSending");
       part("identifiers").hidden = !selectedRun;
@@ -1168,6 +1211,7 @@
         const clinicalPath = adjustment && !frozen ? panel.querySelector('[data-adjust-input="cli.file"]').value.trim() : "";
         const params = new URLSearchParams();
         if (clinicalPath) params.set("clinical", clinicalPath);
+        if (adjustment && item.clinicalChoices && Object.keys(item.clinicalChoices).length) params.set("choices", JSON.stringify(item.clinicalChoices));
         if (visualization && item.draft) {
           for (const [key, input] of parameterInputs) params.set(key,
             Number.isFinite(input.valueAsNumber) ? String(input.valueAsNumber) : input.value);
@@ -1177,6 +1221,8 @@
         if (epoch !== item.cancelEpoch) return;
         const preserve = adjustment || (linkedInputs ? Boolean(item.draft) : item.review && fileKeys.every(key => item.review.inputs[key] === next.inputs[key]));
         item.review = next;
+        if (adjustment) item.clinicalChoices = Object.fromEntries(Object.entries(item.clinicalChoices ?? {})
+          .filter(([key]) => Object.hasOwn(next.clinical?.unrecognized_race ?? {}, key)));
         item.error = next.issues?.join(" ") || next.reason || "";
         if (id === selectedRun) {
           fillReview(next, Boolean(preserve));
@@ -1208,6 +1254,7 @@
       else if (changed && alwaysVisible) fillReview({[parameterGroup]: Object.fromEntries(parameterDefinitions.map(({key, value}) => [key, value])), resources: initialResources});
       if (changed && alwaysVisible && item?.draft && (!item.record || item.retry)) {
         if (adjustment) panel.querySelector('[data-adjust-input="cli.file"]').value = item.draft.clinical;
+        if (adjustment) item.clinicalChoices = {...(item.draft.choices ?? {})};
         for (const [key, input] of parameterInputs) input.value = item.draft.parameters[key];
         for (const [key, input] of resourceInputs) input.value = item.draft.resources[key];
       }
@@ -1233,6 +1280,8 @@
       const values = inputs => Object.fromEntries([...inputs].map(([key, element]) =>
         [key, element.type === "number" ? element.valueAsNumber : element.value.trim()]));
       const body = {inputs: item.review.inputs, [parameterGroup]: values(parameterInputs), resources: values(resourceInputs)};
+      if (adjustment) body.choices = {...(item.clinicalChoices ?? {})};
+      if (adjustment) body.review_token = item.review.review_token;
       item.submitting = true;
       item.retry = false;
       item.error = "";
@@ -1241,7 +1290,7 @@
         accept(item, await request(`/signet/runs/${encodeURIComponent(id)}/${step}/example`, body), id);
       } catch (error) {
         item.error = error.message;
-        if (error.status === 400 || error.status === 412 || error.status === 502 && error.code === "remote_failed") {
+        if (error.status === 400 || error.status === 412 || error.code === "review_required" || error.status === 502 && error.code === "remote_failed") {
           item.review = null;
           item.attempted = false;
           item.retry = Boolean(item.record);
@@ -1263,6 +1312,7 @@
         const item = current();
         if (!item) return;
         item.review = null;
+        item.clinicalChoices = {};
         item.attempted = true;
         item.error = "";
         saveDraft();

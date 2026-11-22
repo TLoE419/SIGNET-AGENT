@@ -14,6 +14,7 @@
     enrichment_radar: ["富集雷達圖", "Enrichment radar"], count_vs_freq: ["頻率門檻與規模", "Counts by frequency cutoff"],
     missingCounts: ["未保留原始頻率矩陣，無法重建各門檻的數量。", "The original frequency matrix was not retained; cutoff counts are unavailable."],
     cutoff: ["門檻", "Cutoff"], genes: ["基因", "Genes"], edges: ["連線", "Connections"],
+    count: ["數量", "Count"], frequencyCutoff: ["重抽樣頻率門檻", "Bootstrap frequency cutoff"],
     close: ["關閉原始預覽", "Close original preview"], search: ["搜尋連線資料", "Search connections"],
     sort: ["連線排序", "Sort connections"], original: ["原始順序", "Original order"],
     source: ["來源基因 A–Z", "Source gene A–Z"], target: ["目標基因 A–Z", "Target gene A–Z"],
@@ -36,6 +37,50 @@
       const element = node("button", "", text); element.type = "button";
       element.addEventListener("click", action); return element;
     };
+    const cutoffSeries = values => {
+      if (!Array.isArray(values) || values.length < 2 || values.length > 32 || values.some(value =>
+        typeof value?.cutoff !== "number" || !Number.isFinite(value.cutoff) || value.cutoff < 0 || value.cutoff > 1 ||
+        ![value.genes, value.connections].every(count => Number.isSafeInteger(count) && count >= 0)) ||
+        new Set(values.map(value => value.cutoff)).size !== values.length) return null;
+      return [...values].sort((a, b) => a.cutoff - b.cutoff);
+    };
+    function cutoffChart(values) {
+      const figure = node("figure", "s6-cutoff-chart"), caption = node("figcaption", "", t("count_vs_freq"));
+      const svg = (tag, attributes = {}, text) => {
+        const element = doc.createElementNS("http://www.w3.org/2000/svg", tag);
+        for (const [name, value] of Object.entries(attributes)) element.setAttribute(name, value);
+        if (text != null) element.textContent = text;
+        return element;
+      };
+      const chart = svg("svg", {viewBox: "0 0 260 165", role: "img", "aria-label": t("count_vs_freq")});
+      const format = value => new Intl.NumberFormat(language() ? "en" : "zh-Hant", {maximumFractionDigits: 3}).format(value);
+      const axisCount = value => value >= 1000 ? new Intl.NumberFormat(language() ? "en" : "zh-Hant", {notation: "compact", maximumFractionDigits: 1}).format(value) : format(value);
+      chart.append(svg("title", {}, t("count_vs_freq")), svg("desc", {}, values.map(value =>
+        `${t("cutoff")} ${format(value.cutoff)}: ${t("genes")} ${format(value.genes)}, ${t("edges")} ${format(value.connections)}`).join("; ")));
+      const left = 40, right = 246, top = 16, bottom = 116;
+      const minimum = values[0].cutoff, maximum = values[values.length - 1].cutoff;
+      const highest = Math.max(...values.flatMap(value => [value.genes, value.connections]));
+      const x = value => left + (value - minimum) / (maximum - minimum) * (right - left);
+      const y = value => bottom - value / (highest || 1) * (bottom - top);
+      for (const value of new Set([0, Math.round(highest / 2), highest])) {
+        chart.append(svg("line", {x1: left, x2: right, y1: y(value), y2: y(value), class: "s6-cutoff-grid"}),
+          svg("text", {x: left - 6, y: y(value) + 3, "text-anchor": "end"}, axisCount(value)));
+      }
+      chart.append(svg("path", {d: `M${left} ${top}V${bottom}H${right}`, class: "s6-cutoff-axis"}));
+      for (const value of values) chart.append(svg("text", {x: x(value.cutoff), y: bottom + 16, "text-anchor": "middle"}, format(value.cutoff)));
+      chart.append(svg("text", {x: (left + right) / 2, y: 155, "text-anchor": "middle", class: "s6-cutoff-axis-title"}, t("frequencyCutoff")),
+        svg("text", {x: 11, y: (top + bottom) / 2, transform: `rotate(-90 11 ${(top + bottom) / 2})`, "text-anchor": "middle", class: "s6-cutoff-axis-title"}, t("count")));
+      const legend = node("div", "s6-cutoff-legend");
+      for (const [key, label] of [["genes", "genes"], ["connections", "edges"]]) {
+        chart.append(svg("path", {d: values.map((value, index) => `${index ? "L" : "M"}${x(value.cutoff)} ${y(value[key])}`).join(" "), class: "s6-cutoff-line", "data-series": key}));
+        for (const value of values) {
+          const point = svg("circle", {cx: x(value.cutoff), cy: y(value[key]), r: 2.7, class: "s6-cutoff-point", "data-series": key, "data-cutoff": value.cutoff, "data-count": value[key]});
+          point.append(svg("title", {}, `${t("cutoff")} ${format(value.cutoff)} · ${t(label)} ${format(value[key])}`)); chart.append(point);
+        }
+        const item = node("span", "", t(label)); item.dataset.series = key; legend.append(item);
+      }
+      figure.append(caption, chart, legend); return figure;
+    }
     const panel = node("details", "s6-original-results"), summary = node("summary"), content = node("div", "s6-original-content");
     panel.append(summary, content); panel.hidden = true;
     stage.querySelector(".ml-result-inspector").append(panel);
@@ -132,12 +177,14 @@
         if (typeof plot.pdf === "string") { const pdf = button(t("pdf"), () => download(plot.pdf)); pdf.disabled = Boolean(downloadRequest); card.append(pdf); }
         content.append(card);
       }
-      if (Array.isArray(data.thresholds) && data.thresholds.length) {
+      const thresholds = cutoffSeries(data.thresholds);
+      if (thresholds) {
+        content.append(cutoffChart(thresholds));
         const table = node("table", "s6-cutoff-counts"), caption = node("caption", "", t("count_vs_freq"));
         const head = node("thead"), row = node("tr");
         for (const name of ["cutoff", "genes", "edges"]) { const th = node("th", "", t(name)); th.scope = "col"; row.append(th); }
         head.append(row); table.append(caption, head); const body = node("tbody");
-        for (const count of data.thresholds) { const tr = node("tr"); for (const value of [count.cutoff, count.genes, count.connections]) tr.append(node("td", "", String(value))); body.append(tr); }
+        for (const count of thresholds) { const tr = node("tr"); for (const value of [count.cutoff, count.genes, count.connections]) tr.append(node("td", "", String(value))); body.append(tr); }
         table.append(body); content.append(table);
       } else content.append(node("p", "s6-original-note", t("missingCounts")));
       if (!previews.length && !data.plots?.length && !data.download_available) content.append(node("p", "s6-original-note", t("unavailable")));

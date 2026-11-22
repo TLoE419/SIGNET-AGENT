@@ -33,6 +33,8 @@ class BackendTransitionQA(unittest.TestCase):
         snapshots = {'genotype': workspace.SNAPSHOT, 'expression': workspace.EXPRESSION_SNAPSHOT,
                      'adjust': workspace.ADJUST_SNAPSHOT, 'cis': workspace.CIS_SNAPSHOT,
                      'network': workspace.NETWORK_SNAPSHOT}
+        controls = self.f.remote_dir / 'steps'
+        controls.mkdir(exist_ok=True)
         for index, (name, snapshot) in enumerate(snapshots.items(), 1):
             record = jobs._load(self.f.root, name)
             record.update(job_id=str(100 + index), settings={key: settings[key] for key in jobs.STEPS[name].settings})
@@ -41,6 +43,9 @@ class BackendTransitionQA(unittest.TestCase):
             saved = json.loads(path.read_text())
             saved.update(record)
             path.write_text(json.dumps(saved))
+            # These synthetic completed jobs need the same matching remote evidence as real jobs.
+            (controls / (name + '.job')).write_text(record['job_id'] + '\n')
+            (controls / (name + '.done')).write_text('0 2026-11-18T01:02:03Z\n')
             for relative in jobs.STEPS[name].required + jobs.STEPS[name].needs:
                 relative = jobs._resolve(relative, settings)
                 for base in (self.f.root, self.f.remote_dir):

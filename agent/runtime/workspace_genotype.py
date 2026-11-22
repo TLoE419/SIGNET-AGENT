@@ -382,7 +382,7 @@ def _review_expression(run_id):
     step = jobs.STEPS['expression']
     checked = jobs._inputs(step, inputs, (config['root'] + '/refdata', config['source'] + '/example', jobs._remote_dir(config, root, run_id)))
     files = jobs._files(step, checked, {'restrict.tcga': str(chromosome)})
-    script = (jobs._say() + jobs._input_checks(files)
+    script = (jobs._say() + jobs._input_checks(files) + jobs._expression_input_check('expression', files)
               + f'if [ ! -s {shlex.quote(config["image"])} ]; then say not_ready container; exit 5; fi\n'
               + 'if ! command -v sbatch >/dev/null 2>&1; then say not_ready sbatch; exit 5; fi\n')
     if frozen:
@@ -394,6 +394,8 @@ def _review_expression(run_id):
         raise jobs.StepError('remote_failed', 'Could not verify the expression inputs on HPC3.') from error
     if 'missing_input' in values:
         raise jobs.StepError('not_ready', 'The Stage 2 input is unavailable: ' + values['missing_file'])
+    if 'invalid_input' in values:
+        raise jobs.StepError('invalid_request', values['invalid_input'])
     if code or 'not_ready' in values:
         raise jobs.StepError('not_ready', 'The Stage 2 environment is not ready. Check remote settings.')
     return {'run_id': run_id, 'inputs': inputs, 'settings': {'restrict.tcga': chromosome}, 'frozen': bool(frozen),
@@ -965,6 +967,8 @@ def run_history(root):
                    'expression': [], 'clinical': []},
         'jobs': {'genotype': job}, 'status': job['state'], 'graph': None,
     }
+    if job.get('summary', {}).get('reference_preparation'):
+        result['reference_preparation'] = job['summary']['reference_preparation']
     expression_path = signet._no_links(root / EXPRESSION_SNAPSHOT)
     if expression_path.is_file():
         expression = json.loads(expression_path.read_text(encoding='utf-8'))
@@ -1067,6 +1071,8 @@ def run_history(root):
     if linked.is_file():
         plan = json.loads(linked.read_text())
         result['rerun'] = {key: plan[key] for key in ('source_run_id', 'step', 'reuse', 'invalidated', 'created_at')}
+        if isinstance(plan.get('parameters'), dict):
+            result['rerun']['parameters'] = plan['parameters']
         target_state = result['jobs'].get(plan['step'], {}).get('state', 'not_submitted')
         if target_state != 'completed':
             result['status'] = target_state

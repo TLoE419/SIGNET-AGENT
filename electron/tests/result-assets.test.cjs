@@ -110,4 +110,26 @@ test('missing exports and matrix stay explicit, and foreign preview URLs are nev
   assert.equal(h.q('iframe'), null);
   assert.match(h.q('.s6-original-content').textContent, /未保留原始頻率矩陣/);
   assert.equal(h.q('.s6-cutoff-counts'), null);
+  assert.equal(h.q('.s6-cutoff-chart'), null);
+});
+
+test('cutoff chart uses only complete real count pairs and keeps readable bilingual axes and legend', async t => {
+  const value = metadata(context()), h = harness(t, () => value);
+  h.controller.setContext(context()); h.open(); await until(() => h.q('.s6-cutoff-chart'));
+  const points = () => [...h.q('.s6-cutoff-chart').querySelectorAll('circle')].map(point => [point.dataset.series, Number(point.dataset.cutoff), Number(point.dataset.count)]);
+  assert.deepEqual(points(), [['genes', .8, 3], ['genes', 1, 2], ['connections', .8, 2], ['connections', 1, 1]]);
+  assert.equal(h.q('.s6-cutoff-chart svg').getAttribute('role'), 'img');
+  assert.match(h.q('.s6-cutoff-chart').textContent, /重抽樣頻率門檻/);
+  assert.match(h.q('.s6-cutoff-legend').textContent, /基因.*連線/);
+  assert.equal(h.q('.s6-cutoff-counts tbody').rows.length, 2);
+  h.stage.closest('[lang]').lang = 'en'; await flush();
+  assert.match(h.q('.s6-cutoff-chart').textContent, /Bootstrap frequency cutoff/);
+  assert.match(h.q('.s6-cutoff-legend').textContent, /Genes.*Connections/);
+  assert.equal(points().length, 4);
+  value.thresholds = [{cutoff: .8, genes: 3, connections: null}, {cutoff: 1, genes: 2, connections: 1}];
+  [...h.q('.s6-original-actions').querySelectorAll('button')].find(button => button.textContent === 'Refresh').click();
+  await until(() => !h.q('.s6-cutoff-chart'));
+  await flush();
+  assert.equal(h.q('.s6-cutoff-counts'), null);
+  assert.match(h.q('.s6-original-content').textContent, /cutoff counts are unavailable/);
 });

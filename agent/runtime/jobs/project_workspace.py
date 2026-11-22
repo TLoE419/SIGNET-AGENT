@@ -8,6 +8,7 @@ import base64
 from bisect import bisect_right
 from collections import Counter
 import csv
+from decimal import Decimal, localcontext
 import hashlib
 import json
 import math
@@ -20,6 +21,27 @@ from types import SimpleNamespace
 import zlib
 
 
+# A small bitmap font keeps the standalone renderer independent of installed fonts or plotting tools.
+_PCA_FONT = {
+    '0': ('111', '101', '101', '101', '101', '101', '111'),
+    '1': ('010', '110', '010', '010', '010', '010', '111'),
+    '2': ('111', '001', '001', '111', '100', '100', '111'),
+    '3': ('111', '001', '001', '111', '001', '001', '111'),
+    '4': ('101', '101', '101', '111', '001', '001', '001'),
+    '5': ('111', '100', '100', '111', '001', '001', '111'),
+    '6': ('111', '100', '100', '111', '101', '101', '111'),
+    '7': ('111', '001', '001', '010', '010', '010', '010'),
+    '8': ('111', '101', '101', '111', '101', '101', '111'),
+    '9': ('111', '101', '101', '111', '001', '001', '111'),
+    '.': ('000', '000', '000', '000', '000', '010', '010'),
+    '-': ('000', '000', '000', '111', '000', '000', '000'),
+    '+': ('000', '000', '010', '111', '010', '000', '000'),
+    'e': ('000', '000', '111', '101', '111', '100', '111'),
+    'P': ('110', '101', '101', '110', '100', '100', '100'),
+    'C': ('111', '100', '100', '100', '100', '100', '111'),
+}
+
+
 def _pca_png(points, width=640, height=420):
     """Rasterize the saved scores here, so sample coordinates never leave HPC3."""
     pixels = bytearray(b'\xff' * (width * height * 3))
@@ -28,6 +50,20 @@ def _pca_png(points, width=640, height=420):
         if 0 <= x < width and 0 <= y < height:
             offset = (y * width + x) * 3
             pixels[offset:offset + 3] = bytes(color)
+
+    def text(label, x, y, scale=1):
+        for index, character in enumerate(label):
+            for row, line in enumerate(_PCA_FONT[character]):
+                for column, value in enumerate(line):
+                    if value == '1':
+                        for dx in range(scale):
+                            for dy in range(scale):
+                                pixel(x + (index * 4 + column) * scale + dx,
+                                      y + row * scale + dy, (55, 65, 75))
+
+    def tick(value):
+        # Two significant figures stay readable within the existing margin, including e+308/e-324.
+        return '0' if value.is_zero() else format(value, '.2g')
 
     left, right, top, bottom = 42, width - 20, 20, height - 35
     for index in range(5):
@@ -39,19 +75,45 @@ def _pca_png(points, width=640, height=420):
     for y in range(top, bottom + 1):
         pixel(left, y, (80, 90, 100))
     if points:
+        if any(len(point) != 2 or not all(map(math.isfinite, point)) for point in points):
+            raise ValueError('The saved principal component scores are invalid.')
         xs, ys = zip(*points)
-        min_x, max_x, min_y, max_y = min(xs), max(xs), min(ys), max(ys)
-        spread_x, spread_y = max_x - min_x, max_y - min_y
-        pad_x, pad_y = (spread_x or 1) * 0.08, (spread_y or 1) * 0.08
-        min_x, max_x = min_x - pad_x, max_x + pad_x
-        min_y, max_y = min_y - pad_y, max_y + pad_y
-        for x, y in points:
-            px = left + round((x - min_x) / (max_x - min_x) * (right - left))
-            py = bottom - round((y - min_y) / (max_y - min_y) * (bottom - top))
-            for dy in range(-3, 4):
-                for dx in range(-3, 4):
-                    if dx * dx + dy * dy <= 9:
-                        pixel(px + dx, py + dy, (43, 109, 190))
+        # Decimal avoids overflow in max-min and loss of a small span beside a large score.
+        with localcontext() as context:
+            context.prec = 400
+            min_x, max_x, min_y, max_y = map(Decimal, (min(xs), max(xs), min(ys), max(ys)))
+            pad_x = (max_x - min_x or Decimal(1)) * Decimal('0.08')
+            pad_y = (max_y - min_y or Decimal(1)) * Decimal('0.08')
+            min_x, max_x, min_y, max_y = min_x - pad_x, max_x + pad_x, min_y - pad_y, max_y + pad_y
+            offset_x = Decimal(min(xs)) if max(abs(min_x), abs(max_x)) > (max_x - min_x) * 100 else Decimal(0)
+            offset_y = Decimal(min(ys)) if max(abs(min_y), abs(max_y)) > (max_y - min_y) * 100 else Decimal(0)
+            for name, offset, vertical in (('PC1', offset_x, False), ('PC2', offset_y, True)):
+                # A labeled translation keeps very narrow ranges readable beside a huge score.
+                label = name + (('-' if offset > 0 else '+') + format(abs(offset), '.17g') if offset else '')
+                scale = 1 if offset else 2
+                text(label, 4 if vertical else (left + right - (len(label) * 4 - 1) * scale) // 2,
+                     1 if vertical else height - 15, scale=scale)
+            for index in range(5):
+                fraction = Decimal(index) / 4
+                x = left + round(fraction * (right - left))
+                y = bottom - round(fraction * (bottom - top))
+                label_x = tick(min_x + fraction * (max_x - min_x) - offset_x)
+                label_y = tick(min_y + fraction * (max_y - min_y) - offset_y)
+                text(label_x, max(1, min(width - len(label_x) * 4, x - (len(label_x) * 4 - 1) // 2)), bottom + 8)
+                text(label_y, left - (len(label_y) * 4 - 1) - 5, y - 3)
+                for offset in range(4):
+                    pixel(x, bottom + offset, (80, 90, 100))
+                    pixel(left - offset, y, (80, 90, 100))
+            for x, y in points:
+                px = left + round((Decimal(x) - min_x) / (max_x - min_x) * (right - left))
+                py = bottom - round((Decimal(y) - min_y) / (max_y - min_y) * (bottom - top))
+                for dy in range(-3, 4):
+                    for dx in range(-3, 4):
+                        if dx * dx + dy * dy <= 9:
+                            pixel(px + dx, py + dy, (43, 109, 190))
+    else:
+        text('PC1', (left + right) // 2 - 11, height - 15, scale=2)
+        text('PC2', 4, 1, scale=2)
 
     def chunk(kind, data):
         return struct.pack('>I', len(data)) + kind + data + struct.pack('>I', zlib.crc32(kind + data) & 0xffffffff)

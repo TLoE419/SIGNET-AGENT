@@ -1355,7 +1355,7 @@ class StepsTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertFalse(invalid['ready'])
         self.assertIn('gender', invalid['reason'])
-        body = {key: review[key] for key in ('inputs', 'options', 'resources')}
+        body = {key: review[key] for key in ('inputs', 'options', 'resources', 'review_token')}
         body['options'] = {'npc': 2}
         body['resources']['cpus'] = 2
         self.assertEqual(request('POST', route, {**body, 'options': {'npc': 11}})[0], 400)

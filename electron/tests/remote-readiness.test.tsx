@@ -220,13 +220,18 @@ test('missing resources never start setup automatically; source install requires
   const requests: string[] = [];
   let installed = false, installCalls = 0, verifyCalls = 0;
   let finish!: () => void;
-  globalThis.fetch = async url => {
+  globalThis.fetch = async (url, options) => {
     requests.push(String(url));
+    if (String(url) === '/hpc/signet') {
+      installCalls++;
+      assert.equal(options?.method, 'POST');
+      assert.equal((options?.headers as Record<string, string>)['X-Chat-Token'], 'test-page-token');
+      return new Promise(resolve => { finish = () => { installed = true; resolve(reply({status: 'ok', outcome: 'started', executed: true})); }; });
+    }
     assert.equal(String(url), '/hpc/check');
     return reply(setupResult({signet_source: installed ? 'ok' : 'missing', container: 'missing'}));
   };
   render(<RemoteReadiness {...props} environment={{...environment, phase: 'needs-install', missing: ['SIGNET source', 'SIGNET container']}}
-    onInstall={() => { installCalls++; return new Promise(resolve => { finish = () => { installed = true; resolve({ok: true}); }; }); }}
     onVerify={async () => { verifyCalls++; return {ok: true}; }}/>);
   await waitFor(() => assert.equal(setupButton('signet')?.disabled, false));
   assert.equal(installCalls, 0);
@@ -238,8 +243,8 @@ test('missing resources never start setup automatically; source install requires
   await act(async () => { finish(); });
   await waitFor(() => assert.equal(row('signet_source').dataset.status, 'ok'));
   assert.equal(installCalls, 1);
-  assert.equal(verifyCalls, 0, 'installation must not silently start another setup action');
-  assert.ok(requests.every(url => url === '/hpc/check'));
+  assert.equal(verifyCalls, 1, 'the completed explicit installation refreshes read-only verification');
+  assert.ok(requests.every(url => url === '/hpc/check' || url === '/hpc/signet'));
 });
 
 test('reopening an ongoing source installation shows its original live progress without installing again', async () => {
@@ -258,9 +263,11 @@ test('reopening an ongoing source installation shows its original live progress 
 
 test('source installation failure exposes the original failure cause without repeating installation', async () => {
   let installs = 0;
-  globalThis.fetch = async () => reply(setupResult({signet_source: 'missing', container: 'missing'}));
-  render(<RemoteReadiness {...props} environment={{...environment, phase: 'needs-install', missing: ['SIGNET source']}}
-    onInstall={async () => { installs++; return {ok: false, error: 'The source download failed: checksum mismatch'}; }}/>);
+  globalThis.fetch = async url => {
+    if (String(url) === '/hpc/signet') { installs++; return reply({status: 'failed', outcome: 'failed', error: 'The source download failed: checksum mismatch'}); }
+    return reply(setupResult({signet_source: 'missing', container: 'missing'}));
+  };
+  render(<RemoteReadiness {...props} environment={{...environment, phase: 'needs-install', missing: ['SIGNET source']}}/>);
   await waitFor(() => assert.equal(setupButton('signet')?.disabled, false));
   fireEvent.click(setupButton('signet'));
   await waitFor(() => assert.equal(row('signet_source').textContent?.includes('The source download failed: checksum mismatch'), true));

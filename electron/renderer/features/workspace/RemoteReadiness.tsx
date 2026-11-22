@@ -95,13 +95,12 @@ interface Props {
   connectionIdentity?: string;
   environment: EnvironmentSnapshot;
   onEnvironment: () => void;
-  onInstall?: () => Promise<{ok: boolean; error?: string}>;
   onVerify?: () => Promise<{ok: boolean; error?: string}>;
 }
 
 type Inspection = {scope: string; value: unknown; error: string; busy: boolean};
 const setupActions = [
-  {item: 'signet_source', step: 'signet', path: '', label: ['安裝 SIGNET', 'Install SIGNET'], requires: ['connection']},
+  {item: 'signet_source', step: 'signet', path: '/hpc/signet', label: ['安裝 SIGNET', 'Install SIGNET'], requires: ['connection']},
   {item: 'container', step: 'container', path: '/hpc/container', label: ['下載容器', 'Download container'], requires: ['connection', 'slurm']},
   {item: 'reference_ref', step: 'ref', path: '/hpc/reference/ref', label: ['下載參考面板', 'Download reference panel'], requires: ['connection', 'slurm']},
   {item: 'reference_gmap', step: 'gmap', path: '/hpc/reference/gmap', label: ['下載遺傳圖譜', 'Download genetic map'], requires: ['connection', 'slurm']},
@@ -117,11 +116,13 @@ const setupStates = {
 type SetupState = {state: keyof typeof setupStates; detail: string; grace?: number; job?: string};
 type SetupRequest = {target: string; step: string; controller: AbortController};
 
-export function RemoteReadiness({english, active, connected, connectionIdentity = '', environment, onEnvironment, onInstall, onVerify}: Props) {
+export function RemoteReadiness({english, active, connected, connectionIdentity = '', environment, onEnvironment, onVerify}: Props) {
   const [inspection, setInspection] = useState<Inspection>({scope: '', value: undefined, error: '', busy: false});
   const request = useRef<{scope: string; controller: AbortController} | null>(null);
   const actionRequest = useRef<SetupRequest | null>(null);
   const logRequest = useRef<SetupRequest | null>(null);
+  const verifiedSource = useRef('');
+  const requestedSource = useRef('');
   const [setup, setSetup] = useState<{target: string; steps: Record<string, SetupState>}>({target: '', steps: {}});
   const [logs, setLogs] = useState<{target: string; steps: Record<string, {state: string; text: string}>}>({target: '', steps: {}});
   const phase = environment.phase;
@@ -151,6 +152,7 @@ export function RemoteReadiness({english, active, connected, connectionIdentity 
 
   function reconcileSetup(value: unknown) {
     const checked = normalizeReadiness(value).checks;
+    if (checked.some(check => check.item === 'signet_source' && check.status === 'in_progress')) requestedSource.current = target;
     setSetup(previous => {
       if (previous.target !== target) return previous;
       const steps = {...previous.steps};
@@ -210,6 +212,12 @@ export function RemoteReadiness({english, active, connected, connectionIdentity 
   }, [scope, available]);
 
   useEffect(() => {
+    const refresh = () => { requestedSource.current = target; if (available) void inspect(); };
+    window.addEventListener('workspace-setup-refresh', refresh);
+    return () => window.removeEventListener('workspace-setup-refresh', refresh);
+  }, [scope, available]);
+
+  useEffect(() => {
     setSetup({target, steps: {}});
     setLogs({target, steps: {}});
     return () => {
@@ -221,6 +229,14 @@ export function RemoteReadiness({english, active, connected, connectionIdentity 
   }, [target, connected]);
 
   const report = current && current.value !== undefined ? normalizeReadiness(current.value, english) : null;
+  const sourceReady = report?.checks.some(check => check.item === 'signet_source' && check.status === 'ok' && check.valid);
+  useEffect(() => {
+    const identity = target + ':' + environment.checkedAt;
+    if (!available || phase !== 'needs-install' || !sourceReady || !onVerify ||
+        requestedSource.current !== target || verifiedSource.current === identity) return;
+    verifiedSource.current = identity;
+    void onVerify();
+  }, [available, phase, sourceReady, target, environment.checkedAt, onVerify]);
   const poll = available && report?.checks.every(check => check.valid) && !current?.busy && !current?.error &&
     (Boolean(report?.checks.some(check => check.status === 'in_progress')) ||
       Object.values(operations).some(operation => ['accepted', 'in_progress', 'unconfirmed'].includes(operation.state)));
@@ -269,18 +285,13 @@ export function RemoteReadiness({english, active, connected, connectionIdentity 
     const check = report?.checks.find(check => check.item === action?.item);
     if (!action || !available || current?.busy || actionRequest.current || !check?.valid ||
         !['missing', 'problem'].includes(check.status) || blocker(action) ||
-        ['accepted', 'in_progress', 'submitting', 'unconfirmed'].includes(operations[step]?.state) || step === 'signet' && !onInstall) return;
+        ['accepted', 'in_progress', 'submitting', 'unconfirmed'].includes(operations[step]?.state)) return;
     const pending = {target, step, controller: new AbortController()};
     actionRequest.current = pending;
+    if (step === 'signet') requestedSource.current = target;
     updateSetup(step, {state: 'submitting', detail: ''});
     try {
-      if (step === 'signet') {
-        const result = await onInstall!();
-        if (context.current.target !== target || !context.current.connected || actionRequest.current !== pending) return;
-        updateSetup(step, result.ok ? {state: 'accepted', grace: 1,
-          detail: label('安裝要求已完成，等待檔案檢查確認。', 'The installation request finished; awaiting file checks.')}
-          : {state: 'failed', detail: result.error || label('安裝未完成。', 'Installation did not complete.')});
-      } else {
+      {
         const result = await post(action.path, pending.controller.signal);
         if (context.current.target !== target || !context.current.connected || actionRequest.current !== pending) return;
         const accepted = result.status === 'ok' && ['started', 'in_progress', 'existing'].includes(String(result.outcome));
@@ -391,11 +402,11 @@ export function RemoteReadiness({english, active, connected, connectionIdentity 
           </p>}
           {reason && <p className="ml-settings-check-detail" data-setup-prerequisite>{reason}</p>}
           {action && <div className="ml-settings-check-actions">
-            {missing && (action.step !== 'signet' || onInstall) && <button type="button" className="ml-settings-action" data-setup-action={action.step}
+            {missing && <button type="button" className="ml-settings-action" data-setup-action={action.step}
               disabled={!available || Boolean(current?.busy) || submitting || Boolean(reason) ||
                 Boolean(operation && ['submitting', 'accepted', 'in_progress', 'unconfirmed'].includes(operation.state))}
               onClick={() => void runSetup(action.step)}>{action.label[english ? 1 : 0]}</button>}
-            {action.step !== 'signet' && check?.valid && <button type="button" className="ml-settings-action" data-setup-log={action.step}
+            {check?.valid && <button type="button" className="ml-settings-action" data-setup-log={action.step}
               disabled={!available || Boolean(current?.busy) || Boolean(logRequest.current)} onClick={() => void readLog(action.step)}>
               {label('查看準備紀錄', 'View setup log')}
             </button>}

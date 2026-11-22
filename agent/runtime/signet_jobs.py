@@ -1765,19 +1765,36 @@ def _output_summary(record, step, root=None):
 
 @_one_at_a_time
 def ensure_summary(run_id, name):
-    """The completed step's counts, computing them on HPC3 once for records made before summaries existed."""
+    """Backfill counts from the exact completed source, including inherited upstream steps."""
     step = _step(name)
     root = _root(run_id)
     record = _load(root, name)
-    if record.get('state') != 'completed' or record.get('summary', {}).get('version') == SUMMARY_VERSION:
+    if record.get('state') != 'completed':
         return record.get('summary')
-    _environment()
+    source_root, source_record, checks = root, record, ()
     try:
-        record['summary'] = _output_summary(record, step, root)
+        if 'reused_from' in record:
+            from agent.runtime.workspace_projection import resolve_source, verify_source
+            source_root, source_record, checks = resolve_source(run_id, name)
+            verify_source(checks)
+            if _load(root, name) != record:
+                raise StepError('conflict', 'The requested inherited attempt changed while its counts were read.')
+        if record.get('summary', {}).get('version') == SUMMARY_VERSION:
+            return record['summary']
+        if source_record.get('summary', {}).get('version') == SUMMARY_VERSION:
+            summary = source_record['summary']
+        else:
+            _environment()
+            summary = _output_summary(source_record, step, source_root)
+        if checks:
+            verify_source(checks)
+        if _load(root, name) != record:
+            raise StepError('conflict', 'The requested attempt changed while its counts were read.')
     except (OSError, ValueError, subprocess.TimeoutExpired, StepError):
         return None
+    record['summary'] = summary
     _save(root, record)
-    return record['summary']
+    return summary
 
 
 def _finish(root, record, step, done, missing, hints):

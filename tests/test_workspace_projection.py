@@ -1,5 +1,6 @@
 import base64
 import json
+import math
 from pathlib import Path
 import struct
 import subprocess
@@ -10,6 +11,7 @@ import zlib
 
 from agent.runtime import signet_jobs as jobs, ssh_transport, workspace_projection as projection
 import agent.tools.signet as signet
+from agent.runtime.jobs.project_workspace import _pca_png
 
 
 class WorkspaceProjectionTest(unittest.TestCase):
@@ -57,7 +59,7 @@ class WorkspaceProjectionTest(unittest.TestCase):
                  'remote_dir': str(self.remote), 'image': self.config['image'], 'partition': 'fixture',
                  'settings': {'alpha.cis': '0.05'}, 'options': {'npc': 2}, **changes}
         for name in {'genotype', step}:
-            (self.root / ('workspace-' + name + '.json')).write_text(json.dumps({'run_id': self.run_id}))
+            (self.root / ('workspace-' + name + '.json')).write_text(json.dumps({'run_id': self.run_id, 'dataset_id': 'fixture-dataset'}))
         path = self.root / 'steps' / (step + '.json')
         path.write_text(json.dumps(value))
         (self.remote / 'steps' / (step + '.job')).write_text(value['job_id'])
@@ -107,6 +109,25 @@ class WorkspaceProjectionTest(unittest.TestCase):
         self.place('res/resc/signet_all.eQTL.data', '0 2\n1 0\n')
         self.place('res/resc/signet_all.sig.pValue_0.05', '1 1 0.01\n2 2 0.02\n')
         self.record(4, required_outputs=['res/resc/signet_all.sig.pValue_0.05'])
+
+    def fork(self, source_id, child_id, stage=1):
+        source = self.project / 'runs' / source_id
+        snapshot = source / 'workspace-genotype.json'
+        if not snapshot.exists():
+            snapshot.write_text(json.dumps({'run_id': source_id, 'dataset_id': 'fixture-dataset'}))
+        child = self.project / 'runs' / child_id
+        for folder in ('work/script', 'work/tmp', 'work/data', 'work/res', 'logs', 'home', 'steps'):
+            (child / folder).mkdir(parents=True, exist_ok=True)
+        (child / 'manifest.json').write_text('{}')
+        step = projection.STEPS[stage]
+        record = json.loads((source / 'steps' / (step + '.json')).read_text())
+        record.update(run_id=child_id, remote_dir=str(self.remote.parent / child_id), reused_from={
+            'run_id': source_id, 'step': step, 'job_id': record['job_id'], 'attempt': record.get('attempt', 1)})
+        (child / 'steps' / (step + '.json')).write_text(json.dumps(record))
+        (child / 'workspace-genotype.json').write_text(json.dumps({**json.loads(snapshot.read_text()), 'run_id': child_id}))
+        (child / 'rerun.json').write_text(json.dumps({'source_run_id': source_id, 'new_run_id': child_id,
+                                                     'step': 'network', 'reuse': [step]}))
+        return child
 
     def test_first_two_stages_return_only_real_aggregates_and_cache_them(self):
         self.genotype()
@@ -243,6 +264,101 @@ class WorkspaceProjectionTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             projection.completed_result(self.run_id, '3')
         self.assertEqual(len(self.calls), 1, 'a malformed cache must fail instead of selecting another source')
+
+    def test_inherited_results_display_before_child_remote_staging_and_follow_a_chain(self):
+        self.genotype()
+        child = self.fork(self.run_id, 'child')
+        grandchild = self.fork('child', 'grandchild')
+        result = projection.completed_result('grandchild', '1')
+        self.assertEqual(result['run_id'], 'grandchild')
+        self.assertEqual(result['job']['run_id'], 'grandchild')
+        self.assertEqual(result['job']['reused_from']['run_id'], 'child')
+        self.assertEqual(result['summary']['samples'], 2)
+        self.assertEqual(len(self.calls), 1)
+        self.assertFalse((child / 'steps/remote.owner').exists())
+        self.assertFalse((grandchild / 'steps/remote.owner').exists())
+        self.assertFalse((self.remote.parent / 'child').exists())
+        self.assertFalse((self.remote.parent / 'grandchild').exists(), 'viewing inherited results never stages a child')
+        with patch.object(ssh_transport, 'remote', side_effect=AssertionError('original aggregate is cached')):
+            self.assertEqual(projection.completed_result('grandchild', '1'), result)
+
+    def test_changed_source_attempt_dataset_plan_and_cycles_refuse_inherited_results(self):
+        self.genotype()
+        child = self.fork(self.run_id, 'child')
+        original = self.root / 'steps/genotype.json'
+        record = json.loads(original.read_text())
+        original.write_text(json.dumps({**record, 'attempt': 2, 'job_id': '99999'}))
+        with self.assertRaises(jobs.StepError):
+            projection.completed_result('child')
+        original.write_text(json.dumps(record))
+        snapshot = child / 'workspace-genotype.json'
+        snapshot.write_text(json.dumps({'run_id': 'child', 'dataset_id': 'different'}))
+        with self.assertRaises(jobs.StepError):
+            projection.completed_result('child')
+        snapshot.write_text(json.dumps({'run_id': 'child', 'dataset_id': 'fixture-dataset'}))
+        plan = child / 'rerun.json'
+        plan.write_text(json.dumps({'source_run_id': 'different', 'new_run_id': 'child', 'reuse': ['genotype']}))
+        with self.assertRaises(jobs.StepError):
+            projection.completed_result('child')
+        plan.write_text(json.dumps({'source_run_id': self.run_id, 'new_run_id': 'child', 'reuse': ['genotype']}))
+        original.write_text(json.dumps({**record, 'reused_from': {'run_id': 'child', 'step': 'genotype',
+                                      'job_id': record['job_id'], 'attempt': 1}}))
+        (self.root / 'rerun.json').write_text(json.dumps({'source_run_id': 'child', 'new_run_id': self.run_id,
+                                                        'reuse': ['genotype']}))
+        with self.assertRaises(jobs.StepError):
+            projection.completed_result('child')
+        self.assertEqual(self.calls, [], 'bad relations are refused before remote reads')
+
+    def test_changed_child_relation_during_source_projection_refuses_publication(self):
+        self.genotype()
+        child = self.fork(self.run_id, 'child')
+        def changed(command, **kwargs):
+            result = self.execute(command, **kwargs)
+            path = child / 'steps/genotype.json'
+            value = json.loads(path.read_text())
+            value['reused_from']['job_id'] = '99999'
+            path.write_text(json.dumps(value))
+            return result
+        with patch.object(ssh_transport, 'remote', side_effect=changed), self.assertRaises(jobs.StepError):
+            projection.completed_result('child')
+
+
+class PcaRasterTest(unittest.TestCase):
+    def pixels(self, points):
+        picture = _pca_png(points)
+        self.assertEqual(struct.unpack('>II', picture[16:24]), (640, 420))
+        offset, compressed = 8, b''
+        while offset < len(picture):
+            size = struct.unpack('>I', picture[offset:offset + 4])[0]
+            if picture[offset + 4:offset + 8] == b'IDAT':
+                compressed += picture[offset + 8:offset + 8 + size]
+            offset += 12 + size
+        rows = zlib.decompress(compressed)
+        self.assertEqual(len(rows), 420 * (640 * 3 + 1))
+        return [rows[y * (640 * 3 + 1) + 1:(y + 1) * (640 * 3 + 1)] for y in range(420)]
+
+    def test_axis_names_and_numeric_ticks_are_inside_png_with_unchanged_point_mapping(self):
+        rows = self.pixels([[-1, -1], [1, 1]])
+        color = bytes((55, 65, 75))
+        self.assertTrue(any(color in row[4 * 3:28 * 3] for row in rows[1:15]), 'PC2 label is rasterized')
+        self.assertTrue(any(color in row[310 * 3:350 * 3] for row in rows[405:420]), 'PC1 label is rasterized')
+        self.assertTrue(any(color in row for row in rows[393:400]), 'numeric x ticks are rasterized below the axis')
+        self.assertTrue(any(color in row[:37 * 3] for row in rows[17:389]), 'numeric y ticks are rasterized left of the axis')
+        for x, y in ((82, 360), (580, 45)):
+            self.assertEqual(rows[y][x * 3:x * 3 + 3], bytes((43, 109, 190)), 'real bounds retain the original eight-percent padding')
+
+    def test_finite_extreme_tiny_constant_and_adjacent_scores_render_without_overflow(self):
+        maximum = float.fromhex('0x1.fffffffffffffp+1023')
+        for points in ([[-maximum, maximum], [maximum, -maximum]],
+                       [[5e-324, -5e-324], [1e-323, 1e-323]],
+                       [[maximum, -maximum], [maximum, -maximum]],
+                       [[1e308, 1e308], [math.nextafter(1e308, math.inf), math.nextafter(1e308, -math.inf)]]):
+            with self.subTest(points=points):
+                rows = self.pixels(points)
+                self.assertTrue(any(bytes((43, 109, 190)) in row for row in rows[20:386]))
+        for value in (math.inf, -math.inf, math.nan):
+            with self.assertRaises(ValueError):
+                _pca_png([[value, 0]])
 
 
 if __name__ == '__main__':
