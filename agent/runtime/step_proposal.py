@@ -65,13 +65,8 @@ def _baseline(settings, attempt):
 
 
 def _reference_path(key, config):
-    """The file in use for one reference on HPC3: the researcher's chosen file, else the download."""
-    from agent.runtime import hpc_files
-    try:
-        chosen = hpc_files.selected().get('selected', {}).get(key)
-    except (OSError, ValueError, AttributeError):
-        chosen = None
-    return chosen or config['root'] + '/' + REFERENCE_FILES[key]
+    """Default for legacy confirmation cards; dataset-owned paths use the dataset review."""
+    return config['root'] + '/' + REFERENCE_FILES[key]
 
 
 def clinical_note(review):

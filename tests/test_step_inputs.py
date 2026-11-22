@@ -81,13 +81,11 @@ class StepInputsTest(unittest.TestCase):
                 found = step_inputs.gtf_problem(str(self.dir / name))
                 self.assertIsNone(found) if problem is None else self.assertIn(problem, found)
 
-    def test_cards_start_from_the_chosen_file_else_the_download(self):
+    def test_legacy_cards_use_environment_defaults_without_global_file_selection(self):
         config = {'root': '/pub/u/signet-agent'}
-        with patch('agent.runtime.hpc_files.selected', return_value={'status': 'ok', 'selected': {'clinical': '/dfs7/lab/c.tsv'}}):
-            self.assertEqual(step_proposal._reference_path('clinical', config), '/dfs7/lab/c.tsv')
-            self.assertEqual(step_proposal._reference_path('gtf', config), '/pub/u/signet-agent/refdata/gencode.v22.genes.gtf')
-        with patch('agent.runtime.hpc_files.selected', return_value={'status': 'unavailable'}):
+        with patch('agent.runtime.ssh_transport.remote', side_effect=AssertionError('No global selection lookup')):
             self.assertEqual(step_proposal._reference_path('clinical', config), '/pub/u/signet-agent/refdata/clinical.tsv')
+            self.assertEqual(step_proposal._reference_path('gtf', config), '/pub/u/signet-agent/refdata/gencode.v22.genes.gtf')
 
 
 if __name__ == '__main__':
