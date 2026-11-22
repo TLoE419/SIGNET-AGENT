@@ -186,6 +186,39 @@ def submit_adjust_example(handler, url, run_id):
     return 202, workspace_genotype.submit_adjust(run_id, **_body(handler, fields, required=fields))
 
 
+def review_cis_example(handler, url, run_id):
+    _query(url, ())
+    return 200, workspace_genotype.review_cis(run_id)
+
+
+def submit_cis_example(handler, url, run_id):
+    _query(url, ())
+    fields = ('inputs', 'settings', 'resources')
+    return 202, workspace_genotype.submit_cis(run_id, **_body(handler, fields, required=fields))
+
+
+def review_network_example(handler, url, run_id):
+    _query(url, ())
+    return 200, workspace_genotype.review_network(run_id)
+
+
+def submit_network_example(handler, url, run_id):
+    _query(url, ())
+    fields = ('inputs', 'settings', 'resources')
+    return 202, workspace_genotype.submit_network(run_id, **_body(handler, fields, required=fields))
+
+
+def review_visualize_example(handler, url, run_id):
+    query = _query(url, ('freq', 'ntop'))
+    return 200, workspace_genotype.review_visualize(run_id, query.get('freq'), query.get('ntop'))
+
+
+def submit_visualize_example(handler, url, run_id):
+    _query(url, ())
+    fields = ('inputs', 'settings', 'resources')
+    return 202, workspace_genotype.submit_visualize(run_id, **_body(handler, fields, required=fields))
+
+
 # ---------- runs (local; includes signet -s) ----------
 
 def _runs(session):
@@ -642,6 +675,12 @@ ROUTES = [
      {'GET': review_expression_example, 'POST': submit_expression_example}),
     (re.compile(rf'/signet/runs/{_RUN}/adjust/example'),
      {'GET': review_adjust_example, 'POST': submit_adjust_example}),
+    (re.compile(rf'/signet/runs/{_RUN}/cis/example'),
+     {'GET': review_cis_example, 'POST': submit_cis_example}),
+    (re.compile(rf'/signet/runs/{_RUN}/network/example'),
+     {'GET': review_network_example, 'POST': submit_network_example}),
+    (re.compile(rf'/signet/runs/{_RUN}/visualize/example'),
+     {'GET': review_visualize_example, 'POST': submit_visualize_example}),
     (re.compile(r'/signet/runs'), {'GET': list_runs, 'POST': create_run}),
     (re.compile(r'/signet/analyses'), {'POST': start_analysis}),
     (re.compile(rf'/signet/runs/{_RUN}'), {'GET': get_run}),

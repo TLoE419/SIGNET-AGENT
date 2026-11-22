@@ -111,7 +111,8 @@ def project(request):
                          'variance_explained': saved_pca['variance_explained'],
                          'source': 'signet_smartpca'}
     else:
-        result = {'summary': namespace[request['reader_entry']](root)}
+        arguments = (root, request['job']) if stage == 4 else (root,)
+        result = {'summary': namespace[request['reader_entry']](*arguments)}
     for relative, original in identities.items():
         current = regular(root / relative, control=not relative.startswith('work/'))
         if not current.is_file():

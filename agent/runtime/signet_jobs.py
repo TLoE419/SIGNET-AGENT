@@ -244,12 +244,13 @@ STEPS = {
                     'data; SIGNET submits its own Slurm jobs, this step drives and follows them.'),
     'visualize': Step(
         flag='-v', cohort='TCGA', inputs=(),
-        settings={'freq': 'alpha', 'ntop': 'subnetworks'},
+        settings={'freq': 'frequency', 'ntop': 'subnetworks'},
         requires=('network',),
         links={'Afreq': 'res/resn/signet_Afreq', 'coef': 'res/resn/signet_CoeffMat0',
                'vis.genepos': 'res/resn/signet_net.genepos'},
         needs=('res/resn/signet_Afreq', 'res/resn/signet_CoeffMat0', 'res/resn/signet_net.genepos'),
-        required=('res/resv/signet-edges.csv', 'res/resv/signet_count_vs_freq.pdf'),
+        required=('res/resv/signet-edges.csv', 'res/resv/signet_edgelist_{freq}.txt',
+                  'res/resv/signet_count_vs_freq.pdf', 'res/resv/signet_count_vs_freq.eps'),
         download='work/res/resv',
         resources={'cpus': 2, 'mem_gb': 16, 'hours': 2},
         limits={'cpus': (1, 8), 'mem_gb': (1, 64), 'hours': (0.25, 12)},
@@ -528,6 +529,14 @@ def _setting(key, rule, value):
         if number and 0 <= value <= 1:
             return str(value)
         raise StepError('invalid_request', f'{key} must be a number from 0 to 1.')
+    if rule == 'frequency':
+        if number and 0 <= value <= 1:
+            return format(value, '.15g')
+        raise StepError('invalid_request', f'{key} must be a number from 0 to 1.')
+    if rule == 'subnetworks':
+        if isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 100:
+            return str(value)
+        raise StepError('invalid_request', f'{key} must be a whole number from 1 to 100.')
     if rule == 'interval':   # IMPUTE2 chunk length in base pairs
         if isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 100_000_000:
             return str(value)
@@ -909,6 +918,7 @@ stopifnot(all(file.exists(expected)), all(file.info(expected)$size > 0))
 edges <- paste0(prefix, "_edgelist_", frequency, ".txt")
 stopifnot(file.exists(edges), file.info(edges)$size > 0)
 stopifnot(file.copy(edges, file.path(dirname(prefix), "signet-edges.csv")))
+cat("SIGNET_STAGE6_EXPORTS_COMPLETED\n")
 SIGNET_EXPORT_CHECK
 """ + run
     after = ''
@@ -1108,6 +1118,12 @@ def submit(run_id, name, inputs, resources=None, options=None, *, settings_overr
         settings = signet._settings(root)
         if any('{' in path for path in step.required):
             record['required_outputs'] = [_resolve(path, settings) for path in step.required]
+        if name == 'visualize':
+            record.setdefault('required_outputs', [_resolve(path, settings) for path in step.required])
+            for number in range(1, int(settings['ntop']) + 1):
+                prefix = f'res/resv/signet_top{number}_freq{settings["freq"]}'
+                record['required_outputs'].extend((prefix + '.html', prefix + '_name.txt',
+                    f'res/resv/signet_circular_top{number}_freq{settings["freq"]}.pdf'))
         record['settings'] = {key: settings[key] for key in step.settings}
         if previous:
             # A refused submission has no job of its own; retain the last real ID across it.
@@ -1251,6 +1267,8 @@ def _status_script(record, step):
     orphans = (f'if [ -n "$j" ] && [ -z "$(squeue -h -j "$j" -o %T 2>/dev/null)" ]; then\n{_children_script(step)}fi\n'
                if step.children else '')
     queue_check = _queue_check(record) if record.get('cancel_requested_at') or step.children else ''
+    export_check = ('grep -Fxq SIGNET_STAGE6_EXPORTS_COMPLETED "$D/steps/visualize.out" 2>/dev/null '
+                    '&& say exports_completed yes\n') if name == 'visualize' else ''
     return _say() + f'''D={q(directory)}
 j={q(job) if job else '"$(head -n 1 "$D/steps/' + name + '.job" 2>/dev/null)"'}
 # No ID recorded (connection lost around sbatch): look for this step's own job name, ours only.
@@ -1265,7 +1283,7 @@ if [ -n "$j" ]; then
 fi
 [ -f "$D/steps/{name}.done" ] && say done "$(head -n 1 "$D/steps/{name}.done")"
 {outputs}cat "$D/steps/{name}.out" "$D/steps/{name}.err" 2>/dev/null | grep -E -m 20 {q(pattern)} | while IFS= read -r l; do say line "$l"; done
-{progress}{orphans}{queue_check}true
+{progress}{orphans}{queue_check}{export_check}true
 '''
 
 
@@ -1334,6 +1352,8 @@ def status(run_id, name, refresh=False):
         _change(record, 'failed', finished_at=_now(), missing_outputs=missing, failure_hints=hints,
                 reason=f'Slurm ended the job with {slurm}.')
     elif slurm == 'COMPLETED' or 'done' in values:
+        if record['step'] == 'visualize' and values.get('exports_completed') != 'yes':
+            hints = [*hints, 'The official Stage 6 export completion marker is missing.']
         _finish(root, record, step, values.get('done', ''), missing, hints)
     elif not record.get('job_id'):
         # Empty lookups can mean scheduler failure or accounting delay, not an unsubmitted job.

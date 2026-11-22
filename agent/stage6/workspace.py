@@ -19,7 +19,7 @@ def graph(root, settings):
     return _read_graph(path, int(settings['ntop']))
 
 
-def _read_graph(path, top_networks):
+def _read_graph(path, top_networks, selected_groups=None):
     edges = []
     with st._no_links(path).open() as stream:
         for row in csv.DictReader(stream):
@@ -46,11 +46,76 @@ def _read_graph(path, top_networks):
         seen.update(group)
         groups.append(group)
     groups.sort(key=lambda group: (-sum(e['source'] in group for e in edges), sorted(group)))
-    selected = set().union(*groups[:top_networks]) if groups else set()
+    if selected_groups is None:
+        selected = set().union(*groups[:top_networks]) if groups else set()
+    else:
+        if (len(selected_groups) != top_networks
+                or len({frozenset(group) for group in selected_groups}) != top_networks
+                or any(group not in groups for group in selected_groups)):
+            raise ValueError('The exported subnetworks do not match the completed network.')
+        expected_sizes = [sum(edge['source'] in group for edge in edges) for group in groups[:top_networks]]
+        selected_sizes = [sum(edge['source'] in group for edge in edges) for group in selected_groups]
+        if selected_sizes != expected_sizes:
+            raise ValueError('The exported subnetworks are not the requested largest components.')
+        selected = set().union(*selected_groups)
     return {'nodes': sorted(neighbors), 'edges': edges,
             'display_nodes': sorted(selected),
             'counts': {'connections': len(edges), 'genes': len(neighbors), 'subnetworks': len(groups),
                        'displayed': min(top_networks, len(groups))}}
+
+
+def live_completed_result(run_id):
+    """Read the exports and submitted settings of this workspace run's remote Stage 6 job."""
+    root = st._run(run_id)
+    snapshot = json.loads(st._no_links(root / workspace_genotype.VISUALIZE_SNAPSHOT).read_text(encoding='utf-8'))
+    job = json.loads(st._no_links(root / 'steps/visualize.json').read_text(encoding='utf-8'))
+    if (snapshot['run_id'] != run_id or snapshot['dataset_id'] != workspace_genotype.DATASET_ID
+            or job.get('run_id') != run_id or job.get('step') != 'visualize' or job.get('state') != 'completed'):
+        raise ValueError('Select a completed Stage 6 job belonging to this workspace run.')
+    settings = job['settings']
+    if any(str(snapshot['settings'][key]) != str(settings[key]) for key in ('freq', 'ntop')):
+        raise ValueError('The Stage 6 settings do not match the confirmed job.')
+    if (any(isinstance(settings[key], bool) for key in ('freq', 'ntop'))
+            or not isinstance(settings['ntop'], (int, str))):
+        raise ValueError('The saved Stage 6 settings are invalid.')
+    frequency = float(settings['freq'])
+    top_networks = int(settings['ntop'])
+    st._number(frequency, 0, 1)
+    st._number(top_networks, 1, 100, integer=True)
+    label = format(frequency, '.15g')
+    folder = root / 'work/res/resv'
+    edge_file = f'res/resv/signet_edgelist_{label}.txt'
+    names = [f'res/resv/signet_top{index}_freq{label}_name.txt' for index in range(1, top_networks + 1)]
+    required = job['required_outputs']
+    if (not isinstance(required, list) or any(path not in required for path in [edge_file, *names])):
+        raise ValueError('The completed Stage 6 outputs do not match its submitted settings.')
+    for relative in required:
+        if not isinstance(relative, str):
+            raise ValueError('Invalid completed Stage 6 output path.')
+        path = st._no_links(root / 'work' / relative)
+        if not path.resolve().is_relative_to(folder.resolve()) or not path.is_file() or not path.stat().st_size:
+            raise ValueError('A completed Stage 6 export is missing or outside this run.')
+    selected_groups = []
+    for relative in names:
+        with st._no_links(root / 'work' / relative).open(encoding='utf-8') as stream:
+            selected = [line.strip() for line in stream if line.strip()]
+        if not selected or len(set(selected)) != len(selected):
+            raise ValueError('The exported Stage 6 subnetwork names are invalid.')
+        selected_groups.append(set(selected))
+    try:
+        result = _read_graph(root / 'work' / edge_file, top_networks, selected_groups)
+    except csv.Error as error:
+        raise ValueError('The saved Stage 6 edge list is not readable CSV.') from error
+    seen = set()
+    for edge in result['edges']:
+        identity = edge['source'], edge['target']
+        if (not 0 <= edge['frequency'] <= 1 or edge['frequency'] < frequency - 2.220446049250313e-16
+                or any(len(edge[key]) > 240 or '\x00' in edge[key] for key in ('source', 'target'))
+                or identity in seen):
+            raise ValueError('The exported Stage 6 edges do not match the submitted threshold.')
+        seen.add(identity)
+    return {'run_id': run_id, 'frequency': frequency, 'top_networks': top_networks,
+            'status': 'completed', 'source': 'live', 'job': job, 'graph': result}
 
 
 def load_run(run_id):
@@ -238,6 +303,13 @@ class Workspace:
 
     def completed_runs(self):
         runs = {result['run_id']: result for result in self.available()}
+        for path in sorted((st.PROJECT / 'runs').glob(f'*/{workspace_genotype.VISUALIZE_SNAPSHOT}')):
+            try:
+                result = live_completed_result(path.parent.name)
+                runs[path.parent.name] = {key: result[key] for key in
+                                          ('run_id', 'frequency', 'top_networks', 'status', 'source')}
+            except (OSError, ValueError, KeyError, TypeError, csv.Error):
+                continue
         for path in sorted(_archive_directory().glob('*/verification.json')):
             run_id = path.parent.name
             if run_id in runs:
@@ -248,8 +320,17 @@ class Workspace:
                 continue
         return list(runs.values())
 
-    def completed_result(self, run_id, *, archive_only=False):
+    def completed_result(self, run_id, *, archive_only=False, live_only=False):
+        if archive_only and live_only:
+            raise ValueError('Select one completed-result source.')
         if not archive_only:
+            try:
+                result = live_completed_result(run_id)
+            except (OSError, ValueError, KeyError, TypeError, csv.Error):
+                if live_only:
+                    raise ValueError('No readable completed workspace Stage 6 result.')
+            else:
+                return result
             try:
                 root, settings, record = load_run(run_id)
             except (OSError, ValueError, KeyError, TypeError):

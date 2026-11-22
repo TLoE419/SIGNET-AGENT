@@ -10,7 +10,7 @@ import shlex
 from agent.runtime import signet_jobs as jobs, ssh_transport
 import agent.tools.signet as signet
 
-STEPS = {1: 'genotype', 2: 'expression', 3: 'adjust'}
+STEPS = {1: 'genotype', 2: 'expression', 3: 'adjust', 4: 'cis'}
 MAX_BYTES = 32 * 1024 * 1024
 
 
@@ -19,10 +19,14 @@ def _reader(stage):
         path = Path(__file__).with_name('workspace_genotype.py')
         entry = 'genotype_summary' if stage == 1 else 'expression_summary'
         wanted = [entry]
-    else:
+    elif stage == 3:
         path = Path(__file__).with_name('workspace_adjustment.py')
         entry = '_local_completed_result'
         wanted = ['_lines', '_matrix', '_clinical', '_pca', '_median_sd', '_genotype_width', entry]
+    else:
+        path = Path(__file__).with_name('workspace_cis.py')
+        entry = 'summary'
+        wanted = ['_matrix_shape', entry]
     source = path.read_text(encoding='utf-8')
     nodes = {node.name: node for node in ast.parse(source).body if isinstance(node, ast.FunctionDef)}
     lines = source.splitlines(keepends=True)
@@ -97,15 +101,33 @@ def _validate(value, run_id, stage, record):
         if sum(item['count'] for item in summary['histogram']) != summary['samples'] * summary['genes']:
             raise ValueError('The remote histogram does not account for the expression values.')
 
+    else:
+        categories = {'common', 'low', 'rare'}
+        if (set(summary) != {'genes', 'counts', 'pairs'} or not _number(summary['genes'], True)
+                or not isinstance(summary['counts'], dict) or set(summary['counts']) != categories
+                or not all(_number(number, True) for number in summary['counts'].values())
+                or not isinstance(summary['pairs'], list)):
+            raise ValueError('The remote cis-eQTL summary is invalid.')
+        counts = dict.fromkeys(categories, 0)
+        for item in summary['pairs']:
+            if (not isinstance(item, dict) or set(item) != {'gene', 'variant', 'category', 'p_value'}
+                    or not isinstance(item['gene'], str) or not 1 <= len(item['gene']) <= 240
+                    or not isinstance(item['variant'], str) or not re.fullmatch(r'[0-9]+', item['variant'])
+                    or item['category'] not in categories or not _number(item['p_value']) or item['p_value'] > 1):
+                raise ValueError('The remote cis-eQTL association is invalid.')
+            counts[item['category']] += 1
+        if counts != summary['counts']:
+            raise ValueError('The remote cis-eQTL counts do not match the associations.')
+
 
 def completed_result(run_id, stage):
-    if str(stage) not in ('1', '2', '3') or type(stage) is bool:
-        raise ValueError('Choose a completed workspace stage from 1 to 3.')
+    if str(stage) not in ('1', '2', '3', '4') or type(stage) is bool:
+        raise ValueError('Choose a completed workspace stage from 1 to 4.')
     stage = int(stage)
     root = signet._run(run_id)
     snapshot_names = ['workspace-genotype.json']
     if stage > 1:
-        snapshot_names.append('workspace-expression.json' if stage == 2 else 'workspace-adjust.json')
+        snapshot_names.append({2: 'workspace-expression.json', 3: 'workspace-adjust.json', 4: 'workspace-cis.json'}[stage])
     snapshots = {}
     for name in snapshot_names:
         path = signet._no_links(root / name)

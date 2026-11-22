@@ -43,8 +43,8 @@ archived expression comparison. Stage 4 shows significant association pairs,
 and Stage 5 shows candidate edges grouped by their recorded bootstrap frequency.
 Stage 6 opens the network and edge table, with a filter for the selected gene.
 Each stage uses the settings preserved with its job. The Stage 6 selector in
-**Analysis** also follows the selected dataset. The previews for Stages 4–5
-in **Analysis** still use simulated data.
+**Analysis** also follows the selected dataset. Stages 1–6 can be submitted
+manually for the chromosome 1 example.
 
 ### Submit the chromosome 1 example
 
@@ -78,6 +78,42 @@ run folder. Counts, expression comparison statistics and a raster PCA plot are
 computed there. Individual matrices, clinical rows, sample identifiers and PCA
 coordinates remain on HPC3; only approved summaries and the plot reach this
 workspace. Historical locally supplied archives remain read-only.
+
+After Stage 3 completes, open **Stage 4** of the same run. Its review keeps the
+significance threshold, range before the gene start and after the gene end,
+permutation count and scheduler resources visible. The values come from that
+run's current configuration. **Check prior results** checks all six preceding
+output files without creating a job. **Submit Stage 4** submits the reviewed
+values through the existing cis-eQTL workflow and tracks its queue and progress.
+The saved result lists all associations, with the submitted settings, category
+counts, gene names, category-local variant or region indices, and p-values.
+
+After Stage 4 completes, **Stage 5** reviews the bootstrap count, the correlation
+limit for selecting instrumental variants, and each compute job's cores, memory
+and time limit. Its controller has separate resources and stays active while
+the model jobs run. Existing valid settings are retained. Unsupported upstream
+resource defaults are replaced in the review with explicit proposals, which are
+saved only when **Submit Stage 5** is selected.
+
+The existing network workflow submits its own model jobs and reports completed
+work items for each of its two calculation batches. Reopening an active run
+resumes status tracking. Saved results read the actual normalized bootstrap
+frequency matrix and preserve the official direction from source columns to
+target rows, including every positive candidate. Stage 5 uses the significance
+file from the completed Stage 4 job even if the run's current threshold changes.
+
+When Stage 5 completes, **Stage 6** reviews the frequency threshold and number
+of subnetworks against that run's collected matrices. **Check network and
+thresholds** checks the selected values without submitting. **Submit Stage 6**
+runs the original SIGNET exports on HPC3 in the same run, with queue and
+execution progress. The confirmed settings and original edge list, subnetwork
+names, interactive graph and plot files are saved with the job.
+
+The completed Stage 6 history view opens the existing graph and edge table.
+Both follow the actual exported subnetworks. Selecting **MEGF6**, or another
+gene in the graph, filters the table to that gene's incident edges. Returning
+from another stage restores the selection for the same run. Archived graphs
+remain available in the completed-result selector.
 
 The local installation needs the audited SIGNET source, as described under
 [user guide](../docs/USER_GUIDE.md). The existing desktop SSH environment
