@@ -100,6 +100,9 @@ function progress(turn, text) {
 }
 async function send(text) {
   if (busy || !text.trim()) return;
+  const selection = {context: null};
+  window.dispatchEvent(new CustomEvent('workspace-context-request', {detail: selection}));
+  const workspace_context = selection.context;
   busy = true;
   window.dispatchEvent(new Event('chat-busy'));
   $('send').disabled = true;
@@ -118,7 +121,7 @@ async function send(text) {
   const interval = setInterval(() => {uiText(turn.timer, `${Math.floor((performance.now()-turn.started)/1000)} 秒`);}, 250);
   let done = false, failed = false;
   try {
-    const response = await fetch('/chat', {method:'POST', headers:{'Content-Type':'application/json','X-Chat-Token':document.querySelector('meta[name="chat-token"]').content},body:JSON.stringify({text,session,language:uiLanguage})});
+    const response = await fetch('/chat', {method:'POST', headers:{'Content-Type':'application/json','X-Chat-Token':document.querySelector('meta[name="chat-token"]').content},body:JSON.stringify({text,session,language:uiLanguage,workspace_context})});
     if (!response.ok) {
       const error = await response.json();
       throw new Error(error.error || '本機服務拒絕請求。');
@@ -140,8 +143,8 @@ async function send(text) {
           answer.parentElement.classList.add('error');
         }
       }
-      if (event.type === 'error') {failed = true; uiText(answer, event.text); answer.parentElement.classList.add('error');}
-      if (event.type === 'done') {done = true; history.replaceState(null, '', location.pathname + '?session=' + session); card(turn,'本回合已結束','end').append(node('div','step-line',event.text));}
+      if (event.type === 'error') {failed = true; uiText(answer, answer.textContent + '\n\n' + event.text); answer.parentElement.classList.add('error');}
+      if (event.type === 'done') {failed = failed || ['failed', 'needs_review', 'cancelled'].includes(event.status); turn.root.dataset.status = event.status || (failed ? 'needs_review' : 'completed'); done = true; history.replaceState(null, '', location.pathname + '?session=' + session); card(turn,failed ? '需要確認' : '本回合已結束',failed ? 'error' : 'end').append(node('div','step-line',event.text));}
     }
     while (true) {
       const part = await reader.read();

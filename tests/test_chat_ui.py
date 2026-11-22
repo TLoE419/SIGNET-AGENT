@@ -45,6 +45,24 @@ class ChatUITest(unittest.TestCase):
         return self.request('/chat', {'text': text, 'session': session or self.session}, headers or {
             'Origin': self.origin, 'X-Chat-Token': self.server.token})
 
+    def test_workspace_context_validated_before_agent(self):
+        catalog = {'datasets': [{'id': 'cohort-a'}], 'runs': [
+            {'history_id': 'archive--same', 'source': 'archive', 'run_id': 'same', 'dataset_id': 'cohort-a'}]}
+        context = dict(version=1, dataset_id='cohort-a', history_id='archive--same', stage=6, selected_genes=['MEGF6'])
+        payload = {'text': 'Which run?', 'session': self.session, 'workspace_context': context}
+        headers = {'Origin': self.origin, 'X-Chat-Token': self.server.token}
+        with patch.object(self.server.stage6, 'history', return_value=catalog), patch.object(chat_ui, 'run_conversation', return_value='Selected archive') as run:
+            status, body = self.request('/chat', payload, headers)
+            self.assertEqual(status, 200)
+            self.assertEqual(run.call_args.kwargs['workspace_context'], dict(context, source='archive', run_id='same'))
+            context['history_id'] = 'workspace--same'
+            run.reset_mock()
+            self.assertEqual(self.request('/chat', payload, headers)[0], 400)
+            run.assert_not_called()
+            payload.pop('workspace_context')
+            self.assertEqual(self.request('/chat', payload, headers)[0], 200)
+            self.assertIsNone(run.call_args.kwargs['workspace_context'])
+
     def test_assets_and_no_arbitrary_file_access(self):
         status, html = self.request()
         self.assertEqual(status, 200)
@@ -88,6 +106,40 @@ class ChatUITest(unittest.TestCase):
         self.post('另一個研究', 'abcdefab-1234-1234-1234-123456789abc')
         self.assertEqual(len(self.requests[1]), 1)
         self.assertEqual(self.requests[1][0].parts[0].text, '另一個研究')
+
+    def test_public_failure_answer_and_outcome_survive_saved_reload(self):
+        self.client, _ = client_for(RuntimeError('PRIVATE-FAILURE'))
+        with tempfile.TemporaryDirectory() as directory:
+            self.server.state_file = Path(directory) / 'chat.json'
+            status, body = self.post('Inspect the saved result')
+            self.assertEqual(status, 200)
+            events = [json.loads(line) for line in body.splitlines()]
+            answer = next(event['text'] for event in events if event['type'] == 'answer')
+            self.assertEqual(events[-1]['status'], 'failed')
+            self.assertIn('模型請求失敗', answer)
+            restored = chat_ui.ChatServer(('127.0.0.1', 0), self.server.client_factory, state_file=self.server.state_file)
+            try:
+                self.assertEqual(restored.visible_messages(self.session)[-1], {'role': 'assistant', 'text': answer})
+                self.assertIn('SIGNET_TURN {"status": "failed"}', restored.events[self.session][0])
+                self.assertNotIn('PRIVATE-FAILURE', self.server.state_file.read_text())
+            finally:
+                restored.server_close()
+
+    def test_workspace_proposal_streams_one_validated_action_and_needs_review(self):
+        from agent.tools import workspace as tools
+        self.client, _ = client_for(response(calls=[types.FunctionCall(name='propose_workspace_stage', args={'run_id': 'fixture', 'stage': 2})]), response('Review the manual form.'))
+        state = {'job': {'job_id': '42', 'attempt': 1}, 'history_id': 'workspace--fixture', 'stage': 2}
+        with patch.object(tools, 'get_workspace_stage', return_value=state), \
+                patch.object(tools.workspace, 'review_expression', return_value={'ready': True}), \
+                patch.object(self.server.stage6, 'history', return_value={'runs': [{'history_id': 'workspace--fixture'}]}), \
+                patch.object(tools.jobs, 'submit') as submit:
+            status, body = self.post('Review the next stage')
+        events = [json.loads(line) for line in body.splitlines()]
+        self.assertEqual(status, 200)
+        self.assertEqual([event['text'] for event in events if event['type'] == 'workspace_action'],
+                         [{'version': 1, 'action': 'view_stage', 'history_id': 'workspace--fixture', 'stage': 2}])
+        self.assertEqual(events[-1]['status'], 'needs_review')
+        submit.assert_not_called()
 
     def test_language_selection_is_validated_and_forwarded_without_changing_history(self):
         payload = {'text': '原本的問題', 'session': self.session, 'language': 'zh-Hant'}
@@ -254,7 +306,7 @@ class ChatUITest(unittest.TestCase):
         release = threading.Event()
         finished = threading.Event()
 
-        def run(client, text, history, progress, http_timing, language, context=''):
+        def run(client, text, history, progress, http_timing, language, context='', workspace_context=None):
             self.assertEqual(language, 'en')
             progress('工具正在執行')
             release.wait(3)

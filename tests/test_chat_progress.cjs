@@ -49,6 +49,7 @@ function setup(initial={}, analysisApi) {
   const find=selector=>selector.startsWith('#')?ids.get(selector.slice(1)):all.find(el=>el.className.split(' ').includes(selector.slice(1)));
   let finish, calls=0;
   const gate=new Promise(resolve=>finish=resolve);
+  const requests=[];
   const events={};const storage=new Map();const navigation=[];
   const timers=new Map();let nextTimer=0, now=0;
   const timersApi=analysisApi ? {
@@ -67,7 +68,7 @@ function setup(initial={}, analysisApi) {
     setInterval(){return 1;},clearInterval(){},...timersApi,AbortController,translateUI:text=>text,
     fetch:async (path, options)=>{
       if(path.startsWith('/signet/'))return analysisApi(path, options);
-      calls++;
+      calls++;requests.push(JSON.parse(options.body));
       if(context.failRequest)return {ok:false,json:async()=>({error:'Controlled service failure'})};
       let read=0;
       const chunk=items=>({done:false,value:Buffer.from(items.map(item=>JSON.stringify(item)+'\n').join(''))});
@@ -98,13 +99,15 @@ function setup(initial={}, analysisApi) {
     }
     return true;
   }
-  return {context,ids,events,visible,finish,navigation,tick,timers,calls:()=>calls};
+  return {requests,context,ids,events,visible,finish,navigation,tick,timers,calls:()=>calls};
 }
 
 (async()=>{
   const app=setup({sessions:[{session:'saved',title:'Saved'}]});await new Promise(setImmediate);
+  app.events['workspace-context-request']=event=>{event.detail.context={version:1,dataset_id:'cohort-a',history_id:'archive--same',stage:6,selected_genes:['A']};};
   const pending=vm.runInContext('send("Describe the tools without running analysis.")',app.context);
   await new Promise(setImmediate);
+  assert.equal(app.requests[0].workspace_context.history_id,'archive--same');
   const savedLink=app.ids.get('chat-list').children[0];
   assert.equal(savedLink.disabled,true);
   savedLink.events.click();
@@ -125,6 +128,10 @@ function setup(initial={}, analysisApi) {
   app.ids.get('chat-progress').open=true;
   assert.match(app.ids.get('activity').textContent,/signet_catalog/);
   assert.equal(app.calls(),1,'view changes must not repeat the request');
+
+  app.events['workspace-context-request']=event=>{event.detail.context=null;};
+  await vm.runInContext('send("After changing chats and workspace")',app.context);
+  assert.equal(app.requests[1].workspace_context,null,'next send must not reuse prior selection');
 
   const restored=setup({session:'saved-session',sessions:[{session:'saved-session',title:'Saved question'},{session:'other-session',title:'<script>literal title</script>'}],messages:[{role:'assistant',text:'Saved answer'}],events:[['Saved tool result']]});
   await new Promise(setImmediate);

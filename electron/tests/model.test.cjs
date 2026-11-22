@@ -90,3 +90,20 @@ test('controller saves only verified keys, then switches to Gemini after replyin
   try{await controller.saveGeminiKey(KEY);await tick();await tick();await assert.rejects(controller.status(),{code:'SWITCH_FAILED'});assert.equal(controller.switching,false)}
   finally{await rm(directory,{recursive:true,force:true})}
  });
+
+test('failed replacement retains the encrypted saved key and does not switch model', async () => {
+ const {directory, store} = await tempStore();
+ try {
+  await store.save(KEY);
+  const original = await readFile(store.file);
+  let switched = false;
+  const controller = new ModelController({store, getProvider: () => 'gemini',
+   verify: async () => {throw Object.assign(Error('rejected'), {code: 'KEY_REJECTED'});},
+   switchProvider: () => {switched = true;}});
+  await assert.rejects(controller.saveGeminiKey('AIza' + 'z'.repeat(35)), {code: 'KEY_REJECTED'});
+  await tick();
+  assert.deepEqual(await readFile(store.file), original);
+  assert.equal(switched, false);
+  assert.equal((await controller.status()).provider, 'gemini');
+ } finally {await rm(directory, {recursive: true, force: true});}
+});

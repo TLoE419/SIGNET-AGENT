@@ -229,6 +229,9 @@ def signet_catalog() -> dict:
             'signet_tools': len(SIGNET_TOOLS), 'all_tools_including_list_files': len(ALL_TOOLS),
             'general_tools': [fn.__name__ for fn in GENERAL_TOOLS], 'hpc_tools': [fn.__name__ for fn in HPC_TOOLS],
             'scripts': INVENTORY['scripts'],
+            'workspace_execution': {'status_tool': 'get_workspace_stage', 'proposal_tool': 'propose_workspace_stage',
+                                    'new_dataset_tool': 'propose_workspace_dataset',
+                                    'confirmation': 'Execution requires explicit confirmation in a review form or chat card.'},
             'hpc3_setup': HPC3_SETUP, 'analysis_stages': ANALYSIS_STAGES, 'resources': RESOURCE_NOTE, 'scope': SCOPE,
             'note': 'Preparation is not execution. No scientific success is inferred from exit code alone.'}
 
@@ -344,8 +347,18 @@ SIGNET_TOOLS = [signet_catalog, configure_signet, propose_hpc3_genotype, get_ste
 def dispatch_tool(name, arguments):
     """Validate the model's tool name, keyword arguments and primitive types before dispatch."""
     from agent.tools.registry import ALL_TOOLS
+    from agent.runtime.signet_jobs import StepError
     functions = {fn.__name__:fn for fn in ALL_TOOLS}
     try:
+        from agent.tools.workspace import LEGACY_EXECUTION
+        if name == 'get_network_status':
+            from agent.tools.workspace import get_workspace_stage
+            if not isinstance(arguments, dict) or set(arguments) != {'run_id'}:
+                raise ValueError('Provide an explicit run_id.')
+            return get_workspace_stage(arguments['run_id'], 5)
+        if name in LEGACY_EXECUTION:
+            return {'status': 'needs_review', 'executed': False,
+                    'reason': 'Use propose_workspace_stage with an explicit live run and stage. Scientific execution requires the manual review form and confirmation.'}
         if name not in functions or not isinstance(arguments, dict):
             raise ValueError('Unsupported tool or argument object.')
         fn = functions[name]
@@ -366,5 +379,5 @@ def dispatch_tool(name, arguments):
                 raise ValueError('The folder must be this project directory.')
             return {'files':fn(**arguments)}
         return fn(**arguments)
-    except (ValueError,TypeError,OSError) as exc:
+    except (ValueError,TypeError,OSError,StepError) as exc:
         return {'status':'invalid','executed':False,'error':str(exc)}
