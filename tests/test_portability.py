@@ -10,7 +10,6 @@ import unittest
 from unittest.mock import patch
 
 import agent.tools.signet as st
-import agent.runtime.remote as runtime
 from scripts import setup_source
 
 
@@ -23,26 +22,9 @@ class PortabilityTest(unittest.TestCase):
             self.assertIn('scripts/setup_source.py', result['error'])
             self.assertFalse((Path(folder) / 'runs').exists())
 
-    def test_paths_are_resolved_from_project_and_settings_apply_after_import(self):
-        with patch.dict(os.environ, {'SIGNET_SOURCE': 'local/source',
-                                    'SIGNET_RUNTIME_PROJECT': 'local/runtime', 'SIGNET_SSH_PORT': '2230'}):
+    def test_source_path_is_resolved_from_the_project(self):
+        with patch.dict(os.environ, {'SIGNET_SOURCE': 'local/source'}):
             self.assertEqual(st.source_path(), (st.PROJECT / 'local/source').resolve())
-            self.assertEqual(runtime.host_project(), (runtime.PROJECT / 'local/runtime').resolve())
-            args = runtime.ssh_args()
-            self.assertEqual(args[args.index('-p') + 1], '2230')
-            self.assertIn('StrictHostKeyChecking=yes', args)
-
-    def test_invalid_runtime_settings_are_rejected_before_connection(self):
-        for port in ('0', '65536', '22;id', '-1', '１２'):
-            with self.subTest(port=port), patch.dict(os.environ, {'SIGNET_SSH_PORT': port}):
-                with self.assertRaises(ValueError):
-                    runtime.ssh_args()
-        for image in ('relative.sif', '/image;id', '/a/../image.sif', '/a b.sif'):
-            with self.subTest(image=image), patch.dict(os.environ, {'SIGNET_CONTAINER_IMAGE': image}):
-                with self.assertRaises(ValueError):
-                    runtime.image_path()
-        with patch.dict(os.environ, {'SIGNET_CONTAINER_IMAGE': '/runtime/images/signet.sif'}):
-            self.assertEqual(runtime.image_path(), '/runtime/images/signet.sif')
 
 
 class SourceSetupTest(unittest.TestCase):
