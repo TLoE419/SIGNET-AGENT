@@ -20,6 +20,7 @@ CIS_SNAPSHOT = 'workspace-cis.json'
 NETWORK_SNAPSHOT = 'workspace-network.json'
 VISUALIZE_SNAPSHOT = 'workspace-visualize.json'
 _CLINICAL_REVIEW = (Path(__file__).with_name('jobs') / 'review_clinical.py').read_text()
+_RETRY_SOURCES = (Path(__file__).with_name('jobs') / 'review_retry_sources.py').read_text()
 DEFAULT_SETTINGS = {'restrict.tcga.geno': 1, 'mind': 0.1, 'geno': 0.1, 'hwe': 0.0001, 'int': 5000000}
 
 
@@ -111,11 +112,171 @@ def _workspace_run(run_id):
 
 
 def _initial(root):
-    return json.loads(signet._no_links(root / SNAPSHOT).read_text())
+    from agent.runtime.workspace_inputs import effective_snapshot
+    return effective_snapshot(root, json.loads(signet._no_links(root / SNAPSHOT).read_text()))
 
 
 def _dataset_id(root):
     return signet._name(_initial(root)['dataset_id'])
+
+
+def _retry_context(run_id, expected_job_id, expected_attempt):
+    from agent.runtime import workspace_history
+    if (not isinstance(expected_job_id, str) or expected_job_id != 'none' and
+            (not expected_job_id.isascii() or not expected_job_id.isdigit())
+            or type(expected_attempt) is not int or not 1 <= expected_attempt < workspace_history.MAX_ATTEMPTS):
+        raise jobs.StepError('invalid_request', 'Provide the displayed Stage 1 job ID and attempt number.')
+    root = jobs._root(run_id)
+    try:
+        initial, initial_digest = workspace_history._json(root / SNAPSHOT)
+        previous, previous_digest = workspace_history._json(root / 'steps/genotype.json')
+        previous = workspace_history._attempt_record(previous, run_id, 'genotype')
+        if initial.get('run_id') != run_id:
+            raise ValueError('The original genotype snapshot identifies a different run.')
+        signet._name(initial['dataset_id'])
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise jobs.StepError('not_found', 'Select a workspace run with its original Stage 1 snapshot and job record.') from error
+    if ((previous.get('job_id') or 'none') != expected_job_id or previous.get('attempt', 1) != expected_attempt):
+        raise jobs.StepError('conflict', 'The Stage 1 job or attempt changed. Refresh its status before reviewing a retry.')
+    if previous['state'] not in jobs.RETRYABLE:
+        raise jobs.StepError('conflict', 'Only a failed or cancelled Stage 1 can be retried in the same run.')
+    if (root / '.active').exists() or (root / '.active').is_symlink():
+        raise jobs.StepError('conflict', 'This run has an active operation. Confirm its status before retrying.')
+    snapshots = (EXPRESSION_SNAPSHOT, ADJUST_SNAPSHOT, CIS_SNAPSHOT, NETWORK_SNAPSHOT, VISUALIZE_SNAPSHOT)
+    evidence = [root / name for name in snapshots]
+    for name in snapshots:
+        evidence += list(root.glob(name[:-5] + '.review*.json'))
+    for name in ('expression_tcga', 'expression_gtex', 'adjust_tcga', 'adjust_gtex', 'pca', 'plot_pca', 'cis_eqtl', 'network', 'visualization'):
+        evidence += [root / (name + '.json'), root / (name + '.plan.json')]
+    for step in jobs.STEPS:
+        if step != 'genotype':
+            evidence += list((root / 'steps').glob(step + '*.json'))
+    if any(path.exists() or path.is_symlink() for path in evidence):
+        raise jobs.StepError('conflict', 'A later stage has already been reviewed or attempted. Create a separate analysis instead of replacing its Stage 1 inputs.')
+    return root, initial, previous, initial_digest, previous_digest
+
+
+def _retry_environment(root, initial, previous, config):
+    directory = jobs._remote_dir(config, root, root.name)
+    saved_environment = initial.get('environment', {})
+    environment_keys = ('root', 'source', 'image', 'executor', 'workRoot', 'partition', 'runtimeModule')
+    if (previous.get('remote_dir') != directory or previous.get('image') != config['image']
+            or previous.get('partition') != config['partition']
+            or initial.get('mode') == 'dataset' and any(saved_environment.get(key) != config.get(key) for key in environment_keys)):
+        raise jobs.StepError('not_ready', 'Select the original remote workspace, container and runtime used by this run.')
+    return directory
+
+
+def _review_genotype_retry(run_id, expected_job_id, expected_attempt):
+    from agent.runtime import workspace_inputs
+    root, initial, previous, initial_digest, previous_digest = _retry_context(run_id, expected_job_id, expected_attempt)
+    config = jobs._environment()
+    directory = _retry_environment(root, initial, previous, config)
+    environment_keys = ('root', 'source', 'image', 'executor', 'workRoot', 'partition', 'runtimeModule')
+    step = jobs.STEPS['genotype']
+    try:
+        saved = previous['settings']
+        settings = {key: int(saved[key]) if key in ('restrict.tcga.geno', 'int') else float(saved[key]) for key in DEFAULT_SETTINGS}
+        for key, rule in step.settings.items():
+            jobs._setting(key, rule, settings[key])
+        resources = {key: previous['resources'][key] for key in step.resources}
+        jobs._resources(step, resources)
+        chromosome = int(initial['settings']['restrict.tcga.geno'])
+        if settings['restrict.tcga.geno'] != chromosome:
+            raise ValueError('The original chromosome differs from the saved attempt.')
+    except (KeyError, ValueError, TypeError, OverflowError) as error:
+        raise jobs.StepError('conflict', 'The original chromosome or saved Stage 1 settings are unavailable.') from error
+    next_attempt = expected_attempt + 1
+    mode = initial.get('mode', 'example')
+    inputs = initial['inputs']
+    warnings = ['This submits a new Stage 1 attempt in the same run; earlier attempts, files and logs remain preserved.']
+    frozen = None
+    if mode == 'dataset':
+        plan = workspace_inputs.staging_plan(root, directory, attempt=next_attempt)
+        files = plan['source_files']
+        inputs = plan['inputs']
+        frozen = workspace_inputs.frozen_paths(directory, next_attempt)
+        warnings.append('Original source files and reference resources must remain unchanged. This attempt freezes them again and prepares fresh study-specific references in its own input directory; partial or complete earlier preparations are not reused.')
+    elif initial['dataset_id'] == DATASET_ID:
+        checked = jobs._inputs(step, inputs, (config['root'] + '/refdata', config['source'] + '/example', directory))
+        files = [{'role': key, 'path': path} for key, path, _ in jobs._files(step, checked, {'restrict.tcga.geno': str(chromosome)})]
+        warnings.append('This older example snapshot did not save input fingerprints. The original file paths are checked now; their contents at the first execution cannot be reconstructed.')
+    else:
+        raise jobs.StepError('conflict', 'The original dataset preparation mode was not recorded; a safe same-run retry is unavailable.')
+    source_inputs = initial.get('source_inputs', {'genotype': [item['path'] for item in files], 'expression': [], 'clinical': []})
+    result = {'run_id': run_id, 'dataset_id': initial['dataset_id'],
+              'dataset_name': initial.get('dataset_name', ['第 1 號染色體範例', 'Chromosome 1 example']),
+              'mode': mode, 'inputs': inputs, 'source_inputs': source_inputs,
+              'settings': settings, 'resources': resources, 'limits': step.limits.copy(),
+              'expected_job_id': previous.get('job_id'), 'expected_attempt': expected_attempt,
+              'next_attempt': next_attempt, 'ready': False, 'issues': [], 'warnings': warnings}
+    if frozen:
+        result['frozen_inputs'] = frozen
+    try:
+        jobs._ensure_stopped(previous)
+    except jobs.StepError as error:
+        result['issues'].append(str(error))
+        return result
+    script = ('python3 - ' + shlex.quote(json.dumps(files)) + " <<'SIGNET_RETRY_SOURCES'\n"
+              + _RETRY_SOURCES + '\nSIGNET_RETRY_SOURCES\n')
+    script += jobs._say() + f'[ -s {shlex.quote(config["image"])} ] || {{ say not_ready container; exit 5; }}\n'
+    script += 'command -v sbatch >/dev/null 2>&1 || { say not_ready sbatch; exit 5; }\n'
+    try:
+        code, values, _ = jobs._shell(script)
+        source_checks = json.loads(values.get('retry_sources', '{}'))
+    except (OSError, ValueError) as error:
+        raise jobs.StepError('remote_failed', 'Could not check the original Stage 1 sources before retrying.') from error
+    result['issues'] += source_checks.get('issues', [])
+    if code or len(source_checks.get('files', [])) != len(files) or values.get('not_ready'):
+        result['issues'].append('The original files, container or scheduler are not ready for this retry.')
+    result['ready'] = not result['issues']
+    if result['ready']:
+        result['review_token'] = workspace_inputs.fingerprint({'initial': initial_digest, 'previous': previous_digest,
+            'inputs': inputs, 'sources': source_checks['files'], 'environment': {key: config.get(key) for key in environment_keys}})
+    return result
+
+
+@jobs._one_at_a_time
+def review_genotype_retry(run_id, expected_job_id, expected_attempt):
+    return _review_genotype_retry(run_id, expected_job_id, expected_attempt)
+
+
+@jobs._one_at_a_time
+def submit_genotype_retry(run_id, inputs, settings, resources, review_token, expected_job_id, expected_attempt, acknowledge_warnings):
+    root, initial, _, _, _ = _retry_context(run_id, expected_job_id, expected_attempt)
+    if type(acknowledge_warnings) is not bool or not acknowledge_warnings:
+        raise jobs.StepError('invalid_request', 'Acknowledge the original-input and retry-preparation warnings before submitting.')
+    if not isinstance(settings, dict) or set(settings) != set(DEFAULT_SETTINGS):
+        raise jobs.StepError('invalid_request', 'Confirm all five Stage 1 settings.')
+    checked = {key: jobs._setting(key, rule, settings[key]) for key, rule in jobs.STEPS['genotype'].settings.items()}
+    if checked['restrict.tcga.geno'] != str(initial['settings']['restrict.tcga.geno']):
+        raise jobs.StepError('invalid_request', 'The chromosome is fixed by the original study. Create another run to change it.')
+    accepted_resources = jobs._resources(jobs.STEPS['genotype'], resources)
+    review = _review_genotype_retry(run_id, expected_job_id, expected_attempt)
+    if not review['ready']:
+        raise jobs.StepError('not_ready', ' '.join(review['issues']))
+    if not isinstance(review_token, str) or review_token != review['review_token'] or inputs != review['inputs']:
+        raise jobs.StepError('conflict', 'The original sources or attempt changed. Review Stage 1 again before submitting.')
+    path = signet._no_links(root / f'workspace-genotype.review{review["next_attempt"]}.json')
+    if path.exists() or path.is_symlink():
+        raise jobs.StepError('conflict', 'The next Stage 1 review snapshot already exists and will not be overwritten.')
+    snapshot = {**initial, 'review_attempt': review['next_attempt'], 'submitted_at': jobs._now(),
+                'inputs': inputs, 'settings': checked, 'resources': accepted_resources,
+                'review_token': review_token, 'acknowledge_warnings': True}
+    if review.get('frozen_inputs'):
+        snapshot['frozen_inputs'] = review['frozen_inputs']
+    with path.open('x') as stream:
+        stream.write(json.dumps(snapshot, indent=2) + '\n')
+    try:
+        jobs.update_settings(run_id, settings)
+        return jobs.submit(run_id, 'genotype', inputs, resources)
+    finally:
+        try:
+            current = jobs._load(root, 'genotype')
+        except (OSError, ValueError, jobs.StepError):
+            current = None
+        if isinstance(current, dict) and current.get('attempt', 1) != review['next_attempt']:
+            path.unlink(missing_ok=True)
 
 
 def review_dataset(dataset_id, inputs):
@@ -224,7 +385,7 @@ def _review_expression(run_id):
               + 'if ! command -v sbatch >/dev/null 2>&1; then say not_ready sbatch; exit 5; fi\n')
     if frozen:
         from agent.runtime.workspace_inputs import frozen_checks
-        script += frozen_checks(jobs._remote_dir(config, root, run_id))
+        script += frozen_checks(jobs._remote_dir(config, root, run_id), initial.get('genotype_attempt', 1))
     try:
         code, values, _ = jobs._shell(script)
     except OSError as error:
@@ -332,7 +493,7 @@ def _review_adjust(run_id, clinical=None):
     script = jobs._say() + jobs._input_checks(jobs._files(step, checked, {}))
     if frozen:
         from agent.runtime.workspace_inputs import frozen_checks
-        script += frozen_checks(directory)
+        script += frozen_checks(directory, initial.get('genotype_attempt', 1))
     for relative in step.needs:
         path = directory + '/work/' + relative
         script += f'if [ ! -s {q(path)} ]; then say missing_prior {q(relative)}; exit 5; fi\n'
@@ -710,7 +871,7 @@ def submit_visualize(run_id, inputs, settings, resources):
 def run_history(root):
     """Return the most recent recorded step alongside the immutable review snapshot."""
     run_id = root.name
-    snapshot = json.loads(signet._no_links(root / SNAPSHOT).read_text(encoding='utf-8'))
+    snapshot = _initial(root)
     dataset_id = signet._name(snapshot['dataset_id'])
     if snapshot['run_id'] != run_id:
         raise ValueError('The genotype history does not identify this run.')
@@ -824,7 +985,10 @@ def run_history(root):
                       name=snapshot['dataset_name'])
         summary = signet._no_links(root / 'work/res/resg/workspace-reference-preparation.json')
         if summary.is_file():
-            result['reference_preparation'] = json.loads(summary.read_text())
+            try:
+                result['reference_preparation'] = json.loads(summary.read_text())
+            except (OSError, ValueError, TypeError):
+                result['result_error'] = 'The saved reference-preparation summary is incomplete or unreadable.'
     return result
 
 

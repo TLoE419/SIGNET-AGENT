@@ -24,6 +24,14 @@ change. Custom execution currently supports TCGA data for one autosome with a
 matching raw VCF reference and genetic map. The unchanged built-in chromosome 1
 example retains its existing path.
 
+Failed or cancelled Stage 1 jobs can be reviewed and manually retried in the
+same run. The original files and chromosome remain fixed while quality
+thresholds and compute resources can change. Previous attempt records, saved
+logs and downloaded results are retained. Custom datasets use a fresh input
+directory and repeat reference preparation for every attempt; their original
+sources must remain unchanged and available. Completed runs or runs with
+later-stage records require a new analysis instead.
+
 **Run history** also lists recorded local Agent operations, generic Slurm run
 records, and archived results. Filter by the current dataset, unclassified
 records, or all runs. Same-named runs from different sources remain separate.
@@ -36,6 +44,17 @@ History reads local records without querying remote jobs or rerunning analysis.
 Each stage can expand its individual submission attempts, showing that attempt's
 saved settings, job ID, times, failure reason and result evidence. Earlier
 attempts remain separate from the latest one; missing records stay explicit.
+Queued or running workspace jobs can be cancelled from their stage's progress
+panel. Review the run, stage, job ID and attempt before confirming. Cancellation
+remains pending until HPC3 confirms that the job and its owned child jobs have
+stopped; connection failures do not imply successful cancellation. Existing
+results and earlier attempt records remain preserved.
+Stage progress and saved attempts have a separate execution-log disclosure.
+It shows saved failure reasons, exit status and missing outputs, then lets you
+read output messages, error messages or submission errors on demand. Each log
+is bound to its own source, run, stage and attempt. Missing files, empty files
+and disconnected remote access are distinct states; opening logs never retries
+analysis or adds the log text to the conversation.
 
 ## Replacing the Former Desktop Workbench
 

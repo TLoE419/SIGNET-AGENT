@@ -119,6 +119,56 @@ first attempt. Output paths describe saved evidence; they are not links to
 today's result folders. These disclosures do not submit, retry, cancel, or poll
 remote work.
 
+### Cancel a workspace job
+
+In an active stage's progress panel, choose **Cancel job**, review the exact
+run/stage/job/attempt, and confirm. **Keep job** dismisses that confirmation
+without sending a request. Cancellation is available only for eligible live
+workspace jobs with a known job ID and an active remote connection. Completed
+jobs, historical attempts, generic old-tool evidence and archived results do
+not offer this action. From **Run history**, open that run's active stage to
+reach the same progress controls, including Stage 1. Returning to Analysis
+preserves its previously selected run and draft.
+
+The UI submits the expected job ID and attempt to the existing cancellation
+service. A changed target is rejected before contacting HPC3. While the request
+or termination is pending, duplicate cancellation, settings and retry controls
+stay blocked. The panel continues checking status and reports **Cancelled** only
+after the backend confirms the parent and its owned child jobs have stopped.
+If the job completed first, the actual final state is retained. Lost connections
+or partially failed cancellation remain unconfirmed, with the reason visible;
+reconnect and check status before deciding what to do next. Switching datasets,
+runs or remote environments clears an unsubmitted confirmation. No original
+input, output, configuration or attempt archive is deleted by cancellation.
+
+### Execution logs and failure details
+
+Open the execution-log disclosure in a stage's progress panel or inside a saved
+attempt in **Run history**. Saved failure reasons, exit status, failure hints
+and missing-output paths remain readable from the recorded snapshot even while
+disconnected. Output messages, error messages and submission errors are separate
+streams. Read and refresh them manually; closed disclosures do not poll logs.
+Content is displayed as plain text, independently of chat activity.
+
+The viewer identifies the source, run, stage, attempt and job. Earlier attempts
+read only their own archived log filenames, and same-named archive/workspace
+runs never share a log. A source/attempt replacement is rejected. Switching the
+selected run, dataset or remote environment prevents an old response from
+appearing in another view. Local saved logs can be read offline; missing remote
+logs require the matching existing connection. Empty, missing, unreadable,
+disconnected and truncated logs are displayed explicitly. The response is
+limited to the requested tail and at most 64 KiB.
+Loose current local log files also need a matching saved job marker, because
+older retries may have left those filenames behind. New retries archive local
+job markers, exit markers, logs and submission files with their attempt number.
+An old residual file is not treated as the new attempt's log.
+
+Old Agent operations read only their fixed, owned local stdout/stderr files;
+saved plans do not imply execution. Archives do not borrow live or remote logs.
+The viewer does not create log files, download scientific results, refresh job
+state, cancel, submit or retry any analysis. It does not send logs to the chat
+model. Original files and attempt snapshots remain unchanged.
+
 ### Submit the chromosome 1 example
 
 Connect to HPC3 from **Settings → Remote compute**. The same panel can check
@@ -152,6 +202,23 @@ fixed chromosome, thresholds, and resource settings, then select **Submit Stage 
 The application tracks the saved job through the queue, execution, and output
 validation. From **Run history**, open the new run and select its Stage 1 result
 to read remotely computed aggregate statistics and the settings actually submitted.
+
+If Stage 1 failed or was cancelled, open that run's Stage 1 and select
+**Review a new attempt**. Review its original files, adjust quality thresholds,
+imputation chunk length and compute resources, acknowledge the warnings, then manually
+submit the next attempt. This keeps the run ID and dataset identity. **Prepare
+a new run** remains a separate action. Completed, active, unknown, or
+downstream-started runs cannot retry Stage 1; old jobs must be confirmed stopped.
+The original snapshot, previous attempt records, downloaded results and saved
+logs remain available in Run history.
+
+For a custom dataset, every retry copies the original source files into a new
+attempt-specific input directory and prepares its references again. The
+original files and their recorded identities must still match; changes in Data
+or global reference selections are not used. The chromosome and run environment
+remain fixed. After a successful retry, Stages 2 and 3 use its new frozen inputs.
+Legacy example runs without source fingerprints disclose that limitation in
+the review. Opening the review never submits work automatically.
 
 After Stage 1 completes, open the same run from **Run history** and select
 **Stage 2**. Confirm the example expression file, gene annotation, chromosome
@@ -478,6 +545,8 @@ npm run test:smoke --prefix electron
 npm run test:startup --prefix electron
 npm run test:history --prefix electron
 npm run test:attempts --prefix electron
+npm run test:cancellation --prefix electron
+npm run test:logs --prefix electron
 .venv/bin/python -m unittest discover -s tests -p 'test_desktop_server.py' -v
 ```
 

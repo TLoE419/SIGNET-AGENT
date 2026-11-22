@@ -72,6 +72,21 @@ test('All scope opens the selected workspace run even while another dataset is a
  assert.equal(h.contexts.expression.datasetId,'example-chr1');assert.equal(h.contexts.expression.runId,'shared');assert.deepEqual(h.contexts.expression.runs.map(row=>row.history_id),['workspace--shared']);assert.equal(h.q('#lens-stage2').hidden,false);
 });
 
+test('Stage 1 progress opens the exact historical run without changing the selected dataset',async t=>{
+ const first=workspace('workspace--first'),second=workspace('workspace--second');
+ for(const row of [first,second]){row.jobs={genotype:{state:'pending',job_id:row.run_id==='first'?'123':'456'}};row.capabilities.stage_results=[];row.capabilities.stage6_graph=false;}
+ const unavailable=workspace('workspace--unavailable');unavailable.jobs={genotype:{state:'completed'}};unavailable.capabilities.stage_results=[];unavailable.capabilities.stage6_graph=false;
+ const h=harness(t,[first,second,unavailable]);await h.ready();h.choose('#ml-dataset-select','dataset-b');h.click('[data-nav-target="history"]');h.choose('#ml-history-scope','all');
+ assert.equal(h.q('#ml-run-workspace--unavailable [data-run-stage="1"]'),null);
+ h.click('[data-run-target="workspace--second"]');h.click('#ml-run-workspace--second [data-run-stage="1"]');
+ assert.equal(h.contexts.genotype.datasetId,'example-chr1');assert.equal(h.contexts.genotype.runId,'second');
+ assert.deepEqual(h.contexts.genotype.runs.map(row=>row.history_id),['workspace--second']);
+ assert.equal(h.contexts.genotype.runs[0].jobs.genotype.job_id,'456');assert.equal(h.q('#lens-stage1').hidden,false);
+ assert.equal(h.q('#lens-history-stage').hidden,true);assert.equal(h.q('#ml-dataset-select').value,'dataset-b');
+ h.click('[data-nav-target="analysis"]');assert.equal(h.contexts.genotype.datasetId,'dataset-b');assert.equal(h.contexts.genotype.runId,null);
+ assert.equal(h.calls.some(call=>call.url.startsWith('/stage/results')),false);
+});
+
 test('manual assignment uses source-scoped revision and remains honest after switching scope',async t=>{
  const row=base('recorded--loose',{dataset_id:null,association:{status:'unclassified',method:null},capabilities:{continue_analysis:false,stage_results:[],stage6_graph:false,assign_dataset:true}});let release;
  const h=harness(t,[row],call=>call.options.method==='PATCH'?new Promise(resolve=>release=resolve):undefined);await h.ready();h.click('[data-nav-target="history"]');h.choose('#ml-history-scope','unclassified');

@@ -38,6 +38,7 @@ FAKE_SLURM = {
     'squeue': ('case "$*" in *"%i %j %Z"*) '
                'if [ -s "$FAKE/squeue" ]; then printf "12345 %s /login\\n" "$(cat "$FAKE/name" 2>/dev/null)"; fi; '
                'for f in "$FAKE"/workdir_*; do [ ! -f "$f" ] || printf "%s child %s\\n" "${f##*workdir_}" "$(cat "$f")"; done;; '
+               '*"%j|%Z"*) if [ -s "$FAKE/squeue" ]; then printf "%s|%s\\n" "$(cat "$FAKE/name")" "$(cat "$FAKE/parent_workdir")"; fi;; '
                '*%j*) cat "$FAKE/name";; *%i*) cat "$FAKE/queued_id";; *%Z*) cat "$FAKE/workdir_$3";; '
                '*) cat "$FAKE/squeue";; '
                'esac 2>/dev/null; true'),
@@ -69,6 +70,7 @@ class StepsTest(unittest.TestCase):
                        'image': str(self.hpc / 'signet.sif'), 'executor': 'apptainer',
                        'workRoot': str(self.hpc / 'ws/work'), 'partition': 'standard'}
         self.remote_dir = self.hpc / 'ws/work/step_test'
+        (self.fake / 'parent_workdir').write_text(str(self.remote_dir / 'work'))
         self.calls = []
         self.lose_connection_on = None
         # Most tests use -t to exercise the transfer of results itself; by default only -n and -v
@@ -209,6 +211,63 @@ class StepsTest(unittest.TestCase):
             steps.submit('step_test', 'expression', self.inputs)
         self.assertEqual(caught.exception.code, 'conflict')
         self.assertIn('already completed', str(caught.exception))
+
+    def test_retry_preserves_local_logs_and_starts_without_old_markers(self):
+        self.failed_expression()
+        folder = self.root / 'steps'
+        originals = {}
+        for suffix in steps._JOB_FILES:
+            originals[suffix] = f'original local {suffix}\n'.encode()
+            (folder / f'expression.{suffix}').write_bytes(originals[suffix])
+        self.assertEqual(steps.submit('step_test', 'expression', self.inputs)['attempt'], 2)
+        for suffix, content in originals.items():
+            self.assertEqual((folder / f'expression.attempt1.{suffix}').read_bytes(), content)
+            self.assertFalse((folder / f'expression.{suffix}').exists())
+
+    def test_retry_refusal_restores_all_local_logs(self):
+        self.failed_expression()
+        folder = self.root / 'steps'
+        originals = {}
+        for suffix in steps._JOB_FILES:
+            originals[suffix] = f'preserve local {suffix}\n'.encode()
+            (folder / f'expression.{suffix}').write_bytes(originals[suffix])
+        self.gexp.unlink()
+        self.assertEqual(self.code_of(steps.submit, 'step_test', 'expression', self.inputs), 'invalid_request')
+        for suffix, content in originals.items():
+            self.assertEqual((folder / f'expression.{suffix}').read_bytes(), content)
+            self.assertFalse((folder / f'expression.attempt1.{suffix}').exists())
+        self.assertFalse((folder / 'expression.attempt1.json').exists())
+
+    def test_retry_does_not_overwrite_an_existing_local_log_archive(self):
+        self.failed_expression()
+        archive = self.root / 'steps/expression.attempt1.out'
+        archive.write_bytes(b'irreplaceable local log\n')
+        calls = len(self.calls)
+        self.assertEqual(self.code_of(steps.submit, 'step_test', 'expression', self.inputs), 'conflict')
+        self.assertEqual(archive.read_bytes(), b'irreplaceable local log\n')
+        self.assertFalse(any('tar xzf' in call for call in self.calls[calls:]))
+        self.assertEqual(steps.status('step_test', 'expression')['job_id'], '12345')
+
+    def test_partial_local_archive_failure_restores_the_previous_attempt(self):
+        self.failed_expression()
+        folder = self.root / 'steps'
+        for suffix in steps._JOB_FILES:
+            (folder / f'expression.{suffix}').write_text(f'old {suffix}\n')
+        previous = (folder / 'expression.json').read_bytes()
+        rename = Path.rename
+
+        def fail_error_log(path, target):
+            if path == folder / 'expression.err':
+                raise OSError('simulated local archival failure')
+            return rename(path, target)
+
+        with patch.object(Path, 'rename', fail_error_log):
+            self.assertEqual(self.code_of(steps.submit, 'step_test', 'expression', self.inputs), 'remote_failed')
+        self.assertEqual((folder / 'expression.json').read_bytes(), previous)
+        self.assertFalse((folder / 'expression.attempt1.json').exists())
+        for suffix in steps._JOB_FILES:
+            self.assertEqual((folder / f'expression.{suffix}').read_text(), f'old {suffix}\n')
+            self.assertFalse((folder / f'expression.attempt1.{suffix}').exists())
 
     def test_unified_history_reads_attempts_created_by_the_existing_retry_flow(self):
         from agent.runtime import workspace_history
@@ -591,8 +650,117 @@ class StepsTest(unittest.TestCase):
         self.remote_dir = self.hpc / 'ws/work/other_job'
         steps.submit('other_job', 'expression', self.inputs)
         (self.fake / 'scancel').unlink()
-        self.slurm(name='someone-elses-job', squeue='', sacct='RUNNING')
-        self.assertEqual(steps.cancel('other_job', 'expression')['state'], 'running')
+        self.slurm(name='someone-elses-job', squeue='RUNNING', sacct='RUNNING')
+        self.assertEqual(self.code_of(steps.cancel, 'other_job', 'expression'), 'conflict')
+        self.assertEqual(steps._load(self.project / 'runs/other_job', 'expression')['state'], 'submitted')
+        self.assertFalse((self.fake / 'scancel').exists())
+
+    def test_cancel_rejects_changed_environment_or_remote_ownership_before_scancel(self):
+        steps.submit('step_test', 'expression', self.inputs)
+        self.slurm(squeue='RUNNING', name='signet-expression-step_test')
+        original = (self.root / 'steps/expression.json').read_bytes()
+        work_root = self.config['workRoot']
+        self.config['workRoot'] += '-other'
+        calls = len(self.calls)
+        self.assertEqual(self.code_of(steps.cancel, 'step_test', 'expression'), 'conflict')
+        self.assertEqual(len(self.calls), calls)
+        self.config['workRoot'] = work_root
+        for target, replacement in ((self.fake / 'parent_workdir', '/other/work'),
+                                    (self.remote_dir / '.owner', 'other-owner'),
+                                    (self.remote_dir / 'steps/expression.job', '99999')):
+            with self.subTest(target=target):
+                saved = target.read_bytes()
+                target.write_text(replacement)
+                self.assertEqual(self.code_of(steps.cancel, 'step_test', 'expression'), 'conflict')
+                self.assertFalse((self.fake / 'scancel').exists())
+                self.assertEqual((self.root / 'steps/expression.json').read_bytes(), original)
+                target.write_bytes(saved)
+
+    def test_cancel_rejects_parent_directory_mismatch_before_cancelling_children(self):
+        self.network_ready()
+        steps.submit('step_test', 'network', {})
+        self.signet_children()
+        self.slurm(squeue='RUNNING', name='signet-network-step_test')
+        (self.fake / 'parent_workdir').write_text('/unrelated/work')
+        original = (self.root / 'steps/network.json').read_bytes()
+        self.assertEqual(self.code_of(steps.cancel, 'step_test', 'network'), 'conflict')
+        self.assertFalse((self.fake / 'scancel').exists())
+        self.assertEqual((self.root / 'steps/network.json').read_bytes(), original)
+
+    def test_cancel_guard_rejects_stale_or_invalid_targets_without_remote_or_record_changes(self):
+        record = steps.submit('step_test', 'expression', self.inputs)
+        original = (self.root / 'steps/expression.json').read_bytes()
+        calls = len(self.calls)
+        for expected_job_id, expected_attempt, code in (
+                ('different', 1, 'invalid_request'), ('12345', True, 'invalid_request'),
+                ('12345', 1.0, 'invalid_request'), ('12345', 0, 'invalid_request'),
+                ('12345', None, 'invalid_request'), (None, 1, 'invalid_request'),
+                ('99999', 1, 'conflict'), ('12345', 2, 'conflict')):
+            with self.subTest(job=expected_job_id, attempt=expected_attempt):
+                self.assertEqual(self.code_of(steps.cancel, 'step_test', 'expression',
+                    expected_job_id=expected_job_id, expected_attempt=expected_attempt), code)
+        self.assertEqual(len(self.calls), calls)
+        self.assertEqual((self.root / 'steps/expression.json').read_bytes(), original)
+        self.assertFalse((self.fake / 'scancel').exists())
+        self.slurm(squeue='RUNNING', sacct='RUNNING', name='signet-expression-step_test')
+        result = steps.cancel('step_test', 'expression', expected_job_id=record['job_id'], expected_attempt=1)
+        self.assertEqual(result['state'], 'cancelling')
+
+    def test_cancel_scheduler_identity_failure_sends_no_parent_or_child_cancel(self):
+        self.network_ready()
+        record = steps.submit('step_test', 'network', {})
+        self.signet_children()
+        original = (self.root / 'steps/network.json').read_bytes()
+        (self.fake / 'bin/squeue').write_text('#!/bin/bash\nexit 1\n')
+        with self.assertRaisesRegex(steps.StepError, 'no cancellation command was sent'):
+            steps.cancel('step_test', 'network', expected_job_id=record['job_id'], expected_attempt=1)
+        self.assertFalse((self.fake / 'scancel').exists())
+        self.assertEqual((self.root / 'steps/network.json').read_bytes(), original)
+
+    def test_cancel_connection_loss_keeps_effect_unconfirmed_and_blocks_retry(self):
+        record = steps.submit('step_test', 'expression', self.inputs)
+        self.lose_connection_on = 'parent="$(squeue'
+        with self.assertRaisesRegex(steps.StepError, 'effect is unknown'):
+            steps.cancel('step_test', 'expression', expected_job_id=record['job_id'], expected_attempt=1)
+        saved = steps._load(self.root, 'expression')
+        self.assertEqual(saved['state'], 'cancelling')
+        self.assertIn('cancel_requested_at', saved)
+        self.assertNotIn('finished_at', saved)
+        self.assertEqual(self.code_of(steps.submit, 'step_test', 'expression', self.inputs), 'conflict')
+        self.lose_connection_on = None
+        self.slurm(squeue='RUNNING', sacct='RUNNING')
+        self.assertEqual(steps.status('step_test', 'expression', refresh=True)['state'], 'cancelling')
+        self.slurm(squeue='', sacct='CANCELLED')
+        self.assertEqual(steps.status('step_test', 'expression', refresh=True)['state'], 'cancelled')
+
+    def test_parent_cancel_success_and_child_failure_keeps_the_run_locked_until_children_stop(self):
+        self.network_ready()
+        record = steps.submit('step_test', 'network', {})
+        self.signet_children()
+        self.slurm(name='signet-network-step_test', squeue='RUNNING')
+        cancel = self.fake / 'bin/scancel'
+        cancel.write_text('#!/bin/bash\nprintf "%s\\n" "$@" >> "$FAKE/scancel"\n[ "$1" != 777 ]\n')
+        with self.assertRaisesRegex(steps.StepError, 'owned child job could not be confirmed'):
+            steps.cancel('step_test', 'network', expected_job_id=record['job_id'], expected_attempt=1)
+        saved = steps._load(self.root, 'network')
+        self.assertEqual(saved['state'], 'cancelling')
+        self.assertNotIn('finished_at', saved)
+        self.assertEqual(set((self.fake / 'scancel').read_text().split()), {'12345', '777'})
+        self.slurm(squeue='', sacct='CANCELLED')
+        self.assertEqual(steps.status('step_test', 'network', refresh=True)['state'], 'cancelling')
+        self.assertEqual(self.code_of(steps.update_settings, 'step_test', {'nboots': 2}), 'conflict')
+        (self.fake / 'workdir_777').unlink()
+        self.assertEqual(steps.status('step_test', 'network', refresh=True)['state'], 'cancelled')
+        self.assertNotIn('888', (self.fake / 'scancel').read_text().split())
+
+    def test_parent_scheduler_lookup_outage_does_not_treat_children_as_orphans(self):
+        self.network_ready()
+        steps.submit('step_test', 'network', {})
+        self.signet_children()
+        self.slurm(squeue='RUNNING', sacct='RUNNING')
+        queue = self.fake / 'bin/squeue'
+        queue.write_text('#!/bin/bash\ncase "$*" in *"-j 12345 -o %T"*) exit 1;; esac\n' + FAKE_SLURM['squeue'] + '\n')
+        self.assertEqual(steps.status('step_test', 'network', refresh=True)['state'], 'running')
         self.assertFalse((self.fake / 'scancel').exists())
 
     def test_lost_connection_during_sbatch_becomes_unknown_then_recovers_job(self):
@@ -2022,6 +2190,8 @@ class StepsTest(unittest.TestCase):
         (self.remote_dir / 'steps/expression.out').write_text(''.join(f'line {i}\n' for i in range(300)))
         log = steps.read_log('step_test', 'expression', 'out', 3)
         self.assertEqual(log, {'lines': ['line 297', 'line 298', 'line 299'], 'truncated': True})
+        self.assertEqual(self.code_of(steps.read_log, 'step_test', 'expression', 'err', 5), 'not_found')
+        (self.remote_dir / 'steps/expression.err').touch()
         self.assertEqual(steps.read_log('step_test', 'expression', 'err', 5), {'lines': [], 'truncated': False})
         for stream, lines in (('both', 5), ('out', 0), ('out', 201), ('out', True)):
             self.assertEqual(self.code_of(steps.read_log, 'step_test', 'expression', stream, lines), 'invalid_request')

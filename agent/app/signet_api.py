@@ -43,6 +43,7 @@ from agent.runtime import workspace_genotype
 from agent.runtime import workspace_datasets
 from agent.runtime import workspace_validation
 from agent.runtime import workspace_history
+from agent.runtime import workspace_logs
 from agent.runtime.visualization import read_graph, threshold_counts
 import agent.tools.signet as signet
 
@@ -204,6 +205,20 @@ def submit_genotype_example(handler, url):
     _query(url, ())
     fields = ('run_id', 'inputs', 'settings', 'resources')
     return 202, workspace_genotype.submit_example(**_body(handler, fields, required=fields))
+
+
+def review_genotype_retry(handler, url, run_id):
+    query = _query(url, ('expected_job_id', 'expected_attempt'))
+    attempt = query.get('expected_attempt', '')
+    if set(query) != {'expected_job_id', 'expected_attempt'} or not re.fullmatch(r'[0-9]{1,4}', attempt):
+        raise ApiError(400, 'invalid_request', 'Provide the displayed Stage 1 job ID and attempt number.')
+    return 200, workspace_genotype.review_genotype_retry(run_id, query['expected_job_id'], int(attempt))
+
+
+def submit_genotype_retry(handler, url, run_id):
+    _query(url, ())
+    fields = ('inputs', 'settings', 'resources', 'review_token', 'expected_job_id', 'expected_attempt', 'acknowledge_warnings')
+    return 202, workspace_genotype.submit_genotype_retry(run_id, **_body(handler, fields, required=fields))
 
 
 def review_expression_example(handler, url, run_id):
@@ -679,18 +694,23 @@ def get_step(handler, url, run_id, step):
 
 
 def cancel_step(handler, url, run_id, step):
-    """POST /signet/runs/{run_id}/steps/{step}/cancel   body {} (or empty)
+    """POST /signet/runs/{run_id}/steps/{step}/cancel
 
     Cancel the step's own Slurm job. The job name is checked on HPC3 first
     (signet-<step>-<run_id>), so no other job can be cancelled. If the job has
     already left the queue, the reply reports how it actually ended instead.
-    Response 200: the step record ("state": "cancelled", or its final state).
-    Errors: 404 never submitted; 409 already finished, or no job ID yet;
+    An optional paired expected_job_id/expected_attempt body guards the displayed
+    target; an empty body keeps legacy callers working.
+    Response 200: the step record ("cancelling" until termination is confirmed,
+    "cancelled", or the actual final state if it ended first).
+    Errors: 400 invalid guard; 404 never submitted; 409 changed/finished target, or no job ID yet;
             412 not connected; 502 scancel failed.
     """
     _query(url, ())
-    _body(handler, ())
-    return 200, jobs.cancel(run_id, step)
+    body = _body(handler, ('expected_job_id', 'expected_attempt'))
+    if body and (set(body) != {'expected_job_id', 'expected_attempt'} or any(value is None for value in body.values())):
+        raise ApiError(400, 'invalid_request', 'Provide the displayed job ID and attempt number together, or an empty legacy body.')
+    return 200, jobs.cancel(run_id, step, **body)
 
 
 def get_log(handler, url, run_id, step):
@@ -703,9 +723,34 @@ def get_log(handler, url, run_id, step):
     """
     query = _query(url, ('stream', 'lines'))
     lines = query.get('lines', '50')
-    if not lines.isdigit():
+    if not re.fullmatch(r'[0-9]{1,3}', lines):
         raise ApiError(400, 'invalid_request', 'lines must be a whole number from 1 to 200.')
     return 200, jobs.read_log(run_id, step, query.get('stream', 'out'), int(lines))
+
+
+def _log_query(url, required):
+    query = _query(url, (*required, 'stream', 'lines'))
+    if not set(required).issubset(query):
+        raise ApiError(400, 'invalid_request', 'Provide the displayed log target identity.')
+    lines = query.get('lines', '50')
+    if not re.fullmatch(r'[0-9]{1,3}', lines) or not 1 <= int(lines) <= 200:
+        raise ApiError(400, 'invalid_request', 'lines must be an integer from 1 to 200.')
+    return query, int(lines)
+
+
+def get_history_log(handler, url, history_id, step):
+    query, lines = _log_query(url, ('attempt', 'job_id', 'identity'))
+    attempt = query['attempt']
+    if attempt != 'unknown' and (not re.fullmatch(r'[0-9]{1,4}', attempt) or not 1 <= int(attempt) <= workspace_history.MAX_ATTEMPTS):
+        raise ApiError(400, 'invalid_request', 'attempt must be unknown or an integer from 1 to 1000.')
+    return 200, workspace_logs.read_step(history_id, step, None if attempt == 'unknown' else int(attempt),
+        query['job_id'], query['identity'], query.get('stream', 'out'), lines, history_loader=handler.server.stage6.history)
+
+
+def get_operation_log(handler, url, history_id, operation):
+    query, lines = _log_query(url, ('identity', 'record_revision'))
+    return 200, workspace_logs.read_operation(history_id, operation, query['identity'], query['record_revision'],
+        query.get('stream', 'out'), lines, history_loader=handler.server.stage6.history)
 
 
 # Each path pattern maps HTTP methods to the function above that serves it.
@@ -714,12 +759,17 @@ ROUTES = [
     (re.compile(r'/signet/catalog'), {'GET': get_catalog}),
     (re.compile(rf'/signet/history/(?P<history_id>{workspace_history.HISTORY_ID})/dataset'),
      {'PATCH': assign_history_dataset}),
+    (re.compile(rf'/signet/history/(?P<history_id>{workspace_history.HISTORY_ID})/steps/{_STEP}/log'),
+     {'GET': get_history_log}),
+    (re.compile(rf'/signet/history/(?P<history_id>{workspace_history.HISTORY_ID})/operations/(?P<operation>{_RUN_NAME})/log'),
+     {'GET': get_operation_log}),
     (re.compile(r'/signet/datasets'), {'GET': list_datasets, 'POST': create_dataset}),
     (re.compile(rf'/signet/datasets/(?P<dataset_id>{_RUN_NAME})'), {'PATCH': update_dataset}),
     (re.compile(rf'/signet/datasets/(?P<dataset_id>{_RUN_NAME})/validate'), {'POST': validate_dataset}),
     (re.compile(rf'/signet/datasets/(?P<dataset_id>{_RUN_NAME})/genotype/review'), {'POST': review_dataset_genotype}),
     (re.compile(rf'/signet/datasets/(?P<dataset_id>{_RUN_NAME})/genotype'), {'POST': submit_dataset_genotype}),
     (re.compile(r'/signet/genotype/example'), {'GET': review_genotype_example, 'POST': submit_genotype_example}),
+    (re.compile(rf'/signet/runs/{_RUN}/genotype/retry'), {'GET': review_genotype_retry, 'POST': submit_genotype_retry}),
     (re.compile(rf'/signet/runs/{_RUN}/expression/example'),
      {'GET': review_expression_example, 'POST': submit_expression_example}),
     (re.compile(rf'/signet/runs/{_RUN}/adjust/example'),
