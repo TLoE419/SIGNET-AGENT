@@ -24,7 +24,7 @@ def check_hpc_environment() -> dict:
 
 
 def create_hpc_workspace() -> dict:
-    """Explain how to prepare the configured workspace through the desktop HPC3 settings. No separate workspace is created."""
+    """Explain that installing SIGNET (install_signet_source) creates the workspace. No separate workspace is created."""
     return hpc.start_step('workspace')
 
 
@@ -34,7 +34,6 @@ def _show_progress(result):
     if channel is not None and result.get('executed'):
         channel({'panel': 'workflow', 'visible': True, 'refresh': True})
     return result
-
 
 
 def install_signet_source() -> dict:
@@ -54,11 +53,11 @@ def download_signet_container() -> dict:
     existing image and never starts a second download. Returns immediately with
     the job ID; use check_hpc_environment later.
     """
-    return hpc.start_step('container')
+    return _show_progress(hpc.start_step('container'))
 
 
 def download_reference_file(file: str) -> dict:
-    """Submit a Slurm job that downloads one public Phase 2 reference file into the HPC3 workspace: "ref" (1000 Genomes GRCh38 chr1 genotypes, about 950 MB), "gmap" (GRCh38 genetic map), "gtf" (GENCODE v22 gene annotation, collapsed for signet -t; needs the container) or "clinical" (TCGA-LUAD race and sex at birth by case). Call only for the files the user's own message asks for or agrees to.
+    """Submit a Slurm job that downloads one public Phase 2 reference file into the HPC3 workspace: "ref" (1000 Genomes GRCh38 chr1 genotypes, about 950 MB), "gmap" (GRCh38 genetic map), "gtf" (GENCODE v22 gene annotation, collapsed for signet -t; needs the container) or "clinical" (TCGA-LUAD submitter_id, race, gender). Call only for the files the user's own message asks for or agrees to.
 
     Downloads only the raw file from a fixed source and records its URL, size
     and checksum in refdata/SOURCES.tsv; matching ref and gmap to a study
@@ -68,7 +67,7 @@ def download_reference_file(file: str) -> dict:
     """
     if file not in hpc.REFERENCES:
         return {'status': 'invalid', 'executed': False, 'error': f'file must be one of {", ".join(hpc.REFERENCES)}.'}
-    return hpc.start_step(file)
+    return _show_progress(hpc.start_step(file))
 
 
 def prepare_imputation_reference() -> dict:
@@ -80,9 +79,9 @@ def prepare_imputation_reference() -> dict:
     in a copy; the original study is never changed. Needs SIGNET (for the example
     study), ref and gmap first. Returns immediately with the job ID; the log then
     shows a counts-only summary with the match rate, and a warning when the rate
-    is low enough to suggest different genome builds.
+    is low enough to suggest different genome builds. Reruns when ref or gmap change.
     """
-    return hpc.start_step('prepare')
+    return _show_progress(hpc.start_step('prepare'))
 
 
 def read_hpc_setup_log(step: str) -> dict:
@@ -95,5 +94,11 @@ def read_hpc_setup_log(step: str) -> dict:
     return hpc.read_log(step)
 
 
+def summarize_reference_table(file: str) -> dict:
+    """Counts-only summary of the "clinical" table in use on HPC3: columns, rows, blanks, category value counts. No rows or IDs."""
+    return hpc.summarize_reference(file)
+
+
 HPC_TOOLS = [check_hpc_environment, create_hpc_workspace, install_signet_source,
-             download_signet_container, download_reference_file, prepare_imputation_reference, read_hpc_setup_log]
+             download_signet_container, download_reference_file, prepare_imputation_reference, read_hpc_setup_log,
+             summarize_reference_table]

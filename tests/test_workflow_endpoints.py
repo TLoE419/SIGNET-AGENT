@@ -40,6 +40,19 @@ class WorkflowEndpointTest(unittest.TestCase):
         return self.request('POST', path, body, headers if headers is not None else {
             'Origin': self.origin, 'X-Chat-Token': self.server.token, 'Content-Type': 'application/json'})
 
+    def test_file_browser_routes_work_without_removed_selection_functions(self):
+        from agent.runtime import hpc_files
+        with patch.object(hpc_files, 'shortcuts', return_value={'status': 'ok', 'shortcuts': []}) as shortcuts, \
+                patch.object(hpc_files, 'list_folder', return_value={'status': 'ok', 'entries': []}) as listing:
+            status, body = self.post('/hpc/files/shortcuts')
+            self.assertEqual((status, json.loads(body)), (200, {'status': 'ok', 'shortcuts': []}))
+            status, body = self.post('/hpc/files/list', json.dumps({'path': '/pub/tester'}))
+            self.assertEqual((status, json.loads(body)), (200, {'status': 'ok', 'entries': []}))
+            shortcuts.assert_called_once_with()
+            listing.assert_called_once_with('/pub/tester')
+            for route in ('selected', 'select', 'clear'):
+                self.assertEqual(self.post('/hpc/files/' + route)[0], 404)
+
     def test_python_remains_api_only(self):
         for path in ('/', '/workflow.js', '/workflow.css'):
             self.assertEqual(self.request('GET', path)[0], 404)
@@ -131,12 +144,12 @@ class WorkflowEndpointTest(unittest.TestCase):
 
     def test_file_window_routes_pass_their_values_and_need_the_token(self):
         from agent.runtime import hpc_files
-        with patch.object(hpc_files, 'select', return_value={'status': 'ok'}) as select:
-            self.assertEqual(self.post('/hpc/files/select', '{"key":"gtf"}', headers={'Origin': self.origin})[0], 403)
+        with patch.object(hpc_files, 'list_folder', return_value={'status': 'ok'}) as select:
+            self.assertEqual(self.post('/hpc/files/list', '{"path":"/pub/u/a.gtf"}', headers={'Origin': self.origin})[0], 403)
             select.assert_not_called()
-            status, _ = self.post('/hpc/files/select', json.dumps({'key': 'gtf', 'path': '/pub/u/a.gtf'}))
+            status, _ = self.post('/hpc/files/list', json.dumps({'path': '/pub/u/a.gtf'}))
         self.assertEqual(status, 200)
-        select.assert_called_once_with('gtf', '/pub/u/a.gtf')
+        select.assert_called_once_with('/pub/u/a.gtf')
         self.assertEqual(self.post('/hpc/files/unknown')[0], 404)
         self.assertEqual(self.post('/hpc/files/list', 'not json')[0], 400)
         self.assertEqual(self.post('/hpc/files/list', '{"path":"' + 'a' * 5000 + '"}')[0], 400)

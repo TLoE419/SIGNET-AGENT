@@ -134,7 +134,7 @@ async function verify() {
   writeFileSync(path.join(fixture.slurm, 'squeue'), '');
   await until(async () => await state() === 'completed', 'Automatic polling did not verify and report completion');
   assert.equal(readStep().state, 'completed');
-  assert.equal(readFileSync(path.join(localRun, 'work/res/resg/signet_Geno'), 'utf8'), '0 1 2\n2 1 0\n1 0 1\n0 0 2\n');
+  assert.equal(existsSync(path.join(localRun, 'work/res/resg/signet_Geno')), false);
 
   const historyId = 'workspace--' + runId;
   const runDetail = `#ml-run-${historyId}`;
@@ -175,8 +175,10 @@ async function verify() {
   assert.deepEqual(submitted, ['submitted'], 'Checking history or reloading replayed a submission');
 
   const genotypeRecord = readFileSync(stepJson, 'utf8');
-  const genotypeResult = readFileSync(path.join(localRun, 'work/res/resg/signet_Geno'), 'utf8');
+  const genotypeResult = readFileSync(path.join(remoteRun, 'work/res/resg/signet_Geno'), 'utf8');
   const genotypeDone = readFileSync(path.join(remoteRun, 'steps/genotype.done'), 'utf8');
+  mkdirSync(path.join(remoteRun, 'work/tmp/tmpg'), {recursive:true});
+  writeFileSync(path.join(remoteRun, 'work/tmp/tmpg/clean_Genotype.fam'), sampleIds.map(id => `${id} ${id} 0 0 1 -9`).join('\n') + '\n');
   const genotypeIntermediate = path.join(remoteRun, 'work/tmp/tmpg/impute/impute_Genotype.sizes');
   mkdirSync(path.dirname(genotypeIntermediate), {recursive: true});
   writeFileSync(genotypeIntermediate, '4 samples, 3 retained variants\n');
@@ -239,7 +241,7 @@ async function verify() {
   assert.equal(readExpression().resources.hours, 1.5);
   assert.match(readFileSync(path.join(remoteRun, 'steps/expression.sbatch'), 'utf8'), /bash \.\/signet -t < \/dev\/null/);
   assert.equal(readFileSync(stepJson, 'utf8'), genotypeRecord, 'Submitting Stage 2 rewrote Stage 1 history');
-  assert.equal(readFileSync(path.join(localRun, 'work/res/resg/signet_Geno'), 'utf8'), genotypeResult);
+  assert.equal(existsSync(path.join(localRun, 'work/res/resg/signet_Geno')), false, 'Individual genotype results must remain remote');
   assert.equal(readFileSync(path.join(remoteRun, 'work/res/resg/signet_Geno'), 'utf8'), genotypeResult);
   assert.equal(readFileSync(path.join(remoteRun, 'steps/genotype.done'), 'utf8'), genotypeDone);
   assert.equal(readFileSync(genotypeIntermediate, 'utf8'), '4 samples, 3 retained variants\n',
@@ -269,7 +271,7 @@ async function verify() {
   writeFileSync(path.join(fixture.slurm, 'squeue'), '');
   await until(async () => await expressionState() === 'completed', 'Stage 2 polling did not collect completed results');
   assert.equal(readExpression().state, 'completed');
-  assert.equal(readFileSync(path.join(localRun, 'work/res/rest/signet_gexp'), 'utf8'), expressionMatrix);
+  assert.equal(existsSync(path.join(localRun, 'work/res/rest/signet_gexp')), false, 'Individual expression results must remain remote');
   assert.equal(readFileSync(stepJson, 'utf8'), genotypeRecord, 'Completing Stage 2 changed the Stage 1 record');
   await click(`${expressionPanel} [data-expression-history]`);
   await until(() => js(`Boolean(document.querySelector(${JSON.stringify(expressionStage)})?.getClientRects().length)`),
@@ -296,7 +298,7 @@ async function verify() {
   assert.ok(await js(`document.querySelector('#lens-history-stage [data-stage-table]').textContent.includes('MEGF6')`));
   assert.deepEqual(readFileSync(sbatchCalls, 'utf8').trim().split('\n'), ['submitted', 'submitted']);
   assert.equal(readFileSync(stepJson, 'utf8'), genotypeRecord);
-  assert.equal(readFileSync(path.join(localRun, 'work/res/resg/signet_Geno'), 'utf8'), genotypeResult);
+  assert.equal(existsSync(path.join(localRun, 'work/res/resg/signet_Geno')), false, 'Individual genotype results must remain remote');
   const originalExpressionRecord = readFileSync(expressionJson, 'utf8');
   const adjustmentPanel = '#lens-stage3';
   const adjustmentState = () => js(`document.querySelector(${JSON.stringify(adjustmentPanel)})?.dataset.adjustState`);
@@ -369,7 +371,9 @@ async function verify() {
   for (const [key, expected] of Object.entries({genotype:4, expression:4, matched:4, retained:3, excluded:1, variants:3, genes:3})) {
     assert.equal(Number(await js(`document.querySelector('#lens-history-stage3 [data-s3-count="${key}"]').textContent`)), expected);
   }
-  assert.equal(await js(`document.querySelectorAll('#lens-history-stage3 .s3-points circle').length`), 3);
+  assert.equal(await js(`document.querySelectorAll('#lens-history-stage3 .s3-points circle').length`), 0);
+  await until(() => js(`(()=>{const image=document.querySelector('#lens-history-stage3 .s3-remote-plot');return image&&!image.hidden&&image.complete&&image.naturalWidth===640})()`), 'The remotely rendered PCA image was blocked or did not load');
+  assert.equal(existsSync(path.join(localRun, 'work/res/resa/workspace-pca.evec')), false);
   assert.ok(await js(`document.querySelector('#lens-history-stage3 [data-s3-difference]').textContent.includes('0.75000')`));
 
   const finishedAdjustmentReload = once(window.webContents, 'did-finish-load');
@@ -380,12 +384,12 @@ async function verify() {
     'Completed Stage 3 did not reopen after reload');
   assert.equal(readFileSync(stepJson, 'utf8'), genotypeRecord);
   assert.equal(readFileSync(expressionJson, 'utf8'), originalExpressionRecord);
-  assert.equal(readFileSync(path.join(localRun, 'work/res/resg/signet_Geno'), 'utf8'), genotypeResult);
-  assert.equal(readFileSync(path.join(localRun, 'work/res/rest/signet_gexp'), 'utf8'), expressionMatrix);
+  assert.equal(existsSync(path.join(localRun, 'work/res/resg/signet_Geno')), false, 'Individual genotype results must remain remote');
+  assert.equal(existsSync(path.join(localRun, 'work/res/rest/signet_gexp')), false, 'Individual expression results must remain remote');
   assert.deepEqual(readFileSync(sbatchCalls, 'utf8').trim().split('\n'), ['submitted', 'submitted', 'submitted']);
   assert.deepEqual(readdirSync(path.join(fixture.project, 'runs')).sort(), ['step_test', runId].sort());
   const originalAdjustmentRecord = readFileSync(adjustmentJson, 'utf8');
-  const originalAdjustedExpression = readFileSync(path.join(localRun, 'work/res/resa/signet_gexp_rmpc.data'), 'utf8');
+  const originalAdjustedExpression = readFileSync(path.join(remoteRun, 'work/res/resa/signet_gexp_rmpc.data'), 'utf8');
   const cisPanel = '#lens-stage4';
   const cisState = () => js(`document.querySelector('${cisPanel}')?.dataset.cisState`);
   async function openCis() {
@@ -465,7 +469,8 @@ async function verify() {
   assert.equal(readFileSync(stepJson, 'utf8'), genotypeRecord);
   assert.equal(readFileSync(expressionJson, 'utf8'), originalExpressionRecord);
   assert.equal(readFileSync(adjustmentJson, 'utf8'), originalAdjustmentRecord);
-  assert.equal(readFileSync(path.join(localRun, 'work/res/resa/signet_gexp_rmpc.data'), 'utf8'), originalAdjustedExpression);
+  assert.equal(readFileSync(path.join(remoteRun, 'work/res/resa/signet_gexp_rmpc.data'), 'utf8'), originalAdjustedExpression);
+  assert.equal(existsSync(path.join(localRun, 'work/res/resa/signet_gexp_rmpc.data')), false);
   assert.deepEqual(readFileSync(sbatchCalls, 'utf8').trim().split('\n'), Array(4).fill('submitted'));
   assert.deepEqual(readdirSync(path.join(fixture.project, 'runs')).sort(), ['step_test', runId].sort());
   const originalCisRecord = readFileSync(cisJson, 'utf8');
@@ -549,7 +554,8 @@ async function verify() {
   assert.equal(readFileSync(expressionJson, 'utf8'), originalExpressionRecord);
   assert.equal(readFileSync(adjustmentJson, 'utf8'), originalAdjustmentRecord);
   assert.equal(readFileSync(cisJson, 'utf8'), originalCisRecord);
-  assert.equal(readFileSync(path.join(localRun, 'work/res/resa/signet_gexp_rmpc.data'), 'utf8'), originalAdjustedExpression);
+  assert.equal(readFileSync(path.join(remoteRun, 'work/res/resa/signet_gexp_rmpc.data'), 'utf8'), originalAdjustedExpression);
+  assert.equal(existsSync(path.join(localRun, 'work/res/resa/signet_gexp_rmpc.data')), false);
   assert.deepEqual(readFileSync(sbatchCalls, 'utf8').trim().split('\n'), Array(5).fill('submitted'));
   assert.deepEqual(readdirSync(path.join(fixture.project, 'runs')).sort(), ['step_test',runId].sort());
   const originalNetworkRecord = readFileSync(networkJson, 'utf8');
@@ -602,7 +608,7 @@ async function verify() {
   for (const relative of readVisualization().required_outputs) {
     const target = path.join(remoteRun, 'work', relative);
     mkdirSync(path.dirname(target), {recursive:true});
-    const content = relative.includes('_edgelist_') ? edgeCsv
+    const content = (relative.includes('_edgelist_') || relative.endsWith('signet-edges.csv')) ? edgeCsv
       : relative.endsWith('_name.txt') ? 'GENE1\nMEGF6\nOTHER\n'
       : relative.endsWith('.pdf') ? '%PDF-1.4\nlocal scientific export fixture\n'
       : relative.endsWith('.eps') ? '%!PS-Adobe-3.0 EPSF-3.0\nlocal scientific export fixture\n'

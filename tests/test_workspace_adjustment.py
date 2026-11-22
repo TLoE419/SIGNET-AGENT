@@ -63,7 +63,7 @@ class WorkspaceAdjustmentTest(unittest.TestCase):
 
     def test_saved_result_uses_actual_pca_and_identically_retained_samples(self):
         with patch('agent.runtime.ssh_transport.remote', side_effect=AssertionError('Saved display must be local')):
-            result = workspace_adjustment.completed_result(self.run_id)
+            result = workspace_adjustment._local_completed_result(self.run_id)
         self.assertEqual(result['matching'], {'genotype': 5, 'expression': 6, 'matched': 4,
                                               'retained': 2, 'excluded': 2, 'variants': 3, 'genes': 2})
         self.assertEqual(result['pca'], {'points': [[0.1, 0.3], [0.2, 0.4]],
@@ -79,16 +79,17 @@ class WorkspaceAdjustmentTest(unittest.TestCase):
         original = path.read_text()
         path.unlink()
         with self.assertRaises(OSError):
-            workspace_adjustment.completed_result(self.run_id)
+            workspace_adjustment._local_completed_result(self.run_id)
         path.write_text(original)
         (self.directory / 'signet_geno.data').write_text('2 1 0\n0 1 2\n')
         with self.assertRaises(ValueError):
-            workspace_adjustment.completed_result(self.run_id)
+            workspace_adjustment._local_completed_result(self.run_id)
         (self.directory / 'signet_geno.data').write_text('0 1 2\n2 1 0\n')
         (self.directory / 'workspace-pca.eval').write_text('nan\n3\n1\n')
         with self.assertRaises(ValueError):
-            workspace_adjustment.completed_result(self.run_id)
+            workspace_adjustment._local_completed_result(self.run_id)
 
+    @patch.object(workspace_adjustment, 'completed_result', new=lambda run_id: workspace_adjustment._local_completed_result(run_id))
     def test_live_route_keeps_authentication_and_saved_option_snapshot(self):
         server = ChatServer(('127.0.0.1', 0), Mock())
         self.addCleanup(server.server_close)
