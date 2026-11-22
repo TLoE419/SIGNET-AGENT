@@ -3563,6 +3563,7 @@
     panel: root.querySelector("#lens-stage1"),
     token: chatToken,
     renderFilePath,
+    onRetryCatalog: loadWorkspaceHistory,
     onHistoryChanged: () => void loadWorkspaceHistory(),
     onOpenHistory: (runId) => void openGenotypeHistory(runId),
     onBack: backToRunTimeline,

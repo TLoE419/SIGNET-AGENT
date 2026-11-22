@@ -66,7 +66,7 @@
     chooseDataset: "Open Data to select or create a dataset for Stage 1.",
     saveDataset: "Save this dataset in Data before preparing Stage 1.",
     catalogLoading: "Loading the dataset catalog…",
-    catalogUnavailable: "Could not load the dataset catalog. Retry in Run history.",
+    catalogUnavailable: "Could not load the dataset catalog.",
     unavailable: "The example is not ready",
     readyPrompt: "Review the files and settings, then select Submit Stage 1.",
     genotypeReadyPrompt: "Confirm the files, settings, and any warnings before submitting.",
@@ -344,7 +344,7 @@
     }};
   }
 
-  window.mountGenotypeRun = function mountGenotypeRun({panel, token, renderFilePath, onHistoryChanged, onOpenHistory, onBack}) {
+  window.mountGenotypeRun = function mountGenotypeRun({panel, token, renderFilePath, onRetryCatalog, onHistoryChanged, onOpenHistory, onBack}) {
     panel.classList.add("ml-stage-review");
     panel.innerHTML = `
       <div class="ml-result-main ml-genotype-main">
@@ -362,6 +362,7 @@
             <p class="ml-stage-review-guidance" data-genotype-guidance hidden></p>
           </div>
           <button type="button" class="ml-nav-action" data-genotype-review data-genotype-copy="review"></button>
+          <button type="button" class="ml-nav-action" data-genotype-retry-catalog hidden>Retry loading datasets</button>
           <p class="ml-genotype-notice" data-genotype-notice role="status" hidden></p>
         </div>
         <p class="ml-settings-note" data-genotype-retry-context role="status" hidden></p>
@@ -437,6 +438,7 @@
     const part = (name) => panel.querySelector(`[data-genotype-${name}]`);
     const form = part("form");
     const reviewButton = part("review");
+    const retryCatalogButton = part("retry-catalog");
     const submitButton = part("submit");
     const statusButton = part("refresh");
     const historyButton = part("history");
@@ -559,6 +561,8 @@
       statusLine.textContent = labelFor(state);
       if (item?.cancellation?.sending) statusLine.textContent = labelFor("cancelSending");
       const reviewingInputs = !item?.runId || retry;
+      const catalogError = !eligible && !dataset.ready && dataset.catalogUnavailable;
+      retryCatalogButton.hidden = !catalogError || !onRetryCatalog;
       const reviewPanel = part("review-panel");
       reviewButton.hidden = !eligible || !reviewingInputs;
       reviewButton.disabled = !connected || Boolean(item?.reviewing || item?.submitting);
@@ -571,7 +575,8 @@
       guidance.textContent = validReview ? labelFor(retry ? "retryReady" : "genotypeReadyPrompt") : eligible && !connected ? labelFor("connect")
         : eligible && !item?.attempted ? labelFor("loadInputsPrompt") : "";
       guidance.hidden = !reviewingInputs || !guidance.textContent;
-      reviewPanel.dataset.reviewState = item?.reviewing ? "checking" : item?.reviewTimedOut || item?.reviewError && !validReview ? "error" : validReview ? "ready" : "idle";
+      reviewPanel.dataset.reviewState = item?.reviewing ? "checking"
+        : catalogError || item?.reviewTimedOut || item?.reviewError && !validReview ? "error" : validReview ? "ready" : "idle";
       part("progress").hidden = !item?.runId && state === "idle";
       form.hidden = !eligible || !Boolean(item?.review || item?.record?.inputs);
       for (const field of fields) field.disabled = Boolean(item?.runId && !retry || item?.reviewing || item?.submitting || revalidationBusy(item) || retry && !validReview);
@@ -801,6 +806,9 @@
     }
     form.addEventListener("submit", event => event.preventDefault());
     reviewButton.addEventListener("click", () => void review());
+    retryCatalogButton.addEventListener("click", () => {
+      if (!retryCatalogButton.hidden) void onRetryCatalog();
+    });
     submitButton.addEventListener("click", () => void submit());
     statusButton.addEventListener("click", () => void refresh(true));
     historyButton.addEventListener("click", () => onOpenHistory?.(current()?.runId));
