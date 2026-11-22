@@ -1304,8 +1304,27 @@
     stage3HistoryPanel.querySelector(".s3-figure").hidden = state !== "ready";
     stage3HistoryPanel.querySelector(".ml-result-dock").hidden = state !== "ready";
 
-    stage3Plot.toggleAttribute("hidden", !pca?.points.length);
-    if (pca?.points.length) {
+    let raster = stage3HistoryPanel.querySelector('.s3-remote-plot');
+    if (!raster) {
+      raster = document.createElement('img');
+      raster.className = 's3-remote-plot';
+      stage3Plot.before(raster);
+    }
+    const remotePlot = pca?.source === 'signet_smartpca' && typeof pca.png_base64 === 'string';
+    raster.hidden = !remotePlot;
+    if (remotePlot) {
+      raster.src = 'data:image/png;base64,' + pca.png_base64;
+      raster.width = 640;
+      raster.height = 420;
+      raster.alt = inEnglish ? 'Principal component plot rendered on the remote host' : '在遠端繪製的主成分圖';
+    } else raster.removeAttribute('src');
+    stage3Plot.toggleAttribute("hidden", remotePlot || !pca?.points?.length);
+    if (remotePlot) {
+      stage3Plot.querySelector('.s3-points').replaceChildren();
+      stage3Legend.textContent = inEnglish
+        ? 'Rendered from saved results on the remote host; individual coordinates remain there.'
+        : '圖像由遠端保存的結果繪製，個體座標保留在遠端。';
+    } else if (pca?.points?.length) {
       const points = pca.points;
       drawStage3Scatter(stage3HistoryPanel, points, stage3Ticks(points, 0), stage3Ticks(points, 1), inEnglish);
       const variance = new Intl.NumberFormat(locale, {maximumFractionDigits: 2});

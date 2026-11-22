@@ -254,7 +254,7 @@ class ChatUITest(unittest.TestCase):
         release = threading.Event()
         finished = threading.Event()
 
-        def run(client, text, history, progress, http_timing, language):
+        def run(client, text, history, progress, http_timing, language, context=''):
             self.assertEqual(language, 'en')
             progress('工具正在執行')
             release.wait(3)

@@ -9,8 +9,8 @@ rules: every check on run names, paths, settings and resources happens in the
 service, so the app's buttons and any future AI tool share one code path.
 
 Security comes from ChatHandler before a request reaches this module: the Host
-must be 127.0.0.1:<port>, every request (GET included, since responses name the
-user's files) must carry X-Chat-Token, and POST/PATCH must come from the app's
+must be 127.0.0.1:<port>, and requests must carry X-Chat-Token except for
+ticketed result downloads and preview files. POST/PATCH must come from the app's
 Origin. Bodies are JSON objects of at most 32 KB.
 
 Every error reply is {"error": "<message for the user>", "code": "<machine code>"}:
@@ -23,21 +23,72 @@ Every error reply is {"error": "<message for the user>", "code": "<machine code>
   500 internal_error    an unexpected error in this app (details go to the backend log only)
   502 remote_failed     an SSH or Slurm command on HPC3 failed
 """
+from base64 import b64encode
+from hashlib import sha256
 import json
 import re
+import secrets
+import shutil
+import tempfile
+import time
+from pathlib import Path
+from zipfile import ZipFile
 import sys
 import traceback
 from urllib.parse import parse_qs
 
+from agent.runtime import analysis_family, analysis_rerun, step_proposal
 from agent.runtime import signet_jobs as jobs
 from agent.runtime import workspace_genotype
+from agent.runtime.visualization import read_graph, threshold_counts
 import agent.tools.signet as signet
 
 MAX_BODY = 32768
-STATUS = {'invalid_request': 400, 'not_found': 404, 'conflict': 409, 'not_ready': 412, 'remote_failed': 502}
+STATUS = {'invalid_request': 400, 'needs_choice': 400, 'not_found': 404, 'conflict': 409, 'not_ready': 412,
+          'remote_failed': 502}
 _RUN_NAME = r'[A-Za-z0-9][A-Za-z0-9_-]{0,63}'  # same rule as agent.tools.signet._name
 _RUN = rf'(?P<run_id>{_RUN_NAME})'
 _STEP = r'(?P<step>[a-z_]{1,32})'
+_SESSION = re.compile(r'[a-f0-9-]{36}')  # same session IDs accepted by ChatHandler
+_PREVIEW = re.compile(r'/signet/result-preview/(?P<ticket>[A-Za-z0-9_-]{32})/(?P<name>[A-Za-z0-9_.+/-]+)')
+_NETWORK_HTML = re.compile(r'signet_top([1-9][0-9]*)_freq[0-9.eE+-]+\.html')
+# PNG copies of SIGNET's own PDF plots, rendered on HPC3 at the end of -v.
+_SIGNET_PLOT = re.compile(r'signet_(circular|enrichment_radar|enrichment_hist)_top([1-9][0-9]*)_freq[0-9.eE+-]+\.png')
+_PREVIEW_TYPES = {'.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
+                  '.css': 'text/css; charset=utf-8', '.png': 'image/png'}
+_EMBED_STYLE = b'''<style>
+html,body,#htmlwidget_container{height:100%;margin:0!important;padding:0!important}
+html,body{overflow:hidden}
+.visNetwork.html-widget{height:100%!important}
+</style>'''
+_EMBED_SCRIPT = b'''
+window.addEventListener('load', () => {
+  const widget = document.querySelector('.visNetwork.html-widget');
+  const network = widget && document.getElementById('graph' + widget.id)?.chart;
+  if (!network) return;
+  let draggingNode = false;
+  const freeze = () => {
+    clearTimeout(timer);
+    network.off('stabilizationIterationsDone', freeze);
+    network.setOptions({physics:{enabled:false}});
+  };
+  let timer = setTimeout(freeze, 4000);
+  network.once('stabilizationIterationsDone', freeze);
+  network.on('dragStart', ({nodes}) => {
+    if (!nodes.length) return;
+    draggingNode = true;
+    clearTimeout(timer);
+    network.off('stabilizationIterationsDone', freeze);
+    network.setOptions({physics:{enabled:true}});
+  });
+  network.on('dragEnd', () => {
+    if (!draggingNode) return;
+    draggingNode = false;
+    timer = setTimeout(freeze, 350);
+  });
+});
+'''
+_EMBED_HASH = b64encode(sha256(_EMBED_SCRIPT).digest()).decode('ascii')
 
 
 class ApiError(Exception):
@@ -170,28 +221,56 @@ def submit_visualize_example(handler, url, run_id):
 
 # ---------- runs (local; includes signet -s) ----------
 
-def list_runs(handler, url):
-    """GET /signet/runs
-
-    Every local run under runs/, newest first, with its cohort and the state of
-    each step submitted to HPC3. Reads local files only; does not contact HPC3.
-    Response 200: {"runs": [{"run_id", "cohort", "created_at", "steps": {"expression": "running"}}]}
-    """
-    _query(url, ())
-    runs = []
+def _runs(session):
+    """Yield valid local run roots, optionally limited to one saved conversation."""
     folder = signet.PROJECT / 'runs'
     for path in sorted(folder.iterdir() if folder.is_dir() else (), key=lambda p: p.name):
         manifest = path / 'manifest.json'
         if not re.fullmatch(_RUN_NAME, path.name) or path.is_symlink() or not manifest.is_file():
             continue
         try:
-            root = signet._run(path.name)
-        except ValueError:
-            continue
-        runs.append({'run_id': path.name, 'cohort': json.loads(manifest.read_text()).get('cohort'),
-                     'created_at': int(manifest.stat().st_mtime), 'steps': jobs.run_steps(root.name)})
+            root = _run_root(path.name)
+        except ApiError as error:
+            if error.status == 404:
+                continue
+            raise
+        linked = jobs.analysis_session(root)
+        if session is None or linked == session:
+            yield root, manifest, linked
+
+
+def list_runs(handler, url):
+    """List local runs with their last saved step states."""
+    session = _query(url, ('session',)).get('session')
+    if session is not None and not _SESSION.fullmatch(session):
+        raise ApiError(400, 'invalid_request', 'Invalid conversation session.')
+    runs = [{'run_id': root.name, 'cohort': json.loads(manifest.read_text()).get('cohort'),
+             'created_at': int(manifest.stat().st_mtime), 'session': linked,
+             'steps': {name: record['state'] for name, record in jobs.run_records(root).items()}}
+            for root, manifest, linked in _runs(session)]
     runs.sort(key=lambda item: item['created_at'], reverse=True)
     return 200, {'runs': runs}
+
+
+def get_progress(handler, url):
+    """Read compact progress for one conversation, even during an HPC3 transfer."""
+    session = _query(url, ('session',)).get('session', '')
+    if not _SESSION.fullmatch(session):
+        raise ApiError(400, 'invalid_request', 'A valid conversation session is required.')
+    analyses = []
+    labels = analysis_family.labels(session)
+    for root, manifest, _ in _runs(session):
+        cohort = json.loads(manifest.read_text()).get('cohort')
+        if cohort == 'TCGA':
+            records = jobs.run_records(root)
+            upcoming = step_proposal.next_step(records)
+            analyses.append({'run_id': root.name, 'next_step': upcoming,
+                             'proposal': step_proposal.view(root, upcoming) if upcoming else None,
+                             'resource_limits': jobs.STEPS[upcoming].limits if upcoming else None,
+                             'genotype_proposal': step_proposal.view(root),
+                             **jobs.analysis_view(root, cohort, records, include_attempts=False),
+                             'family': labels.get(root.name, {})})
+    return 200, {'analyses': analyses}
 
 
 def create_run(handler, url):
@@ -213,21 +292,278 @@ def create_run(handler, url):
     return 201, {'run_id': run_id, 'cohort': cohort, 'settings': result['settings']}
 
 
+def start_analysis(handler, url):
+    """POST /signet/analyses   body {"session": "<conversation>", "mode": "example" | "custom"}
+
+    Start a TCGA analysis from the Workflow panel, as the assistant does with
+    configure_signet and propose_hpc3_genotype: create a fresh run, link it to the
+    conversation and prepare its first confirmation card. Nothing is submitted; the
+    researcher still reviews and confirms the card in chat. A short note is added to
+    the conversation (saving a new one), so the card and the assistant share context.
+    Response 201: {"run_id", "proposal"}
+    Errors: 400 bad session or mode; 409 a chat turn is running; 412 HPC3 not ready.
+    """
+    _query(url, ())
+    body = _body(handler, ('session', 'mode'), required=('session', 'mode'))
+    session, mode = body['session'], body['mode']
+    if not isinstance(session, str) or not _SESSION.fullmatch(session):
+        raise ApiError(400, 'invalid_request', 'Invalid conversation session.')
+    if mode not in ('example', 'custom'):
+        raise ApiError(400, 'invalid_request', 'mode must be example or custom.')
+    if analysis_family.original(session):
+        raise ApiError(409, 'conflict', 'This conversation already has an analysis. '
+                                        'Start a new conversation for a new analysis.')
+    jobs._environment()  # 412 before anything is created when HPC3 is not ready
+    server = handler.server
+    if not server.turn_lock.acquire(blocking=False):
+        raise ApiError(409, 'conflict', 'A chat turn is still running; start the analysis when it finishes.')
+    try:
+        base = time.strftime('tcga-%Y%m%d-%H%M%S')
+        run_id, number = base, 1
+        while (signet.PROJECT / 'runs' / run_id).exists():
+            number += 1
+            run_id = f'{base}-{number}'
+        created = signet.configure_signet(run_id, 'TCGA')
+        if created['status'] != 'created':
+            raise ApiError(400, 'invalid_request', created.get('error', 'Could not create the run.'))
+        proposal = step_proposal.prepare(run_id, session, mode, allow_unlinked=True)
+        from google.genai import types
+        data = '官方示範資料' if mode == 'example' else '自己的資料'
+        server.histories.setdefault(session, []).extend([
+            types.Content(role='user', parts=[types.Part(text=f'（從 Workflow 面板）開始 TCGA 分析：{data}。')]),
+            types.Content(role='model', parts=[types.Part(text=f'已建立分析 {run_id}，第一階段（-g）的確認卡已準備好。'
+                                                               '請檢查輸入與設定後按確認；尚未送出任何工作。')])])
+        server.active_session = session
+        server.save_state()
+    finally:
+        server.turn_lock.release()
+    return 201, {'run_id': run_id, 'proposal': proposal}
+
+
 def get_run(handler, url, run_id):
     """GET /signet/runs/{run_id}
 
     One run's current config.ini settings and the full record of each step
     submitted to HPC3 (state, job ID, timestamps, validation). Local files only.
-    Response 200: {"run_id", "cohort", "settings": {...}, "steps": {"expression": {...}}}
+    Response 200: {"run_id", "cohort", "settings": {...}, "steps": {"expression": {...}}, "analysis": {...}}
     Errors: 404 unknown run.
     """
     _query(url, ())
     root = _run_root(run_id)
     settings = signet._settings(root)
-    records = {}
-    for name in jobs.run_steps(run_id):
-        records[name] = json.loads((root / 'steps' / f'{name}.json').read_text())
-    return 200, {'run_id': run_id, 'cohort': settings.get('cohort'), 'settings': settings, 'steps': records}
+    records = jobs.run_records(root)
+    cohort = settings.get('cohort')
+    return 200, {'run_id': run_id, 'cohort': cohort, 'settings': settings, 'steps': records,
+                 'analysis': jobs.analysis_view(root, cohort, records)}
+
+
+def link_conversation(handler, url, run_id):
+    """Associate an existing run with a saved conversation without touching HPC3."""
+    _query(url, ())
+    session = _body(handler, ('session',), required=('session',))['session']
+    if not isinstance(session, str) or not _SESSION.fullmatch(session):
+        raise ApiError(400, 'invalid_request', 'Invalid conversation session.')
+    server = handler.server
+    if session not in server.histories:
+        raise ApiError(404, 'not_found', 'No such conversation.')
+    return 200, jobs.link_conversation(run_id, session)
+
+
+def step_action(handler, url, run_id, action, step='genotype', rerun=None):
+    """Create, decline, or consume a conversation’s confirmation."""
+    _query(url, ())
+    required = {
+        'prepare': ('session',),
+        'decline': ('session', 'proposal_id'),
+        'confirm': ('session', 'proposal_id', 'inputs', 'settings', 'resources'),
+    }[action]
+    optional = {'prepare': () if rerun else ('mode',), 'decline': (), 'confirm': ('options', 'choices')}[action]
+    body = _body(handler, required + optional, required=required)
+    session = body.pop('session')
+    if not isinstance(session, str) or not _SESSION.fullmatch(session):
+        raise ApiError(400, 'invalid_request', 'Invalid conversation session.')
+    if rerun:
+        if action == 'prepare':
+            return 200, analysis_rerun.prepare(run_id, session, step)
+        return 202, analysis_rerun.confirm(run_id, session, step, **body)
+    if action == 'prepare':
+        return 200, step_proposal.prepare(run_id, session, body.get('mode'), step_name=step)
+    if action == 'decline':
+        return 200, step_proposal.decline(run_id, session, body['proposal_id'], step_name=step)
+    return 202, step_proposal.confirm(run_id, session, **body, step_name=step)
+
+
+def _finished_analysis(run_id, session):
+    if not isinstance(session, str) or not _SESSION.fullmatch(session):
+        raise ApiError(400, 'invalid_request', 'Invalid conversation session.')
+    root = _run_root(run_id)
+    step_proposal.require_owner(root, session)
+    records = jobs.run_records(root)
+    if step_proposal.next_step(records) is not None:
+        raise ApiError(409, 'conflict', 'Complete all six analysis stages first.')
+    return root, records
+
+
+def get_results(handler, url, run_id):
+    session = _query(url, ('session',)).get('session')
+    root, records = _finished_analysis(run_id, session)
+    settings = records['visualize']['settings']
+    graph = read_graph(root / jobs.STEPS['visualize'].download / 'signet-edges.csv', int(settings['ntop']))
+    previews, images = _issue_previews(handler.server, root, records['visualize'].get('outputs', ()))
+    try:
+        # Optional: the card still shows the network if the -n matrix cannot be read.
+        thresholds = threshold_counts(root / jobs.STEPS['network'].download / 'signet_Afreq')
+    except (OSError, ValueError):
+        thresholds = None
+    return 200, {'graph': graph, 'previews': previews, 'images': images, 'thresholds': thresholds,
+                 'freq': float(settings['freq'])}
+
+
+def _issue_previews(server, root, outputs):
+    directory = jobs.STEPS['visualize'].download
+    paths = []
+    for name in outputs:
+        path = Path(name)
+        if path.is_relative_to(directory) and '..' not in path.parts:
+            paths.append(path.relative_to(directory))
+    plots, images = [], []
+    for path in paths:
+        match = _NETWORK_HTML.fullmatch(path.name)
+        image = _SIGNET_PLOT.fullmatch(path.name)
+        if path.parent != Path('.') or not (match or image):
+            continue
+        try:
+            if not signet._no_links(root / directory / path).is_file():
+                continue
+        except ValueError:
+            continue
+        if match:
+            plots.append((int(match[1]), path))
+        else:
+            images.append((image[1], int(image[2]), path))
+    if not plots and not images:
+        return [], []
+    assets = {plot.stem + '_files' for _, plot in plots}
+    files = {plot.as_posix(): plot for _, plot in plots}
+    files.update({path.as_posix(): path for _, _, path in images})
+    for path in paths:
+        if path.parts and path.parts[0] in assets and path.suffix in ('.js', '.css', '.png'):
+            files[path.as_posix()] = path
+    ticket = secrets.token_urlsafe(24)
+    with server.analysis_download_lock:
+        now = time.monotonic()
+        server.analysis_previews = {
+            key: grant for key, grant in server.analysis_previews.items() if grant[0] > now
+        }
+        server.analysis_previews[ticket] = (now + 300, root / directory, files)
+    order = ('circular', 'enrichment_hist', 'enrichment_radar')
+    return ([{'subnetwork': number, 'url': f'/signet/result-preview/{ticket}/{plot.name}'}
+             for number, plot in sorted(plots)],
+            [{'kind': kind, 'subnetwork': number, 'url': f'/signet/result-preview/{ticket}/{path.name}'}
+             for kind, number, path in sorted(images, key=lambda item: (item[1], order.index(item[0])))])
+
+
+def preview_result(handler, url):
+    """Serve an exported widget and its recorded dependencies to a sandboxed frame."""
+    try:
+        _query(url, ())
+        match = _PREVIEW.fullmatch(url.path)
+        with handler.server.analysis_download_lock:
+            grant = handler.server.analysis_previews.get(match['ticket']) if match else None
+        if grant is None or grant[0] <= time.monotonic():
+            raise ApiError(403, 'forbidden', 'Open the analysis results again to load the original graph.')
+        _, directory, files = grant
+        relative = files.get(match['name'])
+        if relative is None:
+            raise ApiError(404, 'not_found', 'No such preview file.')
+        path = signet._no_links(directory / relative)
+        data = path.read_bytes()
+        if path.suffix == '.html':
+            data = data.replace(b'</head>', _EMBED_STYLE + b'<script>' + _EMBED_SCRIPT + b'</script></head>', 1)
+        origin = f'http://127.0.0.1:{handler.server.server_port}'
+        asset_source = f"{origin}/signet/result-preview/{match['ticket']}/"
+        handler.send_response(200)
+        handler.send_header('Content-Type', _PREVIEW_TYPES[path.suffix])
+        handler.send_header('Content-Length', str(len(data)))
+        handler.send_header('Cache-Control', 'no-store')
+        handler.send_header('X-Content-Type-Options', 'nosniff')
+        handler.send_header('Referrer-Policy', 'no-referrer')
+        # The upstream widget evaluates JavaScript inside this opaque-origin frame.
+        handler.send_header('Content-Security-Policy',
+                            f"sandbox allow-scripts; default-src 'none'; "
+                            f"script-src {asset_source} 'unsafe-eval' 'sha256-{_EMBED_HASH}'; "
+                            f"style-src {asset_source} 'unsafe-inline'; img-src {asset_source} data:; "
+                            f"frame-ancestors {origin}; base-uri 'none'; form-action 'none'")
+        handler.end_headers()
+        handler.wfile.write(data)
+    except (BrokenPipeError, ConnectionResetError):
+        return
+    except ApiError as error:
+        return _reply(handler, error.status, error.code, str(error))
+    except (OSError, ValueError):
+        return _reply(handler, 404, 'not_found', 'The recorded preview file is unavailable.')
+
+
+def issue_download(handler, url, run_id):
+    _query(url, ())
+    session = _body(handler, ('session',), required=('session',))['session']
+    _finished_analysis(run_id, session)
+    ticket = secrets.token_urlsafe(24)
+    server = handler.server
+    with server.analysis_download_lock:
+        now = time.monotonic()
+        server.analysis_downloads = {
+            key: value for key, value in server.analysis_downloads.items() if value[0] > now
+        }
+        if len(server.analysis_downloads) >= 32:
+            raise ApiError(409, 'conflict', 'Too many pending downloads.')
+        server.analysis_downloads[ticket] = (now + 60, run_id, session)
+    return 200, {'url': '/signet/result-download?ticket=' + ticket}
+
+
+def download_results(handler, url):
+    """Stream a local ZIP using a single-use ticket from the authenticated chat."""
+    try:
+        ticket = _query(url, ('ticket',)).get('ticket')
+        with handler.server.analysis_download_lock:
+            grant = handler.server.analysis_downloads.pop(ticket, None)
+        if grant is None or grant[0] <= time.monotonic():
+            raise ApiError(403, 'forbidden', 'Request a new result download from the chat.')
+        _, run_id, session = grant
+        root, records = _finished_analysis(run_id, session)
+        with tempfile.TemporaryFile() as archive:
+            with ZipFile(archive, 'w') as zip_file:
+                for stage in jobs.ANALYSIS_STEPS:
+                    if stage not in jobs.DOWNLOADED_STEPS:
+                        continue   # person-level results stay on HPC3
+                    for name in records[stage].get('outputs', ()):
+                        relative = Path(name)
+                        if (relative.is_absolute() or '..' in relative.parts or chr(92) in name
+                                or not relative.is_relative_to(jobs.STEPS[stage].download)):
+                            raise ApiError(409, 'conflict', 'A recorded result path is invalid.')
+                        path = signet._no_links(root / relative)
+                        if not path.is_file():
+                            raise ApiError(409, 'conflict', 'A recorded result file is missing.')
+                        zip_file.write(path, relative.as_posix())
+            size = archive.tell()
+            archive.seek(0)
+            handler.send_response(200)
+            handler.send_header('Content-Type', 'application/zip')
+            handler.send_header('Content-Disposition', f'attachment; filename="{run_id}-results.zip"')
+            handler.send_header('Content-Length', str(size))
+            handler.send_header('Cache-Control', 'no-store')
+            handler.send_header('X-Content-Type-Options', 'nosniff')
+            handler.end_headers()
+            try:
+                shutil.copyfileobj(archive, handler.wfile)
+            except (BrokenPipeError, ConnectionResetError):
+                return
+    except jobs.StepError as error:
+        return _reply(handler, STATUS[error.code], error.code, str(error), error.details)
+    except ApiError as error:
+        return _reply(handler, error.status, error.code, str(error))
+    except (OSError, ValueError):
+        return _reply(handler, 409, 'conflict', 'Could not read the recorded results.')
 
 
 def update_settings(handler, url, run_id):
@@ -285,8 +621,11 @@ def get_step(handler, url, run_id, step):
     every 15 s per step; refresh=1 asks now. When the job has ended, this call
     checks the outputs and logs and, on success, downloads the results into the
     local run (so it may take a little longer once).
-    An absent or incomplete exit marker keeps the step validating. refresh=1
-    also rechecks old failures caused solely by an unconfirmed exit marker.
+    An absent or incomplete exit marker keeps the step validating. A successful
+    visualization with missing outputs stays validating for up to two minutes
+    from the first missing-file check. Normal polling also rechecks old
+    visualization records that failed solely because outputs were missing.
+    refresh=1 also rechecks failures caused by unconfirmed artifacts.
     Response 200: the step record. If HPC3 cannot be reached, the last known
     record with "connection": "interrupted".
     Errors: 404 unknown run, step, or a step never submitted; 412 not connected.
@@ -329,6 +668,7 @@ def get_log(handler, url, run_id, step):
 
 # Each path pattern maps HTTP methods to the function above that serves it.
 ROUTES = [
+    (re.compile(r'/signet/progress'), {'GET': get_progress}),
     (re.compile(r'/signet/catalog'), {'GET': get_catalog}),
     (re.compile(r'/signet/genotype/example'), {'GET': review_genotype_example, 'POST': submit_genotype_example}),
     (re.compile(rf'/signet/runs/{_RUN}/expression/example'),
@@ -342,7 +682,14 @@ ROUTES = [
     (re.compile(rf'/signet/runs/{_RUN}/visualize/example'),
      {'GET': review_visualize_example, 'POST': submit_visualize_example}),
     (re.compile(r'/signet/runs'), {'GET': list_runs, 'POST': create_run}),
+    (re.compile(r'/signet/analyses'), {'POST': start_analysis}),
     (re.compile(rf'/signet/runs/{_RUN}'), {'GET': get_run}),
+    (re.compile(rf'/signet/runs/{_RUN}/conversation'), {'PATCH': link_conversation}),
+    (re.compile(rf'/signet/runs/{_RUN}/genotype-proposal/(?P<action>prepare|decline|confirm)'), {'POST': step_action}),
+    (re.compile(rf'/signet/runs/{_RUN}/steps/{_STEP}/proposal/(?P<action>prepare|decline|confirm)'), {'POST': step_action}),
+    (re.compile(rf'/signet/runs/{_RUN}/steps/{_STEP}/(?P<rerun>rerun)/(?P<action>prepare|confirm)'), {'POST': step_action}),
+    (re.compile(rf'/signet/runs/{_RUN}/results'), {'GET': get_results}),
+    (re.compile(rf'/signet/runs/{_RUN}/results/download'), {'POST': issue_download}),
     (re.compile(rf'/signet/runs/{_RUN}/settings'), {'PATCH': update_settings}),
     (re.compile(rf'/signet/runs/{_RUN}/steps/{_STEP}'), {'GET': get_step, 'POST': submit_step}),
     (re.compile(rf'/signet/runs/{_RUN}/steps/{_STEP}/cancel'), {'POST': cancel_step}),
@@ -362,7 +709,7 @@ def handle(handler, method, url):
                 return handler.json_response(value, status)
         raise ApiError(404, 'not_found', 'No such SIGNET API.')
     except jobs.StepError as error:
-        return _reply(handler, STATUS[error.code], error.code, str(error))
+        return _reply(handler, STATUS[error.code], error.code, str(error), error.details)
     except ApiError as error:
         return _reply(handler, error.status, error.code, str(error))
     except Exception:
@@ -372,7 +719,10 @@ def handle(handler, method, url):
                       'Unexpected error in the app; the request may not have finished. Check the run state before retrying.')
 
 
-def _reply(handler, status, code, message):
-    data = json.dumps({'error': message, 'code': code}, ensure_ascii=False).encode()
+def _reply(handler, status, code, message, details=None):
+    reply = {'error': message, 'code': code}
+    if details is not None:
+        reply['details'] = details
+    data = json.dumps(reply, ensure_ascii=False).encode()
     handler._headers(status, 'application/json; charset=utf-8', len(data))
     handler.wfile.write(data)

@@ -49,7 +49,7 @@ tar -czf maps.tar.gz -C maps chr1.b38.gmap.gz chr2.b38.gmap.gz
 printf 'chr1\tHAVANA\tgene\t1\t2\t.\t+\t.\tgene_id "A"; gene_type "protein_coding";\n' | gzip > gtf.gz
 printf 'print("official tool")\n' > collapse.py
 printf '##fileformat=VCFv4.2\n' | gzip > kg.vcf.gz
-printf 'demographic.race\tid\tsubmitter_id\r\nwhite\tabc\tTCGA-44-3918\r\n' > clinical.tsv
+printf 'demographic.race\tdemographic.sex_at_birth\tid\tsubmitter_id\r\nwhite\tfemale\tabc\tTCGA-44-3918\r\n\tmale\tdef\tTCGA-55-0001\r\n' > clinical.tsv
 '''
 
 
@@ -135,7 +135,12 @@ class ReferenceScriptTest(unittest.TestCase):
                 self.assertEqual(self.download(key)[key], 'existing')
         self.assertEqual((self.root / 'refdata').stat().st_mode & 0o777, 0o700)
         self.assertEqual((self.root / 'refdata/clinical.tsv').read_bytes(),
-                         b'race\tid\tsubmitter_id\nwhite\tabc\tTCGA-44-3918\n', 'CRLF removed and race column renamed')
+                         b'race\tgender\tid\tsubmitter_id\nwhite\tfemale\tabc\tTCGA-44-3918\n\tmale\tdef\tTCGA-55-0001\n',
+                         'CRLF removed; race and sex_at_birth renamed to the columns signet -a reads')
+        log = (self.home / '.signet-agent/steps/clinical.log').read_text()
+        self.assertIn('Clinical cases: 2', log)
+        self.assertIn('(blank)=1', log, 'blank values are counted, not changed')
+        self.assertNotIn('TCGA-', log, 'the log holds counts only, no case IDs')
         self.assertIn('transcript_type', (self.root / hpc.REFERENCES['gtf']['path']).read_text())
         self.assertIn('gene_type', (self.root / hpc.FULL_GTF).read_text(), 'the full GTF is kept')
         gmap = subprocess.run(['gunzip', '-c', str(self.root / 'refdata/gmap/chr1.b38.gmap.gz')],
@@ -202,6 +207,40 @@ class ReferenceScriptTest(unittest.TestCase):
         self.assertTrue((self.root / hpc.REFERENCES['gtf']['path']).is_file())
 
 
+    def test_older_clinical_download_is_flagged_kept_and_fetched_again(self):
+        old = self.root / hpc.REFERENCES['clinical']['path']
+        old.parent.mkdir(parents=True, exist_ok=True)
+        old.write_text('race\tid\tsubmitter_id\nwhite\tabc\tTCGA-44-3918\n')
+        checks = {c['item']: c for c in hpc._checks(self.run_script(hpc._check_script), REVISION)}
+        self.assertEqual(checks['reference_clinical']['status'], 'problem')
+        self.assertIn('gender', checks['reference_clinical']['detail'])
+        started = self.download('clinical')
+        self.assertEqual((started['clinical'], started['clinical_replaced']), ('started', 'yes'))
+        kept = list(old.parent.glob('clinical.tsv.replaced-*'))
+        self.assertEqual(len(kept), 1, 'the older file is kept under another name')
+        self.assertIn('gender', old.read_text().splitlines()[0])
+        checks = {c['item']: c for c in hpc._checks(self.run_script(hpc._check_script), REVISION)}
+        self.assertEqual(checks['reference_clinical']['status'], 'ok')
+        self.assertEqual(self.download('clinical')['clinical'], 'existing')
+
+    def test_clinical_summary_reports_counts_from_hpc3_and_no_ids(self):
+        self.assertEqual(self.run_script(lambda root: hpc._table_summary_script(root, 'clinical'))['table'], 'missing')
+        self.download('clinical')
+        summary = json.loads(self.run_script(lambda root: hpc._table_summary_script(root, 'clinical'))['table'])
+        self.assertEqual((summary['status'], summary['rows']), ('ok', 2))
+        self.assertEqual(summary['columns'], ['race', 'gender', 'id', 'submitter_id'])
+        self.assertEqual(summary['per_column']['race'], {'blank': 1, 'distinct': 1, 'values': {'white': 1}})
+        self.assertEqual(summary['per_column']['gender']['values'], {'female': 1, 'male': 1})
+        self.assertNotIn('values', summary['per_column']['submitter_id'])
+        self.assertNotIn('TCGA-', json.dumps(summary))
+        self.assertNotIn(str(self.root), json.dumps(summary), 'the path stays on HPC3')
+
+    def test_clinical_without_the_columns_is_never_saved(self):
+        (Path(self.env['FIXTURES']) / 'clinical.tsv').write_text('demographic.race\tid\tsubmitter_id\nwhite\tabc\tTCGA-1\n')
+        self.download('clinical')
+        self.assertFalse((self.root / hpc.REFERENCES['clinical']['path']).exists())
+        self.assertIn('nothing was saved', (self.home / '.signet-agent/steps/clinical.log').read_text())
+
 
 class PrepareStepTest(unittest.TestCase):
     """The converter step: prerequisites in order, then the uploaded script really runs."""
@@ -259,6 +298,35 @@ class PrepareStepTest(unittest.TestCase):
         self.assertEqual(self.run_script(hpc._prepare_script)['prepare'], 'existing')
         checks = hpc._checks(self.run_script(hpc._check_script), REVISION)
         self.assertEqual(next(c for c in checks if c['item'] == 'imputation_reference')['status'], 'ok')
+        inputs = json.loads((prepared / 'inputs.json').read_text())
+        self.assertEqual(sorted(inputs), ['genetic_map', 'reference', 'study_map', 'study_ped'])
+        self.assertNotIn(Path(hpc.REFERENCE_FILES['ref']).name, log['lines'][-1], 'input paths stay out of the log')
+
+    def test_changed_ref_or_gmap_means_converting_again(self):
+        self.place(hpc.EXAMPLE_STUDY + '.map', '1\t.\t0\t100\n')
+        self.place(hpc.EXAMPLE_STUDY + '.ped', 'F S1 0 0 1 -9 A G\n')
+        vcf = ('##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tR1\n'
+               'chr1\t100\trs1\tA\tG\t.\tPASS\t.\tGT\t0|1\n')
+        self.place(hpc.REFERENCE_FILES['ref'], vcf, compress=True)
+        self.place(hpc.REFERENCE_FILES['gmap'], 'pos\tchr\tcM\n1\t1\t0\n1000001\t1\t2\n', compress=True)
+        self.assertEqual(self.run_script(hpc._prepare_script)['prepare'], 'started')
+        status = lambda: next(c for c in hpc._checks(self.run_script(hpc._check_script), REVISION)
+                              if c['item'] == 'imputation_reference')
+        self.assertEqual(status()['status'], 'ok')
+
+        # A different ref (here: replaced in place) makes the result stale; converting keeps the old one.
+        self.place(hpc.REFERENCE_FILES['ref'], vcf.replace('0|1', '1|1'), compress=True)
+        self.assertEqual(status()['status'], 'missing')
+        self.assertIn('Convert again', status()['detail'])
+        again = self.run_script(hpc._prepare_script)
+        self.assertEqual((again['prepare'], again['prepare_replaced']), ('started', 'yes'))
+        self.assertEqual(len(list((self.root / hpc.PREPARED).parent.glob('example.replaced-*'))), 1)
+        self.assertEqual((self.root / hpc.PREPARED / 'ref/chr1.gen').read_text(), 'chr1_100 rs1 100 A G 0 0 1\n')
+        self.assertEqual(status()['status'], 'ok')
+
+        # A result from before inputs were recorded is treated as stale too.
+        (self.root / hpc.PREPARED / 'inputs.json').unlink()
+        self.assertEqual(status()['status'], 'missing')
 
     def test_tool_reports_missing_prerequisites_in_plain_words(self):
         with Remote(markers(workspace_path='/w', prepare='needs_ref')):
