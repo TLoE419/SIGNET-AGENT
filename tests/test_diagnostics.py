@@ -19,7 +19,7 @@ class DiagnosticsTest(unittest.TestCase):
         self.assertIn('尚未呼叫任何工具',result)
 
     def test_progress_distinguishes_model_request_tool_and_followup_failure(self):
-        call=types.FunctionCall(id='c1',name='get_signet_settings',args={'run_id':'private-run'})
+        call=types.FunctionCall(id='c1',name='get_workspace_stage',args={'run_id':'private-run','stage':2})
         error=errors.ServerError(500,{'error':{'status':'INTERNAL','message':'Internal service error'}})
         client,_=client_for(response(calls=[call]),error,error)
         events=[]
@@ -27,7 +27,7 @@ class DiagnosticsTest(unittest.TestCase):
             result=main.run_conversation(client,'研究需求',[],progress=events.append)
         joined='\n'.join(events)
         self.assertIn('模型請求 1/5',events[0])
-        self.assertIn('get_signet_settings',joined)
+        self.assertIn('get_workspace_stage',joined)
         self.assertIn('status=ok',joined)
         self.assertIn('模型請求 2/5',joined)
         self.assertIn('已有 1 個工具結果',result)

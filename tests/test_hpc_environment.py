@@ -139,18 +139,32 @@ class CheckTest(unittest.TestCase):
         self.assertEqual(self.item(result, 'workspace')['status'], 'problem')
         self.assertIn('read_hpc_setup_log("container")', self.item(result, 'container')['detail'])
 
+    def test_example_only_background_install_reports_progress(self):
+        result, _ = self.check(markers(**{**READY, 'signet_example': 'missing'},
+                                       step_signet='running', step_signet_host='login-i15'))
+        self.assertEqual(self.item(result, 'signet_source')['status'], 'in_progress')
+
     def test_incomplete_check_changes_nothing_and_says_so(self):
         result, _ = self.check('', code=255)
         self.assertEqual(result['status'], 'failed')
 
 
 class StepToolTest(unittest.TestCase):
+    def test_source_installation_refuses_a_different_pin_before_remote_execution(self):
+        with patch.object(hpc.ssh_transport, 'remote') as remote:
+            for repository, revision in ((hpc.SOURCE_INVENTORY['repository'], 'a' * 40),
+                                         ('https://example.invalid/foreign.git', REVISION)):
+                result = hpc.start_step('signet', repository, revision)
+                self.assertEqual((result['status'], result['executed']), ('invalid', False))
+        remote.assert_not_called()
+
     def test_workspace_has_no_separate_step(self):
         with patch.object(hpc.ssh_transport, 'remote') as remote:
             result = create_hpc_workspace()
         self.assertEqual((result['status'], result['executed']), ('blocked', False))
         self.assertIn('Installing SIGNET creates the workspace', result['reason'])
         remote.assert_not_called()
+
 
     def test_source_installation_runs_in_the_background_and_shows_the_workflow_panel(self):
         from agent.tools.ui import UI_CHANNEL

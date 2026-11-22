@@ -228,7 +228,7 @@ class ReferenceScriptTest(unittest.TestCase):
         self.download('clinical')
         summary = json.loads(self.run_script(lambda root: hpc._table_summary_script(root, 'clinical'))['table'])
         self.assertEqual((summary['status'], summary['rows']), ('ok', 2))
-        self.assertEqual(summary['columns'], ['race', 'gender', 'id', 'submitter_id'])
+        self.assertEqual(summary['columns'], ['race', 'gender', 'column_3', 'submitter_id'])
         self.assertEqual(summary['per_column']['race'], {'blank': 1, 'distinct': 1, 'values': {'white': 1}})
         self.assertEqual(summary['per_column']['gender']['values'], {'female': 1, 'male': 1})
         self.assertNotIn('values', summary['per_column']['submitter_id'])

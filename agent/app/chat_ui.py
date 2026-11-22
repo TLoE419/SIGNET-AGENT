@@ -124,6 +124,8 @@ class ChatHandler(BaseHTTPRequestHandler):
         if not self._local_request():
             return self._error(403, '僅允許本機介面。')
         url = urlsplit(self.path)
+        if url.path == '/stage6/result-download' or url.path.startswith('/stage6/result-preview/'):
+            return signet_api.serve_result_asset(self, url)
         if url.path == '/signet/result-download':
             return signet_api.download_results(self, url)
         if url.path.startswith('/signet/result-preview/'):

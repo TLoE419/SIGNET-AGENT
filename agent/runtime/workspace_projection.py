@@ -1,33 +1,45 @@
-"""Read current workspace aggregates on HPC3 without downloading individual results."""
+"""Display aggregates of completed HPC3 results without downloading person-level files."""
+
 import ast
 import base64
+import hashlib
 import json
 import math
+import os
 from pathlib import Path
 import re
 import shlex
+import tempfile
 
 from agent.runtime import signet_jobs as jobs, ssh_transport
+from agent.runtime.workspace_history import _json
 import agent.tools.signet as signet
 
 STEPS = {1: 'genotype', 2: 'expression', 3: 'adjust', 4: 'cis'}
 MAX_BYTES = 32 * 1024 * 1024
+_SOURCE = Path(__file__).with_name('jobs') / 'project_workspace.py'
+
+
+def _digest(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()).hexdigest()
 
 
 def _reader(stage):
+    directory = Path(__file__).parent
     if stage in (1, 2):
-        path = Path(__file__).with_name('workspace_genotype.py')
+        path = directory / 'workspace_genotype.py'
         entry = 'genotype_summary' if stage == 1 else 'expression_summary'
         wanted = [entry]
     elif stage == 3:
-        path = Path(__file__).with_name('workspace_adjustment.py')
-        entry = '_local_completed_result'
+        path = directory / 'workspace_adjustment.py'
+        names = {node.name for node in ast.parse(path.read_text()).body if isinstance(node, ast.FunctionDef)}
+        # The public adapter can dispatch here; only the original pure reader runs remotely.
+        entry = '_local_completed_result' if '_local_completed_result' in names else 'completed_result'
         wanted = ['_lines', '_matrix', '_clinical', '_pca', '_median_sd', '_genotype_width', entry]
     else:
-        path = Path(__file__).with_name('workspace_cis.py')
-        entry = 'summary'
+        path, entry = directory / 'workspace_cis.py', 'summary'
         wanted = ['_matrix_shape', entry]
-    source = path.read_text(encoding='utf-8')
+    source = path.read_text()
     nodes = {node.name: node for node in ast.parse(source).body if isinstance(node, ast.FunctionDef)}
     lines = source.splitlines(keepends=True)
     return '\n\n'.join(''.join(lines[nodes[name].lineno - 1:nodes[name].end_lineno]) for name in wanted), entry
@@ -100,7 +112,6 @@ def _validate(value, run_id, stage, record):
                 raise ValueError('The remote expression gene aggregate is invalid.')
         if sum(item['count'] for item in summary['histogram']) != summary['samples'] * summary['genes']:
             raise ValueError('The remote histogram does not account for the expression values.')
-
     else:
         categories = {'common', 'low', 'rare'}
         if (set(summary) != {'genes', 'counts', 'pairs'} or not _number(summary['genes'], True)
@@ -120,56 +131,88 @@ def _validate(value, run_id, stage, record):
             raise ValueError('The remote cis-eQTL counts do not match the associations.')
 
 
-def completed_result(run_id, stage):
-    if str(stage) not in ('1', '2', '3', '4') or type(stage) is bool:
+def completed_result(run_id, stage='1', *, refresh=False):
+    """Project one exact completed job; cached aggregates remain readable while disconnected."""
+    if str(stage) not in {'1', '2', '3', '4'} or type(stage) is bool or type(refresh) is not bool:
         raise ValueError('Choose a completed workspace stage from 1 to 4.')
     stage = int(stage)
     root = signet._run(run_id)
-    snapshot_names = ['workspace-genotype.json']
-    if stage > 1:
-        snapshot_names.append({2: 'workspace-expression.json', 3: 'workspace-adjust.json', 4: 'workspace-cis.json'}[stage])
-    snapshots = {}
-    for name in snapshot_names:
-        path = signet._no_links(root / name)
-        content = path.read_bytes()
-        value = json.loads(content)
-        if value.get('run_id') != run_id or value.get('dataset_id') != 'example-chr1':
-            raise ValueError('The saved workspace selection does not identify this run.')
-        snapshots[path] = content
-    record_path = signet._no_links(root / 'steps' / (STEPS[stage] + '.json'))
-    before = record_path.read_bytes()
-    record = json.loads(before)
-    if (record.get('state') != 'completed' or record.get('run_id') != run_id
-            or record.get('step') != STEPS[stage]
-            or not isinstance(record.get('job_id'), str) or not re.fullmatch(r'[0-9]+', record['job_id'])
-            or type(record.get('attempt', 1)) is not int or record.get('attempt', 1) < 1):
-        raise ValueError('Select the exact completed workspace job.')
-    config = dict(jobs._environment())
-    owner_path = signet._no_links(root / 'steps/remote.owner')
-    owner_before = owner_path.read_bytes()
-    owner = json.loads(owner_before)
-    directory = jobs._remote_dir(config, root, run_id)
-    if (record.get('remote_dir') != directory or owner.get('remote_dir') != directory
-            or not isinstance(owner.get('token'), str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', owner['token'])):
-        raise ValueError('Select the original remote environment and owned workspace run.')
+    record_path = root / 'steps' / (STEPS[stage] + '.json')
+    record, record_digest = _json(record_path)
+    if (record.get('state') != 'completed' or record.get('step') != STEPS[stage] or record.get('run_id') != run_id
+            or not isinstance(record.get('job_id'), str) or not re.fullmatch(r'[0-9]{1,128}', record['job_id'])
+            or type(record.get('attempt', 1)) is not int or not 1 <= record.get('attempt', 1) <= 1000):
+        raise ValueError('Select an exact completed workspace job and attempt.')
+    owner, owner_digest = _json(root / 'steps/remote.owner')
     reader, entry = _reader(stage)
-    request = {'run_id': run_id, 'stage': stage, 'remote_dir': directory, 'work_root': config['workRoot'], 'job': record,
-               'owner_token': owner['token'], 'reader_source': reader, 'reader_entry': entry}
-    helper = Path(__file__).with_name('jobs') / 'project_workspace.py'
-    script = 'python3 - ' + shlex.quote(json.dumps(request)) + " <<'SIGNET_WORKSPACE_PROJECTION'\n" + helper.read_text(encoding='utf-8') + '\nSIGNET_WORKSPACE_PROJECTION\n'
-    response = ssh_transport.remote('bash -s', input=script.encode(), capture_output=True, timeout=180)
-    if response.returncode or len(response.stdout) > MAX_BYTES:
-        raise ValueError('The remote results could not be summarized safely.')
-    replies = [line.split('\t', 1)[1] for line in response.stdout.decode('utf-8').splitlines()
-               if line.startswith('@@workspace_projection\t')]
-    if len(replies) != 1:
-        raise ValueError('The remote result did not return a single aggregate.')
-    result = json.loads(replies[0])
-    _validate(result, run_id, stage, record)
-    if (record_path.read_bytes() != before or owner_path.read_bytes() != owner_before
-            or any(path.read_bytes() != content for path, content in snapshots.items())
-            or jobs._environment() != config):
-        raise ValueError('The selected job or remote environment changed while reading.')
+    helper = _SOURCE.read_text()
+    snapshots = {}
+    snapshot_values = {}
+    for step in tuple(STEPS.values())[:stage]:
+        path = root / ('workspace-' + step + '.json')
+        if step in ('genotype', STEPS[stage]) or path.exists() or path.is_symlink():
+            value, digest = _json(path)
+            if value.get('run_id') != run_id:
+                raise ValueError('The saved workspace inputs belong to a different run.')
+            snapshots[step], snapshot_values[step] = digest, value
+    source_version = _digest([1, helper, reader, entry])
+    cache_id = _digest([run_id, stage, record_digest, owner_digest, snapshots, source_version])
+    cache_dir = signet._no_links(root / 'workspace-projections')
+    cache = signet._no_links(cache_dir / (cache_id + '.json'))
+    if not refresh and cache.is_file():
+        if cache.stat().st_size > MAX_BYTES:
+            raise ValueError('The cached workspace projection is too large.')
+        saved = json.loads(cache.read_text())
+        value = saved['projection']
+        if (saved.get('cache_id') != cache_id or saved.get('source_version') != source_version
+                or saved.get('cache_key') != _digest([cache_id, value['source_fingerprint']])):
+            raise ValueError('The cached projection belongs to a different source.')
+        _validate(value, run_id, stage, record)
+    else:
+        config = jobs._environment()
+        if record.get('image') != config['image'] or record.get('partition') != config['partition']:
+            raise jobs.StepError('conflict', 'Select the original container and partition before reading these remote results.')
+        original_environment = snapshot_values.get('genotype', {}).get('environment')
+        if original_environment and any(original_environment.get(key) != config.get(key) for key in
+                ('root', 'source', 'image', 'executor', 'workRoot', 'partition', 'runtimeModule')):
+            raise jobs.StepError('conflict', 'Select the original remote environment before reading these results.')
+        guard = jobs._output_guard(root, record, allow_mount_alias=True)
+        request = {'run_id': run_id, 'stage': stage, 'remote_dir': record['remote_dir'], 'work_root': config['workRoot'], 'job': record,
+                   'owner_token': owner['token'], 'reader_source': reader, 'reader_entry': entry}
+        script = (jobs._say() + guard + 'python3 - ' + shlex.quote(json.dumps(request))
+                  + " <<'SIGNET_PROJECT_WORKSPACE'\n" + helper + '\nSIGNET_PROJECT_WORKSPACE\n'
+                  + 'projection_status=$?\n[ "$projection_status" = 0 ] || exit "$projection_status"\n' + guard)
+        try:
+            response = ssh_transport.remote('bash -s', input=script.encode(), capture_output=True, timeout=180)
+        except OSError as error:
+            raise jobs.StepError('remote_failed', 'Could not read the completed remote result aggregates.') from error
+        if response.returncode or len(response.stdout) > MAX_BYTES:
+            raise jobs.StepError('remote_failed', 'The completed remote results could not be projected safely.')
+        replies = [line.split('\t', 1)[1] for line in response.stdout.decode('utf-8').splitlines()
+                   if line.startswith('@@workspace_projection\t')]
+        if len(replies) != 1:
+            raise jobs.StepError('remote_failed', 'HPC3 did not return a verified workspace projection.')
+        value = json.loads(replies[0])
+        _validate(value, run_id, stage, record)
+        # A switch or retry while the request ran must not publish a projection under its new identity.
+        if (_json(record_path)[1] != record_digest or _json(root / 'steps/remote.owner')[1] != owner_digest
+                or jobs._environment() != config):
+            raise jobs.StepError('conflict', 'The selected job or environment changed while its results were read.')
+        for step, digest in snapshots.items():
+            if _json(root / ('workspace-' + step + '.json'))[1] != digest:
+                raise jobs.StepError('conflict', 'The saved source choices changed while the results were read.')
+        cache_dir.mkdir(mode=0o700, exist_ok=True)
+        saved = {'cache_id': cache_id, 'cache_key': _digest([cache_id, value['source_fingerprint']]),
+                 'source_version': source_version, 'projection': value}
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(mode='w', dir=cache_dir, prefix='.projection-', delete=False) as stream:
+                temporary = Path(stream.name)
+                json.dump(saved, stream, separators=(',', ':'), allow_nan=False)
+            os.replace(temporary, cache)
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
     if stage == 3:
-        return {'run_id': run_id, 'job': record, **{key: result[key] for key in ('npc', 'matching', 'comparison', 'pca')}}
-    return {'run_id': run_id, 'stage': stage, 'job': record, 'summary': result['summary']}
+        return {'run_id': run_id, 'job': record, **{key: value[key] for key in ('npc', 'matching', 'comparison', 'pca')}}
+    return {'run_id': run_id, 'stage': stage, 'job': record, 'summary': value['summary']}

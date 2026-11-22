@@ -1,9 +1,7 @@
-"""The SIGNET source installation run by the Python service on HPC3, against a real local Git repository."""
 import hashlib
 import os
 from pathlib import Path
 import subprocess
-import sys
 import tempfile
 import time
 import unittest
@@ -11,122 +9,127 @@ from unittest.mock import patch
 
 from agent.runtime import hpc
 
-GIT = ['git', '-c', 'user.name=test', '-c', 'user.email=test@example.com', '-c', 'init.defaultBranch=main']
-# HPC3 has GNU coreutils and util-linux; these stand-ins give macOS the same behavior.
-DARWIN_TOOLS = {
-    'mv': '#!/bin/sh\nfor a in "$@"; do shift; [ "$a" = -T ] || set -- "$@" "$a"; done\nexec /bin/mv "$@"\n',
-    'sha256sum': '#!/bin/sh\nexec shasum -a 256 "$@"\n',
-    'setsid': '#!/bin/sh\nexec "$@"\n',
-}
-
 
 class SourceInstallTest(unittest.TestCase):
+    """Run the actual installer against a pinned local repository, without SSH or network."""
+
     def setUp(self):
-        temp = tempfile.TemporaryDirectory()
-        self.addCleanup(temp.cleanup)
-        base = Path(temp.name).resolve()
-        repo = base / 'upstream'
-        files = {'signet': b'#!/bin/bash\necho settings\n', 'config.ini.default': b'[basic]\ncohort = TCGA\n',
-                 'example/geno/example.ped': b'FAM1 IND1 0 0 1 -9 A G\n', 'LICENSE.txt': b'license\n',
-                 'LICENSE_THIRD_PARTY.md': b'third party\n', 'notes/development.txt': b'not audited\n'}
-        for name, data in files.items():
-            (repo / name).parent.mkdir(parents=True, exist_ok=True)
-            (repo / name).write_bytes(data)
-        git = lambda *args: subprocess.run([*GIT, '-C', str(repo), *args], check=True, capture_output=True, text=True).stdout
-        git('init', '-q')
-        git('add', '.')
-        git('commit', '-qm', 'fixture')
-        git('config', 'uploadpack.allowAnySHA1InWant', 'true')
-        digest = lambda name: hashlib.sha256(files[name]).hexdigest()
-        self.inventory = {'repository': f'file://{repo}', 'revision': git('rev-parse', 'HEAD').strip(),
-                          'scripts': [{'path': 'signet', 'sha256': digest('signet')}],
-                          'support_files': [{'path': 'config.ini.default', 'sha256': digest('config.ini.default')}],
-                          'example_files': [{'path': 'example/geno/example.ped', 'sha256': digest('example/geno/example.ped')}]}
-        self.root = base / 'signet-agent'
-        self.source = self.root / 'software' / self.inventory['revision']
-        self.config = {'root': str(self.root), 'source': str(self.source), 'image': str(self.root / 'images/s.sif'),
-                       'executor': '', 'workRoot': str(self.root / 'runs'), 'partition': 'free',
-                       'revision': self.inventory['revision']}
-        bin_dir = base / 'bin'
+        self.folder = tempfile.TemporaryDirectory()
+        self.addCleanup(self.folder.cleanup)
+        self.root = Path(self.folder.name).resolve()
+        self.repository = self.root / 'repository'
+        self.repository.mkdir()
+        self.files = {'signet': b'#!/bin/bash\n', 'config.ini.default': b'[basic]\n',
+                      'example/geno/example.ped': b'FAM1 IND1\n',
+                      'LICENSE.txt': b'fixture\n', 'LICENSE_THIRD_PARTY.md': b'fixture\n'}
+        for name, data in self.files.items():
+            file = self.repository / name
+            file.parent.mkdir(parents=True, exist_ok=True)
+            file.write_bytes(data)
+        self.git('init', '-q')
+        self.git('add', '.')
+        self.git('commit', '-qm', 'local fixture')
+        revision = self.git('rev-parse', 'HEAD').strip()
+        entry = lambda name: {'path': name, 'sha256': hashlib.sha256(self.files[name]).hexdigest()}
+        self.inventory = {'repository': self.repository.as_uri(), 'revision': revision,
+                          'scripts': [entry('signet')], 'support_files': [entry('config.ini.default')],
+                          'example_files': [entry('example/geno/example.ped')]}
+        workspace = self.root / 'workspace'
+        self.source = workspace / 'software' / revision
+        self.config = {'root': str(workspace), 'source': str(self.source), 'revision': revision,
+                       'image': str(workspace / 'image.sif'), 'executor': '/bin/echo'}
+        self.state = workspace / '.signet-agent/steps'
+        # HPC3 uses GNU tools. These local stand-ins retain the used no-clobber semantics.
+        bin_dir = self.root / 'bin'
         bin_dir.mkdir()
-        for name, text in (DARWIN_TOOLS.items() if sys.platform == 'darwin' else ()):
-            (bin_dir / name).write_text(text)
-            (bin_dir / name).chmod(0o755)
-        self.home = base / 'home'
-        self.home.mkdir()
-        self.env = {**os.environ, 'PATH': f'{bin_dir}:{os.environ["PATH"]}', 'HOME': str(self.home)}
-        patcher = patch.object(hpc, 'SOURCE_INVENTORY', self.inventory)
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        self.script(bin_dir / 'sha256sum', '#!/bin/sh\nexec shasum -a 256 "$@"\n')
+        self.script(bin_dir / 'mv', '#!/bin/sh\nfor a in "$@"; do shift; [ "$a" = -T ] || set -- "$@" "$a"; done\nexec /bin/mv "$@"\n')
+        self.script(bin_dir / 'setsid', '#!/bin/sh\nexec "$@"\n')
+        self.env = {**os.environ, 'PATH': f'{bin_dir}:{os.environ["PATH"]}'}
 
-    def bash(self, script):
-        return subprocess.run(['bash', '-s'], input=script, text=True, capture_output=True, env=self.env)
+    def git(self, *args):
+        return subprocess.check_output(['git', '-C', str(self.repository), '-c', 'user.name=fixture',
+                                        '-c', 'user.email=fixture@example.invalid', *args], text=True)
 
-    def install(self):
-        return self.bash(hpc._source_install(self.config))
+    def script(self, path, text):
+        path.write_text(text)
+        path.chmod(0o700)
 
-    def start(self):
-        token = hpc._CONFIG.set(self.config)
+    def run_install(self, background=False):
+        context = hpc._CONFIG.set(self.config)
         try:
-            script = hpc._signet_script(str(self.root))
+            with patch.object(hpc, 'SOURCE_INVENTORY', self.inventory):
+                script = hpc._signet_script(self.config['root']) if background else hpc._source_install(self.config)
         finally:
-            hpc._CONFIG.reset(token)
-        done = self.bash(script)
-        self.assertEqual(done.returncode, 0, done.stderr)
-        return hpc._parse(done.stdout.encode())
+            hpc._CONFIG.reset(context)
+        return subprocess.run(['bash', '-s'], input=script, capture_output=True, text=True,
+                              env=self.env, timeout=10)
 
-    def test_fresh_installation_publishes_only_audited_files_with_the_example_data(self):
-        done = self.install()
-        self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertEqual((self.source / 'example/geno/example.ped').read_text(), 'FAM1 IND1 0 0 1 -9 A G\n')
-        self.assertTrue((self.source / 'LICENSE.txt').is_file())
-        self.assertFalse((self.source / 'notes').exists(), 'files outside the audited inventory are not installed')
-        self.assertFalse(list((self.root / 'software').glob('.install-*')), 'the staging folder is removed')
-        again = self.install()
-        self.assertEqual(again.returncode, 0, again.stderr)
-        self.assertIn('already installed', again.stdout)
+    def wait_for_background(self):
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            text = (self.state / 'signet.status').read_text()
+            if 'state=done' in text or 'state=failed' in text:
+                return text
+            time.sleep(0.02)
+        self.fail('Local fixture installer did not finish: ' + (self.state / 'signet.log').read_text())
 
-    def test_an_older_installation_gains_only_the_example_data(self):
+    def test_background_install_publishes_verified_source_once(self):
+        started = self.run_install(background=True)
+        self.assertEqual(started.returncode, 0, started.stderr)
+        self.assertEqual(hpc._parse(started.stdout.encode())['signet'], 'started')
+        self.assertIn('state=done', self.wait_for_background())
+        for name, data in self.files.items():
+            self.assertEqual((self.source / name).read_bytes(), data)
+        (self.source / 'config.ini').write_text('user configuration\n')
+        (self.source / 'notes.txt').write_text('keep\n')
+        before = {str(p): p.read_bytes() for p in self.source.rglob('*') if p.is_file()}
+        again = self.run_install(background=True)
+        self.assertEqual(hpc._parse(again.stdout.encode())['signet'], 'existing')
+        self.assertEqual({str(p): p.read_bytes() for p in self.source.rglob('*') if p.is_file()}, before)
+
+    def test_a_running_install_is_not_started_again(self):
+        self.state.mkdir(parents=True)
+        self.state.joinpath('signet.status').write_text(
+            f'state=running\nhost={os.uname().nodename}\npid={os.getpid()}\n')
+        result = self.run_install(background=True)
+        self.assertEqual(hpc._parse(result.stdout.encode())['signet'], 'in_progress')
+        self.assertFalse(self.state.joinpath('signet.install').exists())
+
+    def test_a_failed_hash_never_publishes_and_reports_failed(self):
+        self.inventory['scripts'][0]['sha256'] = '0' * 64
+        self.assertEqual(self.run_install(background=True).returncode, 0)
+        self.assertIn('state=failed', self.wait_for_background())
+        self.assertFalse(self.source.exists())
+        self.assertFalse(list(self.source.parent.glob('.install-*')))
+
+    def test_example_upgrade_preserves_existing_installation(self):
         self.source.mkdir(parents=True)
-        (self.source / 'signet').write_text('#!/bin/bash\necho settings\n')
-        (self.source / 'config.ini.default').write_text('[basic]\ncohort = TCGA\n')
-        (self.source / 'config.ini').write_text('user settings\n')
-        done = self.install()
-        self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertTrue((self.source / 'example/geno/example.ped').is_file())
-        self.assertEqual((self.source / 'config.ini').read_text(), 'user settings\n', 'nothing already there changes')
+        for name in ('signet', 'config.ini.default'):
+            (self.source / name).write_bytes(self.files[name])
+        (self.source / 'config.ini').write_text('saved preferences\n')
+        result = self.run_install()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.source / 'example/geno/example.ped').read_bytes(), self.files['example/geno/example.ped'])
+        self.assertEqual((self.source / 'config.ini').read_text(), 'saved preferences\n')
+        (self.source / 'example/geno/example.ped').write_text('researcher edit\n')
+        self.assertEqual(self.run_install().returncode, 0)
+        self.assertEqual((self.source / 'example/geno/example.ped').read_text(), 'researcher edit\n')
 
-    def test_a_hash_mismatch_publishes_nothing(self):
-        self.inventory['scripts'] = [{'path': 'signet', 'sha256': '0' * 64}]
-        self.assertNotEqual(self.install().returncode, 0)
-        self.assertFalse(self.source.exists(), 'unverified files are never published')
-        self.assertFalse(list((self.root / 'software').glob('.install-*')))
-
-    def test_the_step_runs_in_the_background_and_reports_its_state(self):
-        started = self.start()
-        self.assertEqual(started['signet'], 'started')
-        state = self.root / '.signet-agent/steps/signet.status'
-        for _ in range(100):
-            if 'state=done' in state.read_text() or 'state=failed' in state.read_text():
-                break
-            time.sleep(0.1)
-        log = (self.root / '.signet-agent/steps/signet.log').read_text()
-        self.assertIn('state=done', state.read_text(), log)
-        self.assertIn('Installed and verified SIGNET', log)
-        self.assertTrue((self.source / 'example').is_dir())
-        self.assertEqual(self.start()['signet'], 'existing')
-
-    def test_a_running_installation_is_not_started_twice(self):
-        steps = self.root / '.signet-agent/steps'
-        steps.mkdir(parents=True)
-        sleeper = subprocess.Popen(['sleep', '30'])
-        self.addCleanup(sleeper.kill)
-        host = subprocess.run(['hostname'], capture_output=True, text=True).stdout.strip()
-        (steps / 'signet.status').write_text(f'state=running\nhost={host}\npid={sleeper.pid}\n')
-        self.assertEqual(self.start()['signet'], 'in_progress')
-        sleeper.kill()
-        sleeper.wait()
-        self.assertEqual(self.start()['signet'], 'started', 'a stopped installation can be started again')
+    def test_tampered_example_is_never_added_and_source_link_is_refused(self):
+        self.source.mkdir(parents=True)
+        for name in ('signet', 'config.ini.default'):
+            (self.source / name).write_bytes(self.files[name])
+        self.inventory['example_files'][0]['sha256'] = '0' * 64
+        self.assertNotEqual(self.run_install().returncode, 0)
+        self.assertFalse((self.source / 'example').exists())
+        original = self.source.with_name('original')
+        self.source.rename(original)
+        (original / 'example').mkdir()
+        self.source.symlink_to(original, target_is_directory=True)
+        refused = self.run_install(background=True)
+        self.assertEqual(hpc._parse(refused.stdout.encode())['signet'], 'failed')
+        self.assertEqual((original / 'signet').read_bytes(), self.files['signet'])
 
 
 if __name__ == '__main__':

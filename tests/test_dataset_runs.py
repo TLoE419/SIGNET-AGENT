@@ -42,7 +42,7 @@ class DatasetRunTest(unittest.TestCase):
             + '\n'.join('2\t' + str(pos) + '\trs' + str(n) + '\t' + ref + '\t' + alt + '\t.\tPASS\t.\tGT\t0/1'
                          for n, (pos, ref, alt) in enumerate(((101, 'A', 'G'), (202, 'A', 'G'), (303, 'C', 'T')), 1)) + '\n')
         self.paths['genetic-map.txt'].write_text('pos chr cM\n0 2 0\n1000 2 1\n')
-        self.paths['annotation.gtf'].write_text('annotation snapshot\n')
+        self.paths['annotation.gtf'].write_text('chr2\tfixture\tgene\t1\t2\t.\t+\t.\ttranscript_type \"protein_coding\";\n')
         selected = self.f.hpc / 'ws/refdata/selected.tsv'
         selected.write_text(''.join(key + '\t' + str(self.paths[name]) + '\n' for key, name in (
             ('ref', 'reference.vcf'), ('gmap', 'genetic-map.txt'), ('gtf', 'annotation.gtf'))))

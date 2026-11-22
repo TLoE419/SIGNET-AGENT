@@ -52,9 +52,7 @@ class ReadFileTest(unittest.TestCase):
         self.assertIn('summarize_table', st.dispatch_tool('read_file', {'path': 'data/clinical.tsv'})['error'])
         allowed = ['runs/demo/work/res/rest/signet_gene_pos', 'runs/demo/work/res/rest/signet_gene_name',
                    'runs/demo/work/res/resn/signet_Afreq', 'runs/demo/work/res/resn/signet_net.genepos',
-                   'runs/demo/work/res/resv/signet-edges.csv', 'runs/demo/work/res/resv/signet_edgelist_0.5.txt',
-                   'runs/demo/manifest.json', 'runs/demo/steps/genotype.json',
-                   'runs/demo/work/script/adj/adj_adjust.R']
+                   'runs/demo/work/res/resv/signet-edges.csv', 'runs/demo/work/res/resv/signet_edgelist_0.5.txt']
         for relative in allowed:
             target = self.root / relative
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -73,6 +71,8 @@ class ReadFileTest(unittest.TestCase):
 
     def test_rejects_outside_hidden_links_credentials_binary_and_invalid_arguments(self):
         paths = ['.env', 'main.py', 'data/../.env', 'data/.private/secret',
+                 'data/raw-clinical.tsv', 'runs/demo/steps/genotype.json',
+                 'runs/demo/work/res/resg/signet_Genotype.sampleID',
                  'data/credentials', 'data/credentials.json', 'data/private.pem', 'data/node_modules/key.txt']
         for relative in paths:
             target = self.root / relative
@@ -89,6 +89,16 @@ class ReadFileTest(unittest.TestCase):
         self.assertEqual(st.dispatch_tool('read_file',{'path':str(link)})['status'],'invalid')
         for args in [{'start_line':0},{'max_lines':501},{'start_line':True},{'max_lines':'5'},{'extra':1}]:
             self.assertEqual(st.dispatch_tool('read_file',{'path':str(self.path),**args})['status'],'invalid')
+
+    def test_raw_research_data_is_refused_before_contents_are_opened(self):
+        path = self.root / 'data/private-clinical.tsv'
+        path.parent.mkdir(parents=True)
+        path.write_text('patient_id\trace\nPRIVATE-PERSON\tasian\n')
+        with patch.object(Path, 'open', side_effect=AssertionError('Raw data must not be opened')):
+            result = st.dispatch_tool('read_file', {'path': str(path)})
+        self.assertEqual(result['status'], 'invalid')
+        self.assertFalse(result['executed'])
+        self.assertNotIn('PRIVATE-PERSON', str(result))
 
     def test_empty_and_oversized_files(self):
         self.path.touch()
@@ -129,7 +139,7 @@ class SummarizeTableTest(unittest.TestCase):
         (self.root / 'data/few.csv').write_text('sample_id,group\nTCGA-44-0001,a\nTCGA-44-0002,b\n')
         result = tools.summarize_table('data/few.csv')
         self.assertEqual(result['per_column']['sample_id'], {'blank': 0, 'distinct': 2})
-        self.assertEqual(result['per_column']['group']['values'], {'a': 1, 'b': 1})
+        self.assertNotIn('group', result['per_column'])
         self.assertNotIn('TCGA-44', str(result))
         for bad in ('../outside.tsv', '.env', 'data/missing.tsv'):
             self.assertEqual(st.dispatch_tool('summarize_table', {'path': bad})['status'], 'invalid', bad)

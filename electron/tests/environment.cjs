@@ -154,13 +154,15 @@ async function until(check,description='Local environment condition timed out',t
  await js(`(()=>{const button=document.querySelector('[data-setup-action="signet"]');button.click();button.click()})()`);
  await until(()=>js(`document.querySelector('.ml-remote-readiness')?.dataset.phase==='needs-install'&&window.envPhases.filter(p=>p==='checking').length>=2`));
  await settled(10,{signet_source:'ok',container:'missing'});
- assert.equal(commands.filter(script=>script.includes('SIGNET_INSTALL')).length,1,'Double-clicking source installation calls the Python installer once');
+ assert.equal(commands.filter(script=>script.includes('SIGNET_INSTALL')).length,1,'Double-clicking source installation calls the shared Python installer once');
+ assert.equal(await js(`'install' in window.signetDesktop.environment`),false,'the desktop bridge has no second installer');
+ await until(async()=>!(await js('window.signetDesktop.environment.getSnapshot()')).value.missing?.includes('SIGNET source'));
  assert.deepEqual(setupActionCalls,[],'Installing source does not also start downloads');
- const startingPhases=await js('window.envPhases');
+ const startingPhases=await js('window.envPhases'),beforeClassic=setupCommands().length;
  await switchView('classic-view');
  await until(()=>js(`document.querySelector('.ssh-environment-status')?.dataset.phase==='needs-install'`));
  await observeEnvironment(startingPhases);
- assert.equal(setupCommands().length,4,'Opening the classic view keeps the one explicit source installation');
+ assert.equal(setupCommands().length,beforeClassic,'Opening the classic view does not install or recheck the environment');
  assert.ok(await js(`document.querySelector('.ssh-status-subtitle').textContent.includes('testuser@127.0.0.1:')`));
  await js(`document.querySelector('.ssh-environment-status').click()`);
  const click=label=>js(`[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent===${JSON.stringify(label)}).click()`);
@@ -173,7 +175,7 @@ async function until(check,description='Local environment condition timed out',t
  await assert.rejects(pythonEnvironment('environment'),/Prepare the SIGNET environment/,'science stays blocked until verified');
  assert.equal(await js(`'install' in window.signetDesktop.environment`),false,'the desktop bridge has no installer');
  assert.equal(commands.some(s=>s.includes(' pull ')||s.includes('library://')),false,'the login node must not download the container');
- assert.equal(setupCommands().length,4,'probe, source install, probe, source integrity');
+ assert.equal(commands.filter(script=>script.includes('SIGNET_INSTALL')).length,1,'the installer is called only by the explicit source button');
  image=true;await click('Check environment');
  await until(()=>js(`document.querySelector('.ssh-environment-status')?.dataset.phase==='error'`));
  await until(()=>js(`document.querySelector('.ssh-environment-modal').textContent.includes('runtime-verification failed')`));

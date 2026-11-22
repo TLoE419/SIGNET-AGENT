@@ -1,26 +1,7 @@
-"""What the assistant may know about one SIGNET step: its state, and on failure the end of its logs.
-
-Reads the step record kept by signet_jobs (refreshing it from Slurm at most every 15 s, as the
-chat card does). Paths are cut to file names and TCGA barcodes are masked, so neither the
-researcher's folders nor case identifiers reach the model. It never submits, cancels or
-changes anything.
-"""
+"""Structured model reports: counts and execution metadata, never person-level rows or raw logs."""
 import re
-
 from agent.runtime import signet_jobs as jobs
 
-FLAGS = {step.flag: name for name, step in jobs.STEPS.items()}
-LOG_LINES = 40
-_BARCODE = re.compile(r'TCGA-[A-Za-z0-9]{2}-[A-Za-z0-9]{4}(?:-[A-Za-z0-9]{2,5})*')
-_PATH = re.compile(r'(?<![\w.~])/(?:[\w.+@-]+/)+([\w.+@-]*)')
-_FIELDS = ('state', 'attempt', 'job_id', 'slurm_state', 'exit_code', 'submitted_at', 'finished_at', 'reason',
-           'failure_hints', 'missing_outputs', 'progress', 'settings', 'options', 'resources', 'reused_from',
-           'clinical')
-_NEEDS_LOGS = ('failed', 'cancelled', 'unknown')
-
-
-# What the rows and columns of each output mean, from the SIGNET scripts that write them
-# (geno_prep/combine_geno.sh, gexp_prep/gpos.R, adj/adj_filter.sh, cis-eQTL/combine.sh, network.sh).
 _MEANING = {
     'signet_Genotype.sampleID': ('samples', None),
     'signet_Geno': ('samples', 'SNPs'),
@@ -28,6 +9,13 @@ _MEANING = {
     'signet_gexp': ('samples', 'genes'),
     'signet_gene_name': ('genes', None),
     'signet_gene_pos': ('genes', None),
+    'signet_matched.gexp': ('matched samples', 'genes'),
+    'signet_new.Geno': ('matched samples', 'SNPs'),
+    'signet_gexp.data': ('retained samples', 'genes'),
+    'signet_gexp_rmpc.data': ('retained samples', 'genes'),
+    'signet_geno.data': ('retained samples', 'SNPs'),
+    'signet_all.eQTL.data': ('samples', 'instrument columns'),
+    'signet_net.gexp.data': ('samples', 'genes'),
     'signet_new.Geno.map': ('SNPs', None),
     'signet_new.Geno.maf': ('SNPs', None),
     'signet_all.sig.pValue': ('significant gene-SNP pairs', None),
@@ -47,7 +35,7 @@ def _input_facts(key, counts):
         return {'samples': rows}
     if key == 'map.file':
         return {'snps': rows}
-    if key == 'gexp.file':
+    if key == 'gexp.file' and rows >= 6 and columns >= 2:
         return {'samples': columns - 1, 'genes_after_dropping_the_last_5_rows': rows - 1 - 5}
     return {}
 
@@ -74,30 +62,106 @@ def label_summary(name, record, summary):
                'scope': 'Counts only, computed on HPC3, where the results stay. Compare inputs with outputs before '
                         'saying anything was removed; files without rows_are are counted but not labeled.'}
     if name not in jobs.DOWNLOADED_STEPS:
-        labeled['location'] = 'Person-level results stay on HPC3; nothing of this step was copied to this computer.'
+        labeled['location'] = 'Counts computed on HPC3; person-level rows are never shared with the model. Existing local archives are preserved.'
     if record.get('progress'):
         labeled['work_units'] = record['progress']
     return labeled
 
 
-def redact(value):
-    """Mask case IDs and cut absolute paths to their last part, in strings, lists and dicts."""
-    if isinstance(value, str):
-        return _PATH.sub(lambda match: '…/' + match.group(1), _BARCODE.sub('TCGA-[masked]', value))
-    if isinstance(value, list):
-        return [redact(item) for item in value]
-    if isinstance(value, dict):
-        return {key: redact(item) for key, item in value.items()}
-    return value
+def public_progress(record):
+    result = {}
+    progress = record.get('progress')
+    if not isinstance(progress, dict):
+        return result
+    for key, value in progress.items():
+        if (key in {'imputation', 'expression_outputs', 'variant_filter', 'low_frequency',
+                    'rare_variants', 'stage1', 'stage2', 'subnetworks'}
+                and isinstance(value, str) and re.fullmatch(r'[0-9]+ [0-9]+', value)):
+            done, total = map(int, value.split())
+            if 0 <= done <= total and total > 0:
+                result[key] = value
+    return result
 
 
-def _card(root, name):
-    """The step's latest confirmation card: its state and, if sending failed, why."""
-    from agent.runtime import step_proposal
-    proposal = step_proposal.view(root, name)
-    if not proposal:
-        return None
-    return {key: proposal[key] for key in ('state', 'error') if key in proposal}
+def safe_summary(name, record, summary):
+    # Do not trust historical JSON to contain only the current counts schema.
+    if not isinstance(summary, dict):
+        return {'available': False, 'scope': 'No verified counts are available; raw results remain private.'}
+    expected = {path.rsplit('/', 1)[-1] for path in jobs._required(jobs.STEPS[name], record)}
+    clean = {'outputs': [], 'inputs': {}}
+    for entry in summary.get('outputs', []):
+        if not isinstance(entry, dict) or entry.get('file') not in expected:
+            continue
+        row = {'file': entry['file']}
+        if entry.get('available') is False:
+            row['available'] = False
+        for key in ('rows', 'columns'):
+            if type(entry.get(key)) is int and entry[key] >= 0:
+                row[key] = entry[key]
+        clean['outputs'].append(row)
+    for key, entry in summary.get('inputs', {}).items():
+        if key not in jobs._COUNTED_INPUTS.get(name, ()) or not isinstance(entry, dict):
+            continue
+        if all(type(entry.get(field)) is int and entry[field] >= 0 for field in ('rows', 'columns')):
+            clean['inputs'][key] = {'file': key, 'rows': entry['rows'], 'columns': entry['columns']}
+    result = label_summary(name, {**record, 'progress': public_progress(record)}, clean)
+    result['available'] = any('rows' in entry for entry in clean['outputs'])
+    if name == 'genotype' and summary.get('reference_preparation'):
+        from agent.runtime.jobs.reference_summary import safe_preparation
+        result['reference_preparation'] = safe_preparation(summary['reference_preparation'])
+    return result
+
+
+def failure_summary(record):
+    """Classify known evidence into fixed explanations; never forward arbitrary log text."""
+    result, diagnoses = {}, []
+    state = record.get('slurm_state')
+    scheduler = {'OUT_OF_MEMORY': 'The scheduler stopped the job because it exceeded its memory allocation.',
+                 'TIMEOUT': 'The scheduler stopped the job because it reached its time limit.',
+                 'NODE_FAIL': 'The scheduler reported a compute-node failure.',
+                 'PREEMPTED': 'The scheduler preempted this job.',
+                 'FAILED': 'The scheduler reported that the job failed.',
+                 'CANCELLED': 'The scheduler confirmed that the job was cancelled.'}
+    if isinstance(state, str) and state.split() and state.split()[0] in scheduler:
+        key = state.split()[0]
+        diagnoses.append(('scheduler_' + key.lower(), scheduler[key]))
+        result['slurm_state'] = key
+    patterns = (('completion marker is missing', 'exports_incomplete',
+                 'The official visualization export did not record successful completion.'),
+                ('cannot open', 'missing_or_unreadable_file', 'A required file could not be opened. Check the selected inputs and earlier-stage outputs.'),
+                ('No such file or directory', 'missing_file', 'A required file or directory was not found. Check inputs and earlier-stage outputs.'),
+                ('command not found', 'missing_command', 'A required scientific command was unavailable in the execution environment.'),
+                ('Execution halted', 'scientific_script_failed', 'The scientific script stopped with an error.'),
+                ('Error in ', 'scientific_runtime_error', 'The scientific runtime reported an error. Inspect the private logs in the workspace.'))
+    hints = record.get('failure_hints', [])
+    if not isinstance(hints, list):
+        hints = []
+    for pattern, code, message in patterns:
+        if any(isinstance(hint, str) and pattern in hint for hint in hints):
+            diagnoses.append((code, message))
+    code = record.get('exit_code')
+    if isinstance(code, str) and re.fullmatch(r'[0-9]+', code):
+        result['exit_code'] = code
+        if int(code):
+            diagnoses.append(('nonzero_exit', 'The scientific command ended with a nonzero exit status.'))
+    if record.get('missing_outputs'):
+        result['missing_output_count'] = len(record['missing_outputs'])
+        diagnoses.append(('missing_outputs', 'The job ended without all required nonempty result files.'))
+    if hints:
+        result['error_evidence_count'] = len(hints)
+    if record.get('state') == 'unknown':
+        if isinstance(record.get('job_id'), str) and re.fullmatch(r'[0-9]+', record['job_id']):
+            diagnoses.insert(0, ('scheduler_state_unknown', 'The scheduler does not provide a definitive status for the recorded job. Inspect the existing job; do not submit again.'))
+        else:
+            diagnoses.insert(0, ('submission_unconfirmed', 'Scheduler acceptance is unconfirmed. Use manual submission recovery; do not submit again.'))
+    elif record.get('state') == 'cancelled' and not diagnoses:
+        diagnoses.append(('cancelled', 'The job was cancelled.'))
+    if not diagnoses:
+        diagnoses.append(('unclassified_failure', 'The saved evidence does not identify a recognized cause. Inspect the private logs in the workspace.'))
+    result['classifications'] = [code for code, _ in diagnoses]
+    result['reason'] = diagnoses[0][1]
+    result['scope'] = 'Execution diagnostics only. Raw logs, patient identifiers and input paths are not shared with the model.'
+    return result
 
 
 def report(run_id, step, session=None):
@@ -112,26 +176,27 @@ def report(run_id, step, session=None):
     if name not in jobs.run_records(root):
         result = {'status': 'ok', 'run_id': run_id, 'step': name, 'flag': flag, 'state': 'not_started',
                   'note': 'This step has not been submitted in this analysis.'}
-        return redact({**result, 'card': card} if card else result)
+        return {**result, 'card': {'state': card['state']}} if card and 'state' in card else result
     record = jobs.status(run_id, name)
     result = {'status': 'ok', 'run_id': run_id, 'step': name, 'flag': flag,
-              **{key: record[key] for key in _FIELDS if record.get(key) not in (None, '', [], {})}}
+              'state': record['state'], 'progress': public_progress(record)}
     if card:
-        result['card'] = card
-    if record.get('inputs'):
-        result['inputs'] = {key: path.rsplit('/', 1)[-1] for key, path in record['inputs'].items()}
+        result['card'] = {'state': card['state']} if 'state' in card else {}
     if record.get('connection') == 'interrupted':
         result['connection'] = 'interrupted'
-    if record['state'] in _NEEDS_LOGS:
-        logs = {}
-        for stream in ('err', 'out'):
-            try:
-                logs[stream] = jobs.read_log(run_id, name, stream=stream, lines=LOG_LINES)['lines']
-            except jobs.StepError as error:
-                logs[stream] = [f'(log unavailable: {error})']
-        result['log_tail'] = logs
+    if record['state'] in ('failed', 'cancelled', 'unknown'):
+        result['failure'] = failure_summary(record)
     elif record['state'] == 'completed':
         current = record.get('summary') if record.get('summary', {}).get('version') == jobs.SUMMARY_VERSION else None
-        result['summary'] = label_summary(name, record, current or jobs.ensure_summary(run_id, name))
-    result['privacy'] = 'Paths are cut to file names and TCGA barcodes are masked.'
-    return redact(result)
+        result['summary'] = safe_summary(name, record, current or jobs.ensure_summary(run_id, name))
+    return result
+
+FLAGS = {step.flag: name for name, step in jobs.STEPS.items()}
+
+def _card(root, name):
+    """The step's latest confirmation card: its state and, if sending failed, why."""
+    from agent.runtime import step_proposal
+    proposal = step_proposal.view(root, name)
+    if not proposal:
+        return None
+    return {key: proposal[key] for key in ('state', 'error') if key in proposal}

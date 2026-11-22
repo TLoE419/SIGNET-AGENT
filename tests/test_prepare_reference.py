@@ -69,6 +69,18 @@ class PrepareReferenceTest(unittest.TestCase):
         self.assertEqual((out / 'ref/chr1.gen').read_text(), 'chr1_100 rs1 100 A G 1 0 0 0 1 0\n')
         self.assertEqual((out / 'gmap/chr1.map').read_bytes(), (self.root / 'ready.map').read_bytes())
 
+    def test_input_metadata_is_saved_separately_from_the_counts_only_summary(self):
+        summary = self.run_prepare()
+        recorded = json.loads((self.root / 'out/inputs.json').read_text())
+        for name, filename in (('reference', 'ref.vcf.gz'), ('genetic_map', 'map.gz'),
+                               ('study_ped', 'study.ped'), ('study_map', 'study.map')):
+            source = self.root / filename
+            self.assertEqual(recorded[name], {'path': os.path.realpath(source), 'size': source.stat().st_size,
+                                             'mtime_ns': source.stat().st_mtime_ns})
+        self.assertNotIn('inputs', summary)
+        for filename in ('ref.vcf.gz', 'map.gz', 'study.ped', 'study.map'):
+            self.assertNotIn(str(self.root / filename), json.dumps(summary), 'chosen input paths stay off the printed summary')
+
     def test_formats_are_detected_before_anything_is_written(self):
         self.assertEqual(reference_format(str(self.root / 'ref.vcf.gz')), 'vcf')
         self.assertEqual(genetic_map_format(str(self.root / 'map.gz')), 'pos_chr_cm')

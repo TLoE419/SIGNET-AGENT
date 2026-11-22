@@ -822,7 +822,7 @@ class SignetApiTest(unittest.TestCase):
         self.assertNotEqual(record['state'], 'completed')
         self.assertFalse((self.root / 'work' / test_signet_jobs.OUTPUTS[0]).exists())
 
-    def test_refresh_downloads_later_visible_outputs_over_http_without_new_job(self):
+    def test_refresh_verifies_later_visible_remote_outputs_over_http_without_new_job(self):
         self.submit()
         path = '/signet/runs/step_test/steps/expression'
         self.finish_job(outputs=())
@@ -830,7 +830,12 @@ class SignetApiTest(unittest.TestCase):
         self.finish_job()
         status, record = self.call('GET', path + '?refresh=1')
         self.assertEqual((status, record['state'], record['job_id']), (200, 'completed', '12345'))
-        self.assertEqual((self.root / 'work' / test_signet_jobs.OUTPUTS[0]).read_text(), 'data\n')
+        self.assertFalse((self.root / 'work' / test_signet_jobs.OUTPUTS[0]).exists())
+        self.assertEqual(record['outputs'], [])
+        self.assertEqual(record['remote_outputs'], ['work/' + path for path in test_signet_jobs.OUTPUTS])
+        self.assertTrue(all(type(entry.get('rows')) is int and type(entry.get('columns')) is int
+                            for entry in record['summary']['outputs']))
+        self.assertFalse(any('tar czf' in call for call in self.calls))
         self.assertEqual(sum('sbatch --parsable' in call for call in self.calls), 1)
 
     def test_sbatch_refusal_keeps_an_independent_attempt_over_http(self):
@@ -850,7 +855,7 @@ class SignetApiTest(unittest.TestCase):
         self.assertEqual(self.call('GET', path)[1]['attempt'], 2)
         self.assertIn('temporarily-refused', (self.remote_dir / 'steps/expression.sbatch.err').read_text())
 
-    def test_refresh_recovers_a_saved_missing_marker_failure_and_downloads_results(self):
+    def test_refresh_recovers_a_saved_missing_marker_failure_with_remote_results(self):
         status, record = self.submit()
         self.assertEqual(status, 202)
         self.finish_job()
@@ -861,7 +866,12 @@ class SignetApiTest(unittest.TestCase):
         self.assertEqual(self.call('GET', path)[1]['state'], 'failed')
         status, value = self.call('GET', path + '?refresh=1')
         self.assertEqual((status, value['state'], value['job_id']), (200, 'completed', '12345'))
-        self.assertEqual((self.root / 'work/res/rest/signet_gexp').read_text(), 'data\n')
+        self.assertFalse((self.root / 'work/res/rest/signet_gexp').exists())
+        self.assertEqual(value['outputs'], [])
+        self.assertEqual(value['remote_outputs'], ['work/' + path for path in test_signet_jobs.OUTPUTS])
+        self.assertEqual(len(value['summary']['outputs']), len(test_signet_jobs.OUTPUTS))
+        self.assertNotIn('content', value['summary'])
+        self.assertFalse(any('tar czf' in call for call in self.calls))
         self.assertEqual(sum('sbatch --parsable' in call for call in self.calls), 1)
 
     def test_unexpected_error_still_gets_a_json_reply(self):

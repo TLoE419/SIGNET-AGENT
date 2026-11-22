@@ -14,7 +14,15 @@ import sys
 
 MAX_CATEGORIES = 20
 MAX_VALUE_CHARS = 60
-_ID_COLUMN = re.compile(r'(^|[_.\s-])(id|ids|barcode|uuid|submitter|sample|patient|case|name)([_.\s-]|$)', re.I)
+# Only known clinical categories may include values. Other fields can hold arbitrary participant IDs.
+_PUBLIC_VALUES = {'race': {'asian', 'black or african american', 'white', 'not reported',
+                           'american indian or alaska native', 'unknown'},
+                  'gender': {'male', 'female', 'unknown', 'not reported'},
+                  'sex': {'male', 'female', 'unknown', 'not reported'},
+                  'sex_at_birth': {'male', 'female', 'unknown', 'not reported'}}
+_PUBLIC_COLUMNS = {'submitter_id', 'race', 'gender', 'sex', 'sex_at_birth', 'patient_id', 'sample_id',
+                   'gene_id', 'gene_name', 'chromosome', 'position', 'batch', 'age', 'value', 'count'}
+_ID_COLUMN = re.compile(r'(^|[_.\s-])(id|ids|barcode|uuid|submitter|sample|patient|case|name|participant|subject|person|individual|accession|family)([_.\s-]|$)', re.I)
 _BARCODE = re.compile(r'TCGA-[A-Za-z0-9]{2}-[A-Za-z0-9]{4}(?:-[A-Za-z0-9]{2,5})*')
 
 
@@ -59,11 +67,14 @@ def summarize(lines):
             entry['distinct'] = 'more than {}'.format(MAX_CATEGORIES)
         else:
             entry['distinct'] = len(values)
-            if not _ID_COLUMN.search(name):
+            if name.lower() in _PUBLIC_VALUES and not _ID_COLUMN.search(name):
                 entry['values'] = {_BARCODE.sub('TCGA-[masked]', value)[:MAX_VALUE_CHARS]: count
-                                   for value, count in sorted(values.items(), key=lambda item: -item[1])}
-        per_column[_BARCODE.sub('TCGA-[masked]', name)] = entry
-    return {'status': 'ok', 'columns': [_BARCODE.sub('TCGA-[masked]', name) for name in columns], 'rows': rows,
+                                   for value, count in sorted(values.items(), key=lambda item: -item[1])
+                                   if value.lower() in _PUBLIC_VALUES[name.lower()]}
+        public_name = name if name.lower() in _PUBLIC_COLUMNS else 'column_{}'.format(index + 1)
+        per_column[public_name] = entry
+    return {'status': 'ok', 'columns': [name if name.lower() in _PUBLIC_COLUMNS else 'column_{}'.format(i + 1)
+                                        for i, name in enumerate(columns)], 'rows': rows,
             'rows_with_a_different_field_count': ragged,
             'delimiter': {'\t': 'tab', ',': 'comma', None: 'whitespace'}[delimiter],
             'windows_line_endings': header.endswith('\r\n'),

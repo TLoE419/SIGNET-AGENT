@@ -11,9 +11,9 @@ import type {SshConnectionService} from '../main/ssh/SshConnectionService';
 import type {EnvironmentConfig} from '../shared/environment/types';
 const inventory={repository:'https://github.com/signet4grn/SIGNET.git',revision:'a'.repeat(40),scripts:[{path:'signet',sha256:'b'.repeat(64)}],support_files:[],example_files:[{path:'example/geno/example.ped',sha256:'c'.repeat(64)}]};
 class FakeSsh extends EventEmitter {
- connected=true;source=false;example=true;image=false;slurm=true;runtimeModule='';failStep='';commands:string[]=[];pause?:()=>Promise<void>;
+ connected=true;source=false;example=true;image=false;slurm=true;runtimeModule='';failStep='';commands:string[]=[];timeouts:number[]=[];pause?:()=>Promise<void>;
  getSnapshot(){return {selectedProfile:{id:'profile',username:'user',host:'host',port:22},connection:{status:this.connected?'connected':'disconnected',connectedAt:'now'}}}
- async exec(command:string,input:Buffer){assert.equal(command,'bash -s');const s=input.toString();this.commands.push(s);await this.pause?.();
+ async exec(command:string,input:Buffer,timeout:number){this.timeouts.push(timeout);assert.equal(command,'bash -s');const s=input.toString();this.commands.push(s);await this.pause?.();
   if(s.includes('printf \'home='))return {returncode:0,stderr:Buffer.alloc(0),stdout:Buffer.from(`home=/home/user\nroot=/home/user/signet\n${['bash','git','tar','sha256sum','timeout','python3','setsid','sbatch','scontrol','sinfo','squeue'].map(t=>`${t}=${t==='sbatch'&&!this.slurm?'no':'yes'}`).join('\n')}\nexecutor=/usr/bin/apptainer\nruntime_module=${this.runtimeModule}\npartition=standard\nwritable=yes\nsource=${this.source?'exists':'missing'}\nexample=${this.source&&this.example?'exists':'missing'}\nimage=${this.image?'exists':'missing'}\n`)};
   if(s.includes('.example-XXXXXX')){if(!this.failStep)this.example=true}
   else if(s.includes('git -C')&&!this.failStep)this.source=true;
@@ -25,7 +25,7 @@ test('the desktop check reports SIGNET as missing but never installs it; later c
  const {ssh,service,file}=await fixture(t),phases:string[]=[];service.on('snapshot',v=>phases.push(v.phase));
  assert.equal('install' in service,false,'the Python service installs SIGNET (agent/runtime/hpc.py)');
  const first=await service.check();assert.equal(first.phase,'needs-install');assert.deepEqual(first.missing,['SIGNET source','SIGNET container']);
- assert.equal(ssh.commands.length,1);assert.equal(ssh.commands.some(s=>s.includes('git -C')),false,'a check never downloads SIGNET');
+ assert.equal(ssh.commands.length,1);assert.equal(ssh.timeouts[0],90000,'shared login-node checks allow 90 seconds');assert.equal(ssh.commands.some(s=>s.includes('git -C')),false,'a check never downloads SIGNET');
  ssh.source=true;const second=await service.check();assert.deepEqual(second.missing,['SIGNET container']);
  assert.match(ssh.commands.at(-1)!,/SIGNET_HASHES/,'an installed source is verified by its hashes');
  assert.equal(ssh.commands.some(s=>/ pull |library:\/\//.test(s)),false,'the login node must not download the container');

@@ -271,7 +271,7 @@ ANALYSIS_STEPS = ('genotype', 'expression', 'adjust', 'cis', 'network', 'visuali
 # download and the Stage 6 comparison. Every step's counts are summarized on HPC3 (_output_summary).
 DOWNLOADED_STEPS = ('network', 'visualize')
 # Raised when the counting changes, so summaries saved by an older version are counted again.
-SUMMARY_VERSION = 2
+SUMMARY_VERSION = 3
 # Inputs whose size the summary reports, so "before" and "after" both come from HPC3.
 _COUNTED_INPUTS = {'genotype': ('ped.file', 'map.file'), 'expression': ('gexp.file',)}
 
@@ -1081,6 +1081,17 @@ def _input_checks(files):
         for key, path, root in files)
 
 
+def _expression_input_check(name, files):
+    if name != 'expression':
+        return ''
+    source = (Path(__file__).with_name('jobs') / 'step_inputs.py').read_text()
+    annotation = next(path for key, path, _ in files if key == 'pmap.file')
+    return ("python3 - " + shlex.quote(annotation) + " <<'SIGNET_GTF_CHECK'\n"
+            + source + "\nimport sys\nproblem = gtf_problem(sys.argv[1])\n"
+            + "if problem:\n    print('@@invalid_input\t' + problem)\n    sys.exit(9)\nSIGNET_GTF_CHECK\n"
+            + "[ $? -eq 0 ] || exit 9\n")
+
+
 def _submit_script(config, run_id, name, step, directory, files, resources, options=None, archive=None,
                    needs=None, settings=None, dataset_plan=None, submission_token=None):
     """Login-node script: check every input file and earlier result, write the job script, sbatch it, record the job ID.
@@ -1214,7 +1225,7 @@ def _output_check(record, response=None):
         record.pop('output_revalidation_requested_at', None)
 
 
-def _output_guard(root, record, *, ownership_only=False):
+def _output_guard(root, record, *, ownership_only=False, allow_mount_alias=False):
     from agent.runtime.workspace_history import _json
     config = _environment()
     directory = record.get('remote_dir')
@@ -1231,6 +1242,13 @@ def _output_guard(root, record, *, ownership_only=False):
             f'T={q(owner["token"])}\n'
             '[ "$(readlink -f -- "$D")" = "$D" ] && [ -f "$D/.owner" ] && [ ! -L "$D/.owner" ] '
             '&& [ "$(head -c 129 -- "$D/.owner" 2>/dev/null)" = "$T" ] || { say output_source_mismatch owner; exit 91; }\n')
+    alias_check = ''
+    if allow_mount_alias:
+        alias_check = (f'W={q(config["workRoot"])}\n'
+                       'output_canonical() { case "$1" in "$W"/*) '
+                       '[ "$(readlink -f -- "$1")" = "$(readlink -f -- "$W")/${1#"$W"/}" ];; '
+                       '*) return 1;; esac; }\n')
+        guard = alias_check + guard.replace('[ "$(readlink -f -- "$D")" = "$D" ]', 'output_canonical "$D"')
     if ownership_only:
         return guard
     guard += (f'E={q(record["job_id"])}\n'
@@ -1242,6 +1260,9 @@ def _output_guard(root, record, *, ownership_only=False):
               '  [ ! -L "$p" ] || { say output_source_mismatch artifact; exit 91; }\n'
               '  if [ -e "$p" ]; then [ "$(readlink -f -- "$p")" = "$p" ] && [ -f "$p" ] '
               '|| { say output_source_mismatch artifact; exit 91; }; fi\ndone\n')
+    if allow_mount_alias:
+        guard = guard.replace('[ "$(readlink -f -- "$J")" = "$J" ]', 'output_canonical "$J"')
+        guard = guard.replace('[ "$(readlink -f -- "$p")" = "$p" ]', 'output_canonical "$p"')
     return guard
 
 
@@ -1442,6 +1463,8 @@ def submit(run_id, name, inputs, resources=None, options=None, *, settings_overr
                 destination.rename(source)
         else:
             _record_path(root, name).unlink(missing_ok=True)
+        if 'invalid_input' in values:
+            raise StepError('invalid_request', values['invalid_input'])
         if 'missing_input' in values:
             key = values['missing_input']
             hint = (f' (looked for {values.get("missing_file")}; set {_chromosome_key(step)} to the chromosome you have'
@@ -1484,7 +1507,7 @@ def _progress_script(record):
         commands.append('count_markers expression_outputs 2 "$D/work/tmp/tmpt/" .signet-normalized .signet-annotated')
     if name == 'visualize':
         count = record.get('settings', {}).get('ntop')
-        if isinstance(count, str) and re.fullmatch(r'(?:[1-9]|1[0-9]|20)', count):
+        if isinstance(count, str) and re.fullmatch(r'(?:[1-9]|[1-9][0-9]|100)', count):
             names = ' '.join(f'.signet-network-{index}' for index in range(1, int(count) + 1))
             commands.append(f'count_markers subnetworks {count} "$D/work/tmp/tmpv/" {names}')
     if not commands:
@@ -1572,9 +1595,10 @@ def status(run_id, name, refresh=False):
         return {**record, 'reason': 'Submission is unconfirmed. Use manual reconciliation. Do not resubmit.'}
     checking_outputs = bool(record.get('output_revalidation_requested_at'))
     _environment()
-    guard = _output_guard(root, record) if checking_outputs else ''
+    guarded = checking_outputs or name not in DOWNLOADED_STEPS
+    guard = _output_guard(root, record) if guarded else ''
     try:
-        code, values, hints = _shell(_say() + guard + _status_script(record, step, read_only=checking_outputs), timeout=60)
+        code, values, hints = _shell(_say() + guard + _status_script(record, step, read_only=checking_outputs) + guard, timeout=60)
     except OSError:
         reply = {**record, 'connection': 'interrupted', 'reason': 'Could not reach HPC3; the job keeps running. Try again later.'}
         if checking_outputs:
@@ -1627,8 +1651,8 @@ def status(run_id, name, refresh=False):
         _change(record, 'failed', finished_at=_now(), missing_outputs=missing, failure_hints=hints,
                 reason=f'Slurm ended the job with {slurm}.')
     elif slurm == 'COMPLETED' or 'done' in values:
-        if record['step'] == 'visualize' and values.get('exports_completed') != 'yes':
-            hints = [*hints, 'The official Stage 6 export completion marker is missing.']
+        if record['step'] == 'visualize':
+            record['exports_completed'] = values.get('exports_completed') == 'yes'
         _finish(root, record, step, values.get('done', ''), missing, hints)
     elif not record.get('job_id'):
         # Empty lookups can mean scheduler failure or accounting delay, not an unsubmitted job.
@@ -1695,12 +1719,24 @@ def _summary_script(record, step):
         path = record.get('inputs', {}).get(key)
         if path:
             lines.append(f'if [ -f {q(path)} ]; then say in_{key.replace(".", "_")} "$(count {q(path)} \'\')"; fi')
+    if record['step'] == 'genotype':
+        source = (Path(__file__).with_name('jobs') / 'reference_summary.py').read_text()
+        lines.append('P="$D/work/res/resg/workspace-reference-preparation.json"')
+        lines.append('if [ -f "$P" ] && [ ! -L "$P" ] && [ "$(readlink -f -- "$P")" = "$P" ]; then')
+        lines.append("say reference_preparation \"$(python3 - \"$P\" <<'SIGNET_PREPARATION_SUMMARY'\n"
+                     + source + "\nSIGNET_PREPARATION_SUMMARY\n)\"\nfi")
     return '\n'.join(lines) + '\n'
 
 
-def _output_summary(record, step):
+def _output_summary(record, step, root=None):
     """Counts of the step's outputs and inputs, computed on HPC3; never values, IDs or rows."""
-    code, values, _ = _shell(_summary_script(record, step), timeout=120)
+    guard = _output_guard(root, record) if root is not None else ''
+    if root is not None and record.get('output_revalidation_requested_at'):
+        guard += _queue_check(record, require_stopped=True)
+    script = _say() + guard + _summary_script(record, step)
+    if root is not None:
+        script += guard
+    code, values, _ = _shell(script, timeout=120)
     if code:
         raise OSError('the summary did not complete on HPC3')
     def counts(value):
@@ -1716,6 +1752,14 @@ def _output_summary(record, step):
         value = values.get(f'in_{key.replace(".", "_")}', '')
         if re.fullmatch(r'[0-9]+ [0-9]+', value):
             summary['inputs'][key] = {'file': record['inputs'][key].rsplit('/', 1)[-1], **counts(value)}
+    if 'reference_preparation' in values:
+        from agent.runtime.jobs.reference_summary import safe_preparation
+        try:
+            prepared = safe_preparation(json.loads(values['reference_preparation']))
+        except (TypeError, ValueError):
+            prepared = {}
+        if prepared:
+            summary['reference_preparation'] = prepared
     return summary
 
 
@@ -1729,8 +1773,8 @@ def ensure_summary(run_id, name):
         return record.get('summary')
     _environment()
     try:
-        record['summary'] = _output_summary(record, step)
-    except (OSError, ValueError, subprocess.TimeoutExpired):
+        record['summary'] = _output_summary(record, step, root)
+    except (OSError, ValueError, subprocess.TimeoutExpired, StepError):
         return None
     _save(root, record)
     return record['summary']
@@ -1746,15 +1790,17 @@ def _finish(root, record, step, done, missing, hints):
                 reason='Waiting for a complete exit marker on HPC3; check status again. Do not resubmit.')
         return
     exit_code = marker.group(1)
-    if record['step'] == 'visualize' and exit_code == '0' and missing and not hints:
-        # The login node can see the successful exit before it sees the graph files.
-        checked_at = record['checked_at']
+    if (record['step'] == 'visualize' and exit_code == '0' and missing and not hints
+            and not record.get('output_revalidation_requested_at')):
+        checked_at = record.get('checked_at', time.time())
         since = record.setdefault('missing_outputs_since', checked_at)
         if checked_at - since < VISUALIZE_OUTPUT_GRACE_SECONDS:
             record.pop('finished_at', None)
-            _change(record, 'validating', exit_code=exit_code, missing_outputs=missing, failure_hints=[],
+            _change(record, 'validating', exit_code='0', missing_outputs=missing, failure_hints=[],
                     reason='Waiting for visualization outputs to appear on HPC3.')
             return
+    if record['step'] == 'visualize' and not record.get('exports_completed'):
+        hints = [*hints, 'The official Stage 6 export completion marker is missing.']
     if exit_code != '0' or missing or hints:
         reason = (f'signet exited with {exit_code}.' if exit_code != '0' else
                   MISSING_OUTPUTS_REASON if missing else 'The log reports an error.')
@@ -1763,16 +1809,18 @@ def _finish(root, record, step, done, missing, hints):
         return
     record.pop('finished_at', None)
     record.pop('missing_outputs_since', None)
+    _change(record, 'validating', exit_code='0')
     try:
-        record['summary'] = _output_summary(record, step)
-    except (OSError, ValueError, subprocess.TimeoutExpired):
-        pass   # counted later, when the assistant asks (ensure_summary)
+        record['summary'] = _output_summary(record, step, root)
+    except (OSError, ValueError, subprocess.TimeoutExpired, StepError):
+        if record['step'] not in DOWNLOADED_STEPS:
+            record['reason'] = 'Could not verify the owned remote results and summary; check status again. No analysis was resubmitted.'
+            return
     if record['step'] not in DOWNLOADED_STEPS:
-        # Person-level results stay on HPC3; the next steps read them there.
         record['outputs'] = []
         record['remote_outputs'] = ['work/' + path for path in _required(step, record)]
         _change(record, 'completed', finished_at=_now(), exit_code='0', missing_outputs=[], failure_hints=[],
-                reason='Outputs present and logs clean; results stay on HPC3. This is not scientific validation.')
+                reason='Outputs present and logs clean; person-level results stay on HPC3. This is not scientific validation.')
         return
     _change(record, 'validating', exit_code='0', download_pending=True,
             reason='Results passed the checks on HPC3; downloading them now.')

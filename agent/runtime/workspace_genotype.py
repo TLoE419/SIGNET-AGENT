@@ -467,7 +467,37 @@ def _adjust_inputs(config, clinical):
     return {'cli.file': values['clinical']}
 
 
-def _review_adjust(run_id, clinical=None):
+def _clinical_choices(choices):
+    if choices is None:
+        return {}
+    if (not isinstance(choices, dict) or len(choices) > 64 or
+            any(not isinstance(key, str) or not 1 <= len(key) <= 240 or
+                value not in ('not_reported', 'exclude') for key, value in choices.items())):
+        raise jobs.StepError('invalid_request', 'Choose the recorded treatment for each unrecognized clinical race value.')
+    return choices.copy()
+
+
+def _adjust_review_token(run_id, inputs, choices, clinical, history, config):
+    import re
+    from agent.runtime.workspace_inputs import fingerprint
+    digests = clinical.get('upstream_digests', {})
+    if (not isinstance(clinical.get('source_digest'), str)
+            or not re.fullmatch(r'[a-f0-9]{64}', clinical['source_digest'])
+            or not isinstance(digests, dict) or set(digests) != {'genotype', 'expression'}
+            or any(not isinstance(value, str) or not re.fullmatch(r'[a-f0-9]{64}', value) for value in digests.values())):
+        raise jobs.StepError('review_required', 'The clinical source fingerprints are unavailable. Check the clinical file again.')
+    return fingerprint({'version': 1, 'run_id': run_id, 'source': inputs['cli.file'], 'choices': choices,
+        'source_digest': clinical['source_digest'], 'upstream_digests': digests,
+        'upstream': {name: {key: history['jobs'][name].get(key) for key in
+            ('run_id', 'step', 'job_id', 'attempt', 'remote_dir', 'image', 'partition')}
+            for name in ('genotype', 'expression')},
+        'environment': {key: config.get(key) for key in
+            ('root', 'source', 'image', 'executor', 'workRoot', 'partition', 'runtimeModule')},
+        'reviewer': _CLINICAL_REVIEW})
+
+
+def _review_adjust(run_id, clinical=None, choices=None, out=None):
+    choices = _clinical_choices(choices)
     root, history = _workspace_run(run_id)
     config = jobs._environment()
     step = jobs.STEPS['adjust']
@@ -480,7 +510,7 @@ def _review_adjust(run_id, clinical=None):
     checked = jobs._inputs(step, inputs, (config['root'] + '/refdata', config['source'] + '/example', directory))
     result = {'run_id': run_id, 'inputs': inputs, 'options': {'npc': 3},
               'resources': step.resources.copy(), 'limits': step.limits.copy(),
-              'ready': False, 'issues': [], 'clinical': None, 'frozen': bool(frozen)}
+              'ready': False, 'issues': [], 'clinical': None, 'choices': choices, 'frozen': bool(frozen)}
     issues = result['issues']
     for name in ('genotype', 'expression'):
         record = history['jobs'].get(name)
@@ -492,7 +522,10 @@ def _review_adjust(run_id, clinical=None):
         result['reason'] = ' '.join(issues)
         return result
     q = shlex.quote
-    script = jobs._say() + jobs._input_checks(jobs._files(step, checked, {}))
+    script = jobs._say()
+    if out:
+        script += jobs._output_guard(root, history['jobs']['expression'])
+    script += jobs._input_checks(jobs._files(step, checked, {}))
     if frozen:
         from agent.runtime.workspace_inputs import frozen_checks
         script += frozen_checks(directory, initial.get('genotype_attempt', 1))
@@ -503,7 +536,7 @@ def _review_adjust(run_id, clinical=None):
                + 'if ! command -v sbatch >/dev/null 2>&1; then say not_ready sbatch; exit 5; fi\n')
     script += ('python3 - ' + ' '.join(q(path) for path in (
         inputs['cli.file'], directory + '/work/res/resg/signet_Genotype.sampleID',
-        directory + '/work/res/rest/signet_gexpID')) + " <<'SIGNET_CLINICAL_REVIEW'\n"
+        directory + '/work/res/rest/signet_gexpID', json.dumps(choices), *([out] if out else []))) + " <<'SIGNET_CLINICAL_REVIEW'\n"
         + _CLINICAL_REVIEW + '\nSIGNET_CLINICAL_REVIEW\n')
     try:
         code, values, _ = jobs._shell(script)
@@ -520,19 +553,25 @@ def _review_adjust(run_id, clinical=None):
     else:
         result['clinical'] = json.loads(values['clinical'])
         issues.extend(result['clinical']['issues'])
+        if set(choices) - set(result['clinical'].get('unrecognized_race', {})):
+            issues.append('The clinical categories changed. Review the current unrecognized values again.')
+        if out and not result['clinical'].get('written'):
+            issues.append('The reviewed clinical copy could not be prepared.')
     result['ready'] = not issues
     result['reason'] = ' '.join(issues)
+    if result['ready']:
+        result['review_token'] = _adjust_review_token(run_id, inputs, choices, result['clinical'], history, config)
     return result
 
 
 @jobs._one_at_a_time
-def review_adjust(run_id, clinical=None):
+def review_adjust(run_id, clinical=None, choices=None):
     """Return the review form and readiness without changing this run or its files."""
-    return _review_adjust(run_id, clinical)
+    return _review_adjust(run_id, clinical, choices)
 
 
 @jobs._one_at_a_time
-def submit_adjust(run_id, inputs, options, resources):
+def submit_adjust(run_id, inputs, options, resources, choices=None, review_token=None):
     root, _ = _workspace_run(run_id)
     path = jobs._record_path(root, 'adjust')
     previous = jobs._load(root, 'adjust') if path.exists() else None
@@ -544,28 +583,59 @@ def submit_adjust(run_id, inputs, options, resources):
         raise jobs.StepError('invalid_request', 'Confirm the clinical file for this run.')
     answers = jobs._options(jobs.STEPS['adjust'], options)
     accepted_resources = jobs._resources(jobs.STEPS['adjust'], resources)
-    review = _review_adjust(run_id, inputs['cli.file'])
+    choices = _clinical_choices(choices)
+    review = _review_adjust(run_id, inputs['cli.file'], choices)
     if not review['ready']:
         raise jobs.StepError('not_ready', review['reason'])
+    if review_token is not None and (not isinstance(review_token, str)
+            or review_token != review.get('review_token')):
+        raise jobs.StepError('review_required', 'The clinical source, choices or upstream results changed. Check the clinical file again before submitting.')
     if previous:
         jobs._ensure_stopped(previous)
     path = signet._no_links(root / ADJUST_SNAPSHOT)
     attempt = 1
+    archive = saved = None
     if path.exists():
         saved = json.loads(path.read_text())
         attempt = saved['review_attempt'] + 1
         archive = root / f'workspace-adjust.review{saved["review_attempt"]}.json'
         if archive.exists() or archive.is_symlink():
             raise jobs.StepError('conflict', 'The previous Stage 3 review archive already exists.')
+    config = jobs._environment()
+    directory = jobs._remote_dir(config, root, run_id)
+    token = review.get('review_token')
+    suffix = '-' + token if token else ''
+    prepared = directory + f'/inputs/clinical/review{attempt}{suffix}/clinical.tsv'
+    source = review['inputs']['cli.file']
+    prepared_review = _review_adjust(run_id, source, choices, prepared)
+    if not prepared_review['ready']:
+        raise jobs.StepError('not_ready', prepared_review['reason'])
+    if (prepared_review.get('review_token') != review.get('review_token')
+            or prepared_review['clinical'].get('source_digest') != review['clinical'].get('source_digest')
+            or prepared_review['clinical'].get('upstream_digests') != review['clinical'].get('upstream_digests')):
+        raise jobs.StepError('review_required', 'The clinical source or upstream results changed while preparing the reviewed copy. The copy was preserved; check the clinical file again before submitting.')
+    if archive is not None:
         with archive.open('x') as stream:
             stream.write(json.dumps(saved, indent=2) + '\n')
+    accepted_inputs = {'cli.file': prepared}
+    clinical = {'source': source, 'choices': choices, 'review': prepared_review['clinical']}
     snapshot = {'run_id': run_id, 'dataset_id': _dataset_id(root), 'review_attempt': attempt,
-                'submitted_at': jobs._now(), 'inputs': review['inputs'],
+                'submitted_at': jobs._now(), 'inputs': accepted_inputs, 'clinical': clinical,
                 'options': answers, 'resources': accepted_resources}
     temporary = root / (ADJUST_SNAPSHOT + '.tmp')
     temporary.write_text(json.dumps(snapshot, indent=2) + '\n')
     temporary.replace(path)
-    return jobs.submit(run_id, 'adjust', review['inputs'], resources, answers)
+    try:
+        result = jobs.submit(run_id, 'adjust', accepted_inputs, resources, answers)
+    finally:
+        record_path = jobs._record_path(root, 'adjust')
+        if record_path.is_file():
+            record = jobs._load(root, 'adjust')
+            if record.get('inputs') == accepted_inputs:
+                record['clinical'] = clinical
+                jobs._save(root, record)
+    result['clinical'] = clinical
+    return result
 
 
 def _review_cis(run_id):
@@ -917,6 +987,8 @@ def run_history(root):
         if adjustment['run_id'] != run_id or adjustment['dataset_id'] != dataset_id:
             raise ValueError('The adjustment history does not identify this run.')
         adjustment_job = {key: adjustment[key] for key in ('submitted_at', 'inputs', 'options', 'resources')}
+        if adjustment.get('clinical'):
+            adjustment_job['clinical'] = adjustment['clinical']
         adjustment_job['state'] = 'submitting' if (root / '.active').exists() else 'not_submitted'
         if signet._no_links(root / 'steps/adjust.json').is_file():
             record = jobs._load(root, 'adjust')

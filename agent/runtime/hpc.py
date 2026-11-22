@@ -374,7 +374,7 @@ def _reference_script(root, key):
     path = REFERENCES[key]['path']
     outdated = '' if key != 'clinical' else _CLINICAL_SHELL + f'''
 if [ -z "$running" ] && [ -z "$(selected_of clinical)" ] && [ -s "$W/{path}" ] && ! clinical_columns_ok "$W/{path}"; then
-  mv "$W/{path}" "$W/{path}.replaced-$(date +%s)"; say clinical_replaced yes
+  mv -n "$W/{path}" "$W/{path}.replaced-$(date +%s)-$$"; [ ! -e "$W/{path}" ] || exit 1; say clinical_replaced yes
 fi
 '''
     return _prelude(root) + _step_lock(key) + f'''
@@ -466,7 +466,7 @@ elif {{ [ -n "$chosen_ref" ] && [ "$(selected_access ref "$chosen_ref")" != ok ]
   say prepare needs_verified_selection
 else
   # Built from other files than the ones used now: keep it under another name, never delete it.
-  if [ -e "$W/{PREPARED}" ]; then mv "$W/{PREPARED}" "$W/{PREPARED}.replaced-$(date +%s)"; say prepare_replaced yes; fi
+  if [ -e "$W/{PREPARED}" ]; then mv -n "$W/{PREPARED}" "$W/{PREPARED}.replaced-$(date +%s)-$$"; [ ! -e "$W/{PREPARED}" ] || exit 1; say prepare_replaced yes; fi
   mkdir -p "$D" && chmod 700 "$D"
   cat > "$D/prepare_reference.py" <<'SIGNET_PY'
 {_PREPARE_SOURCE}SIGNET_PY
@@ -541,6 +541,7 @@ echo "Installed and verified SIGNET {revision}."
 """
 
 
+
 def _signet_script(root):
     """Start the source installation as a detached login-node process unless it is present or running.
 
@@ -548,11 +549,13 @@ def _signet_script(root):
     Its state (running, done, failed), host and process ID go to $D/signet.status for the check.
     """
     config = _CONFIG.get() or {'root': root, 'source': f'{root}/{SIGNET_DIRECTORY}'}
+    if config.get('revision', SOURCE_INVENTORY['revision']) != SOURCE_INVENTORY['revision']:
+        raise ValueError('Desktop source revision does not match the audited inventory; recheck the remote environment.')
     return _prelude(root) + _step_lock('signet') + f"""
 st="$(state_of signet)"; host="$(field_of signet host)"; pid="$(field_of signet pid)"
 if [ "$st" = running ] && {{ [ "$host" != "$(hostname)" ] || kill -0 "$pid" 2>/dev/null; }}; then say signet in_progress
+elif [ -L "$S" ] || {{ [ -e "$S" ] && [ ! -d "$S" ]; }}; then say signet failed
 elif [ -d "$S" ] && [ -d "$S/example" ]; then say signet existing
-elif [ -e "$S" ] && {{ [ ! -d "$S" ] || [ -L "$S" ]; }}; then say signet failed
 elif ! command -v git >/dev/null 2>&1; then say signet needs_git
 else
 {_NOTE_MISSING_WORKSPACE}  {_ensure_workspace()}
@@ -566,6 +569,7 @@ else
   say signet started
 fi
 """
+
 
 
 def _log_script(step, root='/'):
@@ -656,8 +660,10 @@ def _checks(values, revision):
     elif signet != 'yes':
         add('signet_source', 'problem', 'The SIGNET installation path is not a folder. Choose another installation root in HPC3 settings.')
     elif values.get('signet_example') == 'missing':
-        add('signet_source', *(_step_status(values, 'signet')
-                               or ('missing', 'The SIGNET example data has not been installed; press Install to add it.')))
+        add('signet_source', *(_step_status(values, 'signet') or
+                               ('missing', 'The SIGNET example data has not been installed; press Install to add it.')))
+    elif values.get('signet_example') == 'mismatch':
+        add('signet_source', 'problem', 'The SIGNET example data differs from the pinned revision; move the example folder aside, then install again.')
     else:
         # The desktop HPC3 settings check verifies these files by their hashes; it is not repeated here.
         add('signet_source', 'ok', f'Installed at pinned revision {revision[:12]}. Its files are verified by the HPC3 settings check.')
@@ -742,7 +748,7 @@ def check_environment(revision):
     missing = [check['item'] for check in checks if check['status'] != 'ok']
     return {'status': 'ok', 'executed': False, 'read_only': True, 'ready': not missing,
             'workspace': values.get('workspace_path'), 'checks': checks, 'not_ready': missing,
-            'evidence_scope': 'Existence, file sizes, audited source hashes and the app\'s own setup states only. '
+            'evidence_scope': 'Existence, file sizes, required clinical headers, prepared-input metadata, audited source hashes and the app\'s own setup states only. '
                               'Only pinned source files were read for hashing; no contents or research data were returned and nothing on HPC3 was changed. '
                               'Readiness here does not establish scientific validity.'}
 
@@ -766,6 +772,8 @@ def start_step(step, repository=None, revision=None):
     if step == 'signet' and (not re.fullmatch(r'https://[A-Za-z0-9./_-]+\.git', repository or '')
                              or not re.fullmatch(r'[0-9a-f]{40}', revision or '')):
         return {'status': 'invalid', 'executed': False, 'error': 'Invalid pinned SIGNET repository or revision.'}
+    if step == 'signet' and (repository != SOURCE_INVENTORY['repository'] or revision != SOURCE_INVENTORY['revision']):
+        return {'status': 'invalid', 'executed': False, 'error': 'SIGNET installation must match the audited repository and revision.'}
     if step not in STEPS:
         return {'status': 'invalid', 'executed': False, 'error': f'step must be one of {", ".join(STEPS)}.'}
     if step == 'workspace':
