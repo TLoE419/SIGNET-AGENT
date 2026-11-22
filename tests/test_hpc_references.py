@@ -223,6 +223,18 @@ class ReferenceScriptTest(unittest.TestCase):
         self.assertEqual(checks['reference_clinical']['status'], 'ok')
         self.assertEqual(self.download('clinical')['clinical'], 'existing')
 
+    def test_clinical_summary_reports_counts_from_hpc3_and_no_ids(self):
+        self.assertEqual(self.run_script(lambda root: hpc._table_summary_script(root, 'clinical'))['table'], 'missing')
+        self.download('clinical')
+        summary = json.loads(self.run_script(lambda root: hpc._table_summary_script(root, 'clinical'))['table'])
+        self.assertEqual((summary['status'], summary['rows']), ('ok', 2))
+        self.assertEqual(summary['columns'], ['race', 'gender', 'column_3', 'submitter_id'])
+        self.assertEqual(summary['per_column']['race'], {'blank': 1, 'distinct': 1, 'values': {'white': 1}})
+        self.assertEqual(summary['per_column']['gender']['values'], {'female': 1, 'male': 1})
+        self.assertNotIn('values', summary['per_column']['submitter_id'])
+        self.assertNotIn('TCGA-', json.dumps(summary))
+        self.assertNotIn(str(self.root), json.dumps(summary), 'the path stays on HPC3')
+
     def test_clinical_without_the_columns_is_never_saved(self):
         (Path(self.env['FIXTURES']) / 'clinical.tsv').write_text('demographic.race\tid\tsubmitter_id\nwhite\tabc\tTCGA-1\n')
         self.download('clinical')

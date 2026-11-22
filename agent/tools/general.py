@@ -45,7 +45,7 @@ def list_files(folder: str) -> list[str]:
 
 
 # Person-level files (genotypes, expression, sample IDs, raw data in data/) never reach the model:
-# get_workspace_report and summarize_table give their counts instead. These aggregate SIGNET outputs
+# get_step_report and summarize_table give their counts instead. These aggregate SIGNET outputs
 # (genes, gene-SNP pairs, network matrices and edges) stay readable; snapshots can contain IDs.
 _AGGREGATE_OUTPUT = re.compile(r'signet_(gene_pos|gene_name|net\.genepos|net\.genename|cis\.name'
                                r'|(all|common|low|rare)\.sig\.(pValue|weight)_[0-9.e-]+|Afreq|CoeffMat0)'
@@ -65,10 +65,10 @@ def _shareable(parts):
 
 
 def read_file(path: str, start_line: int = 1, max_lines: int = 100) -> dict:
-    """Read a bounded UTF-8 text page of a recognized aggregate SIGNET result in runs/; never execute it.
+    """Read a bounded UTF-8 text page of a run record or an aggregate SIGNET result in runs/; never execute it.
 
     Person-level files (sample IDs, genotype or expression matrices) and raw data in data/ are refused;
-    use get_workspace_report or summarize_table for their counts.
+    use get_step_report or summarize_table for their counts.
 
     Args:
         path: Project-relative or absolute text file inside runs/.

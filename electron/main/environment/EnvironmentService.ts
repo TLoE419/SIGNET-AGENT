@@ -29,6 +29,7 @@ export class EnvironmentService extends EventEmitter {
   const saved=this.settings[this.sessionKey];void this.check(saved?.root,saved?.partition).catch(()=>{});
  };
  private active(token:number){if(token!==this.generation||this.ssh.getSnapshot().connection?.status!=='connected')throw Error('SSH connection changed. Reconnect and check the environment again.')}
+ // HPC3 login nodes are shared; module discovery and source hashing can take over 30 s when busy.
  private async command(script:string,token:number,step:string,timeout=90000){
   this.active(token);const start=Date.now();this.log(step,'Started.');
   const result=await this.ssh.exec('bash -s',Buffer.from(script),timeout).catch(error=>{this.log(step,`Failed after ${Date.now()-start} ms: ${(error as Error).message}`);throw error});this.active(token);

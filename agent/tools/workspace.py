@@ -120,7 +120,7 @@ def propose_workspace_dataset(dataset_id: str) -> dict:
 WORKSPACE_TOOLS = [get_workspace_stage, get_workspace_report, propose_workspace_stage, propose_workspace_dataset]
 
 # Preserve legacy Python entry points while removing scientific execution from the model allow-list.
-LEGACY_EXECUTION = {'configure_signet', 'genotype_tcga', 'genotype_gtex', 'expression_tcga',
+LEGACY_EXECUTION = {'genotype_tcga', 'genotype_gtex', 'expression_tcga',
                     'expression_gtex', 'adjust_tcga', 'adjust_gtex', 'cis_eqtl', 'prepare_network',
                     'submit_network', 'cancel_network', 'prepare_visualization', 'run_visualization',
                     'run_pca', 'plot_pca', 'combine_covariates', 'adjust_expression', 'normalize_expression'}
