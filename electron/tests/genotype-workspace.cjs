@@ -314,7 +314,9 @@ async function verify() {
     'Stage 3 clinical review did not enable its manual submit button');
   assert.ok(await js(`document.querySelector('${adjustmentPanel} [data-adjust-form]')?.getClientRects().length > 0`),
     'Stage 3 clinical file and principal component controls are hidden');
-  assert.equal(await js(`document.querySelector('[data-adjust-input="cli.file"]').value`), fixture.adjust_inputs['cli.file']);
+  const clinicalSource = fixture.adjust_inputs['cli.file'];
+  const originalClinical = readFileSync(clinicalSource, 'utf8');
+  assert.equal(await js(`document.querySelector('[data-adjust-input="cli.file"]').value`), clinicalSource);
   assert.equal(await js(`document.querySelector('[data-adjust-option="npc"]').value`), '3');
   await setReviewValue('[data-adjust-option="npc"]', '2');
   await setReviewValue('[data-adjust-resource="cpus"]', '2');
@@ -334,7 +336,13 @@ async function verify() {
   assert.equal(readAdjustment().run_id, runId);
   assert.equal(readAdjustment().job_id, '333');
   assert.equal(readAdjustment().options.npc, 2);
-  assert.deepEqual(readAdjustment().inputs, fixture.adjust_inputs);
+  const savedAdjustment = readAdjustment();
+  assert.equal(savedAdjustment.clinical.source, clinicalSource);
+  const reviewedClinical = savedAdjustment.inputs['cli.file'];
+  assert.notEqual(reviewedClinical, clinicalSource, 'Stage 3 must use its reviewed clinical copy');
+  assert.ok(reviewedClinical.startsWith(path.join(remoteRun, 'inputs/clinical') + path.sep));
+  assert.equal(readFileSync(reviewedClinical, 'utf8'), originalClinical);
+  assert.equal(readFileSync(clinicalSource, 'utf8'), originalClinical);
   assert.deepEqual(readFileSync(sbatchCalls, 'utf8').trim().split('\n'), ['submitted', 'submitted', 'submitted']);
   writeFileSync(path.join(fixture.slurm, 'squeue'), 'RUNNING\n');
   await until(async () => await adjustmentState() === 'running', 'Stage 3 did not automatically report execution');
@@ -354,7 +362,7 @@ async function verify() {
     'signet_gexp.data': '-1 -2 -2\n0 0 0\n1 2 2\n',
     'signet_gexp_rmpc.data': '-0.5 -1 -0.75\n0 0 0\n0.5 1 0.75\n',
     'signet_geno.data': '0 1 2\n2 1 0\n1 0 1\n',
-    'workspace-clinical.tsv': readFileSync(fixture.adjust_inputs['cli.file'], 'utf8'),
+    'workspace-clinical.tsv': readFileSync(reviewedClinical, 'utf8'),
     'workspace-genotype-ids.txt': sampleIds.join('\n') + '\n',
     'workspace-pca.evec': '#eigvals: 6 3 1\nTCGA-XX-A001 -1 0 0\nTCGA-XX-A002 0 1 0\nTCGA-XX-A003 1 -1 0\n',
     'workspace-pca.eval': '6\n3\n1\n',

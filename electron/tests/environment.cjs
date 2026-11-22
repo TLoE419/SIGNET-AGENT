@@ -134,7 +134,7 @@ async function until(check,description='Local environment condition timed out',t
  const connectionState=async()=> (await js('window.signetDesktop.ssh.getSnapshot()')).value.connection?.status;
  const observeEnvironment=phases=>js(`window.envPhases=${JSON.stringify(phases)};window.signetDesktop.environment.subscribe(s=>window.envPhases.push(s.phase));true;`);
  const originalGeometry=await geometry();
- assert.deepEqual(originalGeometry,[1650,894,53,542]);
+ assert.deepEqual(originalGeometry,[1650,894,68,542]);
  await clickSelector('[data-nav-target="settings"]');
  await observeEnvironment([]);
  const saved=await js(`window.signetDesktop.ssh.saveProfile(${JSON.stringify({name:'Local mock',host:'127.0.0.1',port,username:'testuser',auth:{method:'private-key',privateKeyPath:keyPath}})})`);assert.ok(saved.ok);
