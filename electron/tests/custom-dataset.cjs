@@ -137,9 +137,9 @@ async function verify() {
   assert.deepEqual(readdirSync(path.join(fixture.project, 'runs')), ['step_test']);
   await click('#lens-stage1 [data-genotype-review]');
   await until(() => js(`(() => {
-    const source=document.querySelector('#lens-stage1 [data-genotype-source-input="genotype"]');
+    const primaryInput=document.querySelector('#lens-stage1 [data-genotype-input="ped.file"] [data-full-file-path]');
     const acknowledge=document.querySelector('#lens-stage1 [data-genotype-acknowledge]');
-    return !!source?.getClientRects().length&&source.textContent.includes(${JSON.stringify(datasetA.inputs.genotype[0])})&&
+    return primaryInput?.textContent===${JSON.stringify(datasetA.inputs.genotype[0])}&&
       !!acknowledge?.getClientRects().length&&!acknowledge.disabled&&
       document.querySelector('#lens-stage1 [data-genotype-review]')?.disabled===false;
   })()`), async () => 'The custom Stage 1 review did not settle: ' + await js(`document.querySelector('#lens-stage1')?.textContent`));
@@ -147,16 +147,33 @@ async function verify() {
     'Custom warning acknowledgement must precede submission');
   assert.match(await js(`document.querySelector('#lens-stage1 [data-genotype-warnings]').textContent`),
     /Stage 3:.*clinical/i, 'Stage 1 must disclose the deferred clinical problem before acknowledgement');
+  const stage = '#lens-stage1';
+  const sourceDetails = `${stage} [data-genotype-source-section]`;
+  assert.equal(await js(`document.querySelector('${sourceDetails}').open`), false,
+    'Stage 1 should start with only the inputs needed for this stage');
+  assert.equal(await js(`document.querySelector('${stage} [data-genotype-progress]').hidden`), true,
+    'The progress inspector should not take space before a run exists');
+  const ped = `${stage} [data-genotype-input="ped.file"]`;
+  await click(`${ped} [data-show-file-path]`);
+  assert.equal(await js(`document.querySelector('${ped} [data-file-path-panel]').matches(':popover-open')`), true);
+  assert.equal(await js(`document.querySelector('${ped} [data-full-file-path]').textContent`), datasetA.inputs.genotype[0]);
+  assert.equal(await js(`!!document.querySelector('${ped} [data-copy-file-path]')`), true);
+  await click(`${ped} [data-show-file-path]`);
+  await click(`${sourceDetails} > summary`);
+  assert.equal(await js(`document.querySelector('${sourceDetails}').open`), true);
   for (const [kind, files] of Object.entries(datasetA.inputs)) {
-    const text = await js(`document.querySelector('[data-genotype-source-input="${kind}"]')?.textContent`);
-    for (const filename of files) assert.ok(text?.includes(filename), 'Stage 1 did not review the selected source ' + kind);
+    const paths = await js(`[...document.querySelectorAll('[data-genotype-source-input="${kind}"] [data-full-file-path]')].map(file => file.textContent)`);
+    assert.deepEqual(paths, files, 'Stage 1 did not review the selected source ' + kind);
   }
+  await click(`${sourceDetails} > summary`);
   assert.equal(await js(`document.querySelector('[data-genotype-setting="restrict.tcga.geno"]').value`), '2');
   assert.deepEqual(calls(), [], 'Reviewing or acknowledging files must not submit a job');
   await click('[data-genotype-acknowledge]');
   await until(() => js(`document.querySelector('#lens-stage1 [data-genotype-submit]')?.disabled===false`), 'Acknowledging warnings did not enable manual submission');
   await js(`(() => {const button=document.querySelector('#lens-stage1 [data-genotype-submit]');button.click();button.click();})()`);
   await until(async () => await stageState('genotype') === 'pending', 'Custom Stage 1 did not queue');
+  assert.equal(await js(`document.querySelector('${stage} [data-genotype-progress]').hidden`), false);
+  assert.equal(await js(`document.querySelector('${stage} [data-genotype-status]').textContent`), 'Queued');
   const runId = await js(`document.querySelector('#lens-stage1').dataset.genotypeRunId`);
   const localRun = path.join(fixture.project, 'runs', runId);
   const initialPath = path.join(localRun, 'workspace-genotype.json');
@@ -195,7 +212,7 @@ async function verify() {
   await until(() => js(`document.querySelector('#lens-stage2 [data-expression-submit]')?.disabled===false`), 'Frozen Stage 2 review did not enable submission');
   const frozen = initial.frozen_inputs;
   for (const [key, expected] of Object.entries({'gexp.file': frozen.expression[0], 'pmap.file': frozen.annotation})) {
-    assert.equal(await js(`(() => {const control=document.querySelector('[data-expression-input="${key}"]');return control?.value||control?.textContent;})()`), expected);
+    assert.equal(await js(`document.querySelector('[data-expression-input="${key}"] [data-full-file-path]').textContent`), expected);
   }
   assert.deepEqual(calls(), ['submitted'], 'Opening Stage 2 replayed Stage 1');
   writeFileSync(path.join(fixture.slurm, 'sbatch_reply'), '222\n');

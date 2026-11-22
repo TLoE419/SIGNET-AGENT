@@ -207,7 +207,7 @@ async function verify() {
     const selector = `${expressionPanel} [data-expression-input="${key}"]`;
     const rendered = await js(`(() => {
       const input = document.querySelector(${JSON.stringify(selector)});
-      return input?.value || input?.textContent;
+      return input?.querySelector('[data-full-file-path]')?.textContent ?? input?.textContent;
     })()`);
     assert.equal(rendered, file, `Stage 2 did not review the prepared ${key}`);
   }

@@ -41,11 +41,17 @@
     reviewAgain: "Recheck files",
     reviewTimeout: "Checking the remote files timed out. Select Recheck files to try again.",
     ready: "Ready to review and submit",
+    reviewReady: "Ready for review",
+    loadInputs: "Check the input files",
+    loadInputsPrompt: "Check that the selected files are available before reviewing the settings.",
+    chooseDataset: "Select a dataset to prepare Stage 1.",
     unavailable: "The example is not ready",
     readyPrompt: "Review the files and settings, then select Submit Stage 1.",
+    genotypeReadyPrompt: "Confirm the files, settings, and any warnings before submitting.",
     connect: "Connect and verify the environment in Settings → Remote compute, then review the input files again.",
     inputs: "Example inputs",
-    sourceInputs: "Dataset files saved with this run",
+    sourceInputs: "Dataset files retained with the run",
+    pendingSourceInputs: "Dataset files to retain with this run",
     genotype: "Genotype data", expression: "Expression data", clinical: "Clinical data",
     reference: "Imputation reference panel", genetic_map: "Genetic map",
     annotation: "Gene annotation",
@@ -58,6 +64,8 @@
     stale: "The files or remote context changed. Review again before submitting.",
     settings: "Settings",
     resources: "Resources",
+    genotypeSettings: "Genotype settings",
+    genotypeResources: "Compute resources",
     submit: "Submit Stage 1",
     refresh: "Refresh status",
     history: "View run history",
@@ -140,6 +148,23 @@
     const target = item?.revalidation?.target;
     if (target && (String(item.record?.job_id) !== target.jobId || (item.record?.attempt ?? 1) !== target.attempt)) item.revalidation = null;
   }
+  const renderedReviewPaths = new WeakMap();
+  function showReviewPaths(element, paths, renderFilePath) {
+    const key = JSON.stringify(paths);
+    if (renderedReviewPaths.get(element) === key) return;
+    renderedReviewPaths.set(element, key);
+    element.replaceChildren();
+    if (!paths.length) element.textContent = "—";
+    for (const path of paths) {
+      const row = document.createElement("div");
+      const name = document.createElement("strong");
+      name.textContent = renderFilePath ? path.split("/").at(-1) || path : path;
+      row.append(name);
+      if (renderFilePath && name.textContent !== path) row.append(renderFilePath(path));
+      element.append(row);
+    }
+  }
+
   const revalidationMarkup = prefix => `<button type="button" class="ml-nav-action" data-${prefix}-revalidate hidden></button>
     <p class="ml-genotype-notice" data-${prefix}-revalidate-notice role="status" hidden></p>`;
 
@@ -291,76 +316,94 @@
     }};
   }
 
-  window.mountGenotypeRun = function mountGenotypeRun({panel, token, onHistoryChanged, onOpenHistory, onBack}) {
+  window.mountGenotypeRun = function mountGenotypeRun({panel, token, renderFilePath, onHistoryChanged, onOpenHistory, onBack}) {
+    panel.classList.add("ml-stage-review");
     panel.innerHTML = `
       <div class="ml-result-main ml-genotype-main">
-        <header>
-          <p class="ml-genotype-eyebrow" data-genotype-copy="stage"></p>
-          <h2 id="lens-stage1-title" data-genotype-copy="title"></h2>
-          <p data-genotype-dataset></p>
+        <header class="ml-stage-review-header">
+          <span class="ml-stage-review-icon" aria-hidden="true"><i data-lucide="dna"></i></span>
+          <div>
+            <p class="ml-genotype-eyebrow" data-genotype-copy="stage"></p>
+            <h2 id="lens-stage1-title" data-genotype-copy="title"></h2>
+            <p data-genotype-dataset></p>
+          </div>
         </header>
-        <p data-genotype-readiness role="status"></p>
-        <p data-genotype-guidance hidden></p>
-        <button type="button" class="ml-nav-action" data-genotype-review data-genotype-copy="review"></button>
+        <div class="ml-stage-review-readiness" data-genotype-review-panel>
+          <div>
+            <p class="ml-stage-review-status" data-genotype-readiness role="status"></p>
+            <p class="ml-stage-review-guidance" data-genotype-guidance hidden></p>
+          </div>
+          <button type="button" class="ml-nav-action" data-genotype-review data-genotype-copy="review"></button>
+          <p class="ml-genotype-notice" data-genotype-notice role="status" hidden></p>
+        </div>
         <p class="ml-settings-note" data-genotype-retry-context role="status" hidden></p>
-        <form data-genotype-form hidden>
-          <h3 data-genotype-copy="inputs"></h3>
-          <dl class="ml-key-values">
-            ${inputKeys.map(key => `<dt data-genotype-copy="${key}"></dt><dd><code data-genotype-input="${key}"></code></dd>`).join("")}
-          </dl>
-          <section data-genotype-source-section hidden>
-            <h3 data-genotype-copy="sourceInputs"></h3><dl class="ml-key-values" data-genotype-source-inputs></dl>
+        <form data-genotype-form data-stage-review-form aria-labelledby="lens-stage1-title" hidden>
+          <section class="ml-stage-review-files" aria-labelledby="ml-stage-review-files-heading">
+            <h3 id="ml-stage-review-files-heading" data-genotype-copy="inputs"></h3>
+            <dl class="ml-stage-review-file-list">
+              ${inputKeys.map(key => `<div><dt data-genotype-copy="${key}"></dt><dd data-genotype-input="${key}"></dd></div>`).join("")}
+            </dl>
           </section>
-          <section data-genotype-warning-section hidden>
-            <h3 data-genotype-copy="warnings"></h3><ul data-genotype-warnings></ul>
+          <details class="ml-stage-review-source-section" data-genotype-source-section hidden>
+            <summary data-genotype-source-label></summary>
+            <dl class="ml-stage-review-file-list" data-genotype-source-inputs></dl>
+          </details>
+          <div class="ml-stage-review-settings">
+            <fieldset data-genotype-fields>
+              <legend data-genotype-copy="genotypeSettings"></legend>
+              <div class="ml-genotype-controls">
+                ${parameters.map(([key, min, max, step]) => `
+                  <label><span data-genotype-copy="${key}"></span>
+                    <input type="number" data-genotype-setting="${key}" min="${min}" max="${max}" step="${step}"
+                      ${key === "restrict.tcga.geno" ? "readonly" : "required"}>
+                  </label>`).join("")}
+              </div>
+            </fieldset>
+            <fieldset data-genotype-fields>
+              <legend data-genotype-copy="genotypeResources"></legend>
+              <div class="ml-genotype-controls">
+                ${resources.map(key => `
+                  <label><span data-genotype-copy="${key}"></span>
+                    <input type="number" data-genotype-resource="${key}" step="${key === "hours" ? "any" : "1"}" required>
+                  </label>`).join("")}
+              </div>
+            </fieldset>
+          </div>
+          <section class="ml-stage-review-warnings" data-genotype-warning-section hidden>
+            <h3 data-genotype-copy="warnings"></h3>
+            <ul data-genotype-warnings></ul>
             <label><input type="checkbox" data-genotype-acknowledge><span data-genotype-copy="acknowledge"></span></label>
           </section>
-          <fieldset data-genotype-fields>
-            <legend data-genotype-copy="settings"></legend>
-            <div class="ml-genotype-controls">
-              ${parameters.map(([key, min, max, step]) => `
-                <label><span data-genotype-copy="${key}"></span>
-                  <input type="number" data-genotype-setting="${key}" min="${min}" max="${max}" step="${step}"
-                    ${key === "restrict.tcga.geno" ? "readonly" : "required"}>
-                </label>`).join("")}
-            </div>
-          </fieldset>
-          <fieldset data-genotype-fields>
-            <legend data-genotype-copy="resources"></legend>
-            <div class="ml-genotype-controls">
-              ${resources.map(key => `
-                <label><span data-genotype-copy="${key}"></span>
-                  <input type="number" data-genotype-resource="${key}" step="${key === "hours" ? "any" : "1"}" required>
-                </label>`).join("")}
-            </div>
-          </fieldset>
-          <button type="button" class="ml-nav-action ml-genotype-submit" data-genotype-submit data-genotype-copy="submit"></button>
+          <footer class="ml-stage-review-actions" data-genotype-submit-actions>
+            <button type="button" class="ml-nav-action ml-genotype-submit" data-genotype-submit data-genotype-copy="submit"></button>
+          </footer>
         </form>
       </div>
-      <aside class="ml-result-inspector ml-genotype-progress">
-        <header class="ml-result-inspector-heading">
-          <i data-lucide="activity" aria-hidden="true"></i>
-          <h3 data-genotype-copy="progress"></h3>
-        </header>
-        <p class="ml-genotype-status" data-genotype-status role="status"></p>
-        <dl class="ml-key-values" data-genotype-identifiers hidden>
-          <dt data-genotype-copy="runID"></dt><dd data-genotype-run-id></dd>
-          <dt data-genotype-copy="jobID"></dt><dd data-genotype-job-id></dd>
-        </dl>
-        <ol class="ml-genotype-events" data-genotype-events hidden></ol>
-        <dl class="ml-key-values" data-genotype-work-progress hidden></dl>
-        <p class="ml-genotype-notice" data-genotype-notice role="status" hidden></p>
-        <div class="ml-genotype-actions">
-          <button type="button" class="ml-nav-action" data-genotype-refresh data-genotype-copy="refresh" hidden></button>
-          <button type="button" class="ml-nav-action" data-genotype-history data-genotype-copy="history" hidden></button>
-          <button type="button" class="ml-nav-action" data-genotype-retry data-genotype-copy="retry" hidden></button>
-          <button type="button" class="ml-nav-action" data-genotype-retry-dismiss data-genotype-copy="retryDismiss" hidden></button>
-          <button type="button" class="ml-nav-action" data-genotype-new data-genotype-copy="newRun" hidden></button>
-          <button type="button" class="ml-nav-action" data-genotype-back hidden></button>
-          ${cancellationMarkup("genotype")}
-          ${revalidationMarkup("genotype")}
+      <aside class="ml-result-inspector ml-genotype-progress" data-genotype-progress hidden>
+        <div class="ml-stage-review-progress-card">
+          <header class="ml-result-inspector-heading">
+            <i data-lucide="activity" aria-hidden="true"></i>
+            <h3 data-genotype-copy="progress"></h3>
+          </header>
+          <p class="ml-genotype-status" data-genotype-status role="status"></p>
+          <dl class="ml-key-values" data-genotype-identifiers hidden>
+            <dt data-genotype-copy="runID"></dt><dd data-genotype-run-id></dd>
+            <dt data-genotype-copy="jobID"></dt><dd data-genotype-job-id></dd>
+          </dl>
+          <ol class="ml-genotype-events" data-genotype-events hidden></ol>
+          <dl class="ml-key-values" data-genotype-work-progress hidden></dl>
+          <div class="ml-genotype-actions">
+            <button type="button" class="ml-nav-action" data-genotype-refresh data-genotype-copy="refresh" hidden></button>
+            <button type="button" class="ml-nav-action" data-genotype-history data-genotype-copy="history" hidden></button>
+            <button type="button" class="ml-nav-action" data-genotype-retry data-genotype-copy="retry" hidden></button>
+            <button type="button" class="ml-nav-action" data-genotype-retry-dismiss data-genotype-copy="retryDismiss" hidden></button>
+            <button type="button" class="ml-nav-action" data-genotype-new data-genotype-copy="newRun" hidden></button>
+            <button type="button" class="ml-nav-action" data-genotype-back hidden></button>
+            ${cancellationMarkup("genotype")}
+            ${revalidationMarkup("genotype")}
+          </div>
+          <div data-genotype-logs></div>
         </div>
-        <div data-genotype-logs></div>
       </aside>`;
 
     const part = (name) => panel.querySelector(`[data-genotype-${name}]`);
@@ -378,6 +421,7 @@
     const identifiers = part("identifiers");
     const runLabel = part("run-id");
     const jobLabel = part("job-id");
+    let renderedSources;
     const inputs = new Map(inputKeys.map(key => [key, panel.querySelector(`[data-genotype-input="${key}"]`)]));
     const settingsInputs = new Map(parameters.map(([key]) => [key, panel.querySelector(`[data-genotype-setting="${key}"]`)]));
     const resourceInputs = new Map(resources.map(key => [key, panel.querySelector(`[data-genotype-resource="${key}"]`)]));
@@ -450,7 +494,7 @@
       for (const [key, element] of inputs) {
         const prefix = item.runId || item.legacy;
         const suffix = prefix && key === "ref" ? `${chromosome}.gen` : prefix && key === "gmap" ? `${chromosome}.map` : "";
-        element.textContent = paths[key] ? paths[key] + suffix : "—";
+        showReviewPaths(element, paths[key] ? [paths[key] + suffix] : [], renderFilePath);
       }
       for (const [key, input] of settingsInputs) {
         input.value = keepDraft && key !== "restrict.tcga.geno" && item.draft ? item.draft.settings[key] : value.settings?.[key] ?? "";
@@ -475,7 +519,7 @@
       form.querySelector('h3[data-genotype-copy="inputs"]').textContent = labelFor(retry ? "retryInputs" : legacy ? "inputs" : "customInputs");
       panel.dataset.genotypeRetryState = retry ? item.reviewing ? "reviewing" : item.submitting ? "submitting" : item.review?.ready ? "ready" : "review" : "idle";
       const state = item?.submitting ? "submitting" : item?.uncertain ? "unknown" : item?.record?.state ?? (item?.runId ? "unknown" : "idle");
-      panel.dataset.genotypeState = state;
+      panel.dataset.genotypeState = panel.dataset.runState = state;
       panel.dataset.genotypeDatasetId = selectedDataset;
       if (item?.runId) panel.dataset.genotypeRunId = item.runId;else delete panel.dataset.genotypeRunId;
       const eligible = Boolean(item?.runId) || Boolean(dataset.ready && (legacy || dataset.persisted));
@@ -485,16 +529,23 @@
         (!retry && legacy || item.review.ready === true && typeof item.review.review_token === "string" && item.review.review_token.length > 0);
       statusLine.textContent = labelFor(state);
       if (item?.cancellation?.sending) statusLine.textContent = labelFor("cancelSending");
-      reviewButton.hidden = !eligible || Boolean(item?.runId && !retry);
+      const reviewingInputs = !item?.runId || retry;
+      const reviewPanel = part("review-panel");
+      reviewButton.hidden = !eligible || !reviewingInputs;
       reviewButton.disabled = !connected || Boolean(item?.reviewing || item?.submitting);
-      readiness.hidden = !eligible || Boolean(item?.runId && !retry);
-      readiness.textContent = labelFor(item?.reviewing ? retry ? "retryChecking" : legacy ? "checking" : "customChecking" : validReview ? "ready" : item?.attempted ? legacy ? "unavailable" : "customUnavailable" : legacy ? "review" : "customReview");
+      readiness.hidden = !reviewingInputs;
+      readiness.textContent = labelFor(!eligible ? "chooseDataset" : item?.reviewing ? retry ? "retryChecking" : legacy ? "checking" : "customChecking"
+        : validReview ? "reviewReady" : item?.attempted ? legacy ? "unavailable" : "customUnavailable" : "loadInputs");
       if (item?.reviewTimedOut) readiness.textContent = labelFor("reviewTimeout");
-      guidance.hidden = !eligible || Boolean(item?.runId && !retry);
-      guidance.textContent = validReview ? labelFor(retry ? "retryReady" : "readyPrompt") : !connected ? labelFor("connect") : "";
+      guidance.textContent = validReview ? labelFor(retry ? "retryReady" : "genotypeReadyPrompt") : eligible && !connected ? labelFor("connect")
+        : eligible && !item?.attempted ? labelFor("loadInputsPrompt") : "";
+      guidance.hidden = !reviewingInputs || !guidance.textContent;
+      reviewPanel.dataset.reviewState = item?.reviewing ? "checking" : item?.reviewTimedOut || item?.reviewError && !validReview ? "error" : validReview ? "ready" : "idle";
+      part("progress").hidden = !item?.runId && state === "idle";
       form.hidden = !eligible || !Boolean(item?.review || item?.record?.inputs);
       for (const field of fields) field.disabled = Boolean(item?.runId && !retry || item?.reviewing || item?.submitting || revalidationBusy(item) || retry && !validReview);
       submitButton.hidden = Boolean(item?.runId && !retry);
+      part("submit-actions").hidden = submitButton.hidden;
       submitButton.disabled = !eligible || !connected || !validReview || Boolean(item?.reviewing || item?.submitting || item?.uncertain || revalidationBusy(item) || item?.runId && !retry) || (!legacy || retry) && !item?.acknowledged;
       statusButton.hidden = !item?.runId || terminal && !retry;statusButton.disabled = Boolean(item?.submitting || item?.polling || item?.cancellation?.sending || item?.revalidation?.pending);
       historyButton.hidden = !item?.record;newButton.hidden = !terminal || Boolean(context.runId);
@@ -509,7 +560,9 @@
       part("back").hidden = !context.runId;
       part("back").textContent = "Back to run timeline";
       identifiers.hidden = !item?.runId;runLabel.textContent = item?.runId ?? "";jobLabel.textContent = item?.record?.job_id ?? "—";
-      notice.textContent = [item?.uncertain ? labelFor("uncertain") : "", item?.error || item?.reviewError].filter(Boolean).join(" ");notice.hidden = !notice.textContent;
+      notice.textContent = [item?.uncertain ? labelFor("uncertain") : "", item?.error || item?.reviewError].filter(Boolean).join(" ");
+      notice.hidden = !notice.textContent;
+      reviewPanel.hidden = !reviewingInputs && notice.hidden;
       const sourceInputs = item?.sourceInputs ?? item?.review?.source_inputs;
       const referenceSources = item?.review?.reference_sources ?? runFor(item)?.reference_sources;
       const sourceRows = sourceInputs ? sourceKinds.map(kind => [kind, sourceInputs[kind] ?? []]) : [];
@@ -517,13 +570,18 @@
         if (typeof referenceSources?.[role] === "string" && referenceSources[role]) sourceRows.push([role, [referenceSources[role]]]);
       }
       part("source-section").hidden = !sourceRows.length;
-      const sourceList = part("source-inputs");sourceList.replaceChildren();
-      for (const [kind, files] of sourceRows) {
-        const title = document.createElement("dt"), paths = document.createElement("dd");
-        title.textContent = labelFor(kind);paths.dataset.genotypeSourceInput = kind;
-        for (const path of files) {const code = document.createElement("code");code.textContent = path;paths.append(code, document.createElement("br"));}
-        if (!paths.childElementCount) paths.textContent = "—";
-        sourceList.append(title, paths);
+      part("source-label").textContent = labelFor(item?.runId ? "sourceInputs" : "pendingSourceInputs");
+      const sources = JSON.stringify(sourceRows);
+      if (renderedSources !== sources) {
+        const sourceList = part("source-inputs");sourceList.replaceChildren();
+        for (const [kind, files] of sourceRows) {
+          const row = document.createElement("div");
+          const title = document.createElement("dt"), paths = document.createElement("dd");
+          title.textContent = labelFor(kind);paths.dataset.genotypeSourceInput = kind;
+          showReviewPaths(paths, files, renderFilePath);
+          row.append(title, paths);sourceList.append(row);
+        }
+        renderedSources = sources;
       }
       const warningList = part("warnings");warningList.replaceChildren();
       for (const message of item?.review?.warnings ?? []) {
@@ -743,6 +801,7 @@
       const previous = current();
       const id = next.dataset?.id ?? next.datasetId ?? "";
       if (id !== selectedDataset || next.runId !== context.runId || previous?.retry && context.visible && !next.visible) {
+        part("source-section").open = false;
         saveDraft(previous);clearTimeout(pollTimer);
         clearRetry(previous);
         if (previous?.reviewing) {previous.reviewRequest?.abort();previous.reviewRequest = null;previous.reviewing = false;}
@@ -793,13 +852,18 @@
   const expressionCopy = {
     title: "Expression preparation",
     stage: "Stage 2",
-    run: "Continue run",
+    run: "Run",
     empty: "Choose a run with completed Stage 1.",
     prerequisite: "Review Stage 2 after Stage 1 completes in this run.",
-    readyPrompt: "Review the files and settings, then select Submit Stage 2.",
+    readyPrompt: "Review the expression file, gene annotation, and settings before submitting.",
+    review: "Check input files",
+    checking: "Checking input files…",
+    unavailable: "The input files need attention",
     submit: "Submit Stage 2",
     retry: "Review a new attempt",
     back: "Back to run timeline",
+    inputs: "Stage 2 input files",
+    settings: "Expression settings",
     chromosome: "Chromosome",
     "gexp.file": "Expression file",
     "pmap.file": "Gene annotation file",
@@ -808,14 +872,16 @@
   const adjustmentCopy = {
     title: "Sample matching and adjustment",
     stage: "Stage 3",
-    run: "Continue run",
+    run: expressionCopy.run,
     empty: "Choose a run with completed Stages 1 and 2.",
     prerequisite: "Submit Stage 3 after Stages 1 and 2 complete in this run.",
     readyPrompt: "Review the clinical file, principal components and resources, then select Submit Stage 3.",
     submit: "Submit Stage 3",
     review: "Check clinical file",
     checking: "Checking clinical data…",
-    inputs: "Clinical data",
+    unavailable: "The clinical file needs review",
+    inputs: "Clinical file",
+    settings: "Adjustment settings",
     retry: expressionCopy.retry,
     back: expressionCopy.back,
     npc: "Principal components for adjustment (0–10)",
@@ -832,7 +898,9 @@
     submit: "Submit Stage 4",
     review: "Check prior results",
     checking: "Checking prior results…",
+    unavailable: "The prior results need attention",
     inputs: "Files from this run",
+    settings: "Association settings",
     retry: expressionCopy.retry,
     back: expressionCopy.back,
     "alpha.cis": "Significance threshold",
@@ -852,9 +920,11 @@
     submit: "Submit Stage 5",
     review: cisCopy.review,
     checking: cisCopy.checking,
+    unavailable: cisCopy.unavailable,
     inputs: cisCopy.inputs,
     retry: expressionCopy.retry,
     back: expressionCopy.back,
+    settings: "Inference settings",
     nboots: "Bootstrap runs",
     cor: "Instrument correlation limit",
     correlationNote: "The correlation limit selects each gene’s instrumental variants.",
@@ -881,15 +951,26 @@
     submit: "Submit Stage 6",
     review: "Check network and thresholds",
     checking: "Checking network and thresholds…",
+    unavailable: "The network inputs need review",
     inputs: cisCopy.inputs,
     retry: expressionCopy.retry,
     back: expressionCopy.back,
+    settings: "Network export settings",
     freq: "Edge frequency threshold",
     ntop: "Subnetworks to display",
     savedResults: "Saved networks",
   };
 
-  function mountContinuationRun({panel, token, onHistoryChanged, onOpenHistory, onBack, onShowResults}, step = "expression") {
+  const sourceLabels = {
+    "snps.map": "Variant positions", "snps.maf": "Variant frequencies",
+    "matched.gexp": "Matched expression", "matched.gexp.withpc": "Expression with covariates",
+    "matched.geno": "Matched genotypes", "gene.pos": "Gene positions",
+    "net.gexp.data": "Expression for network inference", "net.geno.data": "Genotypes for network inference",
+    "sig.pair": "Significant gene–variant associations", "net.genename": "Gene names", "net.genepos": "Gene positions",
+    Afreq: "Edge appearance frequencies", coef: "Edge coefficients", "vis.genepos": "Gene positions",
+  };
+
+  function mountContinuationRun({panel, token, renderFilePath, onHistoryChanged, onOpenHistory, onBack, onShowResults}, step = "expression") {
     const adjustment = step === "adjust";
     const cis = step === "cis";
     const network = step === "network";
@@ -926,62 +1007,105 @@
       <span data-${prefix}-copy="${label}"></span>
       <input type="${type}" data-${prefix}-${parameterAttribute}="${key}" ${type === "number" ? `min="${min}" max="${max}" step="${increment}"` : 'pattern="[0-9]{1,2}:[0-5][0-9]:[0-5][0-9]" placeholder="4:00:00"'} value="${value}" ${alwaysVisible ? 'required' : 'readonly'}>
     </label>`).join("");
-    panel.classList.add("ml-expression-panel");
+    const stageTitle = `lens-stage${stage}${visualization ? "-run" : ""}-title`;
+    const stageIcon = ["table-2", "chart-scatter", "chart-no-axes-combined", "network", "network"][stage - 2];
+    panel.classList.add("ml-expression-panel", "ml-stage-review");
     if (adjustment) panel.classList.add("ml-adjust-panel");
     panel.innerHTML = `
       <div class="ml-result-main ml-genotype-main">
-        <header><p class="ml-genotype-eyebrow" data-${prefix}-copy="stage"></p>
-          <h2 id="${visualization ? 'lens-stage6-run-title' : `lens-stage${stage}-title`}" data-${prefix}-copy="title"></h2></header>
-        <label class="ml-expression-run-label"><span data-${prefix}-copy="run"></span>
-          <select data-${prefix}-run></select>
-        </label>
-        <p data-${prefix}-readiness role="status"></p>
-        <p data-${prefix}-guidance></p>
-        <button type="button" class="ml-nav-action" data-${prefix}-review data-${prefix}-copy="review"></button>
-        <form data-${prefix}-form hidden>
-          ${linkedInputs ? '' : `<h3 data-${prefix}-copy="inputs"></h3>`}
-          <dl class="ml-key-values" ${linkedInputs ? 'hidden' : ''}>${fileKeys.map(key => `<dt data-${prefix}-copy="${key}"></dt>
-            <dd>${adjustment
-              ? `<input class="ml-clinical-input" type="text" data-${prefix}-input="${key}" maxlength="2048" required>`
-              : `<code data-${prefix}-input="${key}"></code>`}</dd>`).join("")}</dl>
-          ${adjustment ? '<p class="ml-settings-note" data-adjust-clinical-replacement hidden></p><div data-adjust-clinical-schema hidden></div><div class="ml-settings-note" data-adjust-clinical-summary></div><div data-adjust-clinical-choices></div>' : ''}
-          <fieldset data-${prefix}-fields><legend data-${prefix}-copy="settings"></legend>
-            <div class="ml-genotype-controls">${parameterMarkup(network ? parameterDefinitions.slice(0, 2) : parameterDefinitions)}</div>
-            ${network ? '<input type="number" data-network-setting="ncis" value="3" readonly hidden><p class="ml-settings-note" data-network-copy="correlationNote"></p>' : ''}
-          </fieldset>
-          ${network ? `<fieldset data-network-fields><legend data-network-copy="childResources"></legend>
-            <div class="ml-genotype-controls">${parameterMarkup(parameterDefinitions.slice(3))}</div>
-          </fieldset><p class="ml-settings-note" data-network-defaults hidden></p>` : ''}
-          <fieldset data-${prefix}-fields><legend data-${prefix}-copy="resources"></legend>
-            ${network ? '<p class="ml-settings-note" data-network-copy="controllerNote"></p>' : ''}
-            <div class="ml-genotype-controls">${resources.map(key => `<label><span data-${prefix}-copy="${key}"></span>
-              <input type="number" data-${prefix}-resource="${key}" step="${key === "hours" ? "any" : "1"}" value="${alwaysVisible ? initialResources[key] : ''}" required>
-            </label>`).join("")}</div>
-          </fieldset>
-          ${linkedInputs ? `<details class="ml-cis-inputs"><summary data-${prefix}-copy="inputs"></summary><dl class="ml-key-values" data-${prefix}-input-sources></dl></details>` : ''}
-          <button type="button" class="ml-nav-action ml-genotype-submit" data-${prefix}-submit data-${prefix}-copy="submit"></button>
+        <header class="ml-stage-review-header">
+          <span class="ml-stage-review-icon" aria-hidden="true"><i data-lucide="${stageIcon}"></i></span>
+          <div>
+            <p class="ml-genotype-eyebrow" data-${prefix}-copy="stage"></p>
+            <h2 id="${stageTitle}" data-${prefix}-copy="title"></h2>
+          </div>
+        </header>
+        <div class="ml-stage-review-context">
+          <label class="ml-expression-run-label"><span data-${prefix}-copy="run"></span>
+            <select data-${prefix}-run></select>
+          </label>
+          <div class="ml-stage-review-navigation">
+            ${visualization ? '<button type="button" class="ml-nav-action" data-visualize-results data-visualize-copy="savedResults"></button>' : ''}
+            <button type="button" class="ml-nav-action" data-${prefix}-back data-${prefix}-copy="back" hidden></button>
+          </div>
+        </div>
+        <div class="ml-stage-review-readiness" data-${prefix}-review-panel>
+          <div>
+            <p class="ml-stage-review-status" data-${prefix}-readiness role="status"></p>
+            <p class="ml-stage-review-guidance" data-${prefix}-guidance hidden></p>
+          </div>
+          <button type="button" class="ml-nav-action" data-${prefix}-review data-${prefix}-copy="review"></button>
+          <p class="ml-genotype-notice" data-${prefix}-notice role="status" hidden></p>
+        </div>
+        <form data-${prefix}-form data-stage-review-form aria-labelledby="${stageTitle}" hidden>
+          ${linkedInputs ? `<details class="ml-stage-review-source-section" data-${prefix}-source-section hidden>
+            <summary data-${prefix}-copy="inputs"></summary>
+            <dl class="ml-stage-review-file-list" data-${prefix}-input-sources></dl>
+          </details>` : `<section class="ml-stage-review-files" aria-labelledby="ml-${prefix}-files-heading">
+            <h3 id="ml-${prefix}-files-heading" data-${prefix}-copy="inputs"></h3>
+            <dl class="ml-stage-review-file-list">${fileKeys.map(key => `<div>
+              <dt data-${prefix}-copy="${key}"></dt>${adjustment
+                ? `<dd class="ml-stage-review-clinical-file">
+                  <input class="ml-clinical-input" type="text" data-${prefix}-input="${key}" maxlength="2048" required>
+                  <div data-adjust-clinical-path hidden></div>
+                </dd>`
+                : `<dd data-${prefix}-input="${key}"></dd>`}
+            </div>`).join("")}</dl>
+            ${adjustment ? `<div class="ml-settings-note" data-adjust-clinical-replacement hidden>
+              <p>Enter a corrected path and check it again. SIGNET retains the original file and reuses completed Stages 1 and 2.</p>
+              <div class="ml-stage-review-clinical-file" data-adjust-original-clinical hidden>
+                <span>Original frozen file</span><div data-adjust-original-path></div>
+              </div>
+            </div>` : ''}
+          </section>`}
+          ${adjustment ? `<div class="ml-stage-review-clinical" data-adjust-clinical-review hidden>
+            <div data-adjust-clinical-schema hidden></div>
+            <div data-adjust-clinical-summary></div>
+            <div data-adjust-clinical-choices></div>
+          </div>` : ''}
+          <div class="ml-stage-review-settings${network ? ' ml-stage-review-network-settings' : ''}">
+            <fieldset data-${prefix}-fields><legend data-${prefix}-copy="settings"></legend>
+              <div class="ml-genotype-controls">${parameterMarkup(network ? parameterDefinitions.slice(0, 2) : parameterDefinitions)}</div>
+              ${network ? '<input type="number" data-network-setting="ncis" value="3" readonly hidden><p class="ml-settings-note" data-network-copy="correlationNote"></p>' : ''}
+            </fieldset>
+            <fieldset data-${prefix}-fields><legend data-${prefix}-copy="resources"></legend>
+              <div class="ml-genotype-controls">${resources.map(key => `<label><span data-${prefix}-copy="${key}"></span>
+                <input type="number" data-${prefix}-resource="${key}" step="${key === "hours" ? "any" : "1"}" value="${alwaysVisible ? initialResources[key] : ''}" required>
+              </label>`).join("")}</div>
+              ${network ? '<p class="ml-settings-note" data-network-copy="controllerNote"></p>' : ''}
+            </fieldset>
+            ${network ? `<fieldset data-network-fields><legend data-network-copy="childResources"></legend>
+              <div class="ml-genotype-controls">${parameterMarkup(parameterDefinitions.slice(3))}</div>
+            </fieldset>` : ''}
+          </div>
+          ${network ? '<p class="ml-settings-note" data-network-defaults hidden></p>' : ''}
+          <footer class="ml-stage-review-actions" data-${prefix}-submit-actions>
+            <button type="button" class="ml-nav-action ml-genotype-submit" data-${prefix}-submit data-${prefix}-copy="submit"></button>
+          </footer>
         </form>
       </div>
-      <aside class="ml-result-inspector ml-genotype-progress">
-        <header class="ml-result-inspector-heading"><h3 data-${prefix}-copy="progress"></h3></header>
-        <p class="ml-genotype-status" data-${prefix}-status role="status"></p>
-        <dl class="ml-key-values" data-${prefix}-identifiers hidden>
-          <dt data-${prefix}-copy="runID"></dt><dd data-${prefix}-run-id></dd>
-          <dt data-${prefix}-copy="jobID"></dt><dd data-${prefix}-job-id></dd>
-        </dl>
-        <ol class="ml-genotype-events" data-${prefix}-events hidden></ol>
-        <dl class="ml-key-values" data-${prefix}-work-progress hidden></dl>
-        <p class="ml-genotype-notice" data-${prefix}-notice role="status" hidden></p>
-        <div class="ml-genotype-actions">
-          <button type="button" class="ml-nav-action" data-${prefix}-refresh data-${prefix}-copy="refresh" hidden></button>
-          <button type="button" class="ml-nav-action" data-${prefix}-history data-${prefix}-copy="history" hidden></button>
-          <button type="button" class="ml-nav-action" data-${prefix}-retry data-${prefix}-copy="retry" hidden></button>
-          ${cancellationMarkup(prefix)}
-          ${revalidationMarkup(prefix)}
-          ${visualization ? '<button type="button" class="ml-nav-action" data-visualize-results data-visualize-copy="savedResults"></button>' : ''}
-          <button type="button" class="ml-nav-action" data-${prefix}-back data-${prefix}-copy="back" hidden></button>
+      <aside class="ml-result-inspector ml-genotype-progress" data-${prefix}-progress hidden>
+        <div class="ml-stage-review-progress-card">
+          <header class="ml-result-inspector-heading">
+            <i data-lucide="activity" aria-hidden="true"></i>
+            <h3 data-${prefix}-copy="progress"></h3>
+          </header>
+          <p class="ml-genotype-status" data-${prefix}-status role="status"></p>
+          <dl class="ml-key-values" data-${prefix}-identifiers hidden>
+            <dt data-${prefix}-copy="runID"></dt><dd data-${prefix}-run-id></dd>
+            <dt data-${prefix}-copy="jobID"></dt><dd data-${prefix}-job-id></dd>
+          </dl>
+          <ol class="ml-genotype-events" data-${prefix}-events hidden></ol>
+          <dl class="ml-key-values" data-${prefix}-work-progress hidden></dl>
+          <div class="ml-genotype-actions">
+            <button type="button" class="ml-nav-action" data-${prefix}-refresh data-${prefix}-copy="refresh" hidden></button>
+            <button type="button" class="ml-nav-action" data-${prefix}-history data-${prefix}-copy="history" hidden></button>
+            <button type="button" class="ml-nav-action" data-${prefix}-retry data-${prefix}-copy="retry" hidden></button>
+            ${cancellationMarkup(prefix)}
+            ${revalidationMarkup(prefix)}
+          </div>
+          <div data-${prefix}-logs></div>
         </div>
-        <div data-${prefix}-logs></div>
       </aside>`;
 
     const part = name => panel.querySelector(`[data-${prefix}-${name}]`);
@@ -991,6 +1115,7 @@
     const parameterInputs = new Map(parameterDefinitions.map(({key}) => [key, panel.querySelector(`[data-${prefix}-${parameterAttribute}="${key}"]`)]));
     const fields = [...panel.querySelectorAll(`[data-${prefix}-fields]`)];
     const runStates = new Map();
+    let renderedSources;
     let context = {datasetId: "", visible: false, runs: [], runId: null};
     let selectedRun = "";
     let pollTimer;
@@ -1028,7 +1153,7 @@
       for (const key of fileKeys) {
         const element = panel.querySelector(`[data-${prefix}-input="${key}"]`);
         if (adjustment) element.value = value.inputs?.[key] ?? "";
-        else element.textContent = value.inputs?.[key] ?? "—";
+        else showReviewPaths(element, value.inputs?.[key] ? [value.inputs[key]] : [], renderFilePath);
       }
       for (const [key, element] of parameterInputs) {
         if (!keepDraft) element.value = value[parameterGroup]?.[key] ?? "";
@@ -1060,6 +1185,9 @@
       item.error = "Check the clinical file again to confirm these choices before submission.";
       saveDraft();
       part("submit").disabled = true;
+      part("review-panel").dataset.reviewState = "error";
+      part("readiness").textContent = "Clinical review changed";
+      part("guidance").hidden = true;
       part("notice").textContent = item.error;
       part("notice").hidden = false;
     }
@@ -1078,27 +1206,35 @@
         (!(network || visualization) || source()?.jobs.cis?.state === "completed") &&
         (!visualization || source()?.jobs.network?.state === "completed");
       const terminal = terminalStates.has(state);
-      panel.dataset[`${prefix}State`] = state;
+      panel.dataset[`${prefix}State`] = panel.dataset.runState = state;
+      part("progress").hidden = state === "idle" && !saved;
       panel.dataset[`${prefix}RunId`] = selectedRun;
       const selection = selectedRun;
       picker.replaceChildren(...context.runs.map(run => {
         const option = document.createElement("option");
         option.value = run.run_id;
-        option.textContent = run.run_id;
+        option.textContent = typeof run.name === "string" && run.name !== run.run_id ? `${run.name} · ${run.run_id}` : run.run_id;
         return option;
       }));
       picker.value = selection;
       picker.disabled = Boolean(context.runId) || !context.runs.length || Boolean(item?.submitting);
+      const verified = allowed && !hasAttempt && item?.review && item.review.ready !== false;
+      const reviewPanel = part("review-panel");
+      part("readiness").hidden = hasAttempt;
       part("readiness").textContent = !selectedRun ? labelFor("empty") : !allowed ? labelFor("prerequisite")
-        : item.checking ? labelFor("checking") : item.review && !hasAttempt ? labelFor(item.review.ready === false ? "unavailable" : "ready") : "";
+        : item.checking ? labelFor("checking") : item.review && !hasAttempt ? labelFor(item.review.ready === false ? "unavailable" : "reviewReady")
+          : labelFor("loadInputs");
+      reviewPanel.dataset.reviewState = item?.checking ? "checking"
+        : item?.reviewTimedOut || item?.review?.ready === false || item?.error ? "error" : verified ? "ready" : "idle";
       if (!hasAttempt && item?.reviewTimedOut) {
         part("readiness").textContent = labelFor("reviewTimeout");
         part("review").textContent = labelFor("reviewAgain");
       }
-      part("guidance").textContent = allowed && item?.review && !hasAttempt && item.review.ready !== false ? labelFor("readyPrompt") : "";
+      part("guidance").textContent = verified && !item.checking ? labelFor("readyPrompt") : "";
+      part("guidance").hidden = !part("guidance").textContent;
       part("review").hidden = !(alwaysVisible ? selectedRun : allowed) || hasAttempt;
       part("review").disabled = Boolean(item?.checking || revalidationBusy(item));
-      form.hidden = !alwaysVisible && (!allowed || !(hasAttempt ? saved?.inputs : item?.review));
+      form.hidden = !selectedRun || !alwaysVisible && (!allowed || !(hasAttempt ? saved?.inputs : item?.review));
       for (const field of fields) field.disabled = hasAttempt || cancellationBusy(item) || revalidationBusy(item) || !selectedRun || visualization && Boolean(item?.checking);
       if (adjustment) {
         const clinicalInput = panel.querySelector('[data-adjust-input="cli.file"]');
@@ -1108,14 +1244,15 @@
         const frozen = Boolean(item?.review?.frozen || item?.review?.frozen_inputs || source()?.input_mode === "dataset" || source()?.frozen_inputs);
         const replacementAllowed = item?.review?.clinical_replacement_allowed === true;
         clinicalInput.readOnly = hasAttempt || frozen && !replacementAllowed;
-        const replacement = part("clinical-replacement");
-        replacement.hidden = !frozen || !replacementAllowed || hasAttempt;
-        replacement.textContent = "You can select a corrected clinical file for Stage 3. The original frozen file is preserved, and completed Stages 1 and 2 are reused. Check the selected file again before submitting.";
-        if (frozenClinical && !replacement.hidden) {
-          const path = document.createElement("code");path.textContent = frozenClinical;
-          replacement.append(document.createTextNode(" Original frozen file: "), path);
-        }
+        const clinicalPath = part("clinical-path");
+        clinicalInput.hidden = Boolean(renderFilePath && clinicalInput.readOnly && clinicalInput.value);
+        clinicalPath.hidden = !clinicalInput.hidden;
+        if (!clinicalPath.hidden) showReviewPaths(clinicalPath, [clinicalInput.value], renderFilePath);
+        part("clinical-replacement").hidden = !frozen || !replacementAllowed || hasAttempt;
+        part("original-clinical").hidden = !frozenClinical;
+        if (frozenClinical) showReviewPaths(part("original-path"), [frozenClinical], renderFilePath);
         const clinical = hasAttempt ? saved?.clinical?.review : item?.review?.clinical;
+        part("clinical-review").hidden = !clinical;
         const missingColumns = clinical?.missing_columns ?? [];
         const candidates = clinical?.gender_column_candidates ?? [];
         const schema = part("clinical-schema");
@@ -1170,8 +1307,15 @@
         summary.replaceChildren();
         if (clinical && clinical.schema_valid !== false && !missingColumns.length) {
           const count = key => Number.isSafeInteger(clinical[key]) && clinical[key] >= 0 ? clinical[key] : "—";
-          const totals = document.createElement("p");
-          totals.textContent = `${count("rows")} clinical rows · ${count("matched")} matched · ${count("retained")} retained · ${count("excluded")} excluded`;
+          const totals = document.createElement("ul");
+          totals.className = "ml-stage-review-clinical-totals";
+          totals.setAttribute("aria-label", "Clinical review totals");
+          for (const [key, label] of [["rows", "clinical rows"], ["matched", "matched"], ["retained", "retained"], ["excluded", "excluded"]]) {
+            const cell = document.createElement("li"), amount = document.createElement("strong");
+            amount.textContent = count(key);
+            cell.append(amount, document.createTextNode(` ${label}`));
+            totals.append(cell);
+          }
           const scope = document.createElement("p");
           scope.textContent = "This review uses the completed Stage 1 and Stage 2 outputs. These counts can differ from the Data page’s preliminary pairing. Retained and excluded counts reflect the current clinical choices.";
           const missing = document.createElement("dl");missing.className = "ml-key-values";
@@ -1214,19 +1358,20 @@
       }
       if (linkedInputs) {
         const inputSources = saved?.input_sources ?? item?.review?.input_sources ?? source()?.jobs[step]?.input_sources ?? {};
-        const entries = Object.entries(inputSources);
-        const inputs = part("input-sources");
-        inputs.replaceChildren();
-        for (const [key, path] of entries) {
-          const label = document.createElement("dt");
-          const value = document.createElement("dd");
-          const code = document.createElement("code");
-          label.textContent = key;
-          code.textContent = path;
-          value.append(code);
-          inputs.append(label, value);
+        const entries = Object.entries(inputSources).filter(([, path]) => typeof path === "string" && path);
+        part("source-section").hidden = !entries.length;
+        const sources = JSON.stringify(entries);
+        if (renderedSources !== sources) {
+          const rows = entries.map(([key, path]) => {
+            const row = document.createElement("div"), label = document.createElement("dt"), value = document.createElement("dd");
+            label.textContent = Object.hasOwn(sourceLabels, key) ? sourceLabels[key] : key;
+            showReviewPaths(value, [path], renderFilePath);
+            row.append(label, value);
+            return row;
+          });
+          part("input-sources").replaceChildren(...rows);
+          renderedSources = sources;
         }
-        inputs.hidden = !entries.length;
       }
       if (network) {
         const defaults = item?.review?.defaults_applied ?? [];
@@ -1235,7 +1380,7 @@
         part("defaults").title = defaults.join("\n");
       }
       renderWorkProgress(part("work-progress"), saved?.progress);
-      part("submit").hidden = hasAttempt;
+      part("submit").hidden = part("submit-actions").hidden = hasAttempt;
       part("submit").disabled = !allowed || !item?.review || item.review.ready === false || adjustment && !item.review.review_token || item.checking || item.submitting || hasAttempt || cancellationBusy(item) || revalidationBusy(item);
       part("status").textContent = labelFor(state);
       if (item?.cancellation?.sending) part("status").textContent = labelFor("cancelSending");
@@ -1251,6 +1396,7 @@
       const message = [item?.uncertain ? labelFor("uncertain") : "", item?.error].filter(Boolean).join(" ");
       part("notice").textContent = message;
       part("notice").hidden = !message;
+      reviewPanel.hidden = hasAttempt && !message;
       part("events").replaceChildren(...(saved?.history ?? []).map(event => {
         const row = document.createElement("li");
         row.dataset.state = event.state;
@@ -1368,7 +1514,10 @@
 
     function selectRun(id) {
       const changed = selectedRun !== id;
-      if (changed) saveDraft();
+      if (changed) {
+        saveDraft();
+        if (linkedInputs) part("source-section").open = false;
+      }
       selectedRun = id;
       clearTimeout(pollTimer);
       const item = id ? stateFor(id) : null;

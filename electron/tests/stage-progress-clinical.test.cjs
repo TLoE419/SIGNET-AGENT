@@ -175,8 +175,8 @@ test('an explicit replacement permission repairs frozen clinical input after fre
  await until(()=>q('[data-adjust-input="cli.file"]').value===original&&!q('[data-adjust-review]').disabled);
  const clinical=q('[data-adjust-input="cli.file"]');
  assert.equal(clinical.readOnly,false);assert.equal(q('[data-adjust-submit]').disabled,true);
- assert.match(q('[data-adjust-clinical-replacement]').textContent,/completed Stages 1 and 2 are reused/);
- assert.match(q('[data-adjust-clinical-replacement]').textContent,/Original frozen file: \/run\/inputs\/frozen\/clinical/);
+ assert.match(q('[data-adjust-clinical-replacement]').textContent,/reuses completed Stages 1 and 2/);
+ assert.equal(q('[data-adjust-original-path]').textContent,original);
  assert.equal(q('[data-adjust-gender-column]'),null,'no mapping can be chosen without a suitable column');
  q('[data-adjust-use-corrected-clinical]').click();
  assert.equal(w.document.activeElement,clinical);

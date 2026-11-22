@@ -3563,6 +3563,7 @@
   genotypeRun = globalThis.mountGenotypeRun({
     panel: root.querySelector("#lens-stage1"),
     token: chatToken,
+    renderFilePath,
     onHistoryChanged: () => void loadWorkspaceHistory(),
     onOpenHistory: (runId) => void openGenotypeHistory(runId),
     onBack: backToRunTimeline,
@@ -3570,6 +3571,7 @@
   expressionRun = globalThis.mountExpressionRun({
     panel: root.querySelector("#lens-stage2"),
     token: chatToken,
+    renderFilePath,
     onHistoryChanged: () => void loadWorkspaceHistory(),
     onOpenHistory: (runId) => void openExpressionHistory(runId),
     onBack: backToRunTimeline,
@@ -3577,6 +3579,7 @@
   adjustmentRun = globalThis.mountAdjustmentRun({
     panel: root.querySelector("#lens-stage3"),
     token: chatToken,
+    renderFilePath,
     onHistoryChanged: () => void loadWorkspaceHistory(),
     onOpenHistory: (runId) => void openAdjustmentHistory(runId),
     onBack: backToRunTimeline,
@@ -3584,6 +3587,7 @@
   cisRun = globalThis.mountCisRun({
     panel: root.querySelector("#lens-stage4"),
     token: chatToken,
+    renderFilePath,
     onHistoryChanged: () => void loadWorkspaceHistory(),
     onOpenHistory: (runId) => void openCisHistory(runId),
     onBack: backToRunTimeline,
@@ -3591,6 +3595,7 @@
   networkRun = globalThis.mountNetworkRun({
     panel: root.querySelector("#lens-stage5"),
     token: chatToken,
+    renderFilePath,
     onHistoryChanged: () => void loadWorkspaceHistory(),
     onOpenHistory: (runId) => void openNetworkHistory(runId),
     onBack: backToRunTimeline,
@@ -3598,6 +3603,7 @@
   visualizationRun = globalThis.mountVisualizationRun({
     panel: visualizationPanel,
     token: chatToken,
+    renderFilePath,
     onHistoryChanged: (runId) => void refreshVisualizationHistory(runId),
     onOpenHistory: (runId) => void openVisualizationHistory(runId),
     onBack: backToRunTimeline,
