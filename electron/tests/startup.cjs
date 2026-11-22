@@ -17,7 +17,7 @@ const histories = Object.fromEntries(Array.from({length: 32}, (_, index) => [
 const oldest = Object.keys(histories)[0], latest = Object.keys(histories).at(-1);
 mkdirSync(path.dirname(stateFile), {recursive: true});
 writeFileSync(stateFile, JSON.stringify({token: randomBytes(32).toString('hex'), histories,
-  events: {[oldest]: [['Retained work event']]}}));
+  active_session: latest, events: {[oldest]: [['Retained work event']]}}));
 function fail(error) {
   console.error(error);
   clearTimeout(deadline);
@@ -35,6 +35,14 @@ app.once('browser-window-created', (_event, window) => {
       assert.equal(BrowserWindow.getAllWindows().length, 1);
       assert.equal(window.isVisible(), true);
       assert.match(window.webContents.getURL(), /^http:\/\/127\.0\.0\.1:/);
+      const workspace = await window.webContents.executeJavaScript(`({
+        title: document.querySelector('#ml-chat-title').textContent,
+        draft: document.querySelector('#ml-input').value,
+        messages: document.querySelectorAll('#ml-chat-transcripts .ml-chat-message').length,
+        saved: document.querySelectorAll('#ml-chat-records > .ml-chat-record:not([hidden])').length,
+        session: JSON.parse(document.querySelector('#initial-chat').textContent).session
+      })`);
+      assert.deepEqual(workspace, {title: 'New chat', draft: '', messages: 0, saved: 32, session: undefined});
       const classicLoaded = once(window.webContents, 'did-finish-load');
       Menu.getApplicationMenu().getMenuItemById('classic-view').click();
       await classicLoaded;
@@ -68,7 +76,6 @@ app.once('browser-window-created', (_event, window) => {
       page = await snapshot();
       assert.equal(page.welcome, true);
       assert.equal(page.initial.session, undefined);
-      assert.equal(page.choices, 32);
       const loaded = once(window.webContents, 'did-finish-load');
       await window.loadURL(new URL('/classic', window.webContents.getURL()).href);
       await loaded;
@@ -77,7 +84,37 @@ app.once('browser-window-created', (_event, window) => {
       assert.equal(stored.active_session, oldest);
       assert.deepEqual(stored.histories, histories);
       assert.deepEqual(stored.events[oldest], [['Retained work event']]);
-      console.log('PASS: package entry creates a visible window; legacy histories restore, switch and survive explicit new chat without replay');
+
+      const workspaceLoaded = once(window.webContents, 'did-finish-load');
+      Menu.getApplicationMenu().getMenuItemById('workspace-view').click();
+      await workspaceLoaded;
+      const deleted = await window.webContents.executeJavaScript(`(async () => {
+        document.querySelector('#ml-chat-list-toggle').click();
+        const savedCount = () => document.querySelectorAll('.ml-chat-record:not([hidden])').length;
+        const before = savedCount();
+        const row = [...document.querySelectorAll('.ml-chat-record')].find(node =>
+          node.querySelector('strong').textContent === 'Saved conversation 0');
+        row.querySelector('[data-delete-chat]').click();
+        const dialog = document.querySelector('#ml-delete-chat-dialog');
+        const opened = dialog.open;
+        const focus = document.activeElement.id;
+        if (!opened || focus !== 'ml-delete-chat-cancel') return {opened, focus};
+        document.querySelector('#ml-delete-chat-confirm').click();
+        for (let index = 0; index < 100 && dialog.open; index++) {
+          await new Promise(resolve => setTimeout(resolve, 20));
+        }
+        return {opened, focus, closed: !dialog.open, removed: !row.isConnected,
+          removedCount: before - savedCount(),
+          error: document.querySelector('#ml-delete-chat-error').textContent};
+      })()`);
+      assert.deepEqual(deleted, {opened: true, focus: 'ml-delete-chat-cancel', closed: true,
+        removed: true, removedCount: 1, error: ''});
+      const afterDelete = JSON.parse(readFileSync(stateFile, 'utf8'));
+      const {[oldest]: removed, ...remainingHistories} = histories;
+      assert.ok(removed);
+      assert.deepEqual(afterDelete.histories, remainingHistories);
+      assert.equal(afterDelete.events[oldest], undefined);
+      console.log('PASS: new workspace chats, classic history, and authenticated removal of one saved chat');
       window.close();
     } catch (error) { fail(error); }
   }));

@@ -64,7 +64,7 @@ const nativeComponents = () => buildSync({entryPoints: [path.join(renderer, 'app
       return {ok:true,body:{getReader:()=>({read:()=>chunks.length?Promise.resolve(chunks.shift()):failure?Promise.reject(failure):ended?Promise.resolve({done:true}):new Promise((resolve,reject)=>waiting.push({resolve,reject}))})}};
     };
     window.signetQaModelBridge = {
-      getStatus:async()=>({ok:true,value:{provider:'codex',geminiConfigured:false,encryptionAvailable:true}}),
+      getStatus:async()=>({ok:true,value:{provider:'none',geminiConfigured:false,encryptionAvailable:true}}),
       saveGeminiKey:async()=>{throw Error('No key save was requested')},clearGeminiKey:async()=>{throw Error('No key removal was requested')}
     };
     const record = (method,...args) => {window.signetQaCalls.push([method,...args]);return Promise.resolve({ok:true})};
@@ -122,7 +122,7 @@ const nativeComponents = () => buildSync({entryPoints: [path.join(renderer, 'app
   await js(components);
   await until(() => js(`!!document.querySelector('[data-run-target]') && !!document.querySelector('dialog.model-key-modal')`), 'Workspace did not initialize');
   const geometry = () => js(`(()=>{const shell=document.querySelector('.ml-app');return [shell.offsetWidth,shell.offsetHeight,shell.querySelector('.ml-rail').offsetWidth,shell.querySelector('.ml-chat').offsetWidth]})()`);
-  assert.deepEqual(await geometry(), [1650, 894, 53, 542]);
+  assert.deepEqual(await geometry(), [1650, 894, 68, 542]);
   assert.equal(await js('typeof window.require'), 'undefined');
   assert.equal(await js(`(()=>{const ids=[...document.querySelectorAll('[id]')].map(e=>e.id);return ids.length===new Set(ids).size})()`), true);
   assert.equal(await js(`document.querySelector('[data-nav-left="settings"]').hidden`), true, 'Toolbar check must begin outside Settings');
@@ -147,7 +147,7 @@ const nativeComponents = () => buildSync({entryPoints: [path.join(renderer, 'app
   writeFileSync(screenshot, (await window.webContents.capturePage()).toPNG());
   await js(`document.querySelector('dialog.model-key-modal .ssh-modal-close').click()`);
   await until(() => js(`!document.querySelector('dialog.model-key-modal').open`), 'Model dialog did not close');
-  await js(`document.getElementById('ml-language').click();document.querySelector('.ml-composer-toolbar button.ml-chip').click()`);
+  await js(`document.querySelector('.ml-composer-toolbar button.ml-chip').click()`);
   await until(() => js(`document.querySelector('dialog.model-key-modal')?.open && document.querySelector('dialog.model-key-modal').textContent.includes('Current model: ')`), 'English model settings did not update');
   await until(() => js(`Number(getComputedStyle(document.querySelector('dialog.model-key-modal')).opacity)>=.99`), 'English model dialog did not finish appearing');
   const englishDialogVisible = await js(`document.querySelector('dialog.model-key-modal').checkVisibility()`);
@@ -158,10 +158,11 @@ const nativeComponents = () => buildSync({entryPoints: [path.join(renderer, 'app
   await js(`document.querySelector('dialog.model-key-modal .ssh-modal-close').click()`);
   await until(() => js(`!document.querySelector('dialog.model-key-modal').open`), 'English model dialog did not close');
 
-  await js(`document.querySelector('[data-nav-target="history"]').click();document.querySelector('[data-run-target="workspace--shared"]').click();document.querySelector('#ml-run-workspace--shared [data-run-stage="6"]').click()`);
+  await js(`document.querySelector('[data-nav-target="history"]').click();document.querySelector('[data-run-target="workspace--shared"]').click();document.querySelector('#ml-run-workspace--shared [data-history-select-stage="6"]').click();document.querySelector('#ml-run-workspace--shared [data-run-stage="6"]').click()`);
   await until(() => js(`document.getElementById('lens-stage6').dataset.runState==='ready'`), 'Saved graph did not load');
   const nativeClick = async selector => {
-    const point = await js(`(()=>{const node=document.querySelector(${JSON.stringify(selector)}),box=node.getBoundingClientRect();return {x:box.x+box.width/2,y:box.y+box.height/2}})()`);
+    await js('new Promise(resolve=>setTimeout(resolve,350))');
+    const point = await js(`(()=>{const node=document.querySelector(${JSON.stringify(selector)});node.scrollIntoView({block:'nearest',inline:'nearest',behavior:'instant'});const box=node.getBoundingClientRect();return {x:box.x+box.width/2,y:box.y+box.height/2}})()`);
     for (const type of ['mouseMove', 'mouseDown', 'mouseUp']) window.webContents.sendInputEvent({type,
       ...(type === 'mouseMove' ? {} : {button: 'left', clickCount: 1}), x: Math.round(point.x), y: Math.round(point.y)});
     await js('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve())))');
@@ -204,7 +205,7 @@ const nativeComponents = () => buildSync({entryPoints: [path.join(renderer, 'app
   await js('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve())))');
   assert.notEqual(await js(`document.querySelector('#lens-stage6 .s6-genes').getAttribute('transform')`),'translate(0 0)');
   assert.equal(await js(`document.getElementById('lens-stage6').dataset.selectedGene`),'A');
-  assert.deepEqual(await geometry(), [1650, 894, 53, 542]);
+  assert.deepEqual(await geometry(), [1650, 894, 68, 542]);
 
   const startTurn=async text=>{
     const index=await js('window.signetQaStreams.length');
@@ -224,6 +225,8 @@ const nativeComponents = () => buildSync({entryPoints: [path.join(renderer, 'app
   await js(`document.getElementById('ml-dataset-select').value='dataset-b';document.getElementById('ml-dataset-select').dispatchEvent(new Event('change',{bubbles:true}));void 0`);
   await until(()=>js(`document.getElementById('ml-dataset-select').value==='dataset-b'`),'Dataset did not switch');
   await nativeClick('[data-nav-target="analysis"]');
+  await nativeClick('#ml-stage-tab');
+  await nativeClick('.ml-stage-button[data-stage="6"]');
   await js(`document.getElementById('ml-stage6-run').value='workspace--second';document.getElementById('ml-stage6-run').dispatchEvent(new Event('change',{bubbles:true}));void 0`);
   await until(()=>js(`document.getElementById('lens-stage6').dataset.historyId==='workspace--second'&&document.getElementById('lens-stage6').dataset.runState==='ready'`),'Second dataset graph did not load');
   await finishTurn(oldDatasetTurn,[{type:'workspace_action',text:{version:1,action:'select_gene',history_id:'archive--shared',stage:6,gene:'X'}},
@@ -241,11 +244,13 @@ const nativeComponents = () => buildSync({entryPoints: [path.join(renderer, 'app
   await nativeClick('[data-nav-target="history"]');
   await js(`document.getElementById('ml-history-scope').value='all';document.getElementById('ml-history-scope').dispatchEvent(new Event('change',{bubbles:true}));void 0`);
   await nativeClick('[data-run-target="workspace--shared"]');
+  await nativeClick('#ml-run-workspace--shared [data-history-select-stage="6"]');
   await nativeClick('#ml-run-workspace--shared [data-run-stage="6"]');
   await until(()=>js(`document.getElementById('lens-stage6').dataset.historyId==='workspace--shared'&&document.getElementById('lens-stage6').dataset.runState==='ready'`),'Live result did not reopen');
   const oldRunTurn=await startTurn('Inspect the current live run');
   await nativeClick('#ml-stage6-back');
   await nativeClick('[data-run-target="archive--shared"]');
+  await nativeClick('#ml-run-archive--shared [data-history-select-stage="6"]');
   await nativeClick('#ml-run-archive--shared [data-run-stage="6"]');
   await until(()=>js(`document.getElementById('lens-stage6').dataset.historyId==='archive--shared'&&document.getElementById('lens-stage6').dataset.runState==='ready'`),'Archive did not open');
   await nativeClick('#lens-stage6 [data-gene="X"] .s6-dot');
@@ -259,40 +264,38 @@ const nativeComponents = () => buildSync({entryPoints: [path.join(renderer, 'app
   await js(`window.signetQaStreams[${delayedTurn}].push([{type:'workspace_action',text:{version:1,action:'select_gene',history_id:'workspace--shared',stage:6,gene:'B'}},{type:'answer',text:'A delayed lookup result'},{type:'done',text:'Conversation complete',status:'completed'}]);window.signetQaStreams[${delayedTurn}].end();void 0`);
   await until(()=>js(`!document.getElementById('ml-send').disabled&&window.signetQaHeldGraphs.length>0`),'Delayed graph request did not remain pending after turn end');
   await nativeClick('[data-nav-target="analysis"]');
+  await nativeClick('#ml-agent-tab');
   await nativeClick('#ml-chat-list-toggle');
-  await nativeClick('#ml-chat-records button:nth-child(2)');
+  await nativeClick('#ml-chat-records > .ml-chat-record:nth-child(2) .ml-nav-list-item');
   await until(()=>js(`document.getElementById('ml-chat-title').textContent==='Saved failure'`),'Saved chat did not switch');
   await js(`window.signetQaReleaseGraph('workspace--shared');void 0`);
   await until(()=>js(`document.getElementById('lens-stage6').dataset.runState==='ready'`),'Delayed graph did not settle');
   assert.notEqual(await js(`document.getElementById('lens-stage6').dataset.selectedGene`),'B','A late old-chat graph cannot select a gene in the new chat');
-  assert.match(await js(`document.getElementById('ml-chat-status').textContent`),/failed|失敗/i);
+  assert.match(await js(`document.getElementById('ml-chat-status').textContent`),/failed/i);
   assert.equal(await js(`!!window.signetQaUnsafe`),false);
   assert.equal(await js(`document.querySelectorAll('#ml-chat-events img').length`),0);
   const savedStates=await js(`[...document.getElementById('ml-chat-events').children[1].querySelectorAll('.ml-chat-event-state')].map(node=>node.textContent)`);
-  assert.ok(savedStates.length===2&&savedStates.every(value=>/failed|失敗/i.test(value)));
-  assert.match(await js(`document.getElementById('ml-chat-events').children[0].textContent`),/Navigation ignored|未套用導覽/);
+  assert.ok(savedStates.length===2&&savedStates.every(value=>/failed/i.test(value)));
+  assert.match(await js(`document.getElementById('ml-chat-events').children[0].textContent`),/Navigation ignored/);
   console.log('PASS: switching saved chat during late graph load rejects the old gene action and preserves escaped failed activity');
 
   const interruptedTurn=await startTurn('Keep this partial answer if the connection fails');
   await js(`window.signetQaStreams[${interruptedTurn}].push([{type:'answer',text:'Partial evidence retained from interrupted stream'},{type:'progress',text:'SIGNET_TOOL '+JSON.stringify({operation_id:'c'.repeat(32),tool_name:'get_workspace_stage',status:'running',elapsed_ms:20,result_summary:'Checking saved state'})}]);void 0`);
+  await nativeClick('#ml-agent-tab');
   await nativeClick('#ml-chat-list-toggle');
-  assert.equal(await js(`document.querySelector('#ml-chat-records button').disabled`),true);
-  await nativeClick('#ml-chat-records button:first-child');
+  assert.equal(await js(`document.querySelector('#ml-chat-records .ml-nav-list-item').disabled`),true);
+  await nativeClick('#ml-chat-records > .ml-chat-record:first-child .ml-nav-list-item');
   assert.equal(await js(`document.getElementById('ml-chat-title').textContent`),'Saved failure','A disabled chat must not take a pending reply');
   await js(`window.signetQaStreams[${interruptedTurn}].fail();void 0`);
   await until(()=>js(`!document.getElementById('ml-send').disabled`),'Interrupted stream did not finish safely');
-  assert.match(await js(`document.getElementById('ml-chat-status').textContent`),/Needs review|需要確認/);
-  assert.match(await js(`document.getElementById('ml-chat-transcripts').textContent`),/Partial evidence retained from interrupted stream/);
-  await nativeClick('#ml-chat-records button:first-child');
-  await until(()=>js(`document.getElementById('ml-chat-title').textContent==='Current chat'`),'First chat did not reopen after the interrupted turn');
-  await nativeClick('#ml-chat-list-toggle');await nativeClick('#ml-chat-records button:nth-child(2)');
-  await until(()=>js(`document.getElementById('ml-chat-title').textContent==='Saved failure'`),'Interrupted chat did not reopen');
-  await nativeClick('#ml-language');
-  assert.match(await js(`document.getElementById('ml-chat-status').textContent`),/需要確認/);
-  assert.match(await js(`document.getElementById('ml-chat-transcripts').textContent`),/Partial evidence retained from interrupted stream/);
-  await nativeClick('#ml-language');
   assert.match(await js(`document.getElementById('ml-chat-status').textContent`),/Needs review/);
-  console.log('PASS: pending reply locks chat switching; disconnect retains partial answer and needs-review state across reopen and both languages');
+  assert.match(await js(`document.getElementById('ml-chat-transcripts').textContent`),/Partial evidence retained from interrupted stream/);
+  await nativeClick('#ml-chat-records > .ml-chat-record:first-child .ml-nav-list-item');
+  await until(()=>js(`document.getElementById('ml-chat-title').textContent==='Current chat'`),'First chat did not reopen after the interrupted turn');
+  await nativeClick('#ml-agent-tab');
+  await nativeClick('#ml-chat-list-toggle');await nativeClick('#ml-chat-records > .ml-chat-record:nth-child(2) .ml-nav-list-item');
+  await until(()=>js(`document.getElementById('ml-chat-title').textContent==='Saved failure'`),'Interrupted chat did not reopen');
+  console.log('PASS: pending reply locks chat switching; disconnect retains partial answer and needs-review state across reopen');
 
   await js(`document.querySelector('[data-nav-target="settings"]').click()`);
   await until(() => js(`!document.querySelector('[data-nav-left="settings"]').hidden && !!document.querySelector('.ssh-dev-launch')`), 'Settings did not open its advanced terminal entry');
@@ -322,7 +325,7 @@ const nativeComponents = () => buildSync({entryPoints: [path.join(renderer, 'app
   await js('window.signetQaDisconnectTerminal()');
   await until(() => js(`window.signetQaCalls.some(call=>call[0]==='close'&&call[1]===${JSON.stringify(secondOwnedId)})`), 'Disconnect did not close its terminal session');
   assert.equal((await js('window.signetQaCalls')).some(call => call[0] === 'input'), false);
-  assert.deepEqual(await geometry(), [1650, 894, 53, 542]);
+  assert.deepEqual(await geometry(), [1650, 894, 68, 542]);
   await js(`window.signetQaReconnectTerminal();window.signetQaHoldTerminal=true;void 0`);
   await until(()=>js(`!!document.querySelector('.ssh-dev-switch')`),'Reconnect did not restore the disabled terminal switch');
   await js(`document.querySelector('.ssh-dev-switch').click()`);
@@ -363,12 +366,12 @@ const nativeComponents = () => buildSync({entryPoints: [path.join(renderer, 'app
   assert.equal(destroyed,1,'The actual controller must destroy a shell accepted after its pending request was cancelled');
   controller.dispose();
   console.log('PASS: actual terminal controller generation guard destroys a late accepted pending shell');
-  console.log(JSON.stringify({status: failures.length ? 'failed' : 'passed', geometry: [1650, 894, 53, 542], model_dialog: dialog,
+  console.log(JSON.stringify({status: failures.length ? 'failed' : 'passed', geometry: [1650, 894, 68, 542], model_dialog: dialog,
     screenshot, englishScreenshot, englishDialogVisible,
     native_pointer: 'trusted mouse gene/edge clicks, keyboard selection, dragging and panning preserve linked table',
     chat_races: ['dataset/run changes reject stale actions and replace outgoing context',
       'saved-chat switch rejects delayed old-chat gene selection', 'saved failed activity escapes markup',
-      'pending reply locks chat switching', 'stream interruption retains partial answer and bilingual needs-review state'],
+      'pending reply locks chat switching', 'stream interruption retains partial answer and needs-review state'],
     dataset_selection: 'controlled DOM select change after trusted Data navigation; hidden native OS menus excluded',
     terminal: 'manual enable only; pending-open/disconnect/reconnect and old-session events isolated; actual controller cancels late shell acceptance',
     isolation: 'hidden window; temporary profile; denied network; fake UI/transport; no backend'}, null, 2));

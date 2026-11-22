@@ -1,5 +1,6 @@
 """Run the desktop backend against one persistent, isolated workspace fixture."""
 
+from contextlib import nullcontext
 import json
 import os
 from pathlib import Path
@@ -7,6 +8,7 @@ import runpy
 import shlex
 import subprocess
 import sys
+from types import SimpleNamespace
 
 REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO))
@@ -37,13 +39,20 @@ def install_file_fixture():
         body, end = body.split('\n' + marker, 1)
         arguments = shlex.split(command)[2:]
         paths = arguments
+        validation_kind = None
         if validating:
             trusted = workspace_validation._SOURCE
-            if body.strip() != trusted.strip() or len(arguments) != 1:
+            if body.strip() != trusted.strip() or len(arguments) not in (1, 2):
                 return {'status': 'failed', 'error': 'The fixture accepts only the production validation script.'}
             inputs = json.loads(arguments[0])
-            if not isinstance(inputs, dict) or set(inputs) != {'genotype', 'expression', 'clinical'}:
-                return {'status': 'failed', 'error': 'The fixture requires the complete input snapshot.'}
+            kinds = {'genotype', 'expression', 'clinical'}
+            if len(arguments) == 2:
+                validation_kind = arguments[1]
+                if validation_kind not in kinds:
+                    return {'status': 'failed', 'error': 'The fixture requires a recognized validation kind.'}
+                kinds = {validation_kind}
+            if not isinstance(inputs, dict) or set(inputs) != kinds:
+                return {'status': 'failed', 'error': 'The fixture requires the selected validation paths.'}
             paths = [value for files in inputs.values() for value in files]
         if end.strip() or any(not Path(value).resolve().is_relative_to(root) for value in paths):
             return {'status': 'failed', 'error': 'File metadata requests must stay in the fixture folder.'}
@@ -52,7 +61,10 @@ def install_file_fixture():
             return {'status': 'failed', 'error': 'The fixture permits names and metadata only.'}
         kind = 'validation' if validating else 'inspect' if 'import stat' in body else 'list' if arguments else 'shortcuts'
         with trace.open('a') as stream:
-            stream.write(json.dumps({'kind': kind, 'paths': paths}) + '\n')
+            entry = {'kind': kind, 'paths': paths}
+            if validating:
+                entry['validation_kind'] = validation_kind
+            stream.write(json.dumps(entry) + '\n')
         completed = subprocess.run([sys.executable, '-', *arguments], input=body + '\n', text=True,
                                    capture_output=True, timeout=min(timeout, 10))
         values = hpc._parse(completed.stdout.encode())
@@ -63,6 +75,36 @@ def install_file_fixture():
     hpc_files._call = local_metadata
 
 
+def install_projection_fixture():
+    """Generate the native test's saved aggregates through the real guarded projector."""
+    from unittest.mock import patch
+    from agent.runtime import signet_jobs as jobs, ssh_transport, workspace_projection
+    from agent.tools import signet
+
+    root = signet.PROJECT / 'runs/workspace-persistence-live'
+    if not root.is_dir():
+        return
+    config = {'root': str(signet.PROJECT), 'workRoot': str(root.parent),
+              'source': str(signet.PROJECT / 'software/pinned'), 'image': str(signet.PROJECT / 'image.sif'),
+              'executor': '/bin/echo', 'partition': 'fixture'}
+    record_path = root / 'steps/genotype.json'
+    record = json.loads(record_path.read_text())
+    record.update(remote_dir=str(root), image=config['image'], partition=config['partition'])
+    record_path.write_text(json.dumps(record))
+    (root / '.owner').write_text('workspace-native-fixture')
+    (root / 'steps/remote.owner').write_text(json.dumps({'remote_dir': str(root), 'token': 'workspace-native-fixture'}))
+    (root / 'steps/genotype.job').write_text(record['job_id'])
+    (root / 'steps/genotype.done').write_text('0 2026-11-17T01:05:00-08:00\n')
+
+    def execute(command, **kwargs):
+        if command != 'bash -s' or b'SIGNET_PROJECT_WORKSPACE' not in kwargs['input']:
+            raise AssertionError('Only the fixed projection script is allowed in this fixture.')
+        return subprocess.run(['bash', '-s'], input=kwargs['input'], capture_output=True, timeout=10)
+
+    with patch.object(jobs, '_environment', return_value=config), patch.object(ssh_transport, 'remote', side_effect=execute):
+        workspace_projection.completed_result(root.name, '1')
+
+
 def main():
     server = REPO / 'electron/main/backend/server.py'
     if sys.argv[1:3] != ['-u', str(server)]:
@@ -70,11 +112,20 @@ def main():
 
     import agent.tools.signet as signet
     from agent.app import chat_ui
+    from google.genai import types
 
     signet.PROJECT = Path(os.environ['SIGNET_WORKSPACE_TEST_PROJECT'])
     install_file_fixture()
     metadata = Path(os.environ['SIGNET_WORKSPACE_TEST_BACKEND'])
+    capture = Path(os.environ['SIGNET_WORKSPACE_TEST_CAPTURE'])
     original_create_server = chat_ui.create_server
+
+    def reply(*, model, contents, config):
+        messages = [''.join(part.text or '' for part in content.parts) for content in contents]
+        with capture.open('a') as stream:
+            stream.write(json.dumps({'system_instruction': config.system_instruction, 'messages': messages}) + '\n')
+        answer = types.Content(role='model', parts=[types.Part(text='Provider replied to: ' + messages[-1])])
+        return types.GenerateContentResponse(candidates=[types.Candidate(content=answer)])
 
     def create_server(*args, **kwargs):
         previous = json.loads(metadata.read_text()) if metadata.exists() else {'starts': []}
@@ -82,6 +133,8 @@ def main():
         # replacing Python without changing production launcher behavior.
         kwargs['port'] = previous.get('port', 0)
         instance = original_create_server(*args, **kwargs)
+        instance.client_factory = lambda _: nullcontext(SimpleNamespace(
+            model='fixture-model', models=SimpleNamespace(generate_content=reply)))
         metadata.write_text(json.dumps({'port': instance.server_port,
                                         'starts': [*previous['starts'], os.getpid()]}))
         return instance

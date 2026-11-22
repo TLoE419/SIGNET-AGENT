@@ -27,13 +27,13 @@ SIGNET_PYTHON=/absolute/path/to/python npm start --prefix electron
 
 macOS and Linux are supported by this launcher; Windows process management and
 packaged installers are not implemented. This is a source checkout launcher:
-Python, its dependencies, Codex CLI when selected, and scientific prerequisites
+Python, its dependencies, and scientific prerequisites
 must still be installed. No scientific data, Python runtime or model credentials
 are bundled.
 
 ### Workspace
 
-The desktop opens directly to the bilingual workspace. The left chat uses the
+The desktop opens directly to the English workspace. The left chat uses the
 existing SIGNET Agent, model configuration, and saved conversations. Choose a
 dataset in **Data**, then open **Run history** to see that dataset's saved
 runs. Each run shows its saved input filenames and the timeline stages
@@ -55,15 +55,13 @@ typed paths, and file sizes. Genotype files can be selected across folders;
 expression and clinical inputs each select one file. Applying checks canonical
 paths, readability, regular-file type, and nonempty size before saving. Cancel
 does not save, and **Use default** restores the dataset's saved defaults.
-**Validate input files** checks the saved dataset on demand: the PED/MAP pair,
-the genes-by-samples expression matrix, required clinical columns, and
-preliminary matching by TCGA patient identifier. It reports file-specific
-errors and counts without returning sample identifiers or data values.
-Expression scale and the meaning of its final five rows require researcher
-confirmation; the pinned SIGNET code transforms the matrix and discards those
-rows. Warnings and incomplete scans are displayed explicitly. Changing files,
-datasets, remote accounts, or environments invalidates the previous report.
-These checks do not start an analysis.
+Each Data section has its own validation button and result. Genotype checks
+the PED/MAP pair, gene expression checks the selected matrix, and clinical
+checks the selected table and its required columns. Changing a file requires
+rechecking its section. Switching datasets, remote accounts, or environments
+clears or invalidates the saved view of these checks. Results show file issues
+and counts. Expression scale and the meaning of the final five rows require
+researcher confirmation. Sample matching is checked during analysis review.
 
 To run the saved dataset, open **Analysis → Stage 1 → Review dataset files**.
 Review all study files, the inferred chromosome, reference resources, settings,
@@ -191,26 +189,38 @@ Connect to HPC3 from **Settings → Remote compute**. The same panel can check
 the remote resources and open the existing environment settings.
 While Settings is open, connecting automatically checks the remote connection,
 writable work directory, scheduler, container runtime, audited SIGNET source,
-container image, reference panel, genetic map, gene annotation, clinical file,
-and prepared imputation reference. Each row shows its status and the returned
-reason directly; **Check again** refreshes the read-only report. Incomplete or
+and container image. Each row shows its status and the returned
+reason directly. **Check environment** refreshes the report and verifies the
+remote configuration when needed. Incomplete or
 contradictory replies and existing environment-verification errors cannot mark
 the environment ready. Disconnecting or changing the account or installation
 clears the previous report. These checks do not install resources or start an
-analysis; the individual stage input reviews still apply.
+analysis. Upload your study files to the remote workspace and choose them in
+**Data**, including clinical data and study-specific reference files. The
+dataset and stage reviews check the files selected for that run.
 
-Missing resources have separate manual actions beside their checks: **Install
-SIGNET**, **Download** for the container and each reference, and **Prepare** for
-the imputation reference. No setup action runs on connection, navigation,
+Missing software has separate manual actions beside its checks: **Install
+SIGNET** and **Download container**. No setup action runs on connection, navigation,
 refresh, or application restart. A click starts only that resource's existing
 setup workflow. Its accepted job, queued/running state, completion, or failure
-appears with the resource. Download and reference-preparation rows also expose
-**View setup log** to read that step's own log.
-The panel refreshes read-only checks while setup work is pending and resumes
-observing recorded work when reopened. It never resubmits jobs automatically.
-After downloads finish, **Verify environment** explicitly runs the original
-runtime verification before analysis is marked ready. Existing files and all
-scientific run results remain untouched by setup retries.
+appears with the resource.
+While setup work is pending, the panel waits for setup metadata changes over
+the existing SSH connection (`POST /hpc/watch`, body `{"cursor":"<setup_cursor>"}`).
+The cursor comes from `/hpc/check` and is captured before the full inspection,
+so completion during inspection is not lost. Batch jobs record their outcome
+through an exit hook. The bounded waiter samples only fixed metadata on the
+remote shared filesystem; it does not repeatedly hash source files or query
+the scheduler. No public callback endpoint or remote service is installed.
+Unchanged wait replies do not refresh readiness. Changes trigger one quiet
+inspection that retains the displayed rows until the new result arrives.
+A quiet 60-second reconciliation covers older jobs, cancellation and jobs
+that could not publish an exit marker. Leaving Settings or disconnecting
+cancels the local wait; reopening reconciles the saved remote state without
+resubmitting jobs. An event only triggers validation and cannot establish
+readiness by itself.
+Under **Remote configuration**, **Remote environment settings** opens the installation
+root and scheduler partition form. Use **Check environment** after changing
+settings or preparing software to confirm readiness.
 
 In **Analysis → Stage → Stage 1**
 of the chromosome 1 example, check the four prepared input files. Review the
@@ -300,11 +310,11 @@ supplies the prepared files and scheduler for the submission.
 Archived HPC3 exports remain local. The application reads these records under
 the ignored `data/` directory:
 
-- `datasets/<dataset-id>.json` supplies `id`, `name` (Chinese and English),
+- `datasets/<dataset-id>.json` supplies `id`, `name` (a string or a legacy `[Chinese, English]` pair),
   and current `inputs` grouped as `genotype`, `expression`, and `clinical`
   filename arrays.
 - `stage6-results/<run-id>/history.json` supplies `run_id`, `dataset_id`,
-  `name` (Chinese and English), and a separate `inputs` snapshot in the same
+  `name` (a string or a legacy `[Chinese, English]` pair), and a separate `inputs` snapshot in the same
   format. Record the filenames confirmed for that run.
 - Beside `history.json`, keep the original `verification.json` and
   `signet_edgelist_<frequency>.txt` from the completed visualization. The
@@ -332,7 +342,8 @@ scoped to each dataset's stable ID and reads its files and settings from the
 run's original snapshots, so changing a dataset cannot rewrite an old run.
 
 The authenticated `/signet/datasets` routes manage this metadata only; saving a
-file path neither opens that file nor submits a scientific job. For an isolated
+file path neither opens that file nor submits a scientific job. Removing a
+dataset leaves its recorded analyses accessible under **All runs**. For an isolated
 test profile, `SIGNET_DATASETS_STATE_FILE` overrides the state-file location.
 
 Use **View → Classic Interface** for model and SSH setup, current HPC3 confirmation
@@ -613,7 +624,6 @@ electron/
       devtools/   Diagnostics and interactive terminal UI
     components/   Shared modal, confirmation, actions and icons
     styles/       Application styles and SSH color/layout tokens
-    i18n/         English and Traditional Chinese translations
     vendor/       Third-party assets and licenses
   shared/ssh/     Contracts and pure validation shared across processes
   scripts/        Build and native dependency preparation

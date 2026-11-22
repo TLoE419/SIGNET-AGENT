@@ -9,7 +9,7 @@ official example data. The app runs on your computer; all SIGNET steps run on HP
 - [Python](https://www.python.org/downloads/) 3.11 or later
 - [Node.js](https://nodejs.org/) 22.12 or later
 - An HPC3 account with Duo. Off campus, connect to the UCI VPN first.
-- One chat model: a signed-in [Codex CLI](https://learn.chatgpt.com/docs/codex/cli) (default) or a
+- One chat model: a signed-in [Codex CLI](https://learn.chatgpt.com/docs/codex/cli) (optional) or a
   [Gemini API key](https://aistudio.google.com/app/apikey)
 
 ## 2. Install and start
@@ -26,7 +26,7 @@ npm start --prefix electron
 The desktop window opens and starts the local Python service automatically. Next time, only
 `npm start --prefix electron` is needed.
 
-**Chat model.** For Codex, run `codex login` once in a terminal before starting the app.
+**Chat model.** The interface opens without a configured model. Select a provider in Settings → Chat model before sending messages. For Codex, run `codex login` once in a terminal before starting the app.
 For Gemini, enter your key in the app's Gemini settings at the top of the window
 (it is verified and stored in the system keychain).
 

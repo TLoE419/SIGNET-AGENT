@@ -392,10 +392,10 @@ function applyLanguage(language) {
     });
   }
   const toggle = document.getElementById('language-toggle');
-  toggle.textContent = uiLanguage === 'en' ? 'Traditional Chinese' : 'English';
-  toggle.setAttribute('aria-label', uiLanguage === 'en' ? 'Switch to Traditional Chinese' : '切換為英文');
+  if (toggle) toggle.textContent = uiLanguage === 'en' ? 'Traditional Chinese' : 'English';
+  if (toggle) toggle.setAttribute('aria-label', uiLanguage === 'en' ? 'Switch to Traditional Chinese' : '切換為英文');
   try { localStorage.setItem('signet-language', uiLanguage); } catch (_) {}
   window.dispatchEvent(new Event('languagechange'));
 }
-document.getElementById('language-toggle').addEventListener('click', () => applyLanguage(uiLanguage === 'en' ? 'zh-Hant' : 'en'));
-applyLanguage(uiLanguage);
+document.getElementById('language-toggle')?.addEventListener('click', () => applyLanguage(uiLanguage === 'en' ? 'zh-Hant' : 'en'));
+applyLanguage(document.getElementById('language-toggle') ? uiLanguage : 'en');

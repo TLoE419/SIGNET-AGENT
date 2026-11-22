@@ -74,24 +74,6 @@ writeFileSync(stateFile, JSON.stringify({token: randomBytes(32).toString('hex'),
   active_session: existingSession, histories: {[existingSession]: [{role: 'user', parts: [{text: existingMessage}]}]},
   events: {[existingSession]: [[existingActivity]]}}));
 
-// Exercise the original Agent with a deterministic local model CLI.
-writeFileSync(path.join(temporary, 'codex'), `#!/usr/bin/env python3
-import json, os, sys
-
-prompt = json.load(sys.stdin)
-messages = prompt['messages']
-with open(os.environ['SIGNET_WORKSPACE_TEST_CAPTURE'], 'a') as result:
-    result.write(json.dumps(messages) + '\\n')
-
-def emit(event):
-    print(json.dumps(event), flush=True)
-
-emit({'type': 'turn.started'})
-answer = {'answer': 'Provider replied to: ' + messages[-1]['content'], 'decision_summary': '', 'tool_calls': []}
-emit({'type': 'item.completed', 'item': {'type': 'agent_message', 'text': json.dumps(answer)}})
-emit({'type': 'turn.completed', 'usage': {'input_tokens': 30, 'output_tokens': 10}})
-`, {mode: 0o700});
-process.env.PATH = [temporary, process.env.PATH].filter(Boolean).join(path.delimiter);
 process.env.SIGNET_WORKSPACE_TEST_CAPTURE = captureFile;
 
 const archiveDir = path.join(project, 'data/stage6-results');
@@ -312,6 +294,9 @@ function createLiveHistoryFixture() {
   if (!existsSync(example)) writeFileSync(example, JSON.stringify({id: 'example-chr1',
     name: ['第 1 號染色體範例', 'Chromosome 1 example'],
     inputs: {genotype: ['study.ped', 'study.map'], expression: ['example_gexp'], clinical: ['clinical.tsv']}}));
+  require('node:child_process').execFileSync(process.env.SIGNET_WORKSPACE_TEST_PYTHON, ['-c',
+    "import runpy,sys; import agent.tools.signet as signet; from pathlib import Path; signet.PROJECT=Path(sys.argv[1]); runpy.run_path(sys.argv[2])['install_projection_fixture']()",
+    project, path.join(__dirname, 'fixtures/workspace_backend.py')], {cwd:path.join(__dirname,'../..')});
   return {run_id, inputs: {genotype: [inputs['ped.file'], inputs['map.file'], inputs.ref + '1.gen', inputs.gmap + '1.map']},
     settings, root};
 }
@@ -462,44 +447,50 @@ async function verifyDatasetValidation({remote}) {
   };
   const state = () => report()?.dataset.validationState;
   const format = kind => report()?.querySelector(`[data-validation-check="${kind}_format"]`)?.dataset.status;
-  async function validate(expected) {
-    const button = document.querySelector('[data-input-validate]');
-    check(button && !button.disabled, 'The dataset-wide input check must be manually available');
+  const select = kind => document.querySelector(`[data-input-target="${kind}"]`).click();
+  async function validate(kind, expected, paths) {
+    select(kind);
+    const button = report().querySelector('[data-validation-action]');
+    check(button && !button.disabled, 'The ' + kind + ' input check must be manually available');
     button.click();
-    await waitFor(() => state() === expected, () => 'Input validation did not settle as ' + expected +
+    await waitFor(() => state() === expected, () => kind + ' input validation did not settle as ' + expected +
       ': ' + JSON.stringify({state: state(), text: report()?.textContent}));
-    check(report().getClientRects().length > 0, 'The dataset input report is hidden');
+    check(report().getClientRects().length > 0, 'The current input report is hidden');
+    check(format(kind) === expected && report().querySelectorAll('[data-validation-check]').length === 1,
+      'The report included another input category or an incorrect format status');
+    const checkedPaths = [...report().querySelectorAll('[data-validation-file]')].map(file => file.dataset.validationFile);
+    check(JSON.stringify(checkedPaths.sort()) === JSON.stringify([...paths].sort()),
+      'The report did not identify exactly the checked input paths');
+    check(!report().querySelector('[data-validation-pairing], [data-pairing-count], [data-validation-stage]'),
+      'Data validation must not display sample pairing or stage readiness');
     check(!report().textContent.includes('PRIVATE_GENE_MUST_NOT_RENDER') &&
       !report().textContent.includes('PRIVATE_CLINICAL_MUST_NOT_RENDER'), 'Input validation exposed a research cell value');
   }
-  const changed = () => waitFor(() => !['passed', 'warning'].includes(state()),
-    'Changing input paths retained an active success report');
+  const changed = () => waitFor(() => ['stale', 'idle', 'unavailable'].includes(state()),
+    'Changing input paths retained a report for the old selection');
 
   check(!['checking', 'passed', 'warning'].includes(state()), 'Input validation must not run automatically when files are selected');
-  await validate('warning');
-  check(format('genotype') === 'passed' && format('clinical') === 'passed' &&
-    ['passed', 'warning'].includes(format('expression')), 'Source-compatible inputs did not pass structural checks');
-  for (const [key, expected] of Object.entries({genotype_patients: 6, expression_patients: 6,
-    matched_patients: 6, clinical_matched: 6, unmatched_genotype: 0, unmatched_expression: 0})) {
-    check(Number(report().querySelector(`[data-pairing-count="${key}"]`)?.textContent.replaceAll(',', '')) === expected,
-      'The validation report has the wrong preliminary pairing count: ' + key);
-  }
-  check(report().querySelectorAll('[data-validation-file]').length === 4, 'The input report did not identify all four inspected files');
+  await validate('genotype', 'passed', remote.genotype);
+  await validate('expression', 'warning', remote.expression);
+  await validate('clinical', 'passed', remote.clinical);
   for (const paths of [remote.invalidExpression, remote.duplicateExpression]) {
     await window.workspaceChooseRemoteFiles({type: 'expression', remote, paths});
     await changed();
-    await validate('failed');
-    check(format('expression') === 'failed', 'Malformed rows or duplicate sample identifiers must fail expression validation');
+    await validate('expression', 'failed', paths);
     check(report().querySelectorAll('[data-validation-issue]').length > 0, 'An invalid file needs a visible explanation');
   }
+  select('genotype');
+  check(state() === 'passed' && format('genotype') === 'passed', 'Changing expression files invalidated the genotype result');
+  select('clinical');
+  check(state() === 'passed' && format('clinical') === 'passed', 'Changing expression files invalidated the clinical result');
   await window.workspaceChooseRemoteFiles({type: 'expression', remote, paths: remote.expression});
   await window.workspaceChooseRemoteFiles({type: 'clinical', remote, paths: remote.invalidClinical});
   await changed();
-  await validate('failed');
-  check(format('clinical') === 'failed', 'Missing clinical columns must fail the clinical format check');
+  await validate('clinical', 'failed', remote.invalidClinical);
+  check(report().querySelectorAll('[data-validation-issue]').length > 0, 'Missing clinical columns need a visible explanation');
   await window.workspaceChooseRemoteFiles({type: 'clinical', remote, paths: remote.clinical});
   await changed();
-  await validate('warning');
+  await validate('clinical', 'passed', remote.clinical);
 }
 
 async function verifyWorkspace({groups, runs, remote}) {
@@ -572,22 +563,25 @@ async function verifyWorkspace({groups, runs, remote}) {
     for (const run of groupRuns) {
       click(`[data-run-target="archive--${run.run_id}"]`);
       const detail = `#ml-run-archive--${run.run_id}`;
-      const archive = find(`${detail} .ml-run-inputs`);
-      if (!archive.open) archive.querySelector('summary').click();
-      const names = [...archive.querySelectorAll('code')].map(file => file.textContent);
+      const archive = find(`${detail} dl.ml-run-inputs`);
+      const files = [...archive.querySelectorAll('code')];
+      const names = files.map(file => file.textContent);
       const original = ['genotype', 'expression', 'clinical'].flatMap(kind => run.inputs[kind]);
-      check(visible(detail) && JSON.stringify(names) === JSON.stringify(original),
+      check(visible(detail) && files.every(file => file.getClientRects().length > 0) &&
+        JSON.stringify(names) === JSON.stringify(original),
         'Run did not show its own saved input files: ' + run.run_id);
 
 
       for (const stage of [1, 2, 4, 5]) {
-        click(`[data-run-stage="${stage}"][data-history-id="archive--${run.run_id}"]`);
+        click(`#ml-run-archive--${run.run_id} [data-history-select-stage="${stage}"]`);
+        click(`#ml-run-archive--${run.run_id} [data-run-stage="${stage}"]`);
         await waitFor(() => savedStage.dataset.runState === 'ready' && savedStage.dataset.runId === run.run_id &&
           savedStage.dataset.stage === String(stage), 'Could not load archived Stage ' + stage + ' for ' + run.run_id);
         check(visible('#lens-history-stage .ml-count-chart') && visible('#lens-history-stage [data-stage-table]') &&
           !visible(detail) && !visible('#lens-stage6'), 'The archived Stage ' + stage + ' view or table is hidden');
-        const bars = [...savedStage.querySelectorAll('.ml-count-label')].map(label =>
-          Number(label.textContent.trim().replaceAll(',', '')));
+        const countLabels = stage === 5 ? '.ml-count-bar title' : '.ml-count-label';
+        const bars = [...savedStage.querySelectorAll(countLabels)].map(label =>
+          Number(label.textContent.match(/[\d,]+$/)?.[0].replaceAll(',', '')));
         check(JSON.stringify(bars) === JSON.stringify(run.stageBars[stage]),
           'Archived Stage ' + stage + ' used output counts from another run');
         for (const [key, value] of Object.entries(run.stepSettings[stage])) {
@@ -602,8 +596,8 @@ async function verifyWorkspace({groups, runs, remote}) {
         check(visible(detail) && !visible('#lens-history-stage'), 'Back from Stage ' + stage + ' lost the timeline');
       }
 
-      const adjustment = `[data-run-stage="3"][data-history-id="archive--${run.run_id}"]`;
-      click(adjustment);
+      click(`#ml-run-archive--${run.run_id} [data-history-select-stage="3"]`);
+      click(`#ml-run-archive--${run.run_id} [data-run-stage="3"]`);
       await waitFor(() => stage3.dataset.runState === 'ready' && stage3.dataset.runId === run.run_id,
         'Could not load Stage 3 from history: ' + run.run_id);
       check(visible('#lens-history-stage3 .s3-chart'), 'Selected Stage 3 chart is hidden');
@@ -625,7 +619,8 @@ async function verifyWorkspace({groups, runs, remote}) {
       click('#lens-history-stage3 [data-run-back]');
       check(visible(detail) && !visible('#lens-history-stage3'), 'Back from Stage 3 did not restore the run detail');
 
-      click(`[data-run-stage="6"][data-history-id="archive--${run.run_id}"]`);
+      click(`#ml-run-archive--${run.run_id} [data-history-select-stage="6"]`);
+      click(`#ml-run-archive--${run.run_id} [data-run-stage="6"]`);
       await waitFor(() => stage6.dataset.runState === 'ready' && stage6.dataset.runId === run.run_id,
         'Could not load Stage 6 from history: ' + run.run_id);
       check(visible('#lens-stage6') && stage6.querySelectorAll('[data-gene]').length === run.genes &&
@@ -706,8 +701,7 @@ async function verifyWorkspace({groups, runs, remote}) {
     'Resetting clinical files to their default was not saved');
   check(!['passed', 'warning'].includes(find('[data-input-validation]').dataset.validationState),
     'Restoring default files retained an active validation result for the old inputs');
-  click('#ml-language');
-  check(datasetPicker.selectedOptions[0]?.textContent === 'Third workspace dataset', 'Language change lost the new dataset');
+  check(datasetPicker.selectedOptions[0]?.textContent === 'Third workspace dataset', 'The dataset picker lost the new dataset');
   go('history');
   check(!historyIds().length && visible('#ml-empty-history') && !resultIds().length, 'New dataset inherited saved runs');
   const saved = await fetch('/signet/datasets', {headers: {'X-Chat-Token': token}}).then(reply => reply.json());
@@ -790,7 +784,8 @@ async function verifyPersistedWorkspace({saved, groups, runs, live, remote, chan
   check(JSON.stringify(archivedFiles) === JSON.stringify(['genotype', 'expression', 'clinical'].flatMap(type => archived.inputs[type])),
     'Editing current files replaced an archived run’s original inputs');
   for (const stage of [1, 2, 4, 5, 3, 6]) {
-    click(`[data-run-stage="${stage}"][data-history-id="archive--${archived.run_id}"]`);
+    click(`#ml-run-archive--${archived.run_id} [data-history-select-stage="${stage}"]`);
+    click(`#ml-run-archive--${archived.run_id} [data-run-stage="${stage}"]`);
     const panel = find(stage === 3 ? '#lens-history-stage3' : stage === 6 ? '#lens-stage6' : '#lens-history-stage');
     await waitFor(() => panel.dataset.runState === 'ready' && panel.dataset.runId === archived.run_id,
       'A saved stage did not reopen after backend restart: ' + stage);
@@ -818,7 +813,8 @@ async function verifyPersistedWorkspace({saved, groups, runs, live, remote, chan
   click(`[data-run-target="workspace--${live.run_id}"]`);
   const liveFiles = [...find(`#ml-run-workspace--${live.run_id}`).querySelectorAll('.ml-run-inputs code')].map(node => node.textContent);
   check(JSON.stringify(liveFiles) === JSON.stringify(live.inputs.genotype), 'Current dataset files replaced the live run’s frozen input snapshot');
-  click(`[data-run-stage="1"][data-history-id="workspace--${live.run_id}"]`);
+  click(`#ml-run-workspace--${live.run_id} [data-history-select-stage="1"]`);
+  click(`#ml-run-workspace--${live.run_id} [data-run-stage="1"]`);
   const panel = find('#lens-history-stage');
   await waitFor(() => panel.dataset.runState === 'ready' && panel.dataset.runId === live.run_id,
     'The completed live Stage 1 result did not reopen');
@@ -843,6 +839,12 @@ async function verifyChat({existingMessage, existingActivity, firstMessage, next
   };
   const contains = (selector, text) => visible(selector).includes(text);
   const expectChat = message => waitFor(() => contains('#ml-chat-transcripts', message), `Missing conversation text: ${message}`);
+  const openSavedChat = async message => {
+    click('#ml-chat-list-toggle');
+    await waitFor(() => contains('#ml-chat-records', message), `Missing saved conversation: ${message}`);
+    [...document.querySelectorAll('#ml-chat-records button')].find(button => button.textContent.includes(message)).click();
+    await expectChat(message);
+  };
   const showActivity = async message => {
     click('#ml-chat-activity-toggle');
     await waitFor(() => contains('#ml-chat-events', message), `Missing activity: ${message}`);
@@ -856,22 +858,16 @@ async function verifyChat({existingMessage, existingActivity, firstMessage, next
     await waitFor(() => !select('#ml-send').disabled, 'Send stayed disabled after the turn finished');
   };
 
-  await expectChat(existingMessage);
+  if (visible('#ml-chat-transcripts').trim() || select('#ml-input').value) throw Error('Startup did not open a blank chat');
+  await openSavedChat(existingMessage);
   await showActivity(existingActivity);
   click('#ml-new');
   await waitFor(() => !contains('#ml-chat-transcripts', existingMessage), 'New chat kept the prior transcript');
-  click('#ml-language');
   await send(firstMessage);
-  click('#ml-language');
   await send(nextMessage);
-  await showActivity('Codex');
-  click('#ml-chat-list-toggle');
-  await waitFor(() => contains('#ml-chat-records', existingMessage), 'Saved conversation disappeared after sending a new message');
-  [...document.querySelectorAll('#ml-chat-records button')].find(button => button.textContent.includes(existingMessage)).click();
-  await expectChat(existingMessage);
-  click('#ml-chat-list-toggle');
-  await waitFor(() => contains('#ml-chat-records', firstMessage), 'New conversation was not added to saved chats');
-  [...document.querySelectorAll('#ml-chat-records button')].find(button => button.textContent.includes(firstMessage)).click();
+  await showActivity('fixture-model');
+  await openSavedChat(existingMessage);
+  await openSavedChat(firstMessage);
   await expectChat('Provider replied to: ' + nextMessage);
 }
 
@@ -883,7 +879,7 @@ app.once('browser-window-created', (_event, window) => {
     try {
       assert.equal(BrowserWindow.getAllWindows().length, 1);
       assert.equal(window.isVisible(), true);
-      assert.match(window.webContents.getURL(), /^http:\/\/127\.0\.0\.1:\d+\/$/);
+      assert.match(window.webContents.getURL(), /^http:\/\/127\.0\.0\.1:\d+\/\?new=1$/);
       const {width, height} = screen.getDisplayMatching(window.getBounds()).workAreaSize;
       const [contentWidth, contentHeight] = window.getContentSize();
       const [windowWidth, windowHeight] = window.getSize();
@@ -904,7 +900,7 @@ app.once('browser-window-created', (_event, window) => {
           liveBridge: typeof window.signetDesktop?.model,
         };
       })()`);
-      assert.deepEqual(initial, {geometry: [1650, 894, 53, 542], css: true, rendered: true, node: 'undefined', liveBridge: 'object'});
+      assert.deepEqual(initial, {geometry: [1650, 894, 68, 542], css: true, rendered: true, node: 'undefined', liveBridge: 'object'});
       const connected = await window.webContents.executeJavaScript(`(async()=>{
         const profile=await window.signetDesktop.ssh.saveProfile(${JSON.stringify(sshProfile)});
         if(!profile.ok)throw Error(profile.error.message);
@@ -924,10 +920,9 @@ app.once('browser-window-created', (_event, window) => {
       await window.webContents.executeJavaScript(`(${verifyChat.toString()})(${chatInputs})`);
       const prompts = readFileSync(captureFile, 'utf8').trim().split('\n').map(line => JSON.parse(line));
       assert.equal(prompts.length, 2);
-      assert.match(prompts[0][0].content, /UI language for this turn is English/);
-      assert.match(prompts[1][0].content, /UI language for this turn is Traditional Chinese/);
-      assert.equal(prompts[0].at(-1).content, firstMessage);
-      assert.deepEqual(prompts[1].slice(-3).map(message => message.content),
+      for (const prompt of prompts) assert.match(prompt.system_instruction, /Write answers and public tool-selection notes in English/);
+      assert.equal(prompts[0].messages.at(-1), firstMessage);
+      assert.deepEqual(prompts[1].messages.slice(-3),
         [firstMessage, 'Provider replied to: ' + firstMessage, nextMessage]);
       const stored = JSON.parse(readFileSync(stateFile, 'utf8'));
       assert.notEqual(stored.active_session, existingSession);
@@ -964,8 +959,13 @@ app.once('browser-window-created', (_event, window) => {
         'Reopening stage results mutated archived or live analysis snapshots');
       const fileCalls = readFileSync(remoteCalls, 'utf8').trim().split('\n').map(line => JSON.parse(line));
       assert.deepEqual([...new Set(fileCalls.map(call => call.kind))].sort(), ['inspect', 'list', 'shortcuts', 'validation']);
-      assert.equal(fileCalls.filter(call => call.kind === 'validation').length, 5,
-        'Only the five explicit input-validation clicks may read scientific input contents');
+      assert.deepEqual(fileCalls.filter(call => call.kind === 'validation').map(call =>
+        [call.validation_kind, [...call.paths].sort()]), [
+        ['genotype', remote.genotype], ['expression', remote.expression], ['clinical', remote.clinical],
+        ['expression', remote.invalidExpression], ['expression', remote.duplicateExpression],
+        ['clinical', remote.invalidClinical], ['clinical', remote.clinical],
+      ].map(([kind, paths]) => [kind, [...paths].sort()]),
+      'Remote validation may read only the requested category paths for each explicit check');
       assert.ok(fileCalls.some(call => call.kind === 'inspect' && JSON.stringify(call.paths) === JSON.stringify(remote.genotype)),
         'The PED and MAP files must be inspected together through the production metadata endpoint');
       assert.ok(fileCalls.some(call => call.kind === 'inspect' && call.paths.includes(remote.invalid[0])),
@@ -973,14 +973,14 @@ app.once('browser-window-created', (_event, window) => {
       assert.equal(existsSync(path.join(remoteRoot, 'refdata/selected.tsv')), false, 'Dataset selection must not change reference selections');
       assert.deepEqual(readdirSync(path.join(project, 'runs')), [liveHistory.run_id], 'Browsing files must not create analysis runs');
       assert.deepEqual(await window.webContents.executeJavaScript(`(()=>{const root=document.querySelector('.ml-app');return [root.offsetWidth,root.offsetHeight,root.querySelector('.ml-rail').offsetWidth,root.querySelector('.ml-chat').offsetWidth]})()`),
-        [1650, 894, 53, 542]);
+        [1650, 894, 68, 542]);
       await replacementBackend.stop();
       replacementBackend = undefined;
-      console.log(`PASS: workspace geometry, Agent chat, real remote-file selection, manual scientific format and six-patient pairing checks with malformed/duplicate/clinical failures and no research-cell disclosure, cancel/default preservation, persistence across a Python restart, scoped history, immutable files and analysis snapshots, all six archived stages (${history.runs.map(run => `${run.connections}/${run.incident}`).join(', ')} total/MEGF6 edges); isolated files and localhost SSH only, no HPC/jobs`);
+      console.log(`PASS: workspace geometry, Agent chat, real remote-file selection, independent per-kind format checks with malformed/duplicate/clinical failures and no research-cell disclosure, cancel/default preservation, persistence across a Python restart, scoped history, immutable files and analysis snapshots, all six archived stages (${history.runs.map(run => `${run.connections}/${run.incident}`).join(', ')} total/MEGF6 edges); isolated files and localhost SSH only, no HPC/jobs`);
       window.close();
     } catch (error) { fail(error); }
   }));
 });
 
-startup = prepareLocalConnection().then(() => launch({provider: 'codex', userData}));
+startup = prepareLocalConnection().then(() => launch({provider: 'none', userData}));
 startup.then(value => { running = value; }).catch(fail);

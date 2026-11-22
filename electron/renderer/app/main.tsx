@@ -13,7 +13,7 @@ if(workspace){
  const readiness=document.getElementById('ml-environment-settings');
  const pane=controls?.closest<HTMLElement>('.ml-nav-pane');
  const sidebar=document.getElementById('ml-chat-panel');
- if(controls&&readiness&&pane&&sidebar)createRoot(controls).render(<WorkspaceSshSettings {...{workspace,readiness,pane,sidebar}}/>);
+ if(controls&&readiness&&pane&&sidebar)createRoot(controls).render(<WorkspaceSshSettings {...{readiness,pane,sidebar}}/>);
 }else{
  const root=document.getElementById('app');
  if(!root)throw Error('Missing SIGNET app root.');
