@@ -7,7 +7,8 @@ import shlex
 from agent.runtime import hpc, hpc_files, signet_jobs, workspace_datasets
 from agent.runtime.jobs import validate_dataset as parser
 
-_SOURCE = Path(parser.__file__).read_text(encoding='utf-8')
+_SOURCE = (Path(parser.__file__).with_name('clinical_rules.py').read_text(encoding='utf-8')
+           + '\n' + Path(parser.__file__).read_text(encoding='utf-8'))
 
 
 def _script(inputs, root):
@@ -54,6 +55,11 @@ def validate(dataset_id, inputs):
         result = parser.validate(snapshot)
     else:
         result = hpc_files._call(lambda root: _script(snapshot, root), 60)
+    if unsafe:
+        for stage, check in enumerate(result['checks'], 1):
+            for issue in check['issues']:
+                issue.update(stage=stage, severity='error')
+        result['stage_readiness'] = parser.stage_readiness(result)
     if _saved(dataset_id)['inputs'] != snapshot:
         raise signet_jobs.StepError('conflict', 'The dataset files changed during review. Check the current files again.')
     return {**result, 'dataset_id': dataset_id, 'inputs': snapshot, 'checked_at': signet_jobs._now()}

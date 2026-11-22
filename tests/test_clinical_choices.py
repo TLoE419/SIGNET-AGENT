@@ -1,5 +1,6 @@
 from contextlib import ExitStack
 import json
+import hashlib
 from pathlib import Path
 import shlex
 import tempfile
@@ -202,6 +203,91 @@ class ClinicalChoicesTest(unittest.TestCase):
         self.assertEqual(self.submitted.call_args.args[2],
                          {'cli.file': str(self.remote / f'inputs/clinical/review2-{updated}/clinical.tsv')})
         self.assertEqual(json.loads((self.root / 'workspace-adjust.review1.json').read_text()), old_snapshot)
+
+    def test_frozen_clinical_repair_preserves_initial_inputs_and_requires_fresh_review(self):
+        self.review_fixture()
+        frozen = self.remote / 'inputs/frozen/clinical'
+        frozen.parent.mkdir(parents=True)
+        frozen.write_text('submitter_id\trace\nTCGA-AA-0001\twhite\n')
+        initial = {'mode': 'dataset', 'frozen_inputs': {'clinical': [str(frozen)]}, 'genotype_attempt': 1}
+        initial_path = self.root / workspace.SNAPSHOT
+        initial_path.write_text(json.dumps(initial))
+        originals = {frozen: frozen.read_bytes(), initial_path: initial_path.read_bytes()}
+        for name, record in self.history['jobs'].items():
+            path = self.root / 'steps' / (name + '.json')
+            path.write_text(json.dumps(record))
+            originals[path] = path.read_bytes()
+        with patch.object(workspace, '_initial', return_value=initial), \
+                patch('agent.runtime.workspace_inputs.frozen_checks', return_value='FROZEN_INPUTS_GUARD\n') as guard:
+            blocked = workspace.review_adjust(self.run_id)
+            self.assertFalse(blocked['ready'])
+            self.assertFalse(blocked['clinical_replacement'])
+            self.assertTrue(blocked['clinical_replacement_allowed'])
+            self.assertEqual(blocked['inputs']['cli.file'], str(frozen))
+            corrected = self.checked_review()
+            self.assertTrue(corrected['ready'], corrected['issues'])
+            self.assertTrue(corrected['clinical_replacement'])
+            self.assertTrue(corrected['clinical_replacement_allowed'])
+            self.assertNotIn('TCGA-', json.dumps(corrected))
+            token = corrected['review_token']
+            source_bytes = self.source.read_bytes()
+            self.source.write_bytes(source_bytes + b'\n')
+            with self.assertRaises(jobs.StepError) as caught:
+                self.checked_submit(token)
+            self.assertEqual(caught.exception.code, 'review_required')
+            self.submitted.assert_not_called()
+            self.assertFalse((self.remote / 'inputs/clinical').exists())
+            refreshed = self.checked_review()
+            self.assertNotEqual(token, refreshed['review_token'])
+            self.checked_submit(refreshed['review_token'])
+            self.submitted.assert_called_once()
+            self.assertTrue(all('FROZEN_INPUTS_GUARD' in call.args[0] for call in self.shell.call_args_list))
+            guard.assert_called_with(str(self.remote), 1)
+        saved = json.loads((self.root / workspace.ADJUST_SNAPSHOT).read_text())
+        self.assertEqual(saved['clinical']['source'], str(self.source))
+        self.assertEqual(saved['clinical']['choices'], {'other': 'exclude'})
+        self.assertEqual(saved['clinical']['review']['source_digest'], hashlib.sha256(self.source.read_bytes()).hexdigest())
+        self.assertEqual(saved['inputs']['cli.file'], self.submitted.call_args.args[2]['cli.file'])
+        self.assertNotEqual(saved['inputs']['cli.file'], str(frozen))
+        self.assertNotEqual(saved['inputs']['cli.file'], str(self.source))
+        self.assertTrue(Path(saved['inputs']['cli.file']).is_file())
+        for path, content in originals.items():
+            self.assertEqual(path.read_bytes(), content)
+        self.assertEqual(self.history['jobs']['genotype']['job_id'], '123')
+        self.assertEqual(self.history['jobs']['expression']['job_id'], '124')
+
+    def test_frozen_clinical_replacement_keeps_roots_and_execution_state_guards(self):
+        self.review_fixture()
+        frozen = self.remote / 'inputs/frozen/clinical'
+        frozen.parent.mkdir(parents=True)
+        frozen.write_bytes(self.source.read_bytes())
+        initial = {'mode': 'dataset', 'frozen_inputs': {'clinical': [str(frozen)]}, 'genotype_attempt': 1}
+        with patch.object(workspace, '_initial', return_value=initial), \
+                patch('agent.runtime.workspace_inputs.frozen_checks', return_value=':\n'):
+            for state in ('running', 'unknown', 'completed'):
+                self.history['jobs']['adjust'] = {'state': state}
+                with self.subTest(state=state), self.assertRaises(jobs.StepError) as caught:
+                    self.checked_review()
+                self.assertEqual(caught.exception.code, 'conflict')
+            self.history['jobs'].pop('adjust')
+            with patch.object(jobs, '_active_step', return_value='network'), self.assertRaises(jobs.StepError):
+                self.checked_review()
+            self.history['jobs']['genotype']['state'] = 'failed'
+            with self.assertRaises(jobs.StepError):
+                self.checked_review()
+            self.history['jobs']['genotype']['state'] = 'completed'
+            with self.assertRaises(jobs.StepError) as caught:
+                self.checked_review(self.folder / 'outside-roots.tsv')
+            self.assertEqual(caught.exception.code, 'invalid_request')
+            marker = self.root / '.active'
+            marker.touch()
+            with self.assertRaises(jobs.StepError):
+                self.checked_review()
+            marker.unlink()
+            for state in ('not_submitted', 'failed', 'cancelled'):
+                self.history['jobs']['adjust'] = {'state': state}
+                self.assertTrue(self.checked_review()['clinical_replacement_allowed'])
+        self.submitted.assert_not_called()
 
     def test_manual_api_requires_a_review_token_and_passes_it_to_the_service(self):
         import io

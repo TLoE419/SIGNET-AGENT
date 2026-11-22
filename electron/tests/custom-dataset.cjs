@@ -50,7 +50,7 @@ async function verify() {
   const fixture = JSON.parse(readFileSync(metadata, 'utf8'));
   const [datasetA, datasetB] = fixture.datasets;
   const originalFiles = [...fixture.datasets.flatMap(dataset => Object.values(dataset.inputs).flat()),
-    fixture.reference, fixture.genetic_map, fixture.annotation];
+    fixture.reference, fixture.genetic_map, fixture.annotation, fixture.corrected_clinical];
   const originalFingerprints = fingerprints(originalFiles);
   const callsFile = path.join(fixture.slurm, 'sbatch_calls');
   const calls = () => existsSync(callsFile) ? readFileSync(callsFile, 'utf8').trim().split('\n') : [];
@@ -92,7 +92,10 @@ async function verify() {
     const row = `[data-run-target][data-run-id="${runId}"]`;
     await until(() => js(`!!document.querySelector(${JSON.stringify(row)})?.getClientRects().length`), 'The run is missing from its dataset history');
     await click(row);
-    await click(`[data-run-stage="${stage}"][data-run-id="${runId}"]`);
+    const stageLink = `[data-run-stage="${stage}"][data-run-id="${runId}"]`;
+    await until(() => js(`!!document.querySelector(${JSON.stringify(stageLink)})?.getClientRects().length`),
+      async () => 'The saved run did not expose Stage ' + stage + ': ' + await js(`document.querySelector('#ml-run-details')?.textContent`));
+    await click(stageLink);
   };
   async function setValue(selector, value) {
     await js(`(() => {const input=document.querySelector(${JSON.stringify(selector)});input.value=${JSON.stringify(value)};
@@ -140,6 +143,8 @@ async function verify() {
   })()`), async () => 'The custom Stage 1 review did not settle: ' + await js(`document.querySelector('#lens-stage1')?.textContent`));
   assert.equal(await js(`document.querySelector('#lens-stage1 [data-genotype-submit]').disabled`), true,
     'Custom warning acknowledgement must precede submission');
+  assert.match(await js(`document.querySelector('#lens-stage1 [data-genotype-warnings]').textContent`),
+    /Stage 3:.*clinical/i, 'Stage 1 must disclose the deferred clinical problem before acknowledgement');
   for (const [kind, files] of Object.entries(datasetA.inputs)) {
     const text = await js(`document.querySelector('[data-genotype-source-input="${kind}"]')?.textContent`);
     for (const filename of files) assert.ok(text?.includes(filename), 'Stage 1 did not review the selected source ' + kind);
@@ -163,7 +168,9 @@ async function verify() {
   assert.equal(changed.status, 200);
   await executeJob(runId, 'genotype', '12345');
   const localManifest = path.join(localRun, 'work/res/resg/workspace-inputs.json');
-  const manifest = JSON.parse(readFileSync(localManifest, 'utf8'));
+  const remoteManifest = path.join(fixture.remote, runId, 'work/res/resg/workspace-inputs.json');
+  assert.equal(existsSync(localManifest), false, 'Stage 1 evidence should remain in the remote data environment');
+  const manifest = JSON.parse(readFileSync(remoteManifest, 'utf8'));
   assert.equal(manifest.dataset_id, datasetA.id);
   assert.equal(manifest.preparation.chromosome, '2');
   assert.equal(manifest.preparation.matched_markers, 3);
@@ -175,7 +182,7 @@ async function verify() {
   }
   const immutableGenotype = readFileSync(path.join(localRun, 'steps/genotype.json'));
   const initialBytes = readFileSync(initialPath);
-  const manifestBytes = readFileSync(localManifest);
+  const manifestBytes = readFileSync(remoteManifest);
 
   const reload = once(window.webContents, 'did-finish-load');
   window.webContents.reload(); await reload;
@@ -199,9 +206,22 @@ async function verify() {
     {'gexp.file': frozen.expression[0], 'pmap.file': frozen.annotation});
 
   await openRunStage(runId, 3);
-  await until(() => js(`document.querySelector('#lens-stage3 [data-adjust-submit]')?.disabled===false`), 'Frozen Stage 3 review did not enable submission');
+  await until(() => js(`document.querySelector('#lens-stage3 [data-adjust-input="cli.file"]')?.value===${JSON.stringify(frozen.clinical[0])}&&
+    document.querySelector('#lens-stage3 [data-adjust-review]')?.disabled===false`),
+    async () => 'Frozen Stage 3 review did not settle: ' + await js(`document.querySelector('#lens-stage3')?.textContent`));
   assert.equal(await js(`document.querySelector('[data-adjust-input="cli.file"]').value`), frozen.clinical[0]);
-  assert.equal(await js(`document.querySelector('[data-adjust-input="cli.file"]').readOnly`), true);
+  assert.equal(await js(`document.querySelector('[data-adjust-input="cli.file"]').readOnly`), false);
+  assert.equal(await js(`document.querySelector('#lens-stage3 [data-adjust-submit]').disabled`), true,
+    'The original malformed clinical file must block Stage 3');
+  const frozenClinicalBytes = readFileSync(frozen.clinical[0]);
+  await setValue('[data-adjust-input="cli.file"]', fixture.corrected_clinical);
+  assert.equal(await js(`document.querySelector('#lens-stage3 [data-adjust-submit]').disabled`), true,
+    'Replacing a clinical path must invalidate prior review');
+  assert.deepEqual(calls(), ['submitted', 'submitted'], 'Replacing clinical input cannot submit a job');
+  await click('#lens-stage3 [data-adjust-review]');
+  await until(() => js(`document.querySelector('#lens-stage3 [data-adjust-submit]')?.disabled===false`),
+    async () => 'The corrected Stage 3 clinical review did not enable submission: ' + await js(`document.querySelector('#lens-stage3')?.textContent`));
+  assert.equal(await js(`document.querySelector('[data-adjust-input="cli.file"]').value`), fixture.corrected_clinical);
   await setValue('[data-adjust-option="npc"]', '2');
   writeFileSync(path.join(fixture.slurm, 'sbatch_reply'), '333\n');
   writeFileSync(path.join(fixture.slurm, 'squeue'), 'PENDING\n');
@@ -210,15 +230,26 @@ async function verify() {
   await until(async () => await stageState('adjust') === 'pending', 'Frozen Stage 3 did not queue');
   await executeJob(runId, 'adjust', '333');
   const savedAdjust = JSON.parse(readFileSync(path.join(localRun, 'steps/adjust.json')));
-  assert.equal(savedAdjust.inputs['cli.file'], frozen.clinical[0]);
+  assert.equal(savedAdjust.clinical.source, fixture.corrected_clinical);
+  assert.notEqual(savedAdjust.inputs['cli.file'], frozen.clinical[0], 'Stage 3 must use its reviewed clinical copy');
+  assert.ok(savedAdjust.inputs['cli.file'].startsWith(path.join(fixture.remote, runId, 'inputs/clinical') + path.sep));
+  assert.deepEqual(readFileSync(savedAdjust.inputs['cli.file']), readFileSync(fixture.corrected_clinical),
+    'The reviewed copy should preserve the corrected clinical values');
+  assert.deepEqual(readFileSync(frozen.clinical[0]), frozenClinicalBytes, 'Replacing clinical input must preserve the original frozen file');
   assert.equal(savedAdjust.options.npc, 2);
   await until(() => js(`document.querySelector('#lens-history-stage3')?.dataset.runState==='ready'`), 'Completed custom Stage 3 results did not display');
   assert.equal(Number(await js(`document.querySelector('#lens-history-stage3 [data-s3-count="matched"]').textContent`)), 6);
-  assert.equal(await js(`document.querySelectorAll('#lens-history-stage3 .s3-points circle').length`), 6);
+  await until(() => js(`(() => {const image=document.querySelector('#lens-history-stage3 .s3-remote-plot');
+    return image&&!image.hidden&&image.complete&&image.naturalWidth===640&&image.naturalHeight===420;})()`),
+    'The completed Stage 3 remote-rendered plot did not display');
+  assert.equal(await js(`document.querySelectorAll('#lens-history-stage3 .s3-points circle').length`), 0,
+    'Live Stage 3 individual component scores must remain remote');
+  assert.equal(Number(await js(`document.querySelector('#lens-history-stage3 [data-s3-count="retained"]').textContent`)), 6);
   assert.deepEqual(calls(), ['submitted', 'submitted', 'submitted']);
   assert.deepEqual(readFileSync(path.join(localRun, 'steps/genotype.json')), immutableGenotype);
   assert.deepEqual(readFileSync(initialPath), initialBytes);
-  assert.deepEqual(readFileSync(localManifest), manifestBytes);
+  assert.deepEqual(readFileSync(remoteManifest), manifestBytes);
+  assert.equal(existsSync(localManifest), false, 'Later reviews must not download the original Stage 1 evidence');
 
   await selectDataset(datasetB.id);
   await click('[data-nav-target="history"]');
@@ -245,7 +276,7 @@ async function verify() {
   assert.deepEqual(calls(), ['submitted', 'submitted', 'submitted'], 'History inspection resubmitted a step');
   assert.deepEqual(await geometry(), [1650, 894, 53, 542]);
   await running.quit();
-  console.log('PASS: custom chr2 Stage 1 manual warning acknowledgement and single queued job, real input freezing/reference preparation, frozen Stage 2/3 after catalog edits, immutable originals and snapshots, six-stage dataset history isolation and fixed geometry; controlled connection context and local-only scheduler, no real SSH/Slurm/container/SIGNET analysis');
+  console.log('PASS: custom chr2 Stage 1 with explicit deferred-clinical warning, real input freezing/reference preparation, frozen Stage 2 after catalog edits, manual Stage 3 clinical replacement and fresh review without upstream reruns, reviewed-copy provenance, remote-rendered PCA without individual scores, immutable originals and snapshots, six-stage dataset history isolation and fixed geometry; controlled connection context and local-only scheduler, no real SSH/Slurm/container/SIGNET analysis');
 }
 
 verify().catch(async error => { console.error(error); await running?.backend.forceStop(); app.exit(1); });

@@ -107,6 +107,7 @@ if flag=='-g':
     ids=[line.split()[1] for line in pathlib.Path(setting('ped.file')).read_text().splitlines() if line.strip()]
     write('res/resg/signet_Geno','0 1 2\\n'*len(ids));write('res/resg/signet_Genotype.sampleID','\\n'.join(ids)+'\\n')
     write('tmp/tmpg/impute/impute_Genotype.sizes','6 samples, 3 variants\\n')
+    write('tmp/tmpg/clean_Genotype.fam',''.join(value+' '+value+' 0 0 1 -9\\n' for value in ids))
 else:
     ids=(root/'res/resg/signet_Genotype.sampleID').read_text().splitlines()
     matrix=''.join(' '.join(str(index+gene+1) for gene in range(4))+'\\n' for index in range(len(ids)))
@@ -148,6 +149,12 @@ def main():
             (catalog / (record['id'] + '.json')).write_text(json.dumps(record))
         archived = archived_run(fixture.project, second)
         refdata = fixture.hpc / 'ws/refdata'
+        corrected_clinical = refdata / 'corrected-clinical.tsv'
+        original_clinical = Path(first['inputs']['clinical'][0])
+        corrected_clinical.write_text(original_clinical.read_text())
+        # A readable but malformed future input must not force genotype/expression reruns.
+        original_clinical.write_text('\n'.join('\t'.join(line.split('\t')[:2])
+            for line in original_clinical.read_text().splitlines()) + '\n')
         reference, genetic_map, annotation = refdata / 'custom-reference.vcf', refdata / 'custom-map.txt', refdata / 'custom-annotation.gtf'
         reference.write_text('##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tR1\tR2\n' + ''.join(
             '2\t{}\trs{}\t{}\t{}\t.\tPASS\t.\tGT\t0/0\t0/1\n'.format(index*101,index,*alleles)
@@ -161,7 +168,8 @@ def main():
         fixture.slurm(squeue='PENDING')
         metadata.write_text(json.dumps({'project':str(fixture.project),'remote':fixture.config['workRoot'],'slurm':str(fixture.fake),
             'datasets':[first,second],'patients':patients,'archived':archived,'annotation':str(annotation),
-            'reference':str(reference),'genetic_map':str(genetic_map),'python':sys.executable}))
+            'reference':str(reference),'genetic_map':str(genetic_map),'python':sys.executable,
+            'corrected_clinical':str(corrected_clinical)}))
         sys.argv=[str(server),*sys.argv[3:]]
         runpy.run_path(str(server),run_name='__main__')
     finally:

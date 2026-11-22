@@ -23,7 +23,7 @@ test('clinical choices need a fresh review and manual submission sends exactly t
   if(options.method==='POST')return json({run_id:'clinical-run',step:'adjust',state:'pending',job_id:'900',inputs:{'cli.file':'/run/copy.tsv'},options:{npc:3},resources});
   return json({ready:choices.other==='exclude',review_token:choices.other==='exclude'?token:null,
    inputs:{'cli.file':'/pub/clinical.tsv'},options:{npc:3},resources,limits:{},issues:[],
-   clinical:{rows:4,matched:4,retained:choices.other==='exclude'?3:4,excluded:choices.other==='exclude'?1:0,
+   clinical:{rows:4,matched:4,clinical_matched:4,missing_race:0,missing_gender:0,retained:choices.other==='exclude'?3:4,excluded:choices.other==='exclude'?1:0,
     race:{asian:1,white:1,'black or african american':1,other:1},unrecognized_race:{other:1}}});
  };
  const controller=w.mountAdjustmentRun({panel,token:'page-token'});
@@ -31,6 +31,10 @@ test('clinical choices need a fresh review and manual submission sends exactly t
  controller.setContext({datasetId:'dataset-a',language:'en',visible:true,runs:[{run_id:'clinical-run',jobs:{genotype:{state:'completed'},expression:{state:'completed'}}}]});
  await until(()=>q('[data-adjust-clinical-choices] input'));
  assert.equal(q('[data-adjust-submit]').disabled,true);
+ assert.match(q('[data-adjust-clinical-summary]').textContent,/completed Stage 1 and Stage 2 outputs/);
+ assert.equal(q('[data-clinical-review-count="clinical_matched"]').textContent,'4');
+ assert.equal(q('[data-clinical-review-count="missing_gender"]').textContent,'0');
+ assert.equal(q('[data-adjust-clinical-choices] input:checked'),null,'unknown categories never receive a default decision');
  const excluded=q('[data-adjust-clinical-choices] input[value="exclude"]');
  excluded.checked=true;excluded.dispatchEvent(new w.Event('change',{bubbles:true}));
  assert.equal(calls.length,1,'a research choice never submits or checks remotely by itself');
@@ -84,4 +88,74 @@ test('reopening a completed Stage3 shows the saved clinical decision and counts'
  const decision=panel.querySelector('[data-adjust-clinical-choices] input[value="exclude"]');
  assert.equal(decision.checked,true);assert.equal(decision.closest('fieldset').disabled,true);
  assert.equal(panel.querySelector('[data-adjust-submit]').hidden,true);
+});
+
+test('clinical review distinguishes unavailable counts from zero and renders private category text inertly',async t=>{
+ const {w,panel}=fixture(t);
+ const category='<img src=x onerror=alert(1)>';
+ w.fetch=async()=>json({ready:false,inputs:{'cli.file':'/pub/clinical.tsv'},options:{npc:3},resources,limits:{},issues:[],
+  clinical:{rows:5,matched:5,clinical_matched:4,missing_gender:1,race:{[category]:1},unrecognized_race:{[category]:1}}});
+ const controller=w.mountAdjustmentRun({panel,token:'page-token'});
+ controller.setContext({datasetId:'dataset-a',language:'en',visible:true,runs:[{run_id:'private-clinical',jobs:{genotype:{state:'completed'},expression:{state:'completed'}}}]});
+ await until(()=>panel.querySelector('[data-adjust-clinical-choices] input'));
+ assert.match(panel.querySelector('[data-adjust-clinical-summary]').textContent,/— retained.*— excluded/);
+ assert.equal(panel.querySelector('[data-clinical-review-count="missing_race"]').textContent,'—');
+ assert.equal(panel.querySelector('[data-clinical-review-count="missing_gender"]').textContent,'1');
+ assert.equal(panel.querySelector('img'),null);
+ assert.match(panel.querySelector('[data-adjust-clinical-choices]').textContent,/<img src=x/);
+ assert.equal(panel.querySelector('[data-adjust-submit]').disabled,true);
+ controller.setContext({datasetId:'dataset-a',language:'zh-Hant',visible:true,runs:[{run_id:'private-clinical',jobs:{genotype:{state:'completed'},expression:{state:'completed'}}}]});
+ assert.match(panel.querySelector('[data-adjust-clinical-summary]').textContent,/實際輸出重新核對/);
+});
+
+test('an explicit replacement permission repairs frozen clinical input after fresh review without rerunning upstream',async t=>{
+ const {w,panel}=fixture(t),calls=[];
+ const original='/run/inputs/frozen/clinical',replacement='/pub/corrected-clinical.tsv';
+ const source={run_id:'repair-clinical',input_mode:'dataset',frozen_inputs:{clinical:[original]},jobs:{genotype:{state:'completed'},expression:{state:'completed'}}};
+ w.fetch=async(url,options={})=>{
+  const parsed=new URL(url,'http://localhost'),selected=parsed.searchParams.get('clinical')||original;
+  calls.push({url,body:options.body?JSON.parse(options.body):null});
+  if(options.method==='POST')return json({run_id:source.run_id,step:'adjust',state:'pending',job_id:'901',inputs:{'cli.file':'/run/reviewed-clinical.tsv'},options:{npc:3},resources});
+  return json({ready:selected===replacement,frozen:true,clinical_replacement_allowed:true,clinical_replacement:selected!==original,
+   review_token:selected===replacement?token:null,inputs:{'cli.file':selected},options:{npc:3},resources,limits:{},
+   issues:selected===replacement?[]:['Clinical columns need repair.'],
+   clinical:{rows:4,matched:4,retained:4,excluded:0,choices:selected===replacement?{}:{old:'exclude'},
+    unrecognized_race:selected===replacement?{}:{old:1}}});
+ };
+ const controller=w.mountAdjustmentRun({panel,token:'page-token'}),q=selector=>panel.querySelector(selector);
+ controller.setContext({datasetId:'dataset-a',language:'en',visible:true,runs:[source]});
+ await until(()=>q('[data-adjust-input="cli.file"]').value===original&&!q('[data-adjust-review]').disabled);
+ const clinical=q('[data-adjust-input="cli.file"]');
+ assert.equal(clinical.readOnly,false);assert.equal(q('[data-adjust-submit]').disabled,true);
+ assert.match(q('[data-adjust-clinical-replacement]').textContent,/completed Stages 1 and 2 are reused/);
+ assert.match(q('[data-adjust-clinical-replacement]').textContent,/Original frozen file: \/run\/inputs\/frozen\/clinical/);
+ clinical.value='/pub/corrected';clinical.dispatchEvent(new w.Event('input',{bubbles:true}));
+ assert.equal(clinical.readOnly,false,'the first keystroke must not revoke the explicit edit permission');
+ clinical.value=replacement;clinical.dispatchEvent(new w.Event('input',{bubbles:true}));
+ assert.equal(calls.length,1,'editing a path cannot submit or check automatically');
+ assert.equal(q('[data-adjust-clinical-choices] input'),null,'old category choices cannot apply to a replacement file');
+ assert.equal(q('[data-adjust-submit]').disabled,true);
+ q('[data-adjust-review]').click();await until(()=>!q('[data-adjust-submit]').disabled);
+ const query=new URL(calls[1].url,'http://localhost').searchParams;
+ assert.equal(query.get('clinical'),replacement);assert.equal(query.has('choices'),false);
+ assert.equal(source.frozen_inputs.clinical[0],original,'the original frozen selection must remain unchanged');
+ q('[data-adjust-submit]').click();await until(()=>panel.dataset.adjustState==='pending');
+ const posts=calls.filter(call=>call.body);assert.equal(posts.length,1);
+ assert.deepEqual(posts[0].body.inputs,{'cli.file':replacement});assert.deepEqual(posts[0].body.choices,{});
+ assert.equal(posts[0].body.review_token,token);assert.equal(clinical.disabled,true);assert.equal(clinical.readOnly,true);
+ assert.ok(calls.every(call=>call.url.includes('/adjust/')),'replacement cannot rerun Stages 1 or 2');
+});
+
+test('a rejected replacement remains editable but cannot reuse an old review token',async t=>{
+ const {w,panel}=fixture(t);let rejected=false;
+ w.fetch=async()=>rejected?{ok:false,status:400,json:async()=>({error:'The selected path is not allowed.'})}:json({ready:true,frozen:true,
+  clinical_replacement_allowed:true,review_token:token,inputs:{'cli.file':'/run/frozen/clinical'},options:{npc:3},resources,limits:{}});
+ const controller=w.mountAdjustmentRun({panel,token:'page-token'}),q=selector=>panel.querySelector(selector);
+ controller.setContext({datasetId:'dataset-a',language:'en',visible:true,runs:[{run_id:'repair-rejected',input_mode:'dataset',frozen_inputs:{clinical:['/run/frozen/clinical']},
+  jobs:{genotype:{state:'completed'},expression:{state:'completed'}}}]});
+ await until(()=>!q('[data-adjust-submit]').disabled);
+ const clinical=q('[data-adjust-input="cli.file"]');clinical.value='/outside/not-allowed';clinical.dispatchEvent(new w.Event('input',{bubbles:true}));
+ rejected=true;q('[data-adjust-review]').click();await until(()=>!q('[data-adjust-review]').disabled);
+ assert.equal(clinical.readOnly,false);assert.equal(clinical.value,'/outside/not-allowed');
+ assert.equal(q('[data-adjust-submit]').disabled,true);assert.match(panel.textContent,/selected path is not allowed/);
 });

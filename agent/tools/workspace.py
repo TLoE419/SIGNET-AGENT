@@ -40,6 +40,9 @@ def get_workspace_stage(run_id: str, stage: int, source: str = 'live') -> dict:
             except (OSError, ValueError, jobs.StepError):
                 summary = None
         public['summary'] = step_report.safe_summary(name, record, summary)
+    clinical = record.get('clinical')
+    if name == 'adjust' and isinstance(clinical, dict) and isinstance(clinical.get('review'), dict):
+        public['clinical'] = step_report.safe_clinical_review(clinical['review'])
     public['progress'] = step_report.public_progress(record)
     if record.get('state') in ('failed', 'cancelled', 'unknown'):
         public['failure'] = step_report.failure_summary(record)
@@ -68,12 +71,19 @@ def get_workspace_report(run_id: str, stage: int, source: str = 'live') -> dict:
     return {**after, **result}
 
 
-def _public_review(review):
+def _public_review(review, stage=None):
     # Full manual reviews contain input paths and arbitrary source labels; these stay in the manual form.
     allowed = ('ready', 'settings', 'options', 'resources', 'limits')
     result = {key: review[key] for key in allowed if key in review}
     if review.get('issues'):
         result['issue_count'] = len(review['issues'])
+        result['diagnostics'] = [{'code': 'stage_input_review_required', 'stage': stage,
+                                  'severity': 'error'}]
+    if stage == 3 and isinstance(review.get('clinical'), dict):
+        result['clinical'] = step_report.safe_clinical_review(review['clinical'])
+        result['diagnostics'] = result['clinical']['diagnostics'] + result.get('diagnostics', [])
+    if isinstance(review.get('validation'), dict):
+        result['validation'] = step_report.safe_input_validation(review['validation'])
     return result
 
 
@@ -101,7 +111,7 @@ def propose_workspace_stage(run_id: str, stage: int, source: str = 'live') -> di
     after = get_workspace_stage(run_id, stage, source)
     if before['job'] != after['job']:
         raise ValueError('The stage attempt changed during review. Refresh and review again.')
-    return _proposal({**after, 'status': 'needs_review', 'executed': False, 'review': _public_review(review),
+    return _proposal({**after, 'status': 'needs_review', 'executed': False, 'review': _public_review(review, stage),
             'reason': 'Review current inputs, settings and prerequisites in the manual form and explicitly confirm there. This proposal is not execution authorization.',
             'workspace_action': {'version': 1, 'action': 'view_stage',
                                  'history_id': after['history_id'], 'stage': stage}})
@@ -113,11 +123,22 @@ def propose_workspace_dataset(dataset_id: str) -> dict:
     saved = _saved(signet._name(dataset_id))
     review = workspace.review_dataset(dataset_id, saved['inputs'])
     return {'status': 'needs_review', 'executed': False, 'dataset_id': dataset_id,
-            'stage': 1, 'review': _public_review(review),
+            'stage': 1, 'review': _public_review(review, 1),
             'reason': 'Open this dataset Stage 1 manual review, choose a new run and explicitly confirm the current inputs, settings and warnings.'}
 
 
-WORKSPACE_TOOLS = [get_workspace_stage, get_workspace_report, propose_workspace_stage, propose_workspace_dataset]
+def get_workspace_validation(dataset_id: str) -> dict:
+    """Check selected inputs remotely and return approved statistics, never file contents or paths."""
+    from agent.runtime import workspace_validation
+    dataset_id = signet._name(dataset_id)
+    saved = workspace_validation._saved(dataset_id)
+    report = workspace_validation.validate(dataset_id, saved['inputs'])
+    return {'status': 'ok', 'executed': False, 'dataset_id': dataset_id,
+            'validation': step_report.safe_input_validation(report)}
+
+
+WORKSPACE_TOOLS = [get_workspace_stage, get_workspace_report, propose_workspace_stage,
+                   propose_workspace_dataset, get_workspace_validation]
 
 # Preserve legacy Python entry points while removing scientific execution from the model allow-list.
 LEGACY_EXECUTION = {'genotype_tcga', 'genotype_gtex', 'expression_tcga',

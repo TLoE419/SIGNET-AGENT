@@ -8,6 +8,9 @@ import os
 from pathlib import Path
 import sys
 
+if 'clinical_covariates' not in globals():
+    from agent.runtime.jobs.clinical_rules import clinical_covariates, SIGNET_RACES
+
 
 def review(clinical, genotype_ids, expression_ids, choices=None, out=None):
     choices = {} if choices is None else choices
@@ -47,53 +50,21 @@ def review(clinical, genotype_ids, expression_ids, choices=None, out=None):
         fields = (row.get('submitter_id') or '').split('-')
         if len(fields) >= 3:
             by_patient.setdefault(fields[2], row)
-    races, genders, unsupported = set(), set(), set()
-    missing_values = {'', 'na', 'n/a', 'nan', 'unknown', 'not reported', '--'}
-    for patient in matched:
-        row = by_patient.get(patient)
-        if row is None:
-            continue
-        result['clinical_matched'] += 1
-        race, gender = (row.get('race') or '').strip(), (row.get('gender') or '').strip()
-        label = race or '(blank)'
-        result['race'][label] = result['race'].get(label, 0) + 1
-        result['gender'][gender or '(blank)'] = result['gender'].get(gender or '(blank)', 0) + 1
-        if race not in {'asian', 'black or african american', 'white', 'not reported', 'american indian or alaska native'}:
-            result['unrecognized_race'][label] = result['unrecognized_race'].get(label, 0) + 1
-            if label not in choices:
-                unsupported.add(label)
-                continue
-            race = 'not reported' if choices[label] == 'not_reported' else 'american indian or alaska native'
-        if race == 'american indian or alaska native':
-            result['excluded'] += 1
-            continue
-        if race == 'not reported':
-            race = 'white'
-        if race.lower() in missing_values:
-            result['missing_race'] += 1
-        elif race not in {'asian', 'black or african american', 'white'}:
-            unsupported.add(race)
-        else:
-            races.add(race)
-            result['races_after'][race] = result['races_after'].get(race, 0) + 1
-        result['retained'] += 1
-        if gender.lower() in missing_values:
-            result['missing_gender'] += 1
-        else:
-            genders.add(gender)
-    result['unsupported_races'] = sorted(unsupported)
-    result['needs_choice'] = sorted(unsupported)
+    matched_rows = [by_patient[patient] for patient in matched if patient in by_patient]
+    result['clinical_matched'] = len(matched_rows)
+    result.update(clinical_covariates(((row.get('race') or '', row.get('gender') or '')
+                                       for row in matched_rows), choices))
     if not matched:
         result['issues'].append('The completed genotype and expression outputs have no matching TCGA patient identifiers.')
     if result['clinical_matched'] != len(matched):
         result['issues'].append('Clinical data is missing for some matched patients.')
     if result['missing_gender'] or result['missing_race']:
         result['issues'].append('Matched patients have missing race or gender values.')
-    if unsupported:
+    if result['needs_choice']:
         result['issues'].append('Choose how to handle each unrecognized race value, then check the clinical file again.')
-    if not unsupported and races != {'asian', 'black or african american', 'white'}:
+    if not result['needs_choice'] and set(result['races_after']) != SIGNET_RACES:
         result['issues'].append('The official adjustment requires the race groups asian, black or african american, and white.')
-    if len(genders) < 2:
+    if result['gender_groups'] < 2:
         result['issues'].append('The official adjustment requires at least two gender groups among matched patients.')
     if out and not result['issues']:
         destination = Path(out)

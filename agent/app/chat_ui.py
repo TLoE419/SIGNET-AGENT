@@ -31,7 +31,8 @@ ROOT = PROJECT_ROOT
 def _analysis_context(session):
     """This conversation's runs and the default one, for the assistant (rebuilt every turn)."""
     try:
-        return analysis_family.describe(session)
+        return [{'run_id': run_id, 'number': label['number'], 'latest': label.get('latest', False),
+                 'from_step': label.get('from_step')} for run_id, label in analysis_family.labels(session).items()]
     except OSError:
         return ''
 

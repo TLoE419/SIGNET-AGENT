@@ -60,17 +60,19 @@ class GroqTest(unittest.TestCase):
         self.assertNotIn('輸入「繼續」', answer)
         self.assertEqual(history[0].parts[0].text, conditions)
 
-    def test_large_tool_result_stops_without_replaying_or_losing_evidence(self):
+    def test_private_tool_result_is_withheld_without_replaying_or_losing_local_evidence(self):
         result = {'status': 'failed', 'executed': 'unknown',
                   'error': '必要的完整錯誤證據，不能截斷。' * 2000}
         history = []
-        with self.client([(200, completion(calls=[call()]))]) as client:
+        with self.client([(200, completion(calls=[call()])),
+                          (200, completion('請在介面查看私人診斷。'))]) as client:
             with patch.object(main, 'dispatch_tool', return_value=result) as dispatch:
                 answer = main.run_conversation(client, '查詢', history)
-        self.assertIn('未送出模型請求', answer)
-        self.assertEqual(len(self.requests), 1)
+        self.assertIn('私人診斷', answer)
+        self.assertEqual(len(self.requests), 2)
+        self.assertNotIn('必要的完整錯誤證據', json.dumps(self.requests[-1], ensure_ascii=False))
         dispatch.assert_called_once()
-        self.assertEqual(history[-1].parts[0].function_response.response, result)
+        self.assertEqual(history[-2].parts[0].function_response.response, result)
 
     def test_repeated_evidence_uses_a_reference_but_changed_states_remain(self):
         history = [types.Content(role='user', parts=[types.Part(text='只查看，不執行')])]
@@ -253,17 +255,19 @@ class GroqTest(unittest.TestCase):
             self.assertEqual(main.run_conversation(client, '繼續', history), '接續上一輪。')
         dispatch.assert_called_once_with('signet_catalog', {})
         messages = self.requests[1]['messages']
-        self.assertEqual(messages[-2]['tool_calls'][0]['id'], 'call-1')
-        self.assertEqual(messages[-1]['tool_call_id'], 'call-1')
-        self.assertEqual(messages[-1]['role'], 'tool')
-        compact = json.loads(messages[-1]['content'])
+        tool_call = next(message for message in messages if message.get('tool_calls'))
+        tool_reply = next(message for message in messages if message.get('tool_call_id') == 'call-1')
+        self.assertEqual(tool_call['tool_calls'][0]['id'], 'call-1')
+        self.assertEqual(tool_reply['tool_call_id'], 'call-1')
+        self.assertEqual(tool_reply['role'], 'tool')
+        compact = json.loads(tool_reply['content'])
         self.assertNotIn('scripts', compact)
         self.assertEqual(compact['all_tools_including_list_files'], len(ALL_TOOLS))
         self.assertTrue(compact['scripts_omitted'])
         self.assertIn('scripts', history[2].parts[0].function_response.response)
         self.assertIn(GROQ_MODEL, events[0])
         self.assertIn('選擇原因', '\n'.join(events))
-        self.assertEqual(self.requests[2]['messages'][-1], {'role':'user', 'content':'繼續'})
+        self.assertIn({'role':'user', 'content':'繼續'}, self.requests[2]['messages'])
         self.assertEqual(self.send_times, [0, 0, 0])
         self.assertEqual(self.pauses, [])
 

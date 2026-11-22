@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 import agent.tools.general as tools
 import agent.tools.signet as st
+from agent.tools.registry import ALL_TOOLS
 
 
 class ListFilesTest(unittest.TestCase):
@@ -65,7 +66,8 @@ class ListFilesTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 tools.list_files(str(alias))
 
-    def test_dispatch_retains_files_response_shape_and_never_reads_contents(self):
+    def test_dispatch_shares_only_a_count_and_never_reads_contents(self):
+        self.assertIn(tools.list_files, ALL_TOOLS)
         self.create('docs/example.txt')
         self.create('data/PRIVATE-person.txt')
         self.create('runs/demo/PRIVATE-person.json')
@@ -74,7 +76,9 @@ class ListFilesTest(unittest.TestCase):
                 patch.object(Path,'read_bytes',side_effect=AssertionError('File content must not be read')), \
                 patch.object(Path,'open',side_effect=AssertionError('File content must not be read')):
             result=st.dispatch_tool('list_files',{'folder':str(self.root)})
-        self.assertEqual(result,{'files':['docs/example.txt']})
+        self.assertEqual(result, {'status': 'ok', 'file_count': 1})
+        self.assertNotIn('example.txt', str(result))
+        self.assertNotIn('PRIVATE', str(result))
 
     def test_empty_project_returns_empty_list(self):
         self.assertEqual(tools.list_files(str(self.root)),[])
@@ -83,7 +87,8 @@ class ListFilesTest(unittest.TestCase):
         with patch.object(tools.os,'walk',side_effect=PermissionError('Cannot inspect fixture directory')):
             result=st.dispatch_tool('list_files',{'folder':str(self.root)})
         self.assertEqual(result['status'],'invalid')
-        self.assertIn('Cannot inspect',result['error'])
+        self.assertEqual(result['error_code'], 'invalid_request')
+        self.assertNotIn('Cannot inspect', str(result))
 
 
 if __name__=='__main__':

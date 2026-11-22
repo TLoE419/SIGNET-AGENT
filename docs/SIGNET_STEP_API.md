@@ -314,7 +314,7 @@ Custom dataset execution uses the separate review and submission routes below. T
 containing all three current saved input arrays. The service compares this
 snapshot before and after the remote read, returning 409 if it changed. The
 report contains `dataset_id`, `inputs`, `checked_at`, `status`, per-category
-`checks`, preliminary `pairing` counts, file metadata/digests, `limits`,
+`checks`, preliminary `pairing` counts, per-stage `stage_readiness`, file metadata/digests, `limits`,
 `read_only: true`, and `executed: false`. A check has an ID, category, status,
 message, paths, metrics, and bounded issue codes with optional line numbers.
 No sample identifiers, genotype calls, expression values, or clinical values
@@ -331,11 +331,59 @@ Clinical execution-compatibility warnings are distinct from column/row errors.
 `passed`, `warning`, `failed`, and `incomplete` describe this read-only check,
 not analysis readiness or biological validity.
 
+`stage_readiness` uses string keys `1`, `2`, and `3`, each containing a
+`status` (`ready`, `needs_review`, `blocked`, or `incomplete`) and staged
+`issues` (`code`, `message`, `stage`, `severity`). These are input checks,
+not permission to execute or a prediction of scientific success. Unknown
+clinical categories require Stage 3 review; they do not block Stage 1.
+Stage 1 still requires valid genotype structure and every selected input to
+be readable, fully checked, and fingerprinted for the existing frozen-input
+contract. A readable malformed later-stage file can therefore block that
+later stage while leaving Stage 1 input review available. Existing warning
+acknowledgement remains required.
+
+Genotype/expression pairing is evaluated independently of clinical-table
+validity. Clinical coverage is unavailable rather than zero when it cannot
+be checked. The preliminary clinical interpretation and the actual Stage 3
+review share the same covariate rules, while the latter uses the completed
+Stage 1/2 outputs and requires explicit choices and a fresh review token.
+
 Remote reads are bounded to 128 MiB per file, 256 MiB total, 4 MiB per line,
 one million rows, and 30 seconds. A limit or detected file change is reported
 as incomplete, never as a complete pass. The service creates no run, writes
 no file, changes no selection, and submits no job. Files may change later;
 execution performs a fresh review before submission.
+
+### Model access to dataset checks and diagnostics
+
+The assistant can call `get_workspace_validation(dataset_id)` to run this
+read-only check and obtain a projection with fixed issue codes, stage input
+statuses, and approved non-personal counts. It does not receive file paths,
+sample identifiers, source category labels, rows, or file contents. Full
+manual reviews and private evidence remain in the workspace interface.
+
+`get_workspace_report` and Stage 3 review proposals return the same kind of
+structured diagnostic evidence. Runtime errors are classified by trusted
+code; a recognized R error identifies an error type, not a specific patient
+or definitive clinical cause. Unknown failures remain unclassified and direct
+the user to private diagnostics. The model cannot read raw logs to investigate.
+
+File reading is no longer a model capability, including aggregate network and
+gene-result files. Only predefined statistical summaries are allowed. The
+dispatcher and every outbound model request enforce this contract, including
+restored tool results and exception paths. Original saved records are retained;
+legacy private evidence is withheld from model context. This also removes
+automatic forwarding of image, file, and audio parts. User-written chat text
+remains user input; this mechanism does not promise to detect arbitrary personal
+data manually pasted into free text.
+
+Execution, dataset, and history identities are represented to the model by
+random process-local references so researcher-defined names cannot leak through
+metadata. Dispatch resolves those references before existing ownership and
+source checks; the manual interface still uses the original identities. The
+bounded reference map is not persisted. After a backend restart, stale references
+are rejected; refresh the current workspace selection instead of guessing an
+identity or resubmitting an analysis.
 
 ### Dataset-bound manual execution
 
@@ -373,8 +421,14 @@ initial dataset ID. Existing expression/adjust/cis/network/visualize review and
 submit routes continue the same run; their `/example` suffix remains for API
 compatibility. Dataset runs read expression, annotation, and clinical inputs
 from their frozen snapshot, not the current catalog or global selections.
-A differing clinical override is rejected for a frozen run. The original
-unchanged chromosome 1 example endpoints retain their existing behavior.
+The Stage 3 manual review may explicitly select a corrected clinical source
+under the existing allowed input roots. This preserves the original frozen
+files and completed Stage 1/2 jobs. The selected source, choices, content
+fingerprint, upstream fingerprints, and execution identity must pass a fresh
+review; submission writes a separate immutable reviewed clinical copy and
+records its source in the Stage 3 snapshot. Editing the original frozen files
+still fails the frozen-input guard. Completed attempts remain read-only.
+The original chromosome 1 example endpoints retain their existing defaults.
 
 ### Workspace Stage 1 same-run retry
 

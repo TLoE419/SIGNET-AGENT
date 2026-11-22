@@ -57,14 +57,18 @@ def review(dataset_id, inputs):
         result.update(workspace.review_example(), ready=True)
     else:
         report = workspace_validation.validate(dataset_id, inputs)
-        if report.get('status') not in ('passed', 'warning') or not report.get('checks'):
-            result['issues'] = [item['message'] for check in report.get('checks', []) for item in check.get('issues', [])]
-            result['issues'] += [item['message'] for item in report.get('pairing', {}).get('issues', [])]
+        result['validation'] = report
+        first_stage = report.get('stage_readiness', {}).get('1', {})
+        if first_stage.get('status') != 'ready':
+            result['issues'] = [item['message'] for item in first_stage.get('issues', [])]
             if not result['issues']:
-                result['issues'] = [report.get('reason') or report.get('error') or 'Complete the dataset format review before Stage 1.']
+                result['issues'] = ['Complete the dataset input review before Stage 1.']
             return result
-        result['warnings'] = [item['message'] for check in report['checks'] if check['status'] == 'warning' for item in check['issues']]
-        result['warnings'] += [item['message'] for item in report['pairing']['issues']]
+        result['warnings'] = [item['message'] for item in first_stage.get('issues', [])
+                              if item['severity'] == 'warning']
+        for number in ('2', '3'):
+            for item in report['stage_readiness'][number]['issues']:
+                result['warnings'].append('Stage ' + number + ': ' + item['message'])
         references = _references(config)
         sources = {item['role']: item for item in report['files']}
         sources.update({role: {'path': path} for role, path in references.items()})

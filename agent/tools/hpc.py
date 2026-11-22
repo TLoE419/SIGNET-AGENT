@@ -85,11 +85,11 @@ def prepare_imputation_reference() -> dict:
 
 
 def read_hpc_setup_log(step: str) -> dict:
-    """Show the last lines of the app's own log for one HPC3 setup step: "workspace", "signet", "container", "ref", "gmap", "gtf", "clinical" or "prepare".
+    """Classify the private log for one HPC3 setup step: "workspace", "signet", "container", "ref", "gmap", "gtf", "clinical" or "prepare".
 
     Use it when check_hpc_environment reports that a setup step failed, to
-    explain why. These logs are written by the app's setup commands only and
-    contain no research data. Read-only.
+    obtain fixed diagnostic codes. Model dispatch never returns the log lines;
+    unknown causes require the user to inspect private diagnostics. Read-only.
     """
     return hpc.read_log(step)
 

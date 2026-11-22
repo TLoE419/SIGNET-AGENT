@@ -10,11 +10,15 @@
     passed: ["結構檢查通過", "Structure passed"], warning: ["有警示", "Warning"],
     failed: ["檢查未通過", "Failed"], incomplete: ["檢查未完整完成", "Incomplete"], unchecked: ["未檢查", "Unchecked"],
   };
+  const stageStatuses = {
+    ready: ["輸入檢查通過", "Input checks passed"], needs_review: ["需要確認", "Needs review"],
+    blocked: ["輸入問題待修正", "Input issues must be corrected"], incomplete: ["尚未完整檢查", "Not fully checked"],
+  };
   const pairingNames = {
     genotype_patients: ["基因型個體", "Genotype patients"], expression_patients: ["表現量個體", "Expression patients"],
     matched_patients: ["兩者配對的個體", "Matched patients"], clinical_matched: ["具臨床資料的配對個體", "Matched with clinical data"],
     unmatched_genotype: ["未配對的基因型個體", "Unmatched genotype patients"], unmatched_expression: ["未配對的表現量個體", "Unmatched expression patients"],
-    missing_race: ["缺少族群資料的配對個體", "Matched patients missing race"], missing_gender: ["缺少性別資料的配對個體", "Matched patients missing gender"],
+    missing_race: ["配對中需核對的族群缺值", "Matched patients with missing or unknown race"], missing_gender: ["缺少性別資料的配對個體", "Matched patients missing gender"],
     race_groups: ["族群類別數", "Race groups"], gender_groups: ["性別類別數", "Gender groups"],
   };
   const metricNames = {
@@ -26,9 +30,23 @@
     duplicate_sample_ids: ["重複樣本編號數", "Duplicate sample IDs"], duplicate_patients: ["重複個體編號數", "Duplicate patient IDs"],
     fid_iid_mismatches: ["家族與個體編號不一致數", "Family/individual ID mismatches"],
     data_rows: ["表現量資料列數", "Expression data rows"], trailing_rows: ["流程會移除的末端資料列數", "Trailing rows removed by the workflow"],
-    missing_race: ["缺少族群資料列數", "Rows missing race"], missing_gender: ["缺少性別資料列數", "Rows missing gender"],
+    missing_race: ["族群缺值、未知或未回報的資料列數", "Rows with missing, unknown or unreported race"], missing_gender: ["缺少性別資料列數", "Rows missing gender"],
   };
   const expressionScale = "The pinned workflow interprets values as log2(count+1) and discards the last five rows. Numeric shape cannot prove that this scale and row removal are intended.";
+  const issueTranslations = {
+    clinical_choices: "有流程無法辨識的族群值，需在第 3 階段由研究者選擇處理方式；可繼續第 1 階段。",
+    missing_covariates: "部分配對個體仍缺少族群或性別資料，需在第 3 階段送出前處理。",
+    adjustment_groups: "目前第 3 階段流程要求其支援的三種族群與至少兩種性別組別；這是此流程的限制，不是所有臨床檔案的通用格式規則。",
+    clinical_coverage: "部分配對個體沒有對應的臨床資料。",
+    input_freeze: "第 1 階段保存這組資料的輸入版本前，每個選定檔案都必須可讀且完成檢查。",
+    clinical_columns: "臨床資料必須各有一個樣本編號、族群與性別欄位（submitter_id、race、gender）。",
+    clinical_width: "臨床資料每列的欄位數必須與以定位字元分隔的標題列一致。",
+    clinical_rows: "臨床資料必須包含標題列與個體資料列。",
+    sample_identifier: "部分樣本編號不包含此流程要求的 TCGA 個體編號區段。",
+    no_overlap: "基因型與表現量資料沒有相同的 TCGA 個體編號區段。",
+    unmatched_samples: "部分個體只出現在一種輸入中，後續配對會排除這些個體。",
+    ambiguous_patient: "重複的個體編號區段可能造成配對歧義；這個預覽不會重現後續的重複樣本篩選。",
+  };
 
   window.SignetInputValidation = {
     create({root, getDataset}) {
@@ -42,8 +60,9 @@
       let pending = null;
       const local = (zh, en) => root.lang === "en" ? en : zh;
       const label = (values) => values?.[root.lang === "en" ? 1 : 0];
-      const messageText = (message, code) => root.lang !== "en" && (code === "expression_scale" || message === expressionScale)
-        ? "目前流程會把數值解讀為 log2(count+1)，並移除最後五列。數值結構檢查無法證明原始資料確實採用這種尺度，或這五列應被移除；請確認資料來源與處理方式。" : message;
+      const messageText = (message, code) => root.lang === "en" ? message : code === "expression_scale" || message === expressionScale
+        ? "目前流程會把數值解讀為 log2(count+1)，並移除最後五列。數值結構檢查無法證明原始資料確實採用這種尺度，或這五列應被移除；請確認資料來源與處理方式。"
+        : issueTranslations[code] ?? message;
       const element = (tag, text, attributes = {}) => {
         const node = document.createElement(tag);
         if (text !== undefined && text !== null) node.textContent = String(text);
@@ -79,7 +98,8 @@
         for (const issue of issues) {
           if (!issue || typeof issue.message !== "string") continue;
           const line = Number.isInteger(issue.line) ? local(`第 ${issue.line} 列：`, `Line ${issue.line}: `) : "";
-          list.append(element("li", line + messageText(issue.message, issue.code), {"data-validation-issue": issue.code ?? ""}));
+          const stage = [1, 2, 3].includes(issue.stage) ? local(`第 ${issue.stage} 階段：`, `Stage ${issue.stage}: `) : "";
+          list.append(element("li", stage + line + messageText(issue.message, issue.code), {"data-validation-issue": issue.code ?? ""}));
         }
         if (list.childElementCount) parent.append(list);
       }
@@ -98,6 +118,19 @@
         checkedAt.append(element("span", local("檢查時間：", "Checked at: ")),
           element("time", report.checked_at, {datetime: report.checked_at, "data-validation-time": ""}));
         panel.append(checkedAt);
+        if (report.stage_readiness) {
+          const section = element("section", null, {class: "ml-validation-check", "data-validation-stage-readiness": ""});
+          section.append(element("h3", local("各階段的輸入適用性", "Stage-specific input checks")));
+          for (const stage of ["1", "2", "3"]) {
+            const check = report.stage_readiness[stage];
+            const entry = element("div", null, {"data-validation-stage": stage, "data-status": check.status});
+            entry.append(element("h4", local(`第 ${stage} 階段`, `Stage ${stage}`)), element("p", label(stageStatuses[check.status])));
+            addIssues(entry, check.issues);
+            section.append(entry);
+          }
+          section.append(element("p", local("這是輸入檢查，不代表階段已可送出；各階段仍會核對當次輸出、設定與執行環境。", "These are input checks, not submission approval. Each stage still reviews its actual upstream outputs, settings and execution environment.")));
+          panel.append(section);
+        }
         for (const check of report.checks) {
           const section = element("section", null, {class: "ml-validation-check", "data-validation-check": check.id, "data-status": check.status});
           const heading = element("div", null, {class: "ml-validation-heading"});
@@ -109,7 +142,7 @@
             const entry = element("li");entry.append(element("code", path));paths.append(entry);
           }
           if (paths.childElementCount) section.append(paths);
-          if (check.message) section.append(element("p", messageText(check.message), {"data-validation-message": ""}));
+          if (check.message) section.append(element("p", messageText(check.message, check.issues?.[0]?.code), {"data-validation-message": ""}));
           addValues(section, check.metrics, metricNames);
           addIssues(section, check.issues);
           panel.append(section);
@@ -117,7 +150,7 @@
         const pairing = report.pairing;
         const match = element("section", null, {class: "ml-validation-check", "data-validation-pairing": "", "data-status": pairing.status});
         const heading = element("div", null, {class: "ml-validation-heading"});
-        heading.append(element("h3", local("樣本配對摘要", "Sample matching")),
+        heading.append(element("h3", local("初步樣本配對摘要", "Preliminary sample matching")),
           element("span", label(statusNames[pairing.status]), {class: "ml-validation-status", "data-status": pairing.status}));
         match.append(heading);
         const rule = pairing.rule === "TCGA patient = third dash-separated identifier component; preliminary before QC."
@@ -126,6 +159,7 @@
         if (pairing.status === "unchecked") match.append(element("p", local("目前尚無可用的樣本配對統計。", "Sample matching statistics are not available yet.")));
         else addValues(match, Object.fromEntries(Object.keys(pairingNames).map(key => [key, pairing[key]])), pairingNames, "data-pairing-count");
         addIssues(match, pairing.issues);
+        match.append(element("p", local("此處依原始輸入預覽配對。第 3 階段會使用前處理後的實際輸出重新核對。", "This previews pairing from the original inputs. Stage 3 checks pairing again using the actual preprocessed outputs.")));
         panel.append(match);
         if (report.files?.length) {
           const details = element("details");
@@ -165,6 +199,9 @@
         else if (state === "checking") message = local("正在讀取並檢查選定檔案；不會啟動分析工作。", "Reading and checking the selected files. This does not start an analysis.");
         else if (state === "stale") message = error || local("檔案或遠端環境已變更，請重新檢查。", "The files or remote context changed. Validate again.");
         else if (state === "unavailable") message = error || local("無法完成檢查，請確認遠端連線與檔案後重試。", "The check could not complete. Review the remote connection and files, then retry.");
+        else if (report?.stage_readiness?.["1"].status === "ready" && report.status !== "incomplete") message = local(
+          "第 1 階段的輸入檢查通過，可繼續核對第 1 階段設定。後續階段如有問題，仍須在該階段送出前處理。",
+          "Stage 1 input checks passed; you can continue to its settings review. Resolve any later-stage input issues before submitting that stage.");
         else if (report) message = {
           passed: local("檔案結構檢查通過。", "File structure checks passed."),
           warning: local("檢查已完成，仍有需要確認的警示。", "Checks completed with warnings that need review."),
@@ -182,6 +219,27 @@
             ["passed", "warning", "failed", "unchecked"].includes(check.status) && Array.isArray(check.paths) && check.paths.every(path => typeof path === "string")) &&
           value.pairing && ["passed", "warning", "failed", "unchecked"].includes(value.pairing.status) && typeof value.checked_at === "string";
         if (!matching) return false;
+        if (value.stage_readiness !== undefined) {
+          const stages = value.stage_readiness;
+          if (!stages || Array.isArray(stages) || Object.keys(stages).length !== 3 || !["1", "2", "3"].every(stage => {
+            const check = stages[stage];
+            return check && Object.hasOwn(stageStatuses, check.status) && Array.isArray(check.issues) && check.issues.every(issue =>
+              issue && typeof issue.code === "string" && typeof issue.message === "string" && [1, 2, 3].includes(issue.stage) &&
+              ["warning", "needs_review", "error"].includes(issue.severity)) &&
+              !(check.status === "ready" && check.issues.some(issue => issue.severity !== "warning"));
+          })) return false;
+          if (stages["1"].status === "ready" && (
+            value.status === "incomplete" ||
+            !["passed", "warning"].includes(value.checks.find(check => check.kind === "genotype")?.status) ||
+            !Array.isArray(value.files) || value.files.length !== kinds.flatMap(kind => captured.inputs[kind]).length ||
+            kinds.flatMap(kind => captured.inputs[kind]).some(path => value.files.filter(file => file?.path === path && file.complete === true &&
+              typeof file.sha256 === "string" && /^[a-f0-9]{64}$/.test(file.sha256)).length !== 1))) return false;
+          for (const [stage, kind] of [["2", "expression"], ["3", "clinical"]]) {
+            if (stages[stage].status === "ready" && !["passed", "warning"].includes(value.checks.find(check => check.kind === kind)?.status)) return false;
+          }
+          if (stages["3"].status === "ready" && !["passed", "warning"].includes(value.pairing.status)) return false;
+          if (value.status === "passed" && Object.values(stages).some(check => check.status !== "ready")) return false;
+        }
         if (value.status === "passed" && (value.checks.some(check => check.status !== "passed") || value.pairing.status !== "passed" ||
             !Array.isArray(value.files) || value.files.length !== kinds.flatMap(kind => captured.inputs[kind]).length || value.files.some(file => file?.complete !== true))) return false;
         return true;
