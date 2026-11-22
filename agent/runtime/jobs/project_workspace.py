@@ -62,9 +62,16 @@ def _pca_png(points, width=640, height=420):
 
 
 def project(request):
-    root = Path(request['remote_dir'])
-    if not root.is_absolute() or str(root.resolve()) != str(root) or root.name != request['run_id']:
-        raise ValueError('The recorded remote run is not canonical.')
+    selected = Path(request['remote_dir'])
+    base = Path(request['work_root'])
+    relative = selected.relative_to(base)
+    if (not selected.is_absolute() or not base.is_absolute()
+            or relative.parts not in ((request['run_id'],), ('runs', request['run_id']))):
+        raise ValueError('The recorded run is outside the configured workspace.')
+    # A configured mount alias is allowed; redirects within its run folder are not.
+    root = base.resolve() / relative
+    if selected.resolve() != root:
+        raise ValueError('The recorded remote run was redirected.')
     identities = {}
 
     def regular(path, control=False):

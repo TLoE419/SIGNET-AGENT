@@ -23,7 +23,6 @@ const devTerminal=process.argv.includes('--signet-dev-terminal')?Object.freeze({
 contextBridge.exposeInMainWorld('signetDesktop', Object.freeze({isDesktop:true,isDevMode:process.argv.includes('--signet-dev-mode'),model:Object.freeze({getStatus:()=>ipcRenderer.invoke('model:getStatus'),saveGeminiKey:key=>ipcRenderer.invoke('model:saveGeminiKey',key),clearGeminiKey:()=>ipcRenderer.invoke('model:clearGeminiKey')}),environment:Object.freeze({
   getSnapshot:()=>ipcRenderer.invoke('environment:getSnapshot'),
   check:(root='',partition='')=>ipcRenderer.invoke('environment:check',root,partition),
-  install:()=>ipcRenderer.invoke('environment:install'),
   subscribe:listener=>subscribe('environment:snapshot',listener),
 }),...(devTerminal?{devTerminal}:{}), ssh:Object.freeze({
   cancelRegistration: () => call('cancelRegistration'),

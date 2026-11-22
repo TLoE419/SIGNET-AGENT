@@ -1074,24 +1074,19 @@ def run_history(root):
 
 
 def completed_result(run_id, stage='1'):
-    root = signet._run(run_id)
-    name = {'1': 'genotype', '2': 'expression', '4': 'cis', '5': 'network'}[stage]
-    job = run_history(root)['jobs'][name]
-    if job['state'] != 'completed':
-        raise ValueError(f'The {name} step is not complete.')
-    if stage == '4':
-        from agent.runtime.workspace_cis import summary as cis_summary
-        summary = cis_summary(root, job)
-    elif stage == '5':
-        from agent.runtime.workspace_network import summary as network_summary
-        summary = network_summary(root, job)
-    else:
-        summary = genotype_summary(root) if stage == '1' else expression_summary(root)
-    return {'run_id': run_id, 'stage': int(stage), 'job': job, 'summary': summary}
+    if stage == '5':
+        root = signet._run(run_id)
+        job = run_history(root)['jobs']['network']
+        if job['state'] != 'completed':
+            raise ValueError('The network step is not complete.')
+        from agent.runtime.workspace_network import summary
+        return {'run_id': run_id, 'stage': 5, 'job': job, 'summary': summary(root, job)}
+    from agent.runtime.workspace_projection import completed_result as project
+    return project(run_id, stage)
 
 
 def expression_summary(root):
-    """Summarize the downloaded matrix with bounded memory and no remote queries."""
+    """Pure bounded-memory expression reader, executed by the trusted remote projector."""
     directory = root / 'work/res/rest'
     sample_ids = signet._no_links(directory / 'signet_gexpID')
     names_path = signet._no_links(directory / 'signet_gene_name')
@@ -1141,7 +1136,7 @@ def expression_summary(root):
 
 
 def genotype_summary(root):
-    """Read only the local Stage 1 outputs already collected by the status operation."""
+    """Pure genotype reader, executed on HPC3 without returning individual rows."""
     directory = root / 'work/res/resg'
     sample_ids = signet._no_links(directory / 'signet_Genotype.sampleID')
     with sample_ids.open(encoding='utf-8') as stream:

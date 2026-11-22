@@ -21,7 +21,7 @@ def _matrix_shape(path):
 
 
 def summary(root, job):
-    """Read local outputs, retaining every association and category-local IV index."""
+    """Read outputs on their owning host, retaining association and category-local IV indices."""
     if job.get('state') != 'completed' or job.get('step') != 'cis' or job.get('run_id') != root.name:
         raise ValueError('Select a completed cis-eQTL job belonging to this run.')
     alpha_text = job['settings']['alpha.cis']

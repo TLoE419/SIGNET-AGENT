@@ -20,11 +20,20 @@ from agent.core.conversation import MODEL, run_conversation
 from agent.core.model_timing import ModelRequestTiming
 from agent.paths import PROJECT_ROOT
 from agent.providers import PROVIDERS, create_provider_adapter
-from agent.runtime import signet_jobs, workspace_genotype, workspace_context
-from agent.stage6.workspace import ARCHIVED_STEP_JOBS, CHAT_CONTEXT, Workspace
+from agent.runtime import analysis_family, signet_jobs, workspace_genotype, workspace_context
+from agent.runtime.step_proposal import CHAT_SESSION
+from agent.stage6.workspace import ARCHIVED_STEP_JOBS, Workspace
 from agent.tools.ui import UI_CHANNEL
 
 ROOT = PROJECT_ROOT
+
+
+def _analysis_context(session):
+    """This conversation's runs and the default one, for the assistant (rebuilt every turn)."""
+    try:
+        return analysis_family.describe(session)
+    except OSError:
+        return ''
 
 
 class ChatServer(ThreadingHTTPServer):
@@ -40,6 +49,9 @@ class ChatServer(ThreadingHTTPServer):
         self.state_file = Path(state_file) if state_file else None
         self.pending_history = []
         self.active_session = None
+        self.analysis_download_lock = threading.Lock()
+        self.analysis_downloads = {}
+        self.analysis_previews = {}
         if self.state_file and self.state_file.exists():
             state = json.loads(self.state_file.read_text())
             self.token = state['token']
@@ -112,6 +124,12 @@ class ChatHandler(BaseHTTPRequestHandler):
         if not self._local_request():
             return self._error(403, '僅允許本機介面。')
         url = urlsplit(self.path)
+        if url.path == '/stage6/result-download' or url.path.startswith('/stage6/result-preview/'):
+            return signet_api.serve_result_asset(self, url)
+        if url.path == '/signet/result-download':
+            return signet_api.download_results(self, url)
+        if url.path.startswith('/signet/result-preview/'):
+            return signet_api.preview_result(self, url)
         if url.path.startswith('/signet/'):
             # Responses name the user's runs and HPC3 paths, so reads need the page token too.
             if not secrets.compare_digest(self.headers.get('X-Chat-Token', ''), self.server.token):
@@ -125,8 +143,6 @@ class ChatHandler(BaseHTTPRequestHandler):
             return self.stage6_results_get(url)
         if url.path == '/stage6/history':
             return self.stage6_history_get(url)
-        if url.path in ('/stage6', '/stage6/file'):
-            return self.stage6_get(url)
         if url.path != '/bootstrap':
             return self._error(404, '找不到此 API。')
         if not self.server.turn_lock.acquire(blocking=False):
@@ -134,7 +150,7 @@ class ChatHandler(BaseHTTPRequestHandler):
         try:
             query = parse_qs(url.query)
             session = query.get('session', [None])[0]
-            saved = list(dict.fromkeys([*self.server.histories, *self.server.stage6.sessions]))
+            saved = list(self.server.histories)
             saved = [key for key in saved if re.fullmatch(r'[a-f0-9-]{36}', key)]
             if session is None and query.get('new') != ['1']:
                 active = self.server.active_session
@@ -167,7 +183,7 @@ class ChatHandler(BaseHTTPRequestHandler):
                 and secrets.compare_digest(self.headers.get('X-Chat-Token', ''), self.server.token))
 
     def do_PATCH(self):
-        # Run settings and current dataset selections use the authenticated SIGNET API.
+        # Run settings, conversation links and dataset selections use the authenticated SIGNET API.
         if not self._app_request():
             return self._error(403, '請從本機聊天頁面送出。')
         url = urlsplit(self.path)
@@ -180,8 +196,6 @@ class ChatHandler(BaseHTTPRequestHandler):
             return self._error(403, '請從本機聊天頁面送出。')
         if self.path.startswith('/signet/'):
             return signet_api.handle(self, 'POST', urlsplit(self.path))
-        if self.path.startswith('/stage6/'):
-            return self.stage6_post()
         if self.path.startswith('/hpc/'):
             return self.hpc_post()
         if self.path != '/chat':
@@ -238,20 +252,21 @@ class ChatHandler(BaseHTTPRequestHandler):
             try:
                 timing = ModelRequestTiming()
                 with self.server.client_factory(timing) as client:
-                    context_token = CHAT_CONTEXT.set((self.server.stage6, session))
+                    genotype_token = CHAT_SESSION.set(session)
+                    context_token = workspace_context.CHAT_CONTEXT.set((self.server.stage6, session))
                     # Panel requests from show_panel go straight to this page as they happen.
                     ui_token = UI_CHANNEL.set(lambda request: emit('workspace_action', request['workspace_action']) if 'workspace_action' in request else emit('ui', request))
                     try:
                         answer = run_conversation(client, text.strip(), history,
                                               progress=lambda message: emit('progress', message), http_timing=timing,
-                                                  language=language, workspace_context=validated_context)
+                                                  language=language, context=_analysis_context(session), workspace_context=validated_context)
                     finally:
                         UI_CHANNEL.reset(ui_token)
-                        CHAT_CONTEXT.reset(context_token)
+                        CHAT_SESSION.reset(genotype_token)
+                        workspace_context.CHAT_CONTEXT.reset(context_token)
                 # Failure returns have no final model content; retain their public answer on reload.
                 if not history or history[-1].role != 'model' or any(part.function_call for part in history[-1].parts or []):
                     history.append(types.Content(role='model', parts=[types.Part.from_text(text=answer)]))
-                emit('workspace', self.server.stage6.view(session))
                 emit('answer', answer)
             except Exception:
                 emit('error', '回合發生非預期錯誤；操作狀態可能未知，請核對工作狀態後再繼續。')
@@ -264,6 +279,73 @@ class ChatHandler(BaseHTTPRequestHandler):
                 self.server.save_state()
             finally:
                 self.server.turn_lock.release()
+
+
+    def archived_stage_results_get(self, url):
+        if not secrets.compare_digest(self.headers.get('X-Chat-Token', ''), self.server.token):
+            return self._error(403, 'Workspace token required.')
+        query = parse_qs(url.query, keep_blank_values=True)
+        if (set(query) - {'run', 'stage', 'source'} or len(query.get('run', [])) != 1 or not query['run'][0]
+                or len(query.get('stage', [])) != 1 or query['stage'][0] not in ARCHIVED_STEP_JOBS
+                or ('source' in query and query['source'] not in (['live'], ['archive']))):
+            return self._error(400, 'Provide a run ID and stage number (1, 2, 4, or 5).')
+        run_id, stage = query['run'][0], query['stage'][0]
+        try:
+            result = (workspace_genotype.completed_result(run_id, stage) if query.get('source') == ['live']
+                      else self.server.stage6.archived_stage_result(run_id, stage))
+        except (OSError, ValueError, KeyError, TypeError, OverflowError):
+            return self._error(404, 'No readable archived result for this stage.')
+        return self.json_response(result)
+
+
+
+    def stage3_results_get(self, url):
+        if not secrets.compare_digest(self.headers.get('X-Chat-Token', ''), self.server.token):
+            return self._error(403, 'Workspace token required.')
+        query = parse_qs(url.query, keep_blank_values=True)
+        if (set(query) - {'run', 'source'} or len(query.get('run', [])) != 1 or not query['run'][0]
+                or ('source' in query and query['source'] not in (['live'], ['archive']))):
+            return self._error(400, 'Provide a single run ID and an optional live or archive source.')
+        try:
+            if query.get('source') == ['live']:
+                from agent.runtime import workspace_adjustment
+                result = workspace_adjustment.completed_result(query['run'][0])
+            else:
+                result = self.server.stage6.archived_stage3(query['run'][0])
+        except (OSError, ValueError, KeyError, TypeError, OverflowError):
+            return self._error(404, 'No readable archived Stage 3 result for this run.')
+        return self.json_response(result)
+
+
+
+    def stage6_results_get(self, url):
+        if not secrets.compare_digest(self.headers.get('X-Chat-Token', ''), self.server.token):
+            return self._error(403, 'Workspace token required.')
+        query = parse_qs(url.query, keep_blank_values=True)
+        if not query:
+            return self.json_response({'runs': self.server.stage6.completed_runs()})
+        if (set(query) - {'run', 'source'} or len(query.get('run', [])) != 1
+                or ('source' in query and query['source'] not in (['archive'], ['live'], ['recorded']))):
+            return self._error(400, 'Provide a single run ID and, optionally, the archive, live or recorded source.')
+        try:
+            return self.json_response(self.server.stage6.completed_result(
+                query['run'][0], archive_only=query.get('source') == ['archive'],
+                live_only=query.get('source') == ['live'], recorded_only=query.get('source') == ['recorded']))
+        except (OSError, ValueError, KeyError, TypeError, OverflowError, csv.Error):
+            return self._error(400, 'No readable completed Stage 6 result for this run.')
+
+
+    def stage6_history_get(self, url):
+        if not secrets.compare_digest(self.headers.get('X-Chat-Token', ''), self.server.token):
+            return self._error(403, 'Workspace token required.')
+        if url.query:
+            return self._error(400, 'The Stage 6 history does not accept query parameters.')
+        try:
+            result = self.server.stage6.history()
+        except signet_jobs.StepError as error:
+            return self._error(signet_api.STATUS.get(error.code, 500), str(error))
+        return self.json_response(result)
+
 
 
     def json_response(self, value, status=200):
@@ -336,138 +418,6 @@ class ChatHandler(BaseHTTPRequestHandler):
         if action is None:
             return self._error(404, '找不到此操作。')
         return self.json_response(action())
-
-    def archived_stage_results_get(self, url):
-        if not secrets.compare_digest(self.headers.get('X-Chat-Token', ''), self.server.token):
-            return self._error(403, 'Workspace token required.')
-        query = parse_qs(url.query, keep_blank_values=True)
-        if (set(query) - {'run', 'stage', 'source'} or len(query.get('run', [])) != 1 or not query['run'][0]
-                or len(query.get('stage', [])) != 1 or query['stage'][0] not in ARCHIVED_STEP_JOBS
-                or ('source' in query and query['source'] not in (['live'], ['archive']))):
-            return self._error(400, 'Provide a run ID and stage number (1, 2, 4, or 5).')
-        run_id, stage = query['run'][0], query['stage'][0]
-        try:
-            result = (workspace_genotype.completed_result(run_id, stage) if query.get('source') == ['live']
-                      else self.server.stage6.archived_stage_result(run_id, stage))
-        except (OSError, ValueError, KeyError, TypeError, OverflowError):
-            return self._error(404, 'No readable archived result for this stage.')
-        return self.json_response(result)
-
-    def stage3_results_get(self, url):
-        if not secrets.compare_digest(self.headers.get('X-Chat-Token', ''), self.server.token):
-            return self._error(403, 'Workspace token required.')
-        query = parse_qs(url.query, keep_blank_values=True)
-        if (set(query) - {'run', 'source'} or len(query.get('run', [])) != 1 or not query['run'][0]
-                or ('source' in query and query['source'] not in (['live'], ['archive']))):
-            return self._error(400, 'Provide a single run ID and an optional live or archive source.')
-        try:
-            if query.get('source') == ['live']:
-                from agent.runtime import workspace_adjustment
-                result = workspace_adjustment.completed_result(query['run'][0])
-            else:
-                result = self.server.stage6.archived_stage3(query['run'][0])
-        except (OSError, ValueError, KeyError, TypeError, OverflowError):
-            return self._error(404, 'No readable archived Stage 3 result for this run.')
-        return self.json_response(result)
-
-    def stage6_results_get(self, url):
-        if not secrets.compare_digest(self.headers.get('X-Chat-Token', ''), self.server.token):
-            return self._error(403, 'Workspace token required.')
-        query = parse_qs(url.query, keep_blank_values=True)
-        if not query:
-            return self.json_response({'runs': self.server.stage6.completed_runs()})
-        if (set(query) - {'run', 'source'} or len(query.get('run', [])) != 1
-                or ('source' in query and query['source'] not in (['archive'], ['live'], ['recorded']))):
-            return self._error(400, 'Provide a single run ID and, optionally, the archive, live or recorded source.')
-        try:
-            return self.json_response(self.server.stage6.completed_result(
-                query['run'][0], archive_only=query.get('source') == ['archive'],
-                live_only=query.get('source') == ['live'], recorded_only=query.get('source') == ['recorded']))
-        except (OSError, ValueError, KeyError, TypeError, OverflowError, csv.Error):
-            return self._error(400, 'No readable completed Stage 6 result for this run.')
-
-    def stage6_history_get(self, url):
-        if not secrets.compare_digest(self.headers.get('X-Chat-Token', ''), self.server.token):
-            return self._error(403, 'Workspace token required.')
-        if url.query:
-            return self._error(400, 'The Stage 6 history does not accept query parameters.')
-        try:
-            result = self.server.stage6.history()
-        except signet_jobs.StepError as error:
-            return self._error(signet_api.STATUS.get(error.code, 500), str(error))
-        return self.json_response(result)
-
-    def stage6_get(self, url):
-        query = parse_qs(url.query)
-        session = query.get('session', [''])[0]
-        if not re.fullmatch(r'[a-f0-9-]{36}', session):
-            return self._error(400, 'Invalid session.')
-        try:
-            if url.path == '/stage6':
-                if not secrets.compare_digest(self.headers.get('X-Chat-Token', ''), self.server.token):
-                    return self._error(403, 'Workspace token required.')
-                return self.json_response(self.server.stage6.view(session))
-            if url.path == '/stage6/file':
-                import agent.tools.signet as st
-                from agent.stage6.workspace import load_run
-                run = query.get('run', [''])[0]
-                name = query.get('name', [''])[0]
-                if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*', name):
-                    raise ValueError('Invalid result filename.')
-                root, _, _ = load_run(run)
-                path = st._no_links(root / 'work/res/resv' / name)
-                if not path.is_file():
-                    return self._error(404, 'Output file not found.')
-                data = path.read_bytes()
-                self.send_response(200)
-                self.send_header('Content-Type', 'application/octet-stream')
-                self.send_header('Content-Disposition', 'attachment; filename="' + name + '"')
-                self.send_header('Content-Security-Policy', "sandbox; default-src 'none'")
-                self.send_header('X-Content-Type-Options', 'nosniff')
-                self.send_header('Content-Length', str(len(data)))
-                self.end_headers()
-                self.wfile.write(data)
-                return
-            return self._error(404, 'Unknown workspace operation.')
-        except (OSError, ValueError, KeyError) as exc:
-            return self._error(400, str(exc))
-
-    def stage6_post(self):
-        self.connection.settimeout(10)
-        locked = False
-        try:
-            size = int(self.headers.get('Content-Length', '0'))
-            if not 0 < size <= 32768:
-                raise ValueError('Invalid request length.')
-            payload = json.loads(self.rfile.read(size))
-            session = payload.get('session', '')
-            if not isinstance(session, str) or not re.fullmatch(r'[a-f0-9-]{36}', session):
-                raise ValueError('Invalid session.')
-            if not self.server.turn_lock.acquire(blocking=False):
-                return self._error(409, 'A conversation turn or visualization is running.')
-            locked = True
-            if self.path == '/stage6/select':
-                value = self.server.stage6.select(session, payload.get('run_id', ''))
-            elif self.path == '/stage6/compare':
-                value = self.server.stage6.compare(session, payload.get('proposal_id', ''))
-            elif self.path == '/stage6/cancel':
-                value = self.server.stage6.cancel(session, payload.get('proposal_id', ''))
-            elif self.path == '/stage6/confirm':
-                proposal = self.server.stage6.approve(session, payload.get('proposal_id', ''))
-                self.server.histories.setdefault(session, [])
-                self.server.save_state()
-                worker = threading.Thread(target=self.server.stage6.execute, args=(session, proposal))
-                worker.start()
-                locked = False  # The worker releases this lock after saving results, even on failure.
-                return self.json_response({'status': 'running', 'run_id': proposal['run_id']}, 202)
-            else:
-                return self._error(404, 'Unknown workspace operation.')
-            return self.json_response(value)
-        except (OSError, ValueError, KeyError, TypeError) as exc:
-            return self._error(400, str(exc))
-        finally:
-            if locked:
-                self.server.turn_lock.release()
 
 
 def create_server(provider='codex', port=8880, state_file=ROOT / '.chat-state.json'):
