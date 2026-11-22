@@ -555,7 +555,9 @@ async function verify() {
   const candidates = await js(`[...document.querySelectorAll('#lens-history-stage [data-stage-table] tbody tr')]
     .map(row => [...row.cells].map(cell => cell.textContent))`);
   assert.deepEqual(candidates, [['MEGF6','GENE1','50%'], ['GENE1','MEGF6','100%'], ['GENE1','OTHER','50%']]);
-  assert.deepEqual(await js(`[...document.querySelectorAll('#lens-history-stage .ml-count-label')].map(n => Number(n.textContent))`), [2,1]);
+  const frequencyCounts = await js(`[...document.querySelectorAll('#lens-history-stage .ml-count-bar title')]
+    .map(label => Number(label.textContent.match(/[\\d,]+$/)?.[0].replaceAll(',', '')))`);
+  assert.deepEqual(frequencyCounts, [2,1]);
   assert.equal(await js(`document.querySelector('#lens-history-stage [data-stage-setting="nboots"]').textContent`), '2');
   assert.equal(await js(`document.querySelector('#lens-history-stage [data-stage-setting="walltime"]').textContent`), '1:30:00');
   const networkFinishedReload = once(window.webContents, 'did-finish-load');
