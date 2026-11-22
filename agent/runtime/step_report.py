@@ -307,11 +307,39 @@ def failure_summary(record):
     return result
 
 
-def report(run_id, name):
+def report(run_id, step, session=None):
+    name = FLAGS.get(step, step)
+    jobs._step(name)
+    root = jobs._root(run_id)
+    owner = jobs.analysis_session(root)
+    if session is not None and owner is not None and owner != session:
+        raise jobs.StepError('not_found', 'This analysis belongs to another conversation.')
+    flag = jobs.STEPS[name].flag
+    card = _card(root, name)
+    if name not in jobs.run_records(root):
+        result = {'status': 'ok', 'run_id': run_id, 'step': name, 'flag': flag, 'state': 'not_started',
+                  'note': 'This step has not been submitted in this analysis.'}
+        return {**result, 'card': {'state': card['state']}} if card and 'state' in card else result
     record = jobs.status(run_id, name)
-    result = {'state': record['state'], 'progress': public_progress(record)}
-    if record['state'] == 'completed':
-        result['summary'] = safe_summary(name, record, jobs.ensure_summary(run_id, name))
-    elif record['state'] in ('failed', 'cancelled', 'unknown'):
+    result = {'status': 'ok', 'run_id': run_id, 'step': name, 'flag': flag,
+              'state': record['state'], 'progress': public_progress(record)}
+    if card:
+        result['card'] = {'state': card['state']} if 'state' in card else {}
+    if record.get('connection') == 'interrupted':
+        result['connection'] = 'interrupted'
+    if record['state'] in ('failed', 'cancelled', 'unknown'):
         result['failure'] = failure_summary(record)
+    elif record['state'] == 'completed':
+        current = record.get('summary') if record.get('summary', {}).get('version') == jobs.SUMMARY_VERSION else None
+        result['summary'] = safe_summary(name, record, current or jobs.ensure_summary(run_id, name))
     return result
+
+FLAGS = {step.flag: name for name, step in jobs.STEPS.items()}
+
+def _card(root, name):
+    """The step's latest confirmation card: its state and, if sending failed, why."""
+    from agent.runtime import step_proposal
+    proposal = step_proposal.view(root, name)
+    if not proposal:
+        return None
+    return {key: proposal[key] for key in ('state', 'error') if key in proposal}

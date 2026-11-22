@@ -2,12 +2,13 @@
 
 The desktop EnvironmentService owns the verified workspace, pinned source,
 container executor and scheduler partition. Reference jobs reuse that configuration. Checks report only
-existence, file sizes, required clinical header names, prepared-input metadata,
-hashes of the pinned source files and the app's own step states.
-Source contents are hashed without being returned; research data is not read.
+existence, file sizes, whether the clinical table's header names the columns signet -a reads,
+and the app's own step states. The pinned SIGNET source is verified by its hashes once, by the
+desktop HPC3 settings check (electron/main/environment); this check does not hash it again.
+Research data is not read.
 
-Each setup step returns as soon as it has started: light steps run as a
-detached process on the login node; downloads run as Slurm jobs, because login
+Each setup step returns as soon as it has started: the SIGNET source installation
+runs as a detached process on the login node; downloads run as Slurm jobs, because login
 nodes must not download large files and compute nodes can reach the internet. Step state and logs live under the configured workspace, isolated by installation root. Setup only adds what is
 missing and never overwrites existing files.
 """
@@ -100,6 +101,7 @@ SIGNET_INPUTS
 }
 '''.replace('@PREPARED@', PREPARED)
 _PREPARE_SOURCE = (Path(__file__).with_name('jobs') / 'prepare_reference.py').read_text()
+_TABLE_SUMMARY_SOURCE = (Path(__file__).with_name('jobs') / 'table_summary.py').read_text()
 # Every Slurm step records its job ID as <step>.job in the state directory.
 JOB_STEPS = ('container', *REFERENCES, 'prepare')
 STEPS = ('workspace', 'signet', *JOB_STEPS)
@@ -227,15 +229,6 @@ def _check_script(root):
     if config is not None and config.get('revision') != SOURCE_INVENTORY['revision']:
         raise ValueError('Desktop source revision does not match the audited inventory; recheck the remote environment.')
     # Match EnvironmentService.sourceCheck: the installed archive has no Git metadata.
-    source_hashes = ''.join(f"{item['sha256']}  {item['path']}\n"
-                            for item in SOURCE_INVENTORY['scripts'] + SOURCE_INVENTORY['support_files'])
-    example_hashes = ''.join(f"{item['sha256']}  {item['path']}\n" for item in SOURCE_INVENTORY.get('example_files', []))
-    example = f'''  if [ ! -d "$S/example" ]; then say signet_example missing
-  elif (cd "$S" && sha256sum -c - >/dev/null 2>&1 <<'SIGNET_EXAMPLE_HASHES'
-{example_hashes}SIGNET_EXAMPLE_HASHES
-  ); then say signet_example verified
-  else say signet_example mismatch; fi
-''' if example_hashes else ''
     files = ' '.join(f'{key}:{path}' for key, path in _checked_files().items())
     return _prelude(root) + _CLINICAL_SHELL + _PREPARED_STATE + f'''
 say user "$(id -un)"
@@ -250,13 +243,8 @@ if [ ! -e "$S" ]; then say signet no
 elif [ ! -d "$S" ] || [ -L "$S" ]; then say signet invalid
 else
   say signet yes
-  if (cd "$S" && sha256sum -c - >/dev/null 2>&1 <<'SIGNET_SOURCE_HASHES'
-{source_hashes}SIGNET_SOURCE_HASHES
-  ); then
-    say signet_integrity verified
-    say signet_revision {SOURCE_INVENTORY['revision']}
-  else say signet_integrity mismatch; fi
-{example}fi
+  if [ -d "$S/example" ]; then say signet_example present; else say signet_example missing; fi
+fi
 for item in {files}; do
   key="${{item%%:*}}"; rel="${{item#*:}}"
   if [ "$key" = container ]; then rel="$I"; else rel="$W/$rel"; fi
@@ -669,15 +657,16 @@ def _checks(values, revision):
     signet = values.get('signet', 'no')
     if signet == 'no':
         add('signet_source', *(_step_status(values, 'signet') or ('missing', 'SIGNET has not been installed in the remote environment.')))
-    elif signet != 'yes' or values.get('signet_integrity') != 'verified' or values.get('signet_revision') != revision:
-        add('signet_source', 'problem', f'Audited source verification failed for revision {revision[:12]}; files may be missing or modified. Recheck HPC3 settings.')
+    elif signet != 'yes':
+        add('signet_source', 'problem', 'The SIGNET installation path is not a folder. Choose another installation root in HPC3 settings.')
     elif values.get('signet_example') == 'missing':
         add('signet_source', *(_step_status(values, 'signet') or
                                ('missing', 'The SIGNET example data has not been installed; press Install to add it.')))
     elif values.get('signet_example') == 'mismatch':
         add('signet_source', 'problem', 'The SIGNET example data differs from the pinned revision; move the example folder aside, then install again.')
     else:
-        add('signet_source', 'ok', f'Audited script, support-file and example-data hashes match pinned revision {revision[:12]}.')
+        # The desktop HPC3 settings check verifies these files by their hashes; it is not repeated here.
+        add('signet_source', 'ok', f'Installed at pinned revision {revision[:12]}. Its files are verified by the HPC3 settings check.')
     for key, path in _checked_files().items():
         value = values.get(f'file_{key}', 'no')
         item = {'container': 'container', 'prepare': 'imputation_reference'}.get(key, f'reference_{key}')
@@ -807,6 +796,36 @@ def start_step(step, repository=None, revision=None):
     if values.get(f'{step}_job'):
         result['job_id'] = values[f'{step}_job']
     return result
+
+
+def _table_summary_script(root, key):
+    """Summarize the table in use for one reference (a chosen file, else the download) on the login node."""
+    return _prelude(root) + f'''
+chosen="$(selected_of {key})"; P="${{chosen:-$W/{REFERENCE_FILES[key]}}}"
+if [ ! -s "$P" ]; then say table missing
+else
+  say table "$(python3 - "$P" <<'SIGNET_PY'
+{_TABLE_SUMMARY_SOURCE}SIGNET_PY
+)"
+fi
+'''
+
+
+def summarize_reference(key):
+    """Counts-only summary of a reference table on HPC3; its path and rows stay on HPC3."""
+    if key != 'clinical':
+        return {'status': 'invalid', 'executed': False, 'error': 'Only the clinical table can be summarized.'}
+    values, error = _run(lambda root: _table_summary_script(root, key), timeout=60, required='table')
+    if error:
+        return error
+    if values['table'] == 'missing':
+        return {'status': 'missing', 'executed': False, 'file': key,
+                'detail': 'No clinical table yet: download it or choose one in the Workflow panel.'}
+    try:
+        result = json.loads(values['table'])
+    except ValueError:
+        return {'status': 'failed', 'executed': False, 'reason': 'The summary could not be read.'}
+    return {**result, 'executed': False, 'file': key}
 
 
 def read_log(step):

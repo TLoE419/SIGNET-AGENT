@@ -4,7 +4,7 @@ import json
 import re
 import threading
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from agent.app.chat_ui import ChatServer
 from agent.runtime import signet_jobs as jobs
@@ -17,6 +17,9 @@ class OutputRevalidationTest(unittest.TestCase):
         self.f.setUp()
         self.addCleanup(self.f.doCleanups)
         self.root = self.f.root
+        private_outputs = patch.object(jobs, 'DOWNLOADED_STEPS', ('network', 'visualize'))
+        private_outputs.start()
+        self.addCleanup(private_outputs.stop)
 
     def seed(self):
         jobs.submit('step_test', 'expression', self.f.inputs)

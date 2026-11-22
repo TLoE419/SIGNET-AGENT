@@ -1,19 +1,76 @@
-"""Run official Stage 6 exports headlessly in the existing local SIGNET VM."""
+"""Reading SIGNET -v exports for the results card: the network edges and the count-vs-frequency counts."""
 import csv
-import io
-import json
 import math
-import re
 from pathlib import Path
-import subprocess
-import tarfile
 
-import agent.runtime.remote as vm
+
+def read_graph(path, top_networks):
+    edges = []
+    with path.open() as stream:
+        for row in csv.DictReader(stream):
+            source, target = row['source_gene_symbol'], row['target_gene_symbol']
+            freq, coef = float(row['frequency']), float(row['coefficient'])
+            if not source or not target or not 0 <= freq <= 1 or not math.isfinite(coef):
+                raise ValueError('Invalid exported edge.')
+            edges.append({'source': source, 'target': target, 'frequency': freq, 'coefficient': coef})
+    if not edges:
+        raise ValueError('The exported network has no edges.')
+    neighbors = {}
+    for edge in edges:
+        a, b = edge['source'], edge['target']
+        neighbors.setdefault(a, set()).add(b)
+        neighbors.setdefault(b, set()).add(a)
+    seen, groups = set(), []
+    for node in sorted(neighbors):
+        if node in seen:
+            continue
+        stack, group = [node], set()
+        while stack:
+            current = stack.pop()
+            if current not in group:
+                group.add(current)
+                stack.extend(neighbors[current] - group)
+        seen.update(group)
+        groups.append(group)
+    group_by_node = {node: index for index, group in enumerate(groups) for node in group}
+    edge_counts = [0] * len(groups)
+    for edge in edges:
+        edge_counts[group_by_node[edge['source']]] += 1
+    groups = [groups[index] for index in sorted(range(len(groups)),
+              key=lambda index: (-edge_counts[index], min(groups[index])))]
+    selected = set().union(*groups[:top_networks]) if groups else set()
+    return {'nodes': sorted(neighbors), 'edges': edges,
+            'display_nodes': sorted(selected),
+            'counts': {'connections': len(edges), 'genes': len(neighbors), 'subnetworks': len(groups),
+                       'displayed': min(top_networks, len(groups))}}
+
+
+SIGNET_CUTOFFS = (0.8, 0.85, 0.9, 0.95, 1)   # netvis/extract_edges.R
+
+
+def threshold_counts(path):
+    """Genes and connections kept at each cutoff of SIGNET's signet_count_vs_freq plot, counted
+    as netvis/extract_edges.R does: a connection is kept when Afreq > cutoff - eps, and a gene is
+    any row or column index of a kept connection."""
+    rows = []
+    for line in Path(path).read_text().splitlines():
+        if line.strip():
+            row = [float(value) for value in line.replace(',', ' ').split()]
+            if not all(math.isfinite(value) and 0 <= value <= 1 for value in row):
+                raise ValueError('Bootstrap frequencies must be between zero and one.')
+            rows.append(row)
+    if not rows or len({len(row) for row in rows}) != 1:
+        raise ValueError('The frequency matrix must be rectangular.')
+    eps = 2.220446049250313e-16
+    counts = []
+    for cutoff in SIGNET_CUTOFFS:
+        kept = [(i, j) for i, row in enumerate(rows) for j, value in enumerate(row) if value > cutoff - eps]
+        genes = {i for i, _ in kept} | {j for _, j in kept}
+        counts.append({'cutoff': cutoff, 'connections': len(kept), 'genes': len(genes)})
+    return counts
+
 
 INPUT_KEYS = ('Afreq', 'coef', 'vis.genepos')
-PACKAGES = ('igraph', 'dnet', 'visNetwork', 'STRINGdb', 'TFutils', 'shiny',
-            'shinyfullscreen', 'shinycustomloader', 'shinydashboard', 'plotly',
-            'DT', 'circlize', 'ggthemes', 'fmsb')
 
 
 def validate_inputs(settings):
@@ -66,130 +123,3 @@ def validate_inputs(settings):
         raise ValueError(f'Only {components} connected subnetworks pass the threshold; reduce top_networks.')
     return {'genes': n, 'edges_at_threshold': len(edges), 'connected_subnetworks': components,
             'limitation': 'Dimensions and coordinate checks do not establish biological identity.'}
-
-
-def preflight():
-    packages = ','.join(json.dumps(p) for p in PACKAGES)
-    cmd = (f'test -s {vm.image_path()} && command -v timeout >/dev/null && '
-           f'singularity exec --cleanenv --no-home --env OPENBLAS_NUM_THREADS=1,OMP_NUM_THREADS=1 '
-           f'{vm.image_path()} Rscript -e \'stopifnot(all(c({packages}) %in% rownames(installed.packages())))\'')
-    try:
-        result = vm.remote(cmd, capture_output=True, timeout=30)
-        return result.returncode == 0
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-
-
-def bundle(root, settings, remote_root):
-    keys = INPUT_KEYS + (('tf',) if settings['id'] != '9606' else ())
-    original = vm.bundle(root, settings, remote_root, input_keys=keys)
-    result = io.BytesIO()
-    with tarfile.open(fileobj=io.BytesIO(original), mode='r:gz') as src, \
-            tarfile.open(fileobj=result, mode='w:gz') as dst:
-        for item in src.getmembers():
-            content = src.extractfile(item).read() if item.isfile() else None
-            if item.name == 'work/script/netvis/netshiny.R':
-                # Deployment only: cloud=T skips the blocking Shiny server; official exports still run.
-                content = b'Sys.setenv(freq=trimws(Sys.getenv("freq")))\n' + content
-                content += b'\ncat("SIGNET_STAGE6_EXPORTS_COMPLETED\\n")\n'
-                item.size = len(content)
-            dst.addfile(item, io.BytesIO(content) if content is not None else None)
-    return result.getvalue()
-
-
-def execute(root, settings, seconds=600):
-    validation = validate_inputs(settings)
-    remote_root = '/tmp/signet-agent-visualization/' + root.name
-    plan = {'operation': 'visualization', 'runtime': 'existing-docker-vm',
-            'remote_directory': remote_root, 'container_image': vm.image_path(),
-            'settings_file': str(root / 'work/config.ini'), 'input_validation': validation,
-            'mode': 'official headless exports; no persistent Shiny server'}
-    if not preflight():
-        return {'status': 'unavailable', 'executed': False, **plan,
-                'reason': 'Existing VM or Stage 6 R packages unavailable; no visualization started.'}
-    record = root / 'visualization.json'
-    outpath, errpath = root / 'logs/visualization.stdout', root / 'logs/visualization.stderr'
-    try:
-        uploaded = vm.remote('umask 077; mkdir -p /tmp/signet-agent-visualization && mkdir ' + remote_root +
-                             ' && tar xzf - -C ' + remote_root,
-                             input=bundle(root, settings, remote_root), capture_output=True, timeout=60)
-        if uploaded.returncode:
-            return {'status': 'blocked', 'executed': False, **plan,
-                    'reason': 'Could not create a fresh remote run; no visualization started.'}
-        record.write_text(json.dumps({'status': 'starting', 'executed': 'unknown', **plan}) + '\n')
-        cmd = (f'cd {remote_root}/work && mkdir -p tmp data res/resv && '
-               f'timeout -k 5 {seconds}s singularity exec --cleanenv --no-home '
-               '--env cloud=T,OPENBLAS_NUM_THREADS=1,OMP_NUM_THREADS=1,MKL_NUM_THREADS=1 '
-               f'--bind {remote_root}:{remote_root} {vm.image_path()} bash ./signet -v')
-        with outpath.open('xb') as stdout, errpath.open('xb') as stderr:
-            result = vm.remote(cmd, stdout=stdout, stderr=stderr, timeout=seconds + 30)
-        fetched = vm.remote(f'cd {remote_root} && tar czf - work/res work/tmp work/data',
-                            capture_output=True, timeout=120)
-        if fetched.returncode:
-            raise OSError('Unable to collect visualization outputs.')
-        outputs = vm.restore_outputs(root, fetched.stdout)
-        value = {'executed': True, **plan, 'returncode': result.returncode,
-                 'output_files': outputs, 'stdout_log': str(outpath), 'stderr_log': str(errpath)}
-        value.update(verify_exports(root, settings, validation, result.returncode))
-    except (OSError, ValueError, subprocess.TimeoutExpired, KeyboardInterrupt) as exc:
-        value = {'status': 'unknown', 'executed': 'unknown', **plan,
-                 'reason': 'Connection or collection interrupted. Do not replay this run; remote timeout bounds execution.',
-                 'error_type': type(exc).__name__}
-    record.write_text(json.dumps(value, indent=2) + '\n')
-    return value
-
-
-def verify_exports(root, settings, validation, returncode):
-    prefix = Path(settings['resv'])
-    label = format(float(settings['freq']), '.15g')
-    renamed = []
-    # The upstream portal leaves a leading newline in freq; only normalize known output names.
-    for i in range(1, int(settings['ntop']) + 1):
-        expected = Path(f'{prefix}_circular_top{i}_freq{label}.pdf')
-        for candidate in prefix.parent.glob(f'{prefix.name}_circular_top{i}_freq*.pdf'):
-            suffix = candidate.name.split(f'_circular_top{i}_freq', 1)[1][:-4]
-            if suffix.strip() == label and candidate != expected:
-                if expected.exists():
-                    raise ValueError('Refusing to overwrite an existing circular plot.')
-                candidate.rename(expected)
-                renamed.append({'from':str(candidate.relative_to(root)), 'to':str(expected.relative_to(root))})
-    required = [Path(f'{prefix}_edgelist_{label}.txt'), Path(f'{prefix}_count_vs_freq.pdf'),
-                Path(f'{prefix}_count_vs_freq.eps')]
-    for i in range(1, int(settings['ntop']) + 1):
-        required += [Path(f'{prefix}_top{i}_freq{label}.html'), Path(f'{prefix}_top{i}_freq{label}_name.txt'),
-                     Path(f'{prefix}_circular_top{i}_freq{label}.pdf')]
-        required += [Path(f'{prefix}_enrich_{cat}_info_top{i}_freq{label}.txt') for cat in ('KEGG','Process')]
-    missing = [str(p.relative_to(root)) for p in required if not p.is_file() or not p.stat().st_size]
-    invalid = []
-    for p in required:
-        if not p.is_file():
-            continue
-        if p.suffix == '.pdf' and not p.read_bytes().startswith(b'%PDF-'):
-            invalid.append(str(p.relative_to(root)))
-        if p.suffix == '.html':
-            source = p.read_text()
-            if 'visNetwork' not in source:
-                invalid.append(str(p.relative_to(root)))
-            for asset in re.findall(r'(?:src|href)=["\']([^"\']+)["\']', source):
-                if asset.startswith(('http:', 'https:', '//', '#', 'data:')):
-                    continue
-                target = p.parent / asset
-                if not target.is_file() or not target.resolve().is_relative_to(prefix.parent.resolve()):
-                    invalid.append(asset)
-    out = (root/'logs/visualization.stdout').read_text(errors='replace')
-    err = (root/'logs/visualization.stderr').read_text(errors='replace')
-    marker = 'SIGNET_STAGE6_EXPORTS_COMPLETED' in out
-    with required[0].open() if required[0].is_file() else io.StringIO('') as stream:
-        rows = list(csv.DictReader(stream))
-    verified = (returncode == 0 and marker and not missing and not invalid and
-                len(rows) == validation['edges_at_threshold'] and
-                'Execution halted' not in err and 'Error in ' not in err)
-    return {'status': 'verified_completed' if verified else 'failed',
-            'output_files': sorted(str(p.relative_to(root)) for p in (root/'work/res').rglob('*') if p.is_file()),
-            'missing_required_outputs': missing, 'invalid_outputs': invalid,
-            'normalized_output_filenames': renamed,
-            'verification': {'completion_marker': marker, 'exported_edges': len(rows),
-                             'pdf_and_html_assets_checked': not missing and not invalid},
-            'notes': ['Some enrichment plots are omitted when too few enriched terms are available.']
-                     if 'no enough pathways' in out else [],
-            'summary': 'Checked technical exports only; not biological validation.'}

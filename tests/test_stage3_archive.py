@@ -222,3 +222,30 @@ class Stage3ArchiveTest(unittest.TestCase):
         status, result = self.request_saved_step(query + '&source=archive')
         self.assertEqual((status, result['summary']), (200, stages['1']))
         self.assertIsNone(self.server.stage6.history()['runs'][0]['dataset_id'])
+
+
+    def test_retired_local_execution_routes_stay_unavailable(self):
+        for route in ('/stage6', '/stage6/file'):
+            self.assertEqual(self.request(route=route)[0], 404)
+        connection = http.client.HTTPConnection('127.0.0.1', self.server.server_port, timeout=3)
+        try:
+            connection.request('POST', '/stage6/confirm', '{}', headers={
+                'X-Chat-Token': self.server.token,
+                'Origin': f'http://127.0.0.1:{self.server.server_port}',
+                'Content-Type': 'application/json'})
+            response = connection.getresponse()
+            self.assertEqual(response.status, 404)
+            response.read()
+        finally:
+            connection.close()
+        self.provider.assert_not_called()
+
+    def test_retired_proposal_checkpoint_cannot_prevent_archive_reads(self):
+        checkpoint = self.state_file.with_name('.stage6-workspace.json')
+        checkpoint.write_text('obsolete invalid checkpoint')
+        server = ChatServer(('127.0.0.1', 0), self.provider, state_file=self.state_file)
+        try:
+            self.assertEqual(server.stage6.sessions, {})
+            self.assertEqual(checkpoint.read_text(), 'obsolete invalid checkpoint')
+        finally:
+            server.server_close()

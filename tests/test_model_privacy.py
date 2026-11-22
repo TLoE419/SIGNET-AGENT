@@ -128,7 +128,7 @@ class ModelPrivacyTest(unittest.TestCase):
             self.assertIn(model_workspace_context(selection)[key], sent[0])
 
     def test_reference_navigation_keeps_canonical_ui_payload_and_rejects_foreign_history(self):
-        from agent.stage6.workspace import CHAT_CONTEXT
+        from agent.runtime.workspace_context import CHAT_CONTEXT
         from agent.tools.ui import UI_CHANNEL
         from agent.tools.signet import dispatch_tool
         identity = 'workspace--' + PRIVATE
@@ -220,3 +220,24 @@ class ModelPrivacyTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class LinkedAnalysisContextTest(unittest.TestCase):
+    def test_linked_run_context_keeps_latest_selection_without_private_names(self):
+        from agent.core.model_privacy import model_analysis_context, resolve_model_references
+        source = [{'run_id': PRIVATE, 'number': 2, 'latest': True, 'from_step': 'adjust',
+                   'changes': [{'before': PRIVATE}], 'reason': PRIVATE}]
+        projected = model_analysis_context(source)
+        self.assertNotIn(PRIVATE, json.dumps(projected))
+        self.assertEqual(projected[0]['number'], 2)
+        self.assertTrue(projected[0]['latest'])
+        self.assertEqual(projected[0]['from_step'], 'adjust')
+        self.assertEqual(resolve_model_references({'run_id': projected[0]['run_id']})['run_id'], PRIVATE)
+        captured = []
+        def generate(**kwargs):
+            captured.append(kwargs['config'].system_instruction)
+            return answer()
+        client = SimpleNamespace(models=SimpleNamespace(generate_content=generate))
+        conversation.run_conversation(client, 'Use the latest analysis.', [], context=source)
+        self.assertNotIn(PRIVATE, captured[0])
+        self.assertIn('"latest": true', captured[0])
