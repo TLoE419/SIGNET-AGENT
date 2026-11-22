@@ -14,8 +14,15 @@
     rare_variants: "Rare-variant jobs", stage1: "Network phase 1",
     stage2: "Network phase 2", subnetworks: "Subnetwork exports",
   };
-  function renderWorkProgress(container, progress) {
+  const activityHints = {
+    submitted: "Waiting for the scheduler to confirm the job.",
+    pending: "Waiting for compute resources.",
+    running: "Measured progress will appear when work counts are available.",
+    validating: "Checking the existing outputs.",
+  };
+  function renderWorkProgress(container, record, state, error) {
     container.replaceChildren();
+    const progress = record?.progress;
     for (const [key, label] of Object.entries(workLabels)) {
       const match = typeof progress?.[key] === "string" ? progress[key].match(/^(\d+)\s+(\d+)$/) : null;
       if (!match || !Number.isSafeInteger(Number(match[2])) || Number(match[2]) <= 0 || Number(match[1]) > Number(match[2])) continue;
@@ -23,6 +30,18 @@
       term.textContent = label;count.textContent = `${match[1]} / ${match[2]} `;
       bar.max = Number(match[2]);bar.value = Number(match[1]);bar.setAttribute("aria-label", term.textContent);
       count.append(bar);container.append(term, count);
+    }
+    const hint = Object.hasOwn(activityHints, state) ? activityHints[state] : "";
+    const confirmedStatus = record?.connection !== "interrupted" && !record?.status_check_issue &&
+      (!error || error === record?.reason);
+    if (!container.childElementCount && hint && confirmedStatus) {
+      const term = document.createElement("dt"), detail = document.createElement("dd");
+      const bar = document.createElement("progress"), note = document.createElement("small");
+      term.textContent = "Job activity";
+      bar.setAttribute("aria-label", hint);
+      note.className = "ml-progress-hint";
+      note.textContent = hint;
+      detail.append(bar, note);container.append(term, detail);
     }
     container.hidden = !container.childElementCount;
   }
@@ -386,12 +405,12 @@
             <h3 data-genotype-copy="progress"></h3>
           </header>
           <p class="ml-genotype-status" data-genotype-status role="status"></p>
+          <dl class="ml-key-values" data-genotype-work-progress hidden></dl>
           <dl class="ml-key-values" data-genotype-identifiers hidden>
             <dt data-genotype-copy="runID"></dt><dd data-genotype-run-id></dd>
             <dt data-genotype-copy="jobID"></dt><dd data-genotype-job-id></dd>
           </dl>
           <ol class="ml-genotype-events" data-genotype-events hidden></ol>
-          <dl class="ml-key-values" data-genotype-work-progress hidden></dl>
           <div class="ml-genotype-actions">
             <button type="button" class="ml-nav-action" data-genotype-refresh data-genotype-copy="refresh" hidden></button>
             <button type="button" class="ml-nav-action" data-genotype-history data-genotype-copy="history" hidden></button>
@@ -595,7 +614,7 @@
         if (at) {const time = document.createElement("time");time.dateTime = at;const date = new Date(at);time.textContent = Number.isNaN(date.valueOf()) ? at : date.toLocaleString("en");row.append(time);}
         return row;
       }));events.hidden = !events.children.length;
-      renderWorkProgress(part("work-progress"), item?.record?.progress);
+      renderWorkProgress(part("work-progress"), item?.record, state, item?.error);
       cancellation?.sync();
       revalidation?.sync();
       const run = context.runs?.find(run => run.run_id === item?.runId);
@@ -1091,12 +1110,12 @@
             <h3 data-${prefix}-copy="progress"></h3>
           </header>
           <p class="ml-genotype-status" data-${prefix}-status role="status"></p>
+          <dl class="ml-key-values" data-${prefix}-work-progress hidden></dl>
           <dl class="ml-key-values" data-${prefix}-identifiers hidden>
             <dt data-${prefix}-copy="runID"></dt><dd data-${prefix}-run-id></dd>
             <dt data-${prefix}-copy="jobID"></dt><dd data-${prefix}-job-id></dd>
           </dl>
           <ol class="ml-genotype-events" data-${prefix}-events hidden></ol>
-          <dl class="ml-key-values" data-${prefix}-work-progress hidden></dl>
           <div class="ml-genotype-actions">
             <button type="button" class="ml-nav-action" data-${prefix}-refresh data-${prefix}-copy="refresh" hidden></button>
             <button type="button" class="ml-nav-action" data-${prefix}-history data-${prefix}-copy="history" hidden></button>
@@ -1379,7 +1398,7 @@
         part("defaults").textContent = defaults.length ? labelFor("defaultsApplied") : "";
         part("defaults").title = defaults.join("\n");
       }
-      renderWorkProgress(part("work-progress"), saved?.progress);
+      renderWorkProgress(part("work-progress"), saved, state, item?.error);
       part("submit").hidden = part("submit-actions").hidden = hasAttempt;
       part("submit").disabled = !allowed || !item?.review || item.review.ready === false || adjustment && !item.review.review_token || item.checking || item.submitting || hasAttempt || cancellationBusy(item) || revalidationBusy(item);
       part("status").textContent = labelFor(state);

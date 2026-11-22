@@ -92,7 +92,7 @@ test('missing gender shows a manual mapping or replacement and requires a fresh 
  assert.equal(sent.body.review_token,token);
 });
 
-test('all six stages show measured counts and reject invalid progress instead of inventing percentages',async t=>{
+test('all six stages switch from indeterminate to measured progress and stop on unconfirmed status',async t=>{
  const specs=[['Genotype','genotype','imputation','Imputation chunks'],
   ['Expression','expression','expression_outputs','Expression preparation'],
   ['Adjustment','adjust','variant_filter','Variant filtering'],
@@ -102,17 +102,29 @@ test('all six stages show measured counts and reject invalid progress instead of
  for(const [factory,step,unit,label] of specs){
   const {w,panel}=fixture(t);
   const record={run_id:'progress-run',step,state:'running',job_id:'123',attempt:1,inputs:{},settings:{},options:{npc:3},resources,
-   progress:{[unit]:'2 5',rare_variants:'9 3',invalid:'99 100'}};
-  w.fetch=async()=>json(record);
+   progress:{rare_variants:'9 3',invalid:'99 100'}};
+  let reported=record;
+  w.fetch=async()=>json(reported);
   const jobs=Object.fromEntries(['genotype','expression','adjust','cis','network'].map(name=>[name,{state:'completed'}]));jobs[step]=record;
   const controller=w['mount'+factory+'Run']({panel,token:'page-token'});
   const dataset={id:'dataset-a',name:['資料','Data'],ready:true,persisted:true,inputs:{genotype:[],expression:[],clinical:[]}};
   controller.setContext({datasetId:'dataset-a',dataset,runId:'progress-run',visible:true,runs:[{run_id:'progress-run',dataset_id:'dataset-a',source:'live',jobs}]});
-  await until(()=>panel.querySelector('progress'));
+  const refresh=panel.querySelector('[data-'+step+'-refresh]');
+  await until(()=>panel.querySelector('progress')&&!refresh.disabled);
+  const activity=panel.querySelector('progress');
+  assert.equal(activity.hasAttribute('value'),false);
+  assert.match(activity.getAttribute('aria-label'),/work counts are available/);
+  reported={...record,progress:{...record.progress,[unit]:'2 5'}};
+  refresh.click();
+  await until(()=>panel.querySelector('progress[value="2"]')&&!refresh.disabled);
   const bar=panel.querySelector('progress');assert.equal(bar.value,2);assert.equal(bar.max,5);
   assert.equal(bar.getAttribute('aria-label'),label);
   assert.match(panel.querySelector('[data-'+step+'-work-progress]').textContent,/2 \/ 5/);
   assert.equal(panel.querySelectorAll('progress').length,1);
+  reported={...record,connection:'interrupted'};
+  refresh.click();
+  await until(()=>panel.querySelector('[data-'+step+'-notice]').textContent.includes('Connection interrupted'));
+  assert.equal(panel.querySelector('progress'),null);
  }
 });
 

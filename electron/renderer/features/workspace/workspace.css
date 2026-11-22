@@ -304,6 +304,9 @@ code:not(pre code) {
 :is(#lens-stage3, #lens-history-stage3) .s3-chart, .ml-stage-snapshot .ml-count-chart { display: block; width: 100%; height: auto; }
 .s3-remote-plot { display: block; width: 100%; height: auto; object-fit: contain; }
 .ml-genotype-progress progress { display: block; inline-size: 100%; accent-color: var(--ml-accent); }
+.ml-genotype-progress .ml-progress-hint {
+  display: block; margin-top: 4px; color: var(--ml-muted);
+}
 .ml-rerun-diff { inline-size: 100%; table-layout: fixed; border-collapse: collapse; }
 .ml-rerun-diff :is(th, td) { padding: 6px; text-align: start; overflow-wrap: anywhere; border-block-end: 1px solid var(--ml-line); }
 :is(#lens-stage3, #lens-history-stage3) .s3-chart text { fill: #536579; font-size: 12px; font-variant-numeric: tabular-nums; }
@@ -1870,3 +1873,5 @@ code:not(pre code) {
     }
   }
 }
+.s3-remote-plot { display: block; width: 100%; height: auto; }
+.s3-remote-plot[hidden] { display: none; }
