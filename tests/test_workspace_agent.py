@@ -12,6 +12,7 @@ class WorkspaceAgentTest(unittest.TestCase):
     def test_model_cannot_execute_legacy_science(self):
         names = {fn.__name__ for fn in ALL_TOOLS}
         self.assertFalse(names & tools.LEGACY_EXECUTION)
+        self.assertTrue({'configure_signet', 'propose_hpc3_genotype', 'get_step_report'} <= names)
         self.assertTrue({'get_workspace_stage', 'propose_workspace_stage'} <= names)
         for name in tools.LEGACY_EXECUTION:
             with self.subTest(name=name), patch('subprocess.Popen') as execute:
@@ -72,7 +73,7 @@ class WorkspaceAgentTest(unittest.TestCase):
                 tools.propose_workspace_stage('fixture', 2)
 
     def test_first_attempt_retry_and_proposal_navigation_emit_once(self):
-        from agent.stage6.workspace import CHAT_CONTEXT
+        from agent.runtime.workspace_context import CHAT_CONTEXT
         from agent.tools.ui import UI_CHANNEL
         history = {'dataset_id': 'fixture', 'jobs': {'genotype': {
             'step': 'genotype', 'run_id': 'fixture', 'job_id': '42', 'state': 'failed'}}}

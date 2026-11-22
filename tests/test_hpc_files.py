@@ -115,7 +115,8 @@ class HpcFilesTest(unittest.TestCase):
         self.assertFalse(any('pub' in label and label.startswith('Lab') for label in labels))
 
     def test_format_checks_reject_the_wrong_file_and_record_nothing(self):
-        cases = {'gtf': [FULL, 'not a table\n'], 'clinical': ['id\tname\n', 'submitter_id\trace\r\nA\tB\r\n'],
+        cases = {'gtf': [FULL, 'not a table\n'], 'clinical': ['id\tname\n', 'submitter_id\trace\tgender\r\nA\tB\tC\r\n',
+                                                                   'id\tsubmitter_id\trace\nx\tTCGA-1\twhite\n'],
                  'ref': ['hello world\n'], 'gmap': ['a b c d\n']}
         for key, texts in cases.items():
             for text in texts:
@@ -125,7 +126,7 @@ class HpcFilesTest(unittest.TestCase):
         self.assertIn('not collapsed', hpc_files.select('gtf', self.file('full.gtf', FULL))['error'])
 
     def test_format_checks_accept_each_expected_format(self):
-        valid = {'gtf': COLLAPSED, 'clinical': 'id\tsubmitter_id\trace\nx\tTCGA-1\twhite\n',
+        valid = {'gtf': COLLAPSED, 'clinical': 'id\tsubmitter_id\trace\tgender\nx\tTCGA-1\twhite\tfemale\n',
                  'ref': '##fileformat=VCFv4.2\n', 'gmap': 'pos chr cM\n1 1 0.1\n'}
         for key, text in valid.items():
             with self.subTest(key=key):

@@ -43,15 +43,15 @@ app.on('will-quit', () => { clearTimeout(deadline); rmSync(temporary, {recursive
     composer:!!document.querySelector('#composer'), stage6:!!document.querySelector('#stage6-pane'),
     language:!!document.querySelector('#language-toggle'), node:typeof window.require,
     chatStatus:(await fetch('/chat',{method:'POST',body:'{}'})).status,
-    workspace:(await fetch('/stage6?session=12345678-1234-1234-1234-123456789abc',
+    progress:(await fetch('/signet/progress?session=12345678-1234-1234-1234-123456789abc',
       {headers:{'X-Chat-Token':document.querySelector('meta[name="chat-token"]').content}})).status,
     devBridge:!!window.signetDesktop?.devTerminal,devButton:!!document.querySelector('.ssh-dev-launch'),
     sshButton:!!document.querySelector('#ssh-root .ssh-status-block'),
     sshBridge:Object.keys(window.signetDesktop?.ssh||{}).sort(),
-    resources:performance.getEntriesByType('resource').filter(x=>x.name.startsWith(location.origin)).length
+    resources:performance.getEntriesByType('resource').filter(x=>x.name.startsWith(location.origin)).map(x=>new URL(x.name).pathname)
   }))()`);
-  assert.equal(value.composer, true); assert.equal(value.stage6, true); assert.equal(value.language, true);
-  assert.equal(value.node, 'undefined'); assert.equal(value.chatStatus, 403); assert.equal(value.workspace, 200);
+  assert.equal(value.composer, true); assert.equal(value.stage6, false); assert.equal(value.language, true);
+  assert.equal(value.node, 'undefined'); assert.equal(value.chatStatus, 403); assert.equal(value.progress, 200);
   // Advanced Settings use the trusted bridge in production; the classic launcher stays dev-only.
   assert.equal(value.devBridge,true);assert.equal(value.devButton,devMode);
   const terminalHistory=await window.webContents.executeJavaScript(`window.signetDesktop.devTerminal.history()`);
@@ -65,7 +65,7 @@ app.on('will-quit', () => { clearTimeout(deadline); rmSync(temporary, {recursive
   assert.equal(value.sshButton, true);
   assert.deepEqual(value.sshBridge, ['addExternalKey', 'answerAuthChallenge', 'cancelRegistration', 'connect', 'disconnect', 'generateKey', 'getSnapshot', 'healthCheck', 'initialize', 'inspectPrivateKey', 'listKeys', 'listProfiles', 'pickPrivateKey', 'registerGenerated', 'removeKey', 'saveProfile', 'selectProfile', 'subscribe', 'subscribeAuthChallenge', 'trustHost', 'updateKey']);
   assert.equal(value.sshBridge.some(name => /exec|shell|readFile|writeFile/.test(name)), false);
-  assert.ok(value.resources >= 5);
+  for (const asset of ['/chat.css', '/ssh.css', '/workspace.js', '/renderer.js']) assert.ok(value.resources.includes(asset), asset);
   await window.webContents.executeJavaScript(`document.querySelector('#language-toggle').click()`);
   assert.equal(await window.webContents.executeJavaScript('document.documentElement.lang'), 'zh-Hant');
   const external = await window.webContents.executeJavaScript(`fetch('http://127.0.0.1:1/').then(()=>false,()=>true)`);
@@ -107,7 +107,7 @@ app.on('will-quit', () => { clearTimeout(deadline); rmSync(temporary, {recursive
   app.on('before-quit', event => { if (!shutdownVerified) event.preventDefault(); });
   backend.closed.then(async () => {
     await assert.rejects(fetch(origin));
-    console.log('PASS: actual Web UI, sandbox, HTTP protections, workspace, language, navigation and owned service shutdown');
+    console.log('PASS: actual Web UI, sandbox, HTTP protections, analysis progress, language, navigation and owned service shutdown');
     shutdownVerified = true;
     app.quit();
   }).catch(error => { console.error(error); app.exit(1); });

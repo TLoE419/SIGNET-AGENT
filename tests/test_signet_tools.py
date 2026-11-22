@@ -1,8 +1,5 @@
 import json
-import os
 from pathlib import Path
-import signal
-import subprocess
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -16,36 +13,10 @@ from agent.tools.registry import ALL_TOOLS
 from agent.tools.workspace import LEGACY_EXECUTION
 
 
-class FakeProcess:
-    returncode = 0
-    pid = 987654
-    calls = []
-    timeout = False
-
-    def __init__(self, argv, **kwargs):
-        self.calls.append((argv, kwargs))
-        assert isinstance(argv, list)
-        assert kwargs['start_new_session']
-        assert 'GEMINI_API_KEY' not in kwargs['env']
-        assert 'AWS_SECRET_ACCESS_KEY' not in kwargs['env']
-        kwargs['stdout'].write(b'controlled test only\n')
-        kwargs['stderr'].write(b'')
-        target = Path(kwargs['env']['SIGNET_RESULT_ROOT']) / 'controlled-output.txt'
-        target.write_text('fixture\n')
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *args):
-        pass
-
-    def communicate(self, input=None, timeout=None):
-        if timeout and self.timeout:
-            raise subprocess.TimeoutExpired('fixture', timeout)
-        return None, None
-
-
 class ToolsTest(unittest.TestCase):
+    def call(self, name, **arguments):
+        return st.dispatch_tool(name, arguments)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.project = Path(self.temp.name).resolve()
@@ -54,13 +25,6 @@ class ToolsTest(unittest.TestCase):
         (self.project / 'data').mkdir()
         self.input = self.project / 'data' / 'fixture.txt'
         self.input.write_text('fixture\n')
-        self.expression = self.project / 'data' / 'expression.bed'
-        self.expression.write_text('#chr\tstart\tend\tgene_id\ts1\ts2\n1\t0\t1\tg1\t1\t2\n')
-        self.cov = self.project / 'data' / 'covariates.txt'
-        self.cov.write_text('ID\ts1\ts2\nC1\t0\t1\n')
-        FakeProcess.calls = []
-        FakeProcess.timeout = False
-        FakeProcess.returncode = 0
 
     def tearDown(self):
         self.patch_project.stop()
@@ -71,18 +35,37 @@ class ToolsTest(unittest.TestCase):
         self.assertEqual(result['status'], 'created', result)
         return self.project / 'runs' / run_id
 
-    def intermediate(self, root, *paths):
-        for relative in paths:
-            path = root / 'work' / relative
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text('fixture\n')
-
     def test_inventory_and_source_hashes(self):
         self.assertEqual(len(st.INVENTORY['scripts']), 138)
         self.assertEqual(sum(x['category']=='entry' for x in st.INVENTORY['scripts']),16)
-        self.assertEqual(len(st.SIGNET_TOOLS),23)
+        self.assertEqual(len(st.SIGNET_TOOLS),5)
+        self.assertIn(st.propose_hpc3_genotype, st.SIGNET_TOOLS)
         st._verify_source()
         self.assertEqual(st.signet_catalog()['internal_scripts'],121)
+
+    def test_local_execution_tools_were_replaced_by_the_hpc3_cards(self):
+        # Every SIGNET step runs on HPC3 after a confirmation card; the model cannot run one itself.
+        names = {fn.__name__ for fn in st.SIGNET_TOOLS}
+        for removed in ('genotype_tcga', 'expression_tcga', 'adjust_tcga', 'prepare_network', 'prepare_visualization',
+                        'run_pca', 'cis_eqtl', 'submit_network', 'get_network_status', 'cancel_network',
+                        'run_visualization', 'get_visualization_workspace', 'propose_visualization_change'):
+            self.assertNotIn(removed, names)
+            self.assertEqual(self.call(removed, run_id='test')['status'],
+                             'needs_review' if removed in LEGACY_EXECUTION else 'invalid')
+
+    def test_catalog_describes_setup_and_six_stages_for_the_assistant(self):
+        catalog = self.call('signet_catalog')
+        self.assertEqual([stage['flag'] for stage in catalog['analysis_stages']], ['-g', '-t', '-a', '-c', '-n', '-v'])
+        for stage in catalog['analysis_stages']:
+            self.assertTrue(all(stage[key] for key in ('name', 'purpose', 'inputs', 'how_to_run')), stage)
+        # SIGNET imputes only missing genotypes at the study's own SNPs (-include_snps empty).
+        self.assertIn('no new SNPs', catalog['analysis_stages'][0]['purpose'])
+        self.assertIn('gender', catalog['analysis_stages'][2]['inputs'])
+        from agent.tools.hpc import HPC_TOOLS
+        named = {step['tool'] for step in catalog['hpc3_setup']} - {None}
+        self.assertTrue(named <= {fn.__name__ for fn in HPC_TOOLS}, 'every named setup tool exists')
+        self.assertIn('check_hpc_environment', named)
+        self.assertIn('genome_build', catalog['scope'])
 
     def test_all_schemas_without_network(self):
         with genai.Client(api_key='fake-schema-key') as client:
@@ -107,6 +90,9 @@ class ToolsTest(unittest.TestCase):
             ('get_workspace_stage',{'run_id':'x','stage':True}),
             ('get_workspace_stage',{'run_id':'x','stage':2.5}),
             ('get_workspace_stage',{'run_id':'x','stage':2,'source':True}),
+            ('configure_signet',{'run_id':'x','ncores':True}),
+            ('configure_signet',{'run_id':'x','ncores':2.5}),
+            ('configure_signet',{'run_id':'x','cohort':'other'}),
             ('list_files',{'folder':'/tmp'}),
         ]:
             self.assertEqual(st.dispatch_tool(name,args)['status'],'invalid',(name,args))
@@ -115,128 +101,15 @@ class ToolsTest(unittest.TestCase):
     def test_legacy_model_dispatch_requires_manual_review_without_effects(self):
         self.assertFalse({function.__name__ for function in ALL_TOOLS} & LEGACY_EXECUTION)
         before = {path: path.read_bytes() for path in self.project.rglob('*') if path.is_file()}
-        with patch.object(st, '_execute') as execute, patch.object(st.subprocess, 'Popen') as popen:
+        with patch('subprocess.Popen') as popen:
             for name in LEGACY_EXECUTION:
                 with self.subTest(name=name):
                     result = st.dispatch_tool(name, {'run_id': 'blocked', 'confirmed': True})
                     self.assertEqual(result['status'], 'needs_review')
                     self.assertFalse(result['executed'])
-            execute.assert_not_called()
             popen.assert_not_called()
         self.assertEqual(before, {path: path.read_bytes() for path in self.project.rglob('*') if path.is_file()})
         self.assertFalse((self.project / 'runs').exists())
-
-    def test_trusted_legacy_parameter_validation_remains_active(self):
-        for arguments in ({'ncores': True}, {'ncores': 2.5}, {'cohort': 'other'}):
-            with self.subTest(arguments=arguments):
-                self.assertEqual(st.configure_signet('x', **arguments)['status'], 'invalid')
-        with self.assertRaisesRegex(ValueError, 'additional covariate'):
-            st.combine_covariates('x', str(self.input), additional_covariates='bad')
-        self.assertFalse((self.project / 'runs').exists())
-
-    def test_paths_and_numbers(self):
-        self.configure()
-        for value in ['/etc/passwd','.env',str(self.project/'data'/'../.env'),str(self.input)+';id',str(self.input)+' x']:
-            with self.subTest(path=value), self.assertRaises(ValueError):
-                st.expression_tcga(run_id='test',expression=value,annotation_gtf=str(self.input))
-        link = self.project / 'data' / 'linked'
-        link.symlink_to(self.input)
-        with self.assertRaises(ValueError):
-            st.expression_tcga(run_id='test',expression=str(link),annotation_gtf=str(self.input))
-        for value in [float('nan'),float('inf'),-1,True]:
-            with self.subTest(frequency=value), self.assertRaises(ValueError):
-                st.prepare_visualization(run_id='test',frequencies=str(self.input),coefficients=str(self.input),gene_positions=str(self.input),frequency=value)
-
-    def test_every_analysis_tool_fixed_argv(self):
-        f = str(self.input)
-        scenarios = [
-            ('genotype_tcga','TCGA',dict(ped=f,map_file=f,reference_prefix=str(self.project/'data'/'chr'),genetic_map_prefix=str(self.project/'data'/'chr')),()),
-            ('genotype_gtex','GTEx',dict(vcf_before_phasing=f,vcf=f,reads=f,annotation=f,tissue='Lung'),()),
-            ('expression_tcga','TCGA',dict(expression=f,annotation_gtf=f),()),
-            ('expression_gtex','GTEx',dict(reads=f,tpm=f,annotation_gtf=f,tissue='Lung'),('tmp/tmpg/subjid_wb_common.txt','tmp/tmpg/GTEx_snp.vcf.gz')),
-            ('adjust_tcga','TCGA',dict(clinical=f,principal_components=2),('res/resg/signet_Geno','res/resg/signet_Genotype.sampleID','res/rest/signet_gexp','res/rest/signet_gexpID')),
-            ('adjust_gtex','GTEx',dict(phenotype=f,annotation=f,annotation_gtf=f,tissue='Lung'),('tmp/tmpg/GTEx_snp.vcf',)),
-            ('cis_eqtl','TCGA',dict(expression=f,expression_with_pc=f,genotype=f,snp_map=f,snp_maf=f,gene_positions=f),()),
-            ('prepare_network','TCGA',dict(expression=f,genotype=f,significant_pairs=f,gene_names=f,gene_positions=f,container=f),()),
-            ('prepare_visualization','TCGA',dict(frequencies=f,coefficients=f,gene_positions=f),()),
-            ('run_pca','TCGA',{},('res/resa/signet_new.Geno','res/resa/signet_new.Geno.map','tmp/tmpg/clean_Genotype.fam','tmp/tmpg/geno_id')),
-            ('run_pca','GTEx',{},('tmp/tmpa/Geno_all_prune.ped','tmp/tmpa/Geno_all_prune.pedsnp','tmp/tmpa/Geno_all_prune.pedind')),
-            ('plot_pca','TCGA',{},('tmp/tmpa/Geno.pca.evec','tmp/tmpa/Geno.eval')),
-            ('combine_covariates','TCGA',dict(expression_covariates=str(self.cov),genotype_pcs=str(self.cov),additional_covariates=[str(self.cov)]),()),
-            ('adjust_expression','TCGA',dict(expression_bed=str(self.expression),covariates=str(self.cov)),()),
-            ('normalize_expression','GTEx',dict(tpm=f,counts=f,annotation_gtf=f,sample_lookup=f,vcf_chromosomes=f,sample_ids=f,convert_tpm=True,legacy_mode=True,normalization='qn'),()),
-        ]
-        for suffix in ('.gen','.map'):
-            for number in range(1,23):
-                (self.project/'data'/f'chr{number}{suffix}').write_text('fixture\n')
-        with patch.object(st.sys,'platform','linux'), patch.object(st.shutil,'which',return_value='/fake/bin'), patch.object(st.importlib.util,'find_spec',return_value=object()), patch.object(st.subprocess,'Popen',FakeProcess):
-            for i,(name,cohort,args,inputs) in enumerate(scenarios):
-                root = self.configure(cohort,str(i))
-                self.intermediate(root,*inputs)
-                result = getattr(st, name)(run_id=str(i),**args)
-                expected = 'prepared' if name.startswith('prepare_') else 'process_completed'
-                self.assertEqual(result['status'],expected,(name,result))
-                self.assertEqual(result['executed'],not name.startswith('prepare_'))
-                if result['executed']:
-                    self.assertIn('work/res/controlled-output.txt',result['output_files'])
-                    repeated = getattr(st, name)(run_id=str(i),**args)
-                    self.assertEqual(repeated['status'],'invalid',repeated)
-                self.assertFalse((root / '.active').exists())
-        self.assertEqual(len(FakeProcess.calls),13)
-
-    def test_missing_dependencies_failure_timeout_and_lock(self):
-        root = self.configure()
-        args = dict(run_id='test',expression=str(self.input),annotation_gtf=str(self.input))
-        with patch.object(st.shutil,'which',return_value=None),patch.object(st.subprocess,'Popen') as popen:
-            result = st.expression_tcga(**args)
-            self.assertEqual(result['status'],'unavailable')
-            popen.assert_not_called()
-        (root/'.active').write_text('locked')
-        self.assertEqual(st.expression_tcga(**args)['status'],'invalid')
-        (root/'.active').unlink()
-        with patch.object(st.sys,'platform','linux'),patch.object(st.shutil,'which',return_value='/fake/bin'),patch.object(st.subprocess,'Popen',FakeProcess):
-            FakeProcess.returncode=2
-            self.assertEqual(st.expression_tcga(**args)['status'],'failed')
-            self.configure(run_id='timeout')
-            FakeProcess.timeout=True
-            with patch.object(st.os,'killpg') as kill:
-                result=st.expression_tcga(**{**args,'run_id':'timeout'})
-                self.assertEqual(result['status'],'timed_out')
-                kill.assert_called_once_with(FakeProcess.pid,signal.SIGKILL)
-
-    def test_cloud_preparation_snapshot_and_no_execution(self):
-        root=self.configure()
-        f=str(self.input)
-        with patch.object(st.subprocess,'Popen') as popen:
-            result=st.prepare_network(run_id='test',expression=f,genotype=f,significant_pairs=f,
-                             gene_names=f,gene_positions=f,computing='cloud',stage=2)
-            self.assertEqual(result['status'],'prepared',result)
-            self.assertFalse(result['executed'])
-            snapshot=Path(result['settings_snapshot']).read_text()
-            self.assertIn('computing = cloud',snapshot)
-            self.assertIn('stage = 2',snapshot)
-            self.assertTrue((root/'network.plan.json').is_file())
-            popen.assert_not_called()
-
-    @unittest.skipUnless(st.sys.platform=='darwin','Verify this macOS host preflight without scientific execution')
-    def test_real_host_preflight_without_model_or_scientific_execution(self):
-        self.configure()
-        with patch.object(st.subprocess,'Popen') as popen:
-            result=st.expression_tcga(run_id='test',expression=str(self.input),annotation_gtf=str(self.input))
-            self.assertEqual(result['status'],'unavailable',result)
-            self.assertTrue(any('Linux' in name for name in result['missing_dependencies']))
-            self.assertFalse(result['executed'])
-            popen.assert_not_called()
-
-    def test_scientific_process_interrupt_cleans_up_group_and_records_state(self):
-        self.configure()
-        with patch.object(st.sys,'platform','linux'),patch.object(st.shutil,'which',return_value='/fake/bin'),patch.object(st.subprocess,'Popen',FakeProcess),patch.object(FakeProcess,'communicate',side_effect=[KeyboardInterrupt(),(None,None)]),patch.object(st.os,'killpg') as kill:
-            result=st.expression_tcga(run_id='test',expression=str(self.input),annotation_gtf=str(self.input))
-            self.assertEqual(result['status'],'interrupted')
-            self.assertTrue(result['executed'])
-            kill.assert_called_once_with(FakeProcess.pid,signal.SIGKILL)
-        settings=st.get_signet_settings(run_id='test')
-        self.assertEqual(settings['operations'][0]['status'],'interrupted')
 
     def test_recorded_status_queries_do_not_infer_success(self):
         root=self.configure()
@@ -250,21 +123,11 @@ class ToolsTest(unittest.TestCase):
         self.assertFalse(operations['network']['executed'])
         self.assertEqual(operations['network']['status'],'prepared')
 
-    def test_prerequisite_cohort_and_sample_order(self):
-        self.configure()
-        self.assertEqual(st.run_pca(run_id='test')['status'],'invalid')
-        f=str(self.input)
-        result=st.genotype_gtex(run_id='test',vcf_before_phasing=f,vcf=f,reads=f,annotation=f,tissue='Lung')
-        self.assertEqual(result['status'],'invalid')
-        self.cov.write_text('ID\ts2\ts1\nC1\t0\t1\n')
-        with self.assertRaisesRegex(ValueError, 'sample columns must match'):
-            st.adjust_expression(run_id='test',expression_bed=str(self.expression),covariates=str(self.cov))
-
     def test_modified_run_code_and_symlinks_rejected(self):
         root=self.configure()
         (root/'work/script/adj/pca_vis.R').write_text('modified')
-        result=st.expression_tcga(run_id='test',expression=str(self.input),annotation_gtf=str(self.input))
-        self.assertEqual(result['status'],'invalid')
+        with self.assertRaises(ValueError):
+            st._verify_source(root/'work')
         (root/'work/config.ini').unlink()
         (root/'work/config.ini').symlink_to(self.input)
         self.assertEqual(st.get_signet_settings(run_id='test')['status'],'invalid')
