@@ -52,8 +52,8 @@ EXAMPLE_EXPRESSION_PATH = next(item['path'] for item in st.INVENTORY['example_fi
 
 
 class StepsTest(unittest.TestCase):
-    def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
+    def setUp(self, *, temporary_parent=None):
+        self.temp = tempfile.TemporaryDirectory(dir=temporary_parent)
         base = Path(self.temp.name).resolve()
         self.project, self.hpc, self.fake = base / 'project', base / 'hpc', base / 'fake'
         for folder in (self.project / 'data', self.hpc / 'ws/refdata', self.hpc / 'ws/signet/example', self.fake / 'bin'):
