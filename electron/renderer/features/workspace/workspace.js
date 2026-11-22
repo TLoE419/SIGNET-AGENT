@@ -941,14 +941,13 @@
       name: historyRun.dataset_name ?? datasets.find(dataset => dataset.id === continuationDataset)?.name ?? continuationDataset,
       inputs: historyRun.inputs,
       persisted: false,
-      ready: datasetCatalogReady,
     } : {id: activeDataset.id, name: activeDataset.name, inputs: activeDataset.inputs,
-      references: activeDataset.references, persisted: activeDataset.persisted, ready: datasetCatalogReady};
+      references: activeDataset.references, persisted: activeDataset.persisted};
     byId("stage-header").querySelector("span").textContent = savedAnalysisView()
       ? historyRun.name : stageContext;
     genotypeRun?.setContext({
       datasetId: genotypeDataset.id,
-      dataset: genotypeDataset,
+      dataset: {...genotypeDataset, ready: datasetCatalogReady, catalogUnavailable: historyState === "error"},
       runs: genotypeHistory ? continuationRuns : liveRuns,
       runId: genotypeHistory ? historyRun.run_id : null,
       visible: app.dataset.nav === "analysis" && !savedAnalysisView() &&

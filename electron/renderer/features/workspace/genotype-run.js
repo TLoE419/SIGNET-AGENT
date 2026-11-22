@@ -16,11 +16,11 @@
   };
   const activityHints = {
     submitted: "Waiting for the scheduler to confirm the job.",
-    pending: "Waiting for compute resources.",
+    pending: "Waiting for the scheduler to start the job.",
     running: "Measured progress will appear when work counts are available.",
-    validating: "Checking the existing outputs.",
+    validating: "Waiting for output verification.",
   };
-  function renderWorkProgress(container, record, state, error) {
+  function renderWorkProgress(container, record, state, error, disconnected) {
     container.replaceChildren();
     const progress = record?.progress;
     for (const [key, label] of Object.entries(workLabels)) {
@@ -32,7 +32,7 @@
       count.append(bar);container.append(term, count);
     }
     const hint = Object.hasOwn(activityHints, state) ? activityHints[state] : "";
-    const confirmedStatus = record?.connection !== "interrupted" && !record?.status_check_issue &&
+    const confirmedStatus = !disconnected && record?.connection !== "interrupted" && !record?.status_check_issue &&
       (!error || error === record?.reason);
     if (!container.childElementCount && hint && confirmedStatus) {
       const term = document.createElement("dt"), detail = document.createElement("dd");
@@ -63,7 +63,10 @@
     reviewReady: "Ready for review",
     loadInputs: "Check the input files",
     loadInputsPrompt: "Check that the selected files are available before reviewing the settings.",
-    chooseDataset: "Select a dataset to prepare Stage 1.",
+    chooseDataset: "Open Data to select or create a dataset for Stage 1.",
+    saveDataset: "Save this dataset in Data before preparing Stage 1.",
+    catalogLoading: "Loading the dataset catalog…",
+    catalogUnavailable: "Could not load the dataset catalog. Retry in Run history.",
     unavailable: "The example is not ready",
     readyPrompt: "Review the files and settings, then select Submit Stage 1.",
     genotypeReadyPrompt: "Confirm the files, settings, and any warnings before submitting.",
@@ -149,6 +152,11 @@
     revalidateMissing: "Outputs were rechecked and still did not pass the checks.",
   };
 
+  function connectionNotice(disconnected, state, error) {
+    return disconnected && Object.hasOwn(activityHints, state) && error !== labels.interrupted
+      ? labels.interrupted : "";
+  }
+
   function statusIssue(record, labelFor) {
     const message = labelFor(record.status_check_issue);
     return record.status_check_issue === "output_check_timeout" && record.slurm_state
@@ -176,6 +184,7 @@
     if (!paths.length) element.textContent = "—";
     for (const path of paths) {
       const row = document.createElement("div");
+      row.className = "ml-stage-review-path";
       const name = document.createElement("strong");
       name.textContent = renderFilePath ? path.split("/").at(-1) || path : path;
       row.append(name);
@@ -453,6 +462,7 @@
     let cancellation;
     let logs;
     let revalidation;
+    let disconnected = false;
     let remote = {connected: false, identity: "", environmentKey: ""};
     const stateKey = (id, runId = context.runId) => runId ? `run:${id}:${runId}` : `dataset:${id}`;
     const current = () => datasets.get(stateKey(selectedDataset));
@@ -553,7 +563,9 @@
       reviewButton.hidden = !eligible || !reviewingInputs;
       reviewButton.disabled = !connected || Boolean(item?.reviewing || item?.submitting);
       readiness.hidden = !reviewingInputs;
-      readiness.textContent = labelFor(!eligible ? "chooseDataset" : item?.reviewing ? retry ? "retryChecking" : legacy ? "checking" : "customChecking"
+      const blocked = !dataset.ready ? dataset.catalogUnavailable ? "catalogUnavailable" : "catalogLoading"
+        : dataset.id ? "saveDataset" : "chooseDataset";
+      readiness.textContent = labelFor(!eligible ? blocked : item?.reviewing ? retry ? "retryChecking" : legacy ? "checking" : "customChecking"
         : validReview ? "reviewReady" : item?.attempted ? legacy ? "unavailable" : "customUnavailable" : "loadInputs");
       if (item?.reviewTimedOut) readiness.textContent = labelFor("reviewTimeout");
       guidance.textContent = validReview ? labelFor(retry ? "retryReady" : "genotypeReadyPrompt") : eligible && !connected ? labelFor("connect")
@@ -579,7 +591,8 @@
       part("back").hidden = !context.runId;
       part("back").textContent = "Back to run timeline";
       identifiers.hidden = !item?.runId;runLabel.textContent = item?.runId ?? "";jobLabel.textContent = item?.record?.job_id ?? "—";
-      notice.textContent = [item?.uncertain ? labelFor("uncertain") : "", item?.error || item?.reviewError].filter(Boolean).join(" ");
+      notice.textContent = [item?.uncertain ? labelFor("uncertain") : "",
+        connectionNotice(disconnected, state, item?.error), item?.error || item?.reviewError].filter(Boolean).join(" ");
       notice.hidden = !notice.textContent;
       reviewPanel.hidden = !reviewingInputs && notice.hidden;
       const sourceInputs = item?.sourceInputs ?? item?.review?.source_inputs;
@@ -614,7 +627,7 @@
         if (at) {const time = document.createElement("time");time.dateTime = at;const date = new Date(at);time.textContent = Number.isNaN(date.valueOf()) ? at : date.toLocaleString("en");row.append(time);}
         return row;
       }));events.hidden = !events.children.length;
-      renderWorkProgress(part("work-progress"), item?.record, state, item?.error);
+      renderWorkProgress(part("work-progress"), item?.record, state, item?.error, disconnected);
       cancellation?.sync();
       revalidation?.sync();
       const run = context.runs?.find(run => run.run_id === item?.runId);
@@ -854,6 +867,7 @@
     }
     window.addEventListener("workspace-remote-context", event => {
       const value = event.detail ?? {};
+      disconnected = value.connected === false;
       const next = {connected: value.connected === true, identity: value.identity ?? "", environmentKey: value.environmentKey ?? ""};
       const changed = JSON.stringify(next) !== JSON.stringify(remote);
       remote = next;
@@ -1141,6 +1155,7 @@
     let cancellation;
     let logs;
     let revalidation;
+    let disconnected = false;
     const labelFor = key => Object.hasOwn(copy, key) ? copy[key] : Object.hasOwn(labels, key) ? labels[key] : key;
     const current = () => runStates.get(selectedRun);
     const source = () => context.runs.find(run => run.run_id === selectedRun);
@@ -1264,9 +1279,10 @@
         const replacementAllowed = item?.review?.clinical_replacement_allowed === true;
         clinicalInput.readOnly = hasAttempt || frozen && !replacementAllowed;
         const clinicalPath = part("clinical-path");
-        clinicalInput.hidden = Boolean(renderFilePath && clinicalInput.readOnly && clinicalInput.value);
-        clinicalPath.hidden = !clinicalInput.hidden;
-        if (!clinicalPath.hidden) showReviewPaths(clinicalPath, [clinicalInput.value], renderFilePath);
+        const selectedClinical = clinicalInput.value.trim();
+        clinicalInput.hidden = Boolean(renderFilePath && clinicalInput.readOnly && selectedClinical);
+        clinicalPath.hidden = !renderFilePath || !selectedClinical;
+        if (!clinicalPath.hidden) showReviewPaths(clinicalPath, [selectedClinical], renderFilePath);
         part("clinical-replacement").hidden = !frozen || !replacementAllowed || hasAttempt;
         part("original-clinical").hidden = !frozenClinical;
         if (frozenClinical) showReviewPaths(part("original-path"), [frozenClinical], renderFilePath);
@@ -1398,7 +1414,7 @@
         part("defaults").textContent = defaults.length ? labelFor("defaultsApplied") : "";
         part("defaults").title = defaults.join("\n");
       }
-      renderWorkProgress(part("work-progress"), saved, state, item?.error);
+      renderWorkProgress(part("work-progress"), saved, state, item?.error, disconnected);
       part("submit").hidden = part("submit-actions").hidden = hasAttempt;
       part("submit").disabled = !allowed || !item?.review || item.review.ready === false || adjustment && !item.review.review_token || item.checking || item.submitting || hasAttempt || cancellationBusy(item) || revalidationBusy(item);
       part("status").textContent = labelFor(state);
@@ -1412,7 +1428,8 @@
       part("retry").hidden = !saved || !["failed", "cancelled"].includes(state) || Boolean(item?.retry || item?.uncertain || cancellationBusy(item) || revalidationBusy(item));
       part("back").hidden = !context.runId;
       if (visualization) part("results").disabled = !context.resultsAvailable;
-      const message = [item?.uncertain ? labelFor("uncertain") : "", item?.error].filter(Boolean).join(" ");
+      const message = [item?.uncertain ? labelFor("uncertain") : "",
+        connectionNotice(disconnected, state, item?.error), item?.error].filter(Boolean).join(" ");
       part("notice").textContent = message;
       part("notice").hidden = !message;
       reviewPanel.hidden = hasAttempt && !message;
@@ -1646,6 +1663,12 @@
       });
     }
     picker.addEventListener("change", () => selectRun(picker.value));
+    window.addEventListener("workspace-remote-context", event => {
+      const offline = event.detail?.connected === false;
+      if (disconnected === offline) return;
+      disconnected = offline;
+      render();
+    });
     cancellation = mountCancellation({panel, prefix, stage, labelFor, request, render, schedule,
       target: () => ({item: current(), runId: selectedRun, datasetId: context.datasetId, visible: context.visible, run: source()}),
       receive: (value, next) => accept(value.item, next, value.runId)});

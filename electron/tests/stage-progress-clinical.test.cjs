@@ -114,6 +114,12 @@ test('all six stages switch from indeterminate to measured progress and stop on 
   const activity=panel.querySelector('progress');
   assert.equal(activity.hasAttribute('value'),false);
   assert.match(activity.getAttribute('aria-label'),/work counts are available/);
+  const remote=connected=>w.dispatchEvent(new w.CustomEvent('workspace-remote-context',{detail:{connected}}));
+  const notice=panel.querySelector('[data-'+step+'-notice]');
+  remote(false);
+  assert.match(notice.textContent,/Connection interrupted/);
+  assert.equal(panel.querySelector('progress'),null,'disconnect stops indeterminate activity immediately');
+  remote(true);
   reported={...record,progress:{...record.progress,[unit]:'2 5'}};
   refresh.click();
   await until(()=>panel.querySelector('progress[value="2"]')&&!refresh.disabled);
@@ -121,9 +127,17 @@ test('all six stages switch from indeterminate to measured progress and stop on 
   assert.equal(bar.getAttribute('aria-label'),label);
   assert.match(panel.querySelector('[data-'+step+'-work-progress]').textContent,/2 \/ 5/);
   assert.equal(panel.querySelectorAll('progress').length,1);
+  remote(false);
+  assert.match(notice.textContent,/Connection interrupted/);
+  assert.equal(panel.querySelector('progress').value,2,'disconnect preserves the last confirmed count');
+  remote(true);
+  reported={...reported,connection:'interrupted'};
+  refresh.click();
+  await until(()=>notice.textContent.includes('Connection interrupted')&&!refresh.disabled);
+  assert.equal(panel.querySelector('progress').value,2);
   reported={...record,connection:'interrupted'};
   refresh.click();
-  await until(()=>panel.querySelector('[data-'+step+'-notice]').textContent.includes('Connection interrupted'));
+  await until(()=>!refresh.disabled);
   assert.equal(panel.querySelector('progress'),null);
  }
 });
@@ -237,12 +251,21 @@ test('a failed Stage 3 submission keeps the replacement and the actual error',as
    review_token:clinical===replacement?token:null,inputs:{'cli.file':clinical},options:{npc:3},resources,limits:{},
    issues:clinical===original?['The clinical file needs one column named gender.']:[]});
  };
- controller=w.mountAdjustmentRun({panel,token:'page-token',onHistoryChanged:()=>Promise.resolve().then(()=>controller.setContext(context))});
+ const renderFilePath=path=>{
+  const button=w.document.createElement('button');
+  button.type='button';button.textContent='Full path';button.dataset.path=path;
+  return button;
+ };
+ controller=w.mountAdjustmentRun({panel,token:'page-token',renderFilePath,
+  onHistoryChanged:()=>Promise.resolve().then(()=>controller.setContext(context))});
  const q=selector=>panel.querySelector(selector);
  controller.setContext(context);
  const path=q('[data-adjust-input="cli.file"]'),review=q('[data-adjust-review]'),submit=q('[data-adjust-submit]');
  await until(()=>path.value===original&&!review.disabled);
  path.value=replacement;path.dispatchEvent(new w.Event('input',{bubbles:true}));
+ assert.equal(q('[data-adjust-clinical-path]').hidden,false);
+ assert.equal(q('[data-adjust-clinical-path] button').dataset.path,replacement);
+ assert.equal(q('[data-adjust-original-path] button').dataset.path,original);
  review.click();await until(()=>!submit.disabled);
  submit.click();await pause();
  assert.equal(path.value,replacement);

@@ -1643,8 +1643,8 @@ code:not(pre code) {
 }
 #signet-lens-left-preview .ml-stage-review .ml-stage-review-file-list dd { min-width: 0; margin: 0; }
 #signet-lens-left-preview .ml-stage-review .ml-stage-review-file-list dd > div + div { margin-top: 5px; }
-#signet-lens-left-preview .ml-stage-review .ml-stage-review-file-list dd > div > strong {
-  display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+#signet-lens-left-preview .ml-stage-review .ml-stage-review-path > strong {
+  display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   font-weight: 630;
 }
 #signet-lens-left-preview .ml-stage-review .ml-stage-review-file-list .ml-file-directory { font-size: 11px; }

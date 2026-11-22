@@ -102,7 +102,11 @@ test('reference overrides route the example to manual dataset review and invalid
 
 test('an unavailable dataset catalog blocks new legacy review and submission',async t=>{
  const h=harness(t,()=>response(legacyReview()));const unavailable={...clone(example),ready:false};
- h.context(unavailable);h.click('review');h.click('submit');await settle();assert.equal(h.calls.length,0);assert.equal(h.q('[data-genotype-submit]').disabled,true);
+ h.context(unavailable);
+ assert.match(h.q('[data-genotype-readiness]').textContent,/Loading the dataset catalog/);
+ h.context({...unavailable,catalogUnavailable:true});
+ assert.match(h.q('[data-genotype-readiness]').textContent,/Could not load the dataset catalog/);
+ h.click('review');h.click('submit');await settle();assert.equal(h.calls.length,0);assert.equal(h.q('[data-genotype-submit]').disabled,true);
  h.context(example);await until(()=>!h.q('[data-genotype-submit]').disabled);assert.equal(h.calls.length,1);
  h.context(unavailable);assert.equal(h.q('[data-genotype-submit]').disabled,true);h.click('submit');await settle();assert.equal(h.calls.length,1);
 });
