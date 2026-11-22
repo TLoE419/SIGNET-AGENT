@@ -264,21 +264,22 @@ test('the file window browses, refuses unsupported names and keeps format errors
  const replies:Record<string,(body:any)=>object>={
   '/hpc/files/shortcuts':()=>({status:'ok',shortcuts:[{label:'Home',path:'/home/u'},{label:'Personal (/pub)',path:'/pub/u'},{label:'Lab: genome',path:'/dfs7/genome'}]}),
   '/hpc/files/list':body=>({status:'ok',kind:'folder',path:body.path,entries:body.path==='/dfs7/genome'?[{name:'refs',path:'/dfs7/genome/refs',kind:'folder',size:0,supported:true}]:[{name:'g.gtf',path:body.path+'/g.gtf',kind:'file',size:2048,supported:true},{name:'bad name.gtf',path:body.path+'/bad name.gtf',kind:'file',size:1,supported:false}]}),
-  '/hpc/files/select':body=>body.path.endsWith('g.gtf')&&!selected++?{status:'invalid',error:'This GTF is not collapsed.'}:{status:'ok'},
+  '/hpc/files/inspect':body=>!selected++?{status:'invalid',error:'This file is unreadable.'}:{status:'ok',files:body.paths.map((path:string)=>({path,size:2048}))},
+  '/signet/datasets/fixture':body=>({id:'fixture',inputs:{},references:body.references}),
  };
  globalThis.fetch=(async(url:string,init:any)=>{const body=JSON.parse(init.body);calls.push([url,body]);return {ok:true,json:async()=>replies[url](body)}}) as any;
  let done=0;
  try{
-  render(<RemoteFilesModal target={{key:'gtf',label:'Gene annotation',current:''}} onClose={()=>{}} onSelected={()=>done++}/>);
+  render(<RemoteFilesModal target={{key:'gtf',referenceKind:'gtf',datasetId:'fixture',label:'Gene annotation',current:''}} onClose={()=>{}} onSelected={()=>done++}/>);
   await waitFor(()=>assert.ok(screen.getByRole('button',{name:/g\.gtf/})));
   assert.deepEqual(calls[1],['/hpc/files/list',{path:'/pub/u'}],'starts in the personal space');
   assert.equal((screen.getByRole('button',{name:/bad name/}) as HTMLButtonElement).disabled,true);
   fireEvent.click(screen.getByRole('button',{name:'Lab: genome'}));await waitFor(()=>assert.ok(screen.getByRole('button',{name:'refs/'})));
   fireEvent.click(screen.getByRole('button',{name:'refs/'}));await waitFor(()=>assert.ok(screen.getByRole('button',{name:/g\.gtf/})));
-  fireEvent.click(screen.getByRole('button',{name:/g\.gtf/}));fireEvent.click(screen.getByRole('button',{name:'Use this file'}));
-  await waitFor(()=>assert.ok(screen.getByRole('alert').textContent?.includes('not collapsed')));assert.equal(done,0);
-  fireEvent.click(screen.getByRole('button',{name:'Use this file'}));await waitFor(()=>assert.equal(done,1));
-  assert.deepEqual(calls.at(-1),['/hpc/files/select',{key:'gtf',path:'/dfs7/genome/refs/g.gtf'}]);
+  fireEvent.click(screen.getByRole('button',{name:/g\.gtf/}));fireEvent.click(screen.getByRole('button',{name:'Apply file selection'}));
+  await waitFor(()=>assert.ok(screen.getByRole('alert').textContent?.includes('unreadable')));assert.equal(done,0);
+  fireEvent.click(screen.getByRole('button',{name:'Apply file selection'}));await waitFor(()=>assert.equal(done,1));
+  assert.deepEqual(calls.at(-1),['/signet/datasets/fixture',{references:{gtf:'/dfs7/genome/refs/g.gtf'}}]);
  }finally{globalThis.fetch=previous}
 });
 

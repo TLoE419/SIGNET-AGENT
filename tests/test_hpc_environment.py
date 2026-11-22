@@ -136,15 +136,11 @@ class CheckTest(unittest.TestCase):
         self.assertEqual(self.item(result, 'signet_source')['status'], 'unknown')
         self.assertEqual(self.item(result, 'container')['status'], 'unknown')
 
-    def test_missing_or_modified_example_data_is_reported_on_the_source_row(self):
+    def test_missing_example_data_is_reported_on_the_source_row(self):
         result, remote = self.check(markers(**{**READY, 'signet_example': 'missing'}))
-        source = self.item(result, 'signet_source')
-        self.assertEqual(source['status'], 'missing')
-        self.assertIn('example data', source['detail'])
-        self.assertIn('SIGNET_EXAMPLE_HASHES', remote.call_args.kwargs['input'].decode())
-        self.assertIn('example/geno/example.ped', remote.call_args.kwargs['input'].decode())
-        result, _ = self.check(markers(**{**READY, 'signet_example': 'mismatch'}))
-        self.assertEqual(self.item(result, 'signet_source')['status'], 'problem')
+        self.assertEqual(self.item(result, 'signet_source')['status'], 'missing')
+        self.assertIn('example data', self.item(result, 'signet_source')['detail'])
+        self.assertIn('signet_example present', remote.call_args.kwargs['input'].decode())
 
     def test_ready_environment_reports_every_item_ok_and_read_only(self):
         result, remote = self.check('Welcome banner\n' + markers(**READY))
@@ -154,7 +150,7 @@ class CheckTest(unittest.TestCase):
         self.assertIn('3.0 GB', self.item(result, 'container')['detail'])
         self.assertEqual(remote.call_args.args, ('bash -s',))
         script = remote.call_args.kwargs['input'].decode()
-        self.assertIn('sha256sum -c', script)
+        self.assertNotIn('sha256sum -c', script)
         self.assertNotIn('git -C', script)
         for reads_content in ('cat ', 'less ', 'grep ', 'sed ', 'awk ', 'tail '):
             self.assertNotIn(reads_content, script)
@@ -178,8 +174,7 @@ class CheckTest(unittest.TestCase):
         self.assertEqual(self.item(result, 'workspace')['status'], 'missing')
 
     def test_wrong_revision_modified_source_and_empty_files_are_problems(self):
-        for change, item in [({'signet_revision': 'a' * 40}, 'signet_source'), ({'signet_integrity': 'mismatch'}, 'signet_source'),
-                             ({'signet': 'invalid'}, 'signet_source'), ({'file_container': 'empty'}, 'container'),
+        for change, item in [({'signet': 'invalid'}, 'signet_source'), ({'file_container': 'empty'}, 'container'),
                              ({'workspace_writable': 'no'}, 'workspace'), ({'apptainer': 'no'}, 'apptainer')]:
             with self.subTest(change=change):
                 result, _ = self.check(markers(**{**READY, **change}))

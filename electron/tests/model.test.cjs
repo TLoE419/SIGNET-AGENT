@@ -144,3 +144,15 @@ test('failed replacement retains the encrypted saved key and does not switch mod
   assert.equal((await controller.status()).provider, 'gemini');
  } finally {await rm(directory, {recursive: true, force: true});}
 });
+
+test('real preload exposes the model selection handler to the main page',()=>{
+ const {runInNewContext}=require('node:vm');
+ const {readFileSync}=require('node:fs');const path=require('node:path');
+ let exposed;const calls=[];
+ runInNewContext(readFileSync(path.join(__dirname,'../preload/index.cjs'),'utf8'),{
+  process:{argv:[],isMainFrame:true},require:()=>({contextBridge:{exposeInMainWorld:(_name,value)=>{exposed=value}},
+   ipcRenderer:{invoke:(...args)=>{calls.push(args);return Promise.resolve({ok:true})}}})
+ });
+ assert.equal(typeof exposed.model.selectProvider,'function');exposed.model.selectProvider('codex');
+ assert.deepEqual(calls,[['model:selectProvider','codex']]);
+});

@@ -14,8 +14,8 @@ def check_hpc_environment() -> dict:
 
     Use it when the user asks whether they are ready, what is missing, or how a
     setup step is progressing. Requires the app's SSH connection to HPC3. Reports
-    existence, image size, hashes of pinned source files and the app's own setup
-    states. Reads only audited source files for hashing. Dataset inputs and
+    existence, image size and the app's own setup states. Source integrity is
+    verified by the desktop environment settings check. Dataset inputs and
     references are checked separately in the corresponding stage review.
     Items whose status is not "ok" still need preparation; "in_progress" means a
     setup step is still running in the background.
@@ -54,7 +54,7 @@ def download_signet_container() -> dict:
     existing image and never starts a second download. Returns immediately with
     the job ID; use check_hpc_environment later.
     """
-    return hpc.start_step('container')
+    return _show_progress(hpc.start_step('container'))
 
 
 def read_hpc_setup_log(step: str) -> dict:

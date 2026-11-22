@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 from google.genai import errors, types
 
 from agent.tools.general import list_files
-from agent.core.model_privacy import model_contents, model_workspace_context
+from agent.core.model_privacy import model_contents, model_workspace_context, model_analysis_context
 from agent.core.model_timing import ModelRequestTiming
 from agent.core.context_budget import ContextBudgetError
 from agent.core.tool_status import activity_status
@@ -34,11 +34,19 @@ config = types.GenerateContentConfig(
         "You are a research assistant for this local SIGNET project. "
         "Write answers and public tool-selection notes in English, regardless of the language used in the conversation. "
         "Answer ONLY the user's current question, using concise, readable Markdown. "
-        "When listing analyses, capabilities or input requirements, give each distinct analysis "
-        "its OWN numbered bold title, followed by separate bullets labeled **Purpose:** and "
-        "**Required data:**. Put each bullet on its own line and a blank line between analyses. "
+        "Keep three kinds of statements apart: (1) facts about this app (tools, steps, inputs, files, limits) "
+        "come only from signet_catalog or tool results; if absent, say the app has no record; (2) general "
+        "science background may come from your knowledge, labeled as general and possibly differing from SIGNET; "
+        "(3) for results or advice, separate tool facts from general reasoning and leave research decisions "
+        "to the researcher. "
+        "When asked what you can do or about capabilities, call signet_catalog and answer in two groups: "
+        "first **HPC3 setup** with one bullet per hpc3_setup step (what it does and its button), then "
+        "**Analysis stages** with each analysis_stages entry as its OWN numbered bold title including its signet "
+        "flag, followed by separate bullets **Purpose:**, **Required data:** and **How to run:** taken from the catalog. "
+        "Mention the scope limits briefly. When asked only about analyses or inputs, use the analysis part. "
+        "Put each bullet on its own line and a blank line between items. "
         "Use short sentences and short input lists; never merge multiple analyses into one "
-        "long bullet or paragraph. List all requested analyses without a fixed item-count "
+        "long bullet or paragraph. List all requested items without a fixed item-count "
         "or character limit. State unknown inputs explicitly rather than inventing them. "
         "For simple questions, answer briefly without forcing the analysis template. "
         "Do not add background, other stages, "
@@ -69,17 +77,25 @@ config = types.GenerateContentConfig(
         "(create_hpc_workspace, install_signet_source, download_signet_container) "
         "does one step; call only "
         "the steps the user's own message asks for or agrees to. An assistant suggestion is not approval. "
+        "To prepare everything, start each missing setup step whose prerequisites are met "
+        "and say which must wait. Dataset references and conversions belong to each analysis stage review. "
         "Discover available context before requesting exact paths or run IDs. "
-        "For a new analysis, propose a saved workspace dataset and let the manual form create its isolated run. "
+        "For first-stage genotype preprocessing in desktop chat, use propose_hpc3_genotype. "
+        "For an HPC3 step's state, failure or result, call get_step_report. "
+        "Explain card settings from catalog parameters; the researcher chooses values. "
+        "A conversation holds one analysis and its reruns; for a new analysis in a conversation that already "
+        "has one, ask the researcher to open a new conversation. Otherwise first create a fresh run with configure_signet. "
+        "Set use_example only when the user asks for the official example. "
+        "After each completed step the next confirmation card appears for the same analysis. "
+        "Use those cards to continue stages 2–6 and view or download the results. "
+        "The review card shows the inputs and settings for the researcher to edit. "
+        "A chat reply, including yes, does not confirm the card. Never claim that preparing the card submitted a job. "
+        "SIGNET steps run only on HPC3 after the researcher confirms a card; you never run a step yourself. "
         "Never invent inputs, cohort or scientific parameters, silently adopt defaults as research "
         "decisions, or execute unrelated work. Only user statements confirm research choices; "
         "'continue' does not approve assistant-proposed parameters. Explain the requested scientific operation briefly "
         "and clarify missing research choices first. Report dependency and input limitations. "
-        "Prepared, unavailable or failed results are not completed analyses; process exit zero "
-        "does not prove scientific validity. All six stages use the selected workspace's manual execution services; "
-        "the model may read saved status and propose review, but cannot submit, retry or cancel work. "
-        "Manual review owns the actual environment, inputs, settings, resources and explicit confirmation. "
-        "Submitted/running is not completion, and checked technical output does not establish biological validity. "
+        "Submitted or running is not completed; a completed step is checked technical output, not biological validity. "
         "Do not repeatedly poll in one turn. "
         "The current workspace has source/dataset, canonical run history, six stage results and a linked gene/connection table. Use navigate_workspace for requested view or gene changes with a known source-prefixed history_id; do not use legacy panel controls for workspace navigation. Navigation never executes analysis or confirms a proposal. Do not claim navigation succeeded when unavailable or rejected by the page. "
         "Never replay interrupted, failed or unknown-state tool operations. "
@@ -225,8 +241,8 @@ def _answer_without_summary(text):
     return '\n'.join(lines).strip()
 
 
-def run_conversation(client, text: str, history=None, progress=None, http_timing=None, workspace_context=None,
-                     *, on_model_fallback=None, cancel_requested=None):
+def run_conversation(client, text: str, history=None, progress=None, http_timing=None, language=None,
+                     context='', workspace_context=None, *, on_model_fallback=None, cancel_requested=None):
     model_name = getattr(client, 'model', MODEL)
     contents = history if history is not None else []
     recovery = ("The conversation and completed tool results are retained. Send “continue” when ready." if history is not None
@@ -243,6 +259,11 @@ def run_conversation(client, text: str, history=None, progress=None, http_timing
         'This replaces all earlier workspace selections, including other chats. Null means no current selection. '
         'Do not infer missing run/source or execute analysis from selection alone: ' +
         json.dumps(model_workspace_context(workspace_context), ensure_ascii=True)})
+    if isinstance(context, list):
+        conversation_config = conversation_config.model_copy(update={
+            'system_instruction': conversation_config.system_instruction +
+            '\nLinked analyses (opaque references; use latest when no run is named): ' +
+            json.dumps(model_analysis_context(context), ensure_ascii=True)})
     def report(message):
         if progress is not None:
             progress(message)

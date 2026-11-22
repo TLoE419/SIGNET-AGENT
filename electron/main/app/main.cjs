@@ -154,7 +154,7 @@ async function launch({provider, visible = true, userData, stateFile, startupMs,
     disposeModel = installModelHandlers(ipcMain, () => window, modelController, () => origin);
     // A saved Gemini key selects Gemini unless --provider was given explicitly.
     const savedKey = await modelStore.load().catch(() => null);
-    const startProvider = provider || (savedKey ? 'gemini' : 'codex');
+    const startProvider = provider || (savedKey ? 'gemini' : 'none');
     await startBackend(startProvider, startProvider === 'gemini' ? savedKey : null);
     devTerminal=installDevTerminal(ipcMain,()=>window,sshService,()=>origin);
   }
@@ -215,7 +215,7 @@ function providerFromArgs(argv) {
   const index = argv.indexOf('--provider');
   if (index < 0) return undefined;
   const provider = argv[index + 1];
-  if (!['codex', 'gemini', 'groq'].includes(provider)) throw Error('Use --provider codex, gemini or groq.');
+  if (!['none', 'codex', 'gemini', 'groq'].includes(provider)) throw Error('Use --provider none, codex, gemini or groq.');
   return provider;
 }
 module.exports = {launch, providerFromArgs};

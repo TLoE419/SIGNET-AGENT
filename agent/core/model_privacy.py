@@ -11,7 +11,7 @@ import threading
 
 _OMIT = object()
 _STATES = {'ok', 'invalid', 'error', 'failed', 'blocked', 'unavailable', 'prepared', 'created',
-           'needs_review', 'needs_choice', 'not_started', 'not_submitted', 'submitting', 'submitted',
+           'awaiting_confirmation', 'needs_review', 'needs_choice', 'not_started', 'not_submitted', 'submitting', 'submitted',
            'pending', 'queued', 'running', 'validating', 'completed', 'cancelled', 'cancelling',
            'unknown', 'interrupted', 'skipped', 'passed', 'warning', 'incomplete', 'unchecked',
            'stale', 'missing', 'problem', 'in_progress', 'ready', 'not_ready', 'requires_review'}
@@ -308,3 +308,23 @@ def model_workspace_context(value):
         return None
     return _project(value, {key: _WORKSPACE[key] for key in
         ('dataset_id', 'history_id', 'run_id', 'source', 'stage')})
+
+
+def model_analysis_context(value):
+    """Keep linked-analysis ordering without exposing run names or arbitrary change text."""
+    if not isinstance(value, list):
+        return []
+    result = []
+    for row in value[:MAX_REFERENCES]:
+        if not isinstance(row, dict):
+            continue
+        item = model_workspace_context({'run_id': row.get('run_id')})
+        if not item:
+            continue
+        if type(row.get('number')) is int and row['number'] >= 0:
+            item['number'] = row['number']
+        item['latest'] = row.get('latest') is True
+        if row.get('from_step') in _STEPS:
+            item['from_step'] = row['from_step']
+        result.append(item)
+    return result

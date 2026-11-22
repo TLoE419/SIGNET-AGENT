@@ -41,6 +41,19 @@ class WorkflowEndpointTest(unittest.TestCase):
         return self.request('POST', path, body, headers if headers is not None else {
             'Origin': self.origin, 'X-Chat-Token': self.server.token, 'Content-Type': 'application/json'})
 
+    def test_file_browser_routes_work_without_removed_selection_functions(self):
+        from agent.runtime import hpc_files
+        with patch.object(hpc_files, 'shortcuts', return_value={'status': 'ok', 'shortcuts': []}) as shortcuts, \
+                patch.object(hpc_files, 'list_folder', return_value={'status': 'ok', 'entries': []}) as listing:
+            status, body = self.post('/hpc/files/shortcuts')
+            self.assertEqual((status, json.loads(body)), (200, {'status': 'ok', 'shortcuts': []}))
+            status, body = self.post('/hpc/files/list', json.dumps({'path': '/pub/tester'}))
+            self.assertEqual((status, json.loads(body)), (200, {'status': 'ok', 'entries': []}))
+            shortcuts.assert_called_once_with()
+            listing.assert_called_once_with('/pub/tester')
+            for route in ('selected', 'select', 'clear'):
+                self.assertEqual(self.post('/hpc/files/' + route)[0], 404)
+
     def test_python_remains_api_only(self):
         for path in ('/', '/workflow.js', '/workflow.css'):
             self.assertEqual(self.request('GET', path)[0], 404)

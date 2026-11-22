@@ -259,10 +259,11 @@ class GroqTest(unittest.TestCase):
         self.assertEqual(workspace['parameters']['required'], ['run_id', 'stage'])
         self.assertEqual(workspace['parameters']['properties']['stage'], {'type':'integer'})
         self.assertEqual(workspace['parameters']['properties']['source'], {'type':'string', 'default':'live'})
-        # Legacy Python schemas remain supported without exposing execution to the model.
-        combine = tool_schema(next(function for function in SIGNET_TOOLS if function.__name__ == 'combine_covariates'))['function']
-        self.assertEqual(combine['parameters']['properties']['additional_covariates'],
-                         {'type':'array', 'items':{'type':'string'}, 'default':None})
+        configure = next(x['function'] for x in schemas if x['function']['name'] == 'configure_signet')
+        self.assertEqual(configure['parameters']['required'], ['run_id'])
+        self.assertEqual(configure['parameters']['properties']['nchr'], {'type':'integer', 'default':22})
+        report = next(x['function'] for x in schemas if x['function']['name'] == 'get_step_report')
+        self.assertEqual(set(report['parameters']['required']), {'run_id', 'step'})
         files = next(x['function'] for x in schemas if x['function']['name'] == 'list_files')
         self.assertEqual(files['parameters']['properties']['folder'].get('enum'), [str(PROJECT)])
 
@@ -271,29 +272,42 @@ class GroqTest(unittest.TestCase):
         responses = [(200, completion(summary, [call()])), (200, completion('查詢完成。')),
                      (200, completion('接續上一輪。'))]
         history, events = [], []
-        with self.client(responses) as client, patch.object(main, 'dispatch_tool', return_value=signet_catalog()) as dispatch:
+        # A small result keeps this test about call IDs; the full catalog's size is covered below.
+        evidence = {key: value for key, value in signet_catalog().items()
+                    if key not in ('hpc3_setup', 'analysis_stages', 'resources', 'scope')}
+        with self.client(responses) as client, patch.object(main, 'dispatch_tool', return_value=evidence) as dispatch:
             self.assertEqual(main.run_conversation(client, '查詢能力', history, progress=events.append), '查詢完成。')
             self.assertEqual(main.run_conversation(client, '繼續', history), '接續上一輪。')
         dispatch.assert_called_once_with('signet_catalog', {})
         messages = self.requests[1]['messages']
-        self.assertEqual(messages[-2]['tool_calls'][0]['id'], 'call-1')
-        self.assertEqual(messages[-1]['tool_call_id'], 'call-1')
-        self.assertEqual(messages[-1]['role'], 'tool')
-        compact = json.loads(messages[-1]['content'])
+        tool_call = next(message for message in messages if message.get('tool_calls'))
+        tool_reply = next(message for message in messages if message.get('tool_call_id') == 'call-1')
+        self.assertEqual(tool_call['tool_calls'][0]['id'], 'call-1')
+        self.assertEqual(tool_reply['tool_call_id'], 'call-1')
+        self.assertEqual(tool_reply['role'], 'tool')
+        compact = json.loads(tool_reply['content'])
         self.assertNotIn('scripts', compact)
         self.assertEqual(compact['all_tools_including_list_files'], len(ALL_TOOLS))
         self.assertTrue(compact['scripts_omitted'])
         self.assertIn('scripts', history[2].parts[0].function_response.response)
         self.assertIn(GROQ_MODEL, events[0])
         self.assertIn('Selection reason:', '\n'.join(events))
-        self.assertEqual(self.requests[2]['messages'][-1], {'role':'user', 'content':'繼續'})
+        self.assertIn({'role':'user', 'content':'繼續'}, self.requests[2]['messages'])
         self.assertEqual(self.send_times, [0, 0, 0])
         self.assertEqual(self.pauses, [])
+
+    def test_full_catalog_over_the_free_budget_is_answered_without_new_tools(self):
+        responses = [(200, completion('', [call()])), (200, completion('能力說明。'))]
+        with self.client(responses) as client, patch.object(main, 'dispatch_tool', return_value=signet_catalog()):
+            self.assertEqual(main.run_conversation(client, '你可以做什麼', []), '能力說明。')
+        second = self.requests[1]
+        self.assertNotIn('tools', second, 'the over-budget round drops only new-call capability')
+        self.assertIn('analysis_stages', json.dumps(second['messages'], ensure_ascii=False), 'catalog evidence is kept')
 
     def test_non_catalog_evidence_is_not_truncated(self):
         result = {'status':'unavailable', 'executed':False, 'missing_dependencies':['Rscript'], 'value':'x'*2000}
         content = types.Content(role='user', parts=[types.Part(function_response=types.FunctionResponse(
-            id='a', name='expression_tcga', response=result))])
+            id='a', name='cis_eqtl', response=result))])
         sent = groq_messages([content], 'rules')
         self.assertEqual(json.loads(sent[-1]['content']), result)
 

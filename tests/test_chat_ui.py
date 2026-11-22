@@ -306,7 +306,7 @@ class ChatUITest(unittest.TestCase):
                 other: {'baseline': None, 'comparison': None, 'proposals': []},
             }
             self.server.save_state()
-            self.server.stage6.save()
+            self.server.stage6.path.write_text(json.dumps(self.server.stage6.sessions))
 
             status, body = self.delete()
             self.assertEqual((status, json.loads(body)), (200, {'deleted': self.session}))
@@ -319,7 +319,7 @@ class ChatUITest(unittest.TestCase):
             self.assertEqual((status, json.loads(body)), (200, {'deleted': self.session}))
             self.assertNotIn('Delete me', self.server.state_file.read_text())
             self.assertNotIn('Delete this event', self.server.state_file.read_text())
-            self.assertNotIn(self.session, self.server.stage6.path.read_text())
+            self.assertIn(self.session, self.server.stage6.path.read_text(), 'Retired scientific checkpoints are never rewritten by chat deletion')
             self.assertEqual(self.requests, [])
             with chat_ui.ChatServer(('127.0.0.1', 0), self.server.client_factory,
                                     state_file=self.server.state_file) as restored:
@@ -327,7 +327,7 @@ class ChatUITest(unittest.TestCase):
                 self.assertEqual(restored.histories, {other: []})
                 self.assertEqual(restored.events, {other: [['Keep this event']]})
                 self.assertEqual(restored.pending_history, self.server.pending_history)
-                self.assertEqual(restored.stage6.sessions, {other: self.server.stage6.sessions[other]})
+                self.assertEqual(restored.stage6.sessions, {}, 'Retired execution state is not restored')
                 self.assertEqual(restored.deleted_sessions, {self.session})
 
     def test_delete_requires_local_auth_and_rejects_busy_or_unknown_sessions(self):
@@ -353,10 +353,10 @@ class ChatUITest(unittest.TestCase):
             workspace = {'baseline': None, 'comparison': None, 'proposals': []}
             self.server.stage6.sessions[self.session] = workspace
             self.server.save_state()
-            self.server.stage6.save()
+            self.server.stage6.path.write_text(json.dumps(self.server.stage6.sessions))
             before = [path.read_bytes() for path in (self.server.state_file, self.server.stage6.path)]
 
-            for target, method in ((self.server, 'save_state'), (self.server.stage6, 'save')):
+            for target, method in ((self.server, 'save_state'),):
                 with self.subTest(method=method), patch.object(target, method, side_effect=OSError('private state path')):
                     status, body = self.delete()
                     self.assertEqual(status, 500)
@@ -567,7 +567,8 @@ class ChatUITest(unittest.TestCase):
         release = threading.Event()
         finished = threading.Event()
 
-        def run(client, text, history, progress, http_timing, workspace_context=None, *, on_model_fallback=None):
+        def run(client, text, history, progress, http_timing, workspace_context=None, *, on_model_fallback=None, context=''):
+
             progress('工具正在執行')
             release.wait(3)
             history.append('已記錄工具結果')

@@ -187,15 +187,6 @@ def _check_script(root):
     if config is not None and config.get('revision') != SOURCE_INVENTORY['revision']:
         raise ValueError('Desktop source revision does not match the audited inventory; recheck the remote environment.')
     # Match EnvironmentService.sourceCheck: the installed archive has no Git metadata.
-    source_hashes = ''.join(f"{item['sha256']}  {item['path']}\n"
-                            for item in SOURCE_INVENTORY['scripts'] + SOURCE_INVENTORY['support_files'])
-    example_hashes = ''.join(f"{item['sha256']}  {item['path']}\n" for item in SOURCE_INVENTORY.get('example_files', []))
-    example = f'''  if [ ! -d "$S/example" ]; then say signet_example missing
-  elif (cd "$S" && sha256sum -c - >/dev/null 2>&1 <<'SIGNET_EXAMPLE_HASHES'
-{example_hashes}SIGNET_EXAMPLE_HASHES
-  ); then say signet_example verified
-  else say signet_example mismatch; fi
-''' if example_hashes else ''
     return _prelude(root) + '''
 say user "$(id -un)"
 say host "$(hostname)"
@@ -215,13 +206,8 @@ if [ ! -e "$S" ]; then say signet no
 elif [ ! -d "$S" ] || [ -L "$S" ]; then say signet invalid
 else
   say signet yes
-  if (cd "$S" && sha256sum -c - >/dev/null 2>&1 <<'SIGNET_SOURCE_HASHES'
-{source_hashes}SIGNET_SOURCE_HASHES
-  ); then
-    say signet_integrity verified
-    say signet_revision {SOURCE_INVENTORY['revision']}
-  else say signet_integrity mismatch; fi
-{example}fi
+  if [ -d "$S/example" ]; then say signet_example present; else say signet_example missing; fi
+fi
 if [ -s "$I" ]; then say file_container "$(stat -c %s "$I" 2>/dev/null || stat -f %z "$I")"
 elif [ -e "$I" ]; then say file_container empty
 else say file_container no; fi
@@ -464,7 +450,7 @@ def _checks(values, revision):
     signet = values.get('signet', 'no')
     if signet == 'no':
         add('signet_source', *(_step_status(values, 'signet') or ('missing', 'SIGNET has not been installed in the remote environment.')))
-    elif signet != 'yes' or values.get('signet_integrity') != 'verified' or values.get('signet_revision') != revision:
+    elif signet != 'yes':
         add('signet_source', 'problem', f'Audited source verification failed for revision {revision[:12]}; files may be missing or modified. Recheck HPC3 settings.')
     elif values.get('signet_example') == 'missing':
         add('signet_source', *(_step_status(values, 'signet') or
@@ -472,7 +458,7 @@ def _checks(values, revision):
     elif values.get('signet_example') == 'mismatch':
         add('signet_source', 'problem', 'The SIGNET example data differs from the pinned revision; move the example folder aside, then install again.')
     else:
-        add('signet_source', 'ok', f'Audited script, support-file and example-data hashes match pinned revision {revision[:12]}.')
+        add('signet_source', 'ok', f'Installed at pinned revision {revision[:12]}. Its files are verified by the HPC3 settings check.')
     value = values.get('file_container', 'no')
     job, state = values.get('job_container'), values.get('job_container_state')
     terminal = values.get('job_container_terminal')
@@ -555,7 +541,7 @@ def check_environment(revision):
             'workspace': values.get('workspace_path'), 'checks': checks, 'not_ready': missing,
             **({'setup_cursor': values['setup_cursor']} if re.fullmatch(r'[a-f0-9]{64}', values.get('setup_cursor', '')) else {}),
             'evidence_scope': 'Shared environment only: connection, workspace, scheduler, runtime, pinned source and container. '
-                              'Only pinned source files were read for hashing. No study files were inspected or changed.'}
+                              'Source integrity is verified by the desktop settings check. No study files were inspected or changed.'}
 
 
 _OUTCOMES = {

@@ -34,4 +34,13 @@ details[open]>.workflow-stage-head::after{transform:rotate(90deg)}
 .workflow-message{margin:10px 0 0;font-size:11px;color:var(--muted)}
 .workflow-message.warning{color:#92400e}
 .workflow-message.error{color:#b91c1c}
+.workflow-next{display:flex;justify-content:flex-end;margin-top:10px}
+.workflow-next button{background:var(--accent);color:#fff}
+.workflow-next button:not(:disabled):hover{background:var(--accent);opacity:.9}
+.workflow-analysis{margin-top:8px}
+.workflow-analysis-head{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px}
+.workflow-analysis-id{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--muted)}
+.workflow-analysis-family{font-size:11px;color:var(--accent, #34765e);white-space:nowrap}
+.workflow-start{gap:8px;margin-top:10px}
+.workflow-item-label code{font-size:11px;color:var(--muted)}
 @media(max-width:600px){.workflow{margin:10px 12px 0}.workflow-badge{flex-basis:52px}}

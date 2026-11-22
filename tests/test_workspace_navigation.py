@@ -1,7 +1,7 @@
 import unittest
 from types import SimpleNamespace
 from agent.tools.ui import UI_CHANNEL, navigate_workspace
-from agent.stage6.workspace import CHAT_CONTEXT
+from agent.runtime.workspace_context import CHAT_CONTEXT
 from agent.tools.signet import dispatch_tool
 
 

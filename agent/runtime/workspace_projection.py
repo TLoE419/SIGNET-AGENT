@@ -222,7 +222,7 @@ def completed_result(run_id, stage='1', *, refresh=False):
     snapshot_values = {}
     for step in tuple(STEPS.values())[:stage]:
         path = root / ('workspace-' + step + '.json')
-        if path.exists() or path.is_symlink():
+        if step in ('genotype', STEPS[stage]) or path.exists() or path.is_symlink():
             value, digest = _json(path)
             if value.get('run_id') != run_id:
                 raise ValueError('The saved workspace inputs belong to a different run.')
@@ -248,22 +248,17 @@ def completed_result(run_id, stage='1', *, refresh=False):
         if original_environment and any(original_environment.get(key) != config.get(key) for key in
                 ('root', 'source', 'image', 'executor', 'workRoot', 'partition', 'runtimeModule')):
             raise jobs.StepError('conflict', 'Select the original remote environment before reading these results.')
-        guard = jobs._output_guard(root, record)
-        request = {'run_id': run_id, 'stage': stage, 'job': record,
+        guard = jobs._output_guard(root, record, allow_mount_alias=True)
+        request = {'run_id': run_id, 'stage': stage, 'remote_dir': record['remote_dir'], 'work_root': config['workRoot'], 'job': record,
                    'owner_token': owner['token'], 'reader_source': reader, 'reader_entry': entry}
         probe = ('if command -v timeout >/dev/null 2>&1; then\n'
                  '  probe_exit=0\n'
                  f'  timeout -k 1s 8s stat -L -- {shlex.quote(record["remote_dir"])} >/dev/null 2>&1 || probe_exit=$?\n'
                  '  case "$probe_exit" in 124|137) exit 124;; esac\n'
                  'fi\n')
-        # Use the canonical directory established by the ownership guard, not its configured mount alias.
+        # The guarded reader resolves only the configured mount alias, never a run redirect.
         script = (jobs._say() + probe + guard + 'python3 - ' + shlex.quote(json.dumps(request))
-                  + " \"$C\" <<'SIGNET_PROJECT_WORKSPACE'\n"
-                  + 'import json, sys\n'
-                  + 'projection_request = json.loads(sys.argv[1])\n'
-                  + 'projection_request["remote_dir"] = sys.argv[2]\n'
-                  + 'sys.argv[1] = json.dumps(projection_request)\n'
-                  + helper + '\nSIGNET_PROJECT_WORKSPACE\n'
+                  + " <<'SIGNET_PROJECT_WORKSPACE'\n" + helper + '\nSIGNET_PROJECT_WORKSPACE\n'
                   + 'projection_status=$?\n[ "$projection_status" = 0 ] || exit "$projection_status"\n' + guard)
         try:
             response = ssh_transport.remote('bash -s', input=script.encode(), capture_output=True, timeout=180)
