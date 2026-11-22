@@ -517,14 +517,20 @@ async function verify() {
   assert.equal(readNetwork().resources.hours, 3);
   assert.match(readFileSync(path.join(remoteRun, 'steps/network.sbatch'), 'utf8'), /bash \.\/signet -n/);
   assert.deepEqual(readFileSync(sbatchCalls, 'utf8').trim().split('\n'), Array(5).fill('submitted'));
-  for (const [phase, completed] of [['stage1', 'one\n'], ['stage2', '']]) {
+  for (const [phase, completed] of [['stage1', 'first\n'], ['stage2', '']]) {
     const directory = path.join(remoteRun, 'work/tmp/tmpn', phase);
     mkdirSync(directory, {recursive:true});
     writeFileSync(path.join(directory, 'params.txt'), 'first\nsecond\n');
     writeFileSync(path.join(directory, 'params1.txt.completed'), completed);
   }
   writeFileSync(path.join(fixture.slurm, 'squeue'), 'RUNNING\n');
-  await until(async () => await networkState() === 'running', 'Stage 5 did not automatically report execution');
+  try {
+    // The renderer poll and backend cache each have a 15-second interval.
+    await until(async () => await networkState() === 'running', 'Stage 5 did not automatically report execution', 35000);
+  } catch (error) {
+    const {state, slurm_state: schedulerState} = readNetwork();
+    throw Error(`${error.message} (screen: ${await networkState()}, saved: ${state}, scheduler: ${schedulerState})`, {cause: error});
+  }
   assert.deepEqual(readNetwork().progress, {stage1:'1 2', stage2:'0 2'});
   assert.ok(await js(`document.querySelector('${networkPanel} [data-network-work-progress]')?.getClientRects().length > 0`),
     'Stage 5 internal calculation progress is hidden');
