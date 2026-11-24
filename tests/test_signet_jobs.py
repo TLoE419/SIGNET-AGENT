@@ -2202,6 +2202,9 @@ else:
         patched = (self.remote_dir / 'work/script/netvis/netshiny.R').read_text()
         self.assertTrue(patched.startswith('Sys.setenv(freq=trimws(Sys.getenv("freq")))\n'))
         self.assertTrue(patched.endswith('cat("SIGNET_STAGE6_EXPORTS_COMPLETED\\n")\n'))
+        # The Shiny dashboard's objects are saved before the check reuses the name `edges`.
+        self.assertIn(steps.DASHBOARD_EXPORT, patched)
+        self.assertLess(patched.index('jsonlite::write_json'), patched.index('edges <- paste0(prefix'))
         (self.remote_dir / 'steps/visualize.done').unlink()
         snapshot = (self.root / workspace.VISUALIZE_SNAPSHOT).read_bytes()
         calls = len(self.calls)

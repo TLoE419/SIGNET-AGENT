@@ -87,6 +87,73 @@ class Stage6ResultAssetsTest(unittest.TestCase):
             with self.subTest(invalid=invalid), self.assertRaises(StepError):
                 self.assets.issue_download(row['history_id'], row['record_identity'], invalid)
 
+    def dashboard(self, **changes):
+        """The shape jsonlite::write_json gives the objects netshiny.R exports on HPC3."""
+        data = {'version': 1, 'frequency': 0.45, 'ntop': 1, 'summary': {'subnetworks': 3, 'genes': 5, 'edges': 4},
+                'top_nodes': [{'gene': 'MEGF6', 'degree': 3, 'subnetwork': 1}, {'gene': 'B', 'degree': 1}],
+                'ppi': [{'Protein 1': 'MEGF6', 'Protein 2': 'B', 'Combined Score': 912}],
+                'subnetworks': [{'number': 1, 'genes': 3, 'edges': 2, 'enrichment_terms': False, 'modularity_groups': 2,
+                                 'pathway': [{'description': 'Cell cycle, Term: GO:1', 'p_value': 0.0001, 'text': 'Related genes: MEGF6,B'}],
+                                 'table': [{'source gene': 'MEGF6', 'source chr': '1', 'source start': 100, 'source end': 200,
+                                            'target gene': 'B', 'target chr': '1', 'target start': 300, 'target end': 400,
+                                            'coef': 0.5}]}]}
+        data.update(changes)
+        (self.directory / 'signet_dashboard_freq0.45.json').write_text(json.dumps(data))
+
+    def test_dashboard_export_is_read_with_its_network_pages_and_figure_reasons(self):
+        self.dashboard()
+        lib = self.directory / 'signet_dashboard_freq0.45_files'
+        lib.mkdir()
+        (lib / 'vis.js').write_text('window.vis=true;')
+        (lib / 'notes.txt').write_text('not a dependency')
+        for criterion in ('enrichment', 'modularity'):
+            (self.directory / f'signet_dashboard_freq0.45_top1_{criterion}.html').write_text(
+                f'<html><head><script src="signet_dashboard_freq0.45_files/vis.js"></script></head><body>{criterion}</body></html>')
+        (self.directory / 'signet_enrich_KEGG_info_top1_freq0.45.txt').write_text('category@term\nNA@NA\n')
+        (self.directory / 'signet_enrich_Process_info_top1_freq0.45.txt').write_text('category@term\nProcess@GO:1\nProcess@GO:2\n')
+        data = self.metadata()['dashboard']
+        self.assertTrue(data['available'])
+        self.assertEqual(data['summary'], {'subnetworks': 3, 'genes': 5, 'edges': 4})
+        self.assertEqual(data['top_nodes'], [{'gene': 'MEGF6', 'degree': 3, 'subnetwork': 1}, {'gene': 'B', 'degree': 1, 'subnetwork': None}])
+        self.assertEqual(data['ppi'], [{'protein1': 'MEGF6', 'protein2': 'B', 'score': 912}])
+        entry = data['subnetworks'][0]
+        self.assertEqual(entry['table']['rows'], [['MEGF6', '1', 100, 200, 'B', '1', 300, 400]])
+        self.assertEqual(entry['pathway'][0]['text'], 'Related genes: MEGF6,B')
+        self.assertEqual(entry['missing'], {
+            'enrichment_radar': {'code': 'too_few', 'category': 'KEGG', 'count': 0, 'minimum': 4},
+            'enrichment_hist': {'code': 'too_few', 'category': 'Process', 'count': 2, 'minimum': 5}})
+        page = result_assets.PREVIEW_PATH.fullmatch(entry['networks']['modularity'])
+        body, _, csp = self.assets.preview(page['ticket'], page['name'], 'http://127.0.0.1:1234')
+        self.assertIn(b'modularity', body)
+        self.assertIn(b"signetGenes", body)
+        self.assertIn(result_assets._SCRIPT_HASH, csp)
+        self.assertEqual(self.assets.preview(page['ticket'], 'signet_dashboard_freq0.45_files/vis.js', 'http://127.0.0.1:1234')[0], b'window.vis=true;')
+        for name in ('signet_dashboard_freq0.45.json', 'signet_dashboard_freq0.45_files/notes.txt'):
+            with self.subTest(name=name), self.assertRaises(StepError):
+                self.assets.preview(page['ticket'], name, 'http://127.0.0.1:1234')
+        row = self.row()
+        archive, _, _ = self.assets.download(self.ticket(self.assets.issue_download(row['history_id'], row['record_identity'])))
+        with ZipFile(io.BytesIO(archive)) as files:
+            self.assertIn('signet_dashboard_freq0.45.json', files.namelist())
+            self.assertIn('signet_dashboard_freq0.45_top1_enrichment.html', files.namelist())
+            self.assertIn('signet_enrich_Process_info_top1_freq0.45.txt', files.namelist())
+            self.assertNotIn('signet_dashboard_freq0.45_files/notes.txt', files.namelist())
+
+    def test_dashboard_reports_why_it_is_unavailable(self):
+        data = self.metadata()['dashboard']
+        self.assertEqual((data['available'], data['reason']), (False, {'code': 'not_exported'}))
+        self.assertEqual(data['subnetworks'][0]['networks'], {'enrichment': None, 'modularity': None})
+        self.assertEqual(data['subnetworks'][0]['missing']['enrichment_radar'], {'code': 'not_recorded', 'category': 'KEGG'})
+        (self.directory / 'signet_dashboard_freq0.45.error.txt').write_text('Error in visNetwork(...):\n  could not find function\n')
+        data = self.metadata()['dashboard']
+        self.assertEqual(data['reason'], {'code': 'export_failed', 'detail': 'Error in visNetwork(...): could not find function'})
+        for broken in ({'summary': {'subnetworks': 'three', 'genes': 5, 'edges': 4}}, {'subnetworks': []}, {'ppi': 'none'}):
+            with self.subTest(broken=broken):
+                self.dashboard(**broken)
+                data = self.metadata()['dashboard']
+                self.assertEqual((data['available'], data['reason'], data['top_nodes']), (False, {'code': 'invalid'}, []))
+                self.assertNotIn('table', data['subnetworks'][0])
+
     def test_changed_identity_and_artifact_cannot_be_replayed(self):
         row = self.row(); issued = self.assets.issue_download(row['history_id'], row['record_identity'])
         (self.directory / self.pdf).write_text('changed after the user reviewed the result')

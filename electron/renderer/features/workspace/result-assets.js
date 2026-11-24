@@ -5,9 +5,8 @@
     title: "Original analysis results", loading: "Loading original results…",
     unavailable: "No original preview exports were retained for this run.",
     failed: "Original exports are unavailable. Refresh to try again.",
-    refresh: "Refresh", graph: "Original interactive network",
-    open: "View original network", subnetwork: "Subnetwork",
-    missingGraph: "The original interactive network was not retained.",
+    refresh: "Refresh", dashboard: "Open SIGNET dashboard", dashboardTitle: "SIGNET dashboard",
+    dashboardHint: "Hover over bars and genes for details. If a figure stops loading, close and reopen the dashboard.",
     download: "Download original results ZIP", pdf: "Download original PDF",
     pdfOnly: "No image preview was retained; the original PDF is available.",
     circular: "Circular network", enrichment_hist: "Enrichment histogram",
@@ -15,12 +14,11 @@
     missingCounts: "The original frequency matrix was not retained; cutoff counts are unavailable.",
     cutoff: "Cutoff", genes: "Genes", edges: "Connections",
     count: "Count", frequencyCutoff: "Bootstrap frequency cutoff",
-    close: "Close original preview", search: "Search connections",
+    close: "Close dashboard", search: "Search connections",
     sort: "Sort connections", original: "Original order",
     source: "Source gene A–Z", target: "Target gene A–Z",
     frequency: "Frequency, high to low", coefficient: "Absolute coefficient, high to low",
     rows: "Connections shown", downloadFailed: "Could not create the download link. Try again.",
-    frameFailed: "If the preview cannot load, close it and refresh original results.",
   };
   window.mountStage6Assets = ({stage, token}) => {
     if (!stage || stage.querySelector(".s6-original-results")) return null;
@@ -82,16 +80,16 @@
     const panel = node("details", "s6-original-results"), summary = node("summary"), content = node("div", "s6-original-content");
     panel.append(summary, content); panel.hidden = true;
     stage.querySelector(".ml-result-inspector").append(panel);
-    const dialog = node("dialog", "s6-original-dialog"), dialogHeading = node("strong"), dialogBody = node("div", "s6-original-preview");
+    const dialog = node("dialog", "s6-original-dialog s6-dashboard-dialog"), dialogHeading = node("strong"), dialogBody = node("div", "s6-dashboard");
     const close = button("", () => dialog.close()), dialogHint = node("p", "s6-original-note");
     const dialogHeader = node("header"); dialogHeader.append(dialogHeading, close);
     dialog.append(dialogHeader, dialogBody, dialogHint); stage.append(dialog);
-    const stopPreview = () => { dialogBody.querySelectorAll("iframe").forEach(frame => frame.src = "about:blank"); dialogBody.replaceChildren(); };
+    let dashboard = null, dashboardState = null, loadedAt = 0;
+    const stopPreview = () => { dashboard?.destroy(); dashboard = null; dialogBody.querySelectorAll("iframe").forEach(frame => frame.src = "about:blank"); dialogBody.replaceChildren(); };
     dialog.addEventListener("close", stopPreview);
     dialog.addEventListener("click", event => { if (event.target === dialog) dialog.close(); });
     const contextKey = value => value ? [value.historyId, value.identity, value.revision, value.source, value.runId].join("|") : "";
     let context = null, key = "", request = null, downloadRequest = null, data = null, loading = false, failure = false, downloadFailure = false;
-    let selected = 1;
     const safeURL = (value, prefix) => {
       if (typeof value !== "string" || !value.startsWith(prefix)) return null;
       const url = new URL(value, doc.location.href);
@@ -108,18 +106,33 @@
       if (!response.ok) throw Error(value.error || "Result export unavailable");
       return value;
     };
-    function showPreview(url, title, image = false) {
-      const safe = safeURL(url, "/stage6/result-preview/");
-      if (!safe) return;
-      stopPreview(); dialogHeading.textContent = title;
-      if (image) {
-        const img = node("img"); img.src = safe; img.alt = title; img.referrerPolicy = "no-referrer"; dialogBody.append(img);
-      } else {
-        const frame = node("iframe"); frame.setAttribute("sandbox", "allow-scripts");
-        frame.referrerPolicy = "no-referrer"; frame.title = title; frame.src = safe; dialogBody.append(frame);
-      }
-      dialogHint.textContent = labels.frameFailed;
-      dialog.showModal();
+    function cutoffSection() {
+      const thresholds = cutoffSeries(data?.thresholds);
+      const section = node("div", "s6-cutoff-section");
+      if (!thresholds) { section.append(node("p", "s6-original-note", labels.missingCounts)); return section; }
+      section.append(cutoffChart(thresholds));
+      const table = node("table", "s6-cutoff-counts"), caption = node("caption", "", labels.count_vs_freq);
+      const head = node("thead"), row = node("tr");
+      for (const name of ["cutoff", "genes", "edges"]) { const th = node("th", "", labels[name]); th.scope = "col"; row.append(th); }
+      head.append(row); table.append(caption, head); const body = node("tbody");
+      for (const count of thresholds) { const tr = node("tr"); for (const value of [count.cutoff, count.genes, count.connections]) tr.append(node("td", "", String(value))); body.append(tr); }
+      table.append(body); section.append(table); return section;
+    }
+    function drawDashboard() {
+      if (!dialog.open || !data || !window.mountStage6Dashboard) return;
+      dashboard?.destroy();
+      dashboard = window.mountStage6Dashboard({doc, body: dialogBody, data, thresholds: cutoffSection, safeURL, download,
+        downloading: Boolean(downloadRequest), state: dashboardState});
+    }
+    async function showDashboard() {
+      // Preview links expire after five minutes; fetch fresh ones before drawing.
+      if (Date.now() - loadedAt > 240000) await load();
+      if (!data || !context) return;
+      dashboardState ??= {tab: "summary", enrichmentSubnetwork: 1, circularSubnetwork: 1, criterion: "modularity", genes: null, geneStatus: ""};
+      dialogHeading.textContent = `${labels.dashboardTitle} · ${context.runId}`;
+      dialogHint.textContent = labels.dashboardHint;
+      if (!dialog.open) dialog.showModal();
+      drawDashboard();
     }
     async function download(asset = null) {
       if (!context || downloadRequest) return;
@@ -134,7 +147,7 @@
         const link = node("a"); link.href = url; link.download = asset || "SIGNET-stage6.zip"; link.rel = "noreferrer";
         doc.body.append(link); link.click(); link.remove();
       } catch (error) { if (!controller.signal.aborted && captured === key) downloadFailure = true; }
-      finally { if (downloadRequest === controller) { downloadRequest = null; render(); } }
+      finally { if (downloadRequest === controller) { downloadRequest = null; render(); drawDashboard(); } }
     }
     async function load() {
       if (!context || loading) return;
@@ -144,9 +157,9 @@
         const value = await api(`/signet/history/${encodeURIComponent(context.historyId)}/stage6/assets?identity=${encodeURIComponent(context.identity)}${context.revision ? `&revision=${encodeURIComponent(context.revision)}` : ""}`, {signal: controller.signal});
         if (captured !== key || controller.signal.aborted) return;
         if (value.history_id !== context.historyId || value.identity !== context.identity || value.source !== context.source || value.run_id !== context.runId || (context.revision && value.revision !== context.revision)) throw Error("Result source changed");
-        data = value;
+        data = value; loadedAt = Date.now();
       } catch (error) { if (!controller.signal.aborted && captured === key) { failure = true; data = null; } }
-      finally { if (request === controller) { request = null; loading = false; render(); } }
+      finally { if (request === controller) { request = null; loading = false; render(); if (!data && dialog.open) dialog.close(); else drawDashboard(); } }
     }
     function render() {
       summary.textContent = labels.title; close.textContent = labels.close;
@@ -156,36 +169,11 @@
       if (loading) { content.append(node("p", "s6-original-note", labels.loading)); return; }
       if (failure) content.append(node("p", "s6-original-note", labels.failed));
       if (!data) { if (failure) content.append(button(labels.refresh, load)); return; }
-      const previews = Array.isArray(data.previews) ? data.previews : [];
-      if (previews.length) {
-        const label = node("label", "s6-original-select", labels.subnetwork); const select = node("select");
-        for (const preview of previews) { const option = node("option", "", `${labels.subnetwork} ${preview.subnetwork}`); option.value = String(preview.subnetwork); select.append(option); }
-        if (!previews.some(value => value.subnetwork === selected)) selected = previews[0].subnetwork;
-        select.value = String(selected); select.addEventListener("change", () => { selected = Number(select.value); }); label.append(select);
-        content.append(label, button(labels.open, () => { const preview = previews.find(value => value.subnetwork === selected); if (preview) showPreview(preview.url, `${labels.graph} · ${selected}`); }));
-      } else content.append(node("p", "s6-original-note", labels.missingGraph));
-      for (const plot of Array.isArray(data.plots) ? data.plots : []) {
-        const card = node("div", "s6-original-plot"), title = `${labels[plot.kind] ?? plot.kind}${plot.subnetwork ? ` · ${plot.subnetwork}` : ""}`;
-        card.append(node("strong", "", title));
-        const url = safeURL(plot.url, "/stage6/result-preview/");
-        if (url) {
-          const preview = button("", () => showPreview(plot.url, title, true));
-          const img = node("img"); img.src = url; img.alt = title; img.loading = "lazy"; img.referrerPolicy = "no-referrer"; preview.append(img); card.append(preview);
-        } else card.append(node("p", "s6-original-note", labels.pdfOnly));
-        if (typeof plot.pdf === "string") { const pdf = button(labels.pdf, () => download(plot.pdf)); pdf.disabled = Boolean(downloadRequest); card.append(pdf); }
-        content.append(card);
-      }
-      const thresholds = cutoffSeries(data.thresholds);
-      if (thresholds) {
-        content.append(cutoffChart(thresholds));
-        const table = node("table", "s6-cutoff-counts"), caption = node("caption", "", labels.count_vs_freq);
-        const head = node("thead"), row = node("tr");
-        for (const name of ["cutoff", "genes", "edges"]) { const th = node("th", "", labels[name]); th.scope = "col"; row.append(th); }
-        head.append(row); table.append(caption, head); const body = node("tbody");
-        for (const count of thresholds) { const tr = node("tr"); for (const value of [count.cutoff, count.genes, count.connections]) tr.append(node("td", "", String(value))); body.append(tr); }
-        table.append(body); content.append(table);
-      } else content.append(node("p", "s6-original-note", labels.missingCounts));
-      if (!previews.length && !data.plots?.length && !data.download_available) content.append(node("p", "s6-original-note", labels.unavailable));
+      const summaryText = data.dashboard?.available && data.dashboard.summary
+        ? `${data.dashboard.summary.subnetworks} subnetworks · ${data.dashboard.summary.genes} genes · ${data.dashboard.summary.edges} regulation effects`
+        : "Network Summary, Enrichment Analysis and Circular Plot from SIGNET's dashboard.";
+      content.append(node("p", "s6-original-note", summaryText), button(labels.dashboard, () => void showDashboard()));
+      if (!data.download_available && !data.plots?.length && !data.previews?.length) content.append(node("p", "s6-original-note", labels.unavailable));
       if (downloadFailure) content.append(node("p", "s6-original-note", labels.downloadFailed));
       const actions = node("div", "s6-original-actions");
       if (data.download_available) { const zip = button(labels.download, () => download()); zip.disabled = Boolean(downloadRequest); actions.append(zip); }
@@ -229,14 +217,14 @@
     render(); filterRows();
     function clear() {
       request?.abort(); downloadRequest?.abort(); request = null; downloadRequest = null; loading = false;
-      context = null; key = ""; data = null; failure = false; downloadFailure = false;
+      context = null; key = ""; data = null; failure = false; downloadFailure = false; dashboardState = null; loadedAt = 0;
       if (dialog.open) dialog.close(); else stopPreview(); render();
     }
     return {
       setContext(value) {
         if (!value?.historyId || !value.identity || !value.source || !value.runId) { clear(); return; }
         const next = contextKey(value); if (next === key) return;
-        clear(); context = {...value}; key = next; selected = 1; search.value = ""; sort.value = "original"; filterRows(); render();
+        clear(); context = {...value}; key = next; search.value = ""; sort.value = "original"; filterRows(); render();
         if (panel.open) void load();
       }, clear,
       destroy() { clear(); rowsObserver.disconnect(); hiddenObserver.disconnect(); panel.remove(); dialog.remove(); tools.remove(); },
