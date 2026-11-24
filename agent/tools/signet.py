@@ -107,8 +107,8 @@ HPC3_SETUP = [
     {'step': 'Read a setup log', 'tool': 'read_hpc_setup_log', 'button': None,
      'what': 'Returns fixed diagnostic codes for one setup failure. Raw log lines are not returned to the assistant.'},
 ]
-_HOW_TO_RUN = ('From the confirmation card in chat. The researcher reviews the inputs, settings and resources, '
-               'then confirms; the job runs on HPC3 through Slurm. The assistant cannot confirm a card.')
+_HOW_TO_RUN = ('From this stage\'s form in Analysis. The researcher reviews the inputs, settings and resources, '
+               'then selects Submit; the job runs on HPC3 through Slurm. The assistant cannot submit.')
 # What each card setting controls, quoted from SIGNET's own README.md (pinned commit). The card
 # may show the app's starting value instead of SIGNET's default; choosing values is the researcher's.
 _README = 'SIGNET README.md'
@@ -138,7 +138,7 @@ STAGE_PARAMETERS = {
         'nboots': 'an integer as the number of bootstrapping data sets taken in calculation. By deault 100',
         'ncis': 'an integer as the maximum number of biomarkers associated with each gene. By default 3',
         'cor': 'a value in [-1, 1] specifying the maximum correlation between biomarkers. By default 0.6 '
-               '(the README; SIGNET\'s config.ini.default, which the card starts from, sets 0.3)',
+               '(the README; SIGNET\'s config.ini.default, which the stage form starts from, sets 0.3)',
         'ncores': 'number of cores for each node. By default 128 (this app allows 1-64 per job on HPC3)',
         'memory': 'memory of each node, in GB. By default 256 (this app allows 1-128 GB per job on HPC3)',
         'walltime': 'maximum wall time for cluster. By default 4:00:00',
@@ -148,7 +148,7 @@ STAGE_PARAMETERS = {
         'ntop': 'specifying the number of top subnetworks to visualize. By default 1',
     },
 }
-RESOURCE_NOTE = ('cpus, mem_gb and hours on each card are the Slurm resources requested for that step\'s job on '
+RESOURCE_NOTE = ('cpus, mem_gb and hours on each stage form are the Slurm resources requested for that step\'s job on '
                  'HPC3, not SIGNET parameters. For -n, ncores, memory and walltime size the jobs SIGNET submits itself.')
 _STAGE_KEYS = ('genotype', 'expression', 'adjust', 'cis', 'network', 'visualize')
 
@@ -159,9 +159,9 @@ ANALYSIS_STAGES = [
                 'fail Hardy-Weinberg equilibrium, using the mind, geno and hwe settings), then IMPUTE2 fills in '
                 'missing genotypes at the study\'s own SNPs. SIGNET runs IMPUTE2 with -include_snps empty '
                 '(script/geno_prep/imputation.sh), so no new SNPs are added.',
-     'inputs': 'Study genotypes (PED and MAP), the imputation reference (.gen) and genetic map (IMPUTE2 format). '
-               'The conversion setup step prepares the last two for the example study.',
-     'how_to_run': 'The assistant prepares the first card with propose_hpc3_genotype. ' + _HOW_TO_RUN},
+     'inputs': 'Study genotypes (PED and MAP), an imputation reference and a genetic map. The Stage 1 job converts '
+               'a VCF reference and a SHAPEIT-style map to IMPUTE2 format and keeps study SNPs that match the reference.',
+     'how_to_run': 'First choose the dataset files in Data, then use the Stage 1 form in Analysis. ' + _HOW_TO_RUN},
     {'stage': 2, 'flag': '-t', 'name': 'Expression preprocessing',
      'purpose': 'Removes samples with fewer than 2.5 million total reads and genes with very low counts, applies '
                 'the DESeq2 variance-stabilizing transformation, and uses the GTF to keep protein-coding genes '
@@ -190,7 +190,8 @@ ANALYSIS_STAGES = [
     {'stage': 6, 'flag': '-v', 'name': 'Network visualization',
      'purpose': 'Keeps edges whose bootstrap frequency is at least freq, draws the top ntop subnetworks as '
                 'interactive HTML and circular PDF, and runs functional enrichment with the online STRING '
-                'database. Results are shown in chat and can be downloaded.',
+                'database. Results open in the workspace (network graph, edge table and the SIGNET dashboard) '
+                'and can be downloaded.',
      'inputs': 'Results of stage 5.',
      'how_to_run': _HOW_TO_RUN},
 ]
@@ -219,7 +220,7 @@ def signet_catalog() -> dict:
             'scripts': INVENTORY['scripts'],
             'workspace_execution': {'status_tool': 'get_workspace_stage', 'proposal_tool': 'propose_workspace_stage',
                                     'new_dataset_tool': 'propose_workspace_dataset',
-                                    'confirmation': 'Execution requires explicit confirmation in a review form or chat card.'},
+                                    'confirmation': 'Execution requires the researcher to submit the stage form in Analysis.'},
             'hpc3_setup': HPC3_SETUP, 'analysis_stages': ANALYSIS_STAGES, 'resources': RESOURCE_NOTE, 'scope': SCOPE,
             'note': 'Preparation is not execution. No scientific success is inferred from exit code alone.'}
 
@@ -349,6 +350,9 @@ def dispatch_tool(name, arguments):
             if not isinstance(arguments, dict) or set(arguments) != {'run_id'}:
                 raise ValueError('Provide an explicit run_id.')
             return safe_tool_result(name, get_workspace_stage(arguments['run_id'], 5))
+        if name in {'configure_signet', 'propose_hpc3_genotype'}:
+            return {'status': 'needs_review', 'executed': False,
+                    'reason': 'Analyses start in Data and the Stage 1 form in Analysis. Use propose_workspace_dataset to open it.'}
         if name in LEGACY_EXECUTION or name in {'get_visualization_workspace', 'propose_visualization_change'}:
             return {'status': 'needs_review', 'executed': False,
                     'reason': 'Use propose_workspace_stage with an explicit live run and stage. Scientific execution requires the manual review form and confirmation.'}

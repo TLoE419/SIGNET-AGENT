@@ -2273,7 +2273,9 @@ else:
         self.assertEqual(failed['state'], 'failed')
         text = json.dumps(failed, ensure_ascii=False)
         self.assertIn('scientific_runtime_error', failed['failure']['classifications'])
-        self.assertNotIn('Error in fread', text, 'Original diagnostic text stays private')
+        # The end of the log reaches the model only with sample IDs and folder paths removed.
+        self.assertIn('Error in fread(.../' + self.gexp.name + '): sample [sample ID] missing', failed['failure']['log_tail'])
+        self.assertIn('Removed 1 samples: [sample ID]', failed['failure']['log_tail'])
         self.assertNotIn('TCGA-95', text)
         self.assertNotIn('TCGA-44', text)
         self.assertNotIn(str(self.hpc), text, 'no HPC3 folder reaches the model')

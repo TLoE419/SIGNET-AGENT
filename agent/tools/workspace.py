@@ -1,4 +1,8 @@
 """Model tools share the manual workspace reviews; submission is never exposed."""
+import csv
+import json
+import re
+
 from agent.runtime import signet_jobs as jobs, workspace_genotype as workspace
 from agent.tools import signet
 from agent.runtime import step_report, workspace_datasets
@@ -138,8 +142,78 @@ def get_workspace_validation(dataset_id: str) -> dict:
             'validation': step_report.safe_input_validation(report)}
 
 
+GENE = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,39}')
+
+
+def _network_files(run_id):
+    """The completed Stage 6 gene-level exports already downloaded into this live run."""
+    root, history = workspace._workspace_run(signet._name(run_id))
+    record = history['jobs'].get('visualize') or {}
+    if record.get('state') != 'completed':
+        raise jobs.StepError('not_ready', 'Stage 6 has not completed for this run.')
+    directory = root / 'work/res/resv'
+    label = format(float(record['settings']['freq']), '.15g')
+    return directory / 'signet-edges.csv', directory / f'signet_dashboard_freq{label}.json', record
+
+
+def get_network_genes(run_id: str, gene: str = '', limit: int = 20, source: str = 'live') -> dict:
+    """Gene-level Stage 6 results (no patient data): hub genes by degree, known STRING interactions, enrichment terms, and one gene's regulators and targets when gene is given."""
+    if source != 'live':
+        raise ValueError('Select an explicit live workspace run.')
+    if type(limit) is not int or not 1 <= limit <= 50:
+        raise ValueError('limit must be an integer from 1 to 50.')
+    if gene and not GENE.fullmatch(gene):
+        raise ValueError('gene must be a gene symbol.')
+    edges_path, dashboard_path, record = _network_files(run_id)
+    edges = []
+    with signet._no_links(edges_path).open(newline='') as stream:
+        for row in csv.DictReader(stream):
+            edges.append((row['source_gene_symbol'].strip(), row['target_gene_symbol'].strip(),
+                          float(row['frequency']), float(row['coefficient'])))
+    regulates, regulated = {}, {}
+    for source_gene, target_gene, _, _ in edges:
+        regulates[source_gene] = regulates.get(source_gene, 0) + 1
+        regulated[target_gene] = regulated.get(target_gene, 0) + 1
+    genes = set(regulates) | set(regulated)
+    # igraph::degree in server.R's Top Nodes counts both directions.
+    ranked = sorted(genes, key=lambda name: (-(regulates.get(name, 0) + regulated.get(name, 0)), name))
+    result = {'status': 'ok', 'executed': False, 'run_id': run_id, 'stage': 6,
+              'settings': {key: record['settings'][key] for key in ('freq', 'ntop')},
+              'network': {'genes': len(genes), 'connections': len(edges)},
+              'hub_genes': [{'gene': name, 'degree': regulates.get(name, 0) + regulated.get(name, 0),
+                             'targets': regulates.get(name, 0), 'regulators': regulated.get(name, 0)}
+                            for name in ranked[:limit]],
+              'meaning': 'An edge means the source gene regulates the target gene. frequency is the share of bootstrap '
+                         'networks containing the edge; a positive coefficient is up-regulation, a negative one down-regulation.'}
+    if dashboard_path.is_file():
+        dashboard = json.loads(signet._no_links(dashboard_path).read_text())
+        result['network']['subnetworks'] = dashboard['summary']['subnetworks']
+        result['known_string_interactions'] = [
+            {'gene_a': row.get('Protein 1'), 'gene_b': row.get('Protein 2'), 'score': row.get('Combined Score')}
+            for row in dashboard.get('ppi') or [] if isinstance(row, dict)][:50]
+        result['subnetworks'] = [
+            {'number': item.get('number'), 'genes': item.get('genes'), 'connections': item.get('edges'),
+             'modularity_groups': item.get('modularity_groups'),
+             'enrichment_terms': [{'term': row.get('description'), 'p_value': row.get('p_value')}
+                                  for row in item.get('pathway') or [] if isinstance(row, dict)][:30]}
+            for item in dashboard.get('subnetworks') or [] if isinstance(item, dict)]
+    else:
+        result['dashboard'] = 'not_exported'
+    if gene:
+        matches = {name.upper(): name for name in genes}
+        name = matches.get(gene.upper())
+        result['gene'] = {'gene': name or gene, 'found': name is not None}
+        if name:
+            order = lambda item: (-item[2], -abs(item[3]))
+            result['gene']['regulated_by'] = [{'gene': a, 'frequency': f, 'coefficient': c}
+                                              for a, b, f, c in sorted((e for e in edges if e[1] == name), key=order)][:30]
+            result['gene']['regulates'] = [{'gene': b, 'frequency': f, 'coefficient': c}
+                                           for a, b, f, c in sorted((e for e in edges if e[0] == name), key=order)][:30]
+    return result
+
+
 WORKSPACE_TOOLS = [get_workspace_stage, get_workspace_report, propose_workspace_stage,
-                   propose_workspace_dataset, get_workspace_validation]
+                   propose_workspace_dataset, get_workspace_validation, get_network_genes]
 
 # Preserve legacy Python entry points while removing scientific execution from the model allow-list.
 LEGACY_EXECUTION = {'genotype_tcga', 'genotype_gtex', 'expression_tcga',

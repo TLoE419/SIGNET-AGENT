@@ -31,13 +31,14 @@ class ChatTest(unittest.TestCase):
         main._report_decision_summary(content, events.append)
         self.assertFalse(any(event.startswith(('SIGNET_TOOL ', 'Tool result:', '工具結果：')) for event in events))
 
-    def test_english_prompt_preserves_user_text_without_mutating_global_rules(self):
+    def test_prompt_follows_user_language_and_preserves_user_text_without_mutating_global_rules(self):
         client, _ = client_for(response('English answer'))
         original = main.config.system_instruction
         with patch.object(client.models, 'generate_content', return_value=response('English answer')) as generate:
             main.run_conversation(client, '中文問題', [])
         instruction = generate.call_args.kwargs['config'].system_instruction
-        self.assertIn('Write answers and public tool-selection notes in English', instruction)
+        self.assertIn("Reply in the language of the user's latest message", instruction)
+        self.assertNotIn('Decision summary', instruction)
         self.assertEqual(main.config.system_instruction, original)
         self.assertEqual(generate.call_args.kwargs['contents'][0].parts[0].text, '中文問題')
 

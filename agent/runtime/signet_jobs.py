@@ -47,6 +47,7 @@ The HTTP server is multi-threaded, so settings/submit/status/cancel of the same
 run execute one at a time (see _one_at_a_time); settings must not change while
 submission reads them, and simultaneous status checks must not download twice.
 """
+import base64
 from dataclasses import dataclass, field
 import functools
 import fcntl
@@ -1577,6 +1578,14 @@ def _progress_script(record):
         directory, basename = manifest.rsplit('/', 1)
         commands.append(f'count_commands {label} "$D/work/"{shlex.quote(directory)} '
                         f'{shlex.quote(basename)} {shlex.quote(completed)}')
+    if name == 'genotype':
+        # A dataset run first freezes its inputs and prepares study-matched references in the same job.
+        ped = (record.get('inputs') or {}).get('ped.file', '')
+        if record.get('remote_dir') and ped.startswith(record['remote_dir'] + '/inputs/') and ped.endswith('/prepared/study.ped'):
+            base = ped[:-len('/prepared/study.ped')]
+            frozen = shlex.quote(base + '/frozen/expression')
+            commands.append(f'n=0; [ -s {frozen} ] && n=$((n + 1)); [ -s {shlex.quote(ped)} ] && n=$((n + 1)); '
+                            'say progress_preparation "$n 2"')
     if name == 'expression':
         commands.append('count_markers expression_outputs 2 "$D/work/tmp/tmpt/" .signet-normalized .signet-annotated')
     if name == 'visualize':
@@ -1644,11 +1653,31 @@ if [ -n "$j" ]; then
   account_state="$(sacct -n -X -P -j "$j" -o State 2>/dev/null | head -n 1)"
   say squeue "$queue_state"
   say sacct "$account_state"
+  # Once the job left the queue: its accounting and the end of its logs, for the failure report.
+  if [ -z "$queue_state" ] && [ -n "$account_state" ]; then
+    say accounting "$(sacct -n -P -j "$j" -o JobID,State,ExitCode,Elapsed,MaxRSS,ReqMem,NodeList 2>/dev/null | head -n 4 | tr '\n' ';')"
+    say log_tail "$({{ tail -n 30 "$D/steps/{name}.out"; echo '--- stderr ---'; tail -n 15 "$D/steps/{name}.err"; }} 2>/dev/null | tail -c 8000 | base64 | tr -d '\n')"
+  fi
 fi
 [ -f "$D/steps/{name}.done" ] && say done "$(head -n 1 "$D/steps/{name}.done")"
 {outputs}cat "$D/steps/{name}.out" "$D/steps/{name}.err" 2>/dev/null | grep -E -m 20 {q(pattern)} | while IFS= read -r l; do say line "$l"; done
 {progress}{orphans}{queue_check}{export_check}true
 '''
+
+
+def _record_diagnostics(record, values):
+    """Keep Slurm accounting and a masked log tail of a job that left the queue (step_report shares them)."""
+    from agent.runtime.step_report import mask_log_line, parse_accounting
+    accounting = parse_accounting(values.get('accounting', ''))
+    if accounting:
+        record['accounting'] = accounting
+    if values.get('log_tail'):
+        try:
+            text = base64.b64decode(values['log_tail'], validate=True).decode('utf-8', 'replace')
+        except ValueError:
+            return
+        lines = [mask_log_line(line) for line in text.splitlines() if line.strip()]
+        record['log_tail'] = lines[-40:]
 
 
 @_one_at_a_time
@@ -1712,6 +1741,7 @@ def status(run_id, name, refresh=False):
     if measured:
         record.setdefault('progress', {}).update(measured)
     missing = [path for i, path in enumerate(_required(step, record)) if values.get(f'output_{i}') != 'yes']
+    _record_diagnostics(record, values)
     cancelling = record.get('cancel_requested_at')
     terminal = slurm == 'COMPLETED' or slurm.startswith('CANCELLED') or slurm in _SLURM_FAILED
     finishing = terminal or 'done' in values

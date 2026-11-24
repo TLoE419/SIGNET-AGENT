@@ -12,8 +12,13 @@ class WorkspaceAgentTest(unittest.TestCase):
     def test_model_cannot_execute_legacy_science(self):
         names = {fn.__name__ for fn in ALL_TOOLS}
         self.assertFalse(names & tools.LEGACY_EXECUTION)
-        self.assertTrue({'configure_signet', 'propose_hpc3_genotype', 'get_step_report'} <= names)
-        self.assertTrue({'get_workspace_stage', 'propose_workspace_stage'} <= names)
+        # The chat-card tools were replaced by the Analysis forms; old saved calls are redirected there.
+        self.assertFalse({'configure_signet', 'propose_hpc3_genotype'} & names)
+        self.assertTrue({'get_workspace_stage', 'propose_workspace_stage', 'get_network_genes', 'get_step_report'} <= names)
+        for name in ('configure_signet', 'propose_hpc3_genotype'):
+            result = dispatch_tool(name, {'run_id': 'fixture'})
+            self.assertEqual((result['status'], result['executed']), ('needs_review', False))
+            self.assertIn('Stage 1 form', result['reason'])
         for name in tools.LEGACY_EXECUTION:
             with self.subTest(name=name), patch('subprocess.Popen') as execute:
                 result = dispatch_tool(name, {'run_id': 'fixture', 'confirmed': True})

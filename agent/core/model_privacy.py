@@ -126,24 +126,42 @@ _DIAGNOSTIC = {'code': _enum(_CODES), 'stage': _number, 'severity': _enum({'erro
                'count': _number, 'certainty': _enum({'confirmed', 'requires_review', 'unclassified'})}
 _CLINICAL = {**_NUMBERS, 'available': _boolean, 'diagnostics': [_DIAGNOSTIC]}
 _PROGRESS = {key: lambda value: value if isinstance(value, str) and re.fullmatch(r'[0-9]{1,12} [0-9]{1,12}', value) else _OMIT
-             for key in ('imputation', 'expression_outputs', 'variant_filter', 'low_frequency', 'rare_variants', 'stage1', 'stage2', 'subnetworks')}
+             for key in ('preparation', 'imputation', 'expression_outputs', 'variant_filter', 'low_frequency', 'rare_variants', 'stage1', 'stage2', 'subnetworks')}
 _FAILURE = {**_NUMBERS, 'classifications': [_enum(_CODES)], 'exit_code': _parameter,
             'slurm_state': _enum({'OUT_OF_MEMORY', 'TIMEOUT', 'NODE_FAIL', 'PREEMPTED', 'FAILED', 'CANCELLED'}),
             'certainty': _enum({'confirmed', 'requires_review', 'unclassified'}), 'diagnostics': [_DIAGNOSTIC],
             'evidence': _enum({'unclassified', 'recognized_execution_evidence'}),
-            'next_action': _enum({'inspect_private_diagnostics'})}
+            'next_action': _enum({'inspect_private_diagnostics'}),
+            'accounting': {'state': _enum({'COMPLETED', 'FAILED', 'OUT_OF_MEMORY', 'TIMEOUT', 'NODE_FAIL', 'PREEMPTED',
+                                           'CANCELLED', 'BOOT_FAIL', 'DEADLINE'}),
+                           'exit_code': lambda value: value if isinstance(value, str) and re.fullmatch(r'[0-9]{1,3}:[0-9]{1,3}', value) else _OMIT,
+                           'elapsed': lambda value: value if isinstance(value, str) and re.fullmatch(r'(?:[0-9]{1,3}-)?[0-9]{1,2}(?::[0-9]{2}){1,2}', value) else _OMIT,
+                           'max_memory_mb': _number, 'requested_mem_gb': _number,
+                           'node': lambda value: value if isinstance(value, str) and re.fullmatch(r'[A-Za-z0-9-]{1,40}', value) else _OMIT},
+            'log_tail': [lambda value: _log_line(value)]}
+
+
+def _log_line(value):
+    # Re-mask here too: a saved record is not trusted to have been masked.
+    from agent.runtime.step_report import mask_log_line
+    if not isinstance(value, str):
+        return _OMIT
+    line = mask_log_line(value)
+    return line if line and not _TCGA.search(line) else _OMIT
 
 
 def _result_file(value):
     return value if isinstance(value, str) and re.fullmatch(
         r'signet_(?:Genotype\.sampleID|Geno|gexpID|gexp|gene_name|gene_pos|matched\.gexp|new\.Geno(?:\.map|\.maf)?|'
         r'gexp(?:_rmpc)?\.data|geno\.data|all\.eQTL\.data|net\.gexp\.data|net\.genename|net\.genepos|Afreq|CoeffMat0|'
-        r'all\.sig\.pValue_[0-9.e-]+)', value) else _OMIT
+        r'all\.sig\.pValue_[0-9.e-]+|edgelist_[0-9.e-]+\.txt|count_vs_freq\.(?:pdf|eps)|top[0-9]{1,3}_freq[0-9.e-]+(?:\.html|_name\.txt)|'
+        r'circular_top[0-9]{1,3}_freq[0-9.e-]+\.pdf)|signet-edges\.csv', value) else _OMIT
 
 
 _SUMMARY = {**_NUMBERS, 'available': _boolean,
             'outputs': [{'file': _result_file, 'rows': _number, 'columns': _number, 'available': _boolean,
-                         'rows_are': _enum({'samples', 'genes', 'SNPs', 'matched samples', 'retained samples', 'significant gene-SNP pairs'}),
+                         'rows_are': _enum({'samples', 'genes', 'SNPs', 'matched samples', 'retained samples', 'significant gene-SNP pairs',
+                                            'regulatory edges', 'genes in the subnetwork'}),
                          'columns_are': _enum({'samples', 'genes', 'SNPs', 'genes with cis-eQTL', 'instrument columns'})}],
             'inputs': {key: {**_NUMBERS} for key in ('ped.file', 'map.file', 'gexp.file')},
             'work_units': _PROGRESS,
@@ -173,6 +191,37 @@ _WORKSPACE = {'status': _enum(_STATES), 'state': _enum(_STATES), 'executed': lam
               'creates_workspace': _boolean,
               'job_id': lambda value: value if isinstance(value, str) and re.fullmatch(r'[0-9]{1,20}', value) else _OMIT}
 _WORKSPACE['job'] = {key: _WORKSPACE[key] for key in ('state', 'attempt', 'job_id', 'settings', 'options', 'resources', 'progress', 'summary', 'failure', 'clinical')}
+
+
+_TCGA = re.compile(r'TCGA-[A-Za-z0-9]{2}-[A-Za-z0-9]{4}', re.IGNORECASE)
+
+
+def _gene(value):
+    return value if isinstance(value, str) and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,39}', value) and not _TCGA.search(value) else _OMIT
+
+
+def _signed(value):
+    return value if type(value) in (int, float) and math.isfinite(value) and abs(value) < 2 ** 53 else _OMIT
+
+
+def _term(value):
+    """A STRING/GO enrichment term: public vocabulary, bounded plain text."""
+    return value if (isinstance(value, str) and 0 < len(value) <= 300 and value.isprintable()
+                     and not _TCGA.search(value) and '/' not in value) else _OMIT
+
+
+_EDGE = {'gene': _gene, 'frequency': _number, 'coefficient': _signed}
+_NETWORK_GENES = {
+    'network': {'genes': _number, 'connections': _number, 'subnetworks': _number},
+    'hub_genes': [{'gene': _gene, 'degree': _number, 'targets': _number, 'regulators': _number}],
+    'known_string_interactions': [{'gene_a': _gene, 'gene_b': _gene, 'score': _number}],
+    'subnetworks': [{'number': _number, 'genes': _number, 'connections': _number, 'modularity_groups': _number,
+                     'enrichment_terms': [{'term': _term, 'p_value': _number}]}],
+    'dashboard': _enum({'not_exported'}),
+    'gene': {'gene': _gene, 'found': _boolean, 'regulated_by': [_EDGE], 'regulates': [_EDGE]},
+}
+NETWORK_MEANING = ('An edge means the source gene regulates the target gene. frequency is the share of bootstrap '
+                   'networks containing the edge; a positive coefficient is up-regulation, a negative one down-regulation.')
 
 
 def safe_tool_result(name, value):
@@ -223,6 +272,11 @@ def safe_tool_result(name, value):
                 result['diagnostic_status'] = 'no_recognized_error'
         elif 'failure' not in result and 'diagnostic_status' not in result:
             result['diagnostic_status'] = 'not_available'
+    elif name == 'get_network_genes':
+        # Gene-level Stage 6 results are not personal data; everything else still fails closed.
+        result.update(_project(value, _NETWORK_GENES))
+        if 'hub_genes' in result:
+            result['meaning'] = NETWORK_MEANING
     elif name == 'get_workspace_validation':
         if 'validation' not in value:
             result.update(_project(value, _VALIDATION))
@@ -242,7 +296,7 @@ def _safe_call(call, names):
                'source': _enum({'live', 'archive', 'recorded'}), 'action': _enum({'view_stage', 'select_gene'}),
                'panel': _enum({'workflow', 'visualization'}), 'visible': _boolean,
                'file': _enum({'ref', 'gmap', 'gtf', 'clinical'}), 'step': _enum(_STEPS | _SETUP),
-               'frequency': _parameter, 'top_networks': _number}
+               'frequency': _parameter, 'top_networks': _number, 'gene': _gene, 'limit': _number}
     clean = _project(arguments, allowed)
     if name == call.name and clean == arguments:
         return call

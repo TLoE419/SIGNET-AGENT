@@ -9,7 +9,7 @@
   const terminalStates = new Set(["completed", "failed", "cancelled"]);
   const pollInterval = 15_000;
   const workLabels = {
-    imputation: "Imputation chunks", expression_outputs: "Expression preparation",
+    preparation: "Input and reference preparation", imputation: "Imputation chunks", expression_outputs: "Expression preparation",
     variant_filter: "Variant filtering", low_frequency: "Low-frequency jobs",
     rare_variants: "Rare-variant jobs", stage1: "Network phase 1",
     stage2: "Network phase 2", subnetworks: "Subnetwork exports",

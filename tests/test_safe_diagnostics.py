@@ -111,7 +111,9 @@ class SafeDiagnosticsTest(unittest.TestCase):
         self.assertEqual(saved['exit_code'], '0')
         public = step_report.failure_summary(saved)
         self.assertIn('resource_memory_limit', public['classifications'])
-        self.assertNotIn('PRIVATE', json.dumps(public))
+        # The masked log tail is the only place log text reaches the model.
+        self.assertEqual(public['log_tail'][-1], 'Error: cannot allocate vector of size PRIVATE')
+        self.assertNotIn('PRIVATE', json.dumps({key: value for key, value in public.items() if key != 'log_tail'}))
 
     def test_model_validation_tool_calls_controlled_checker_without_analysis(self):
         with patch('agent.runtime.workspace_validation._saved', return_value={'inputs': {'clinical': ['/PRIVATE']}}), \

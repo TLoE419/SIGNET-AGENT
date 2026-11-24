@@ -90,9 +90,8 @@ class ToolsTest(unittest.TestCase):
             ('get_workspace_stage',{'run_id':'x','stage':True}),
             ('get_workspace_stage',{'run_id':'x','stage':2.5}),
             ('get_workspace_stage',{'run_id':'x','stage':2,'source':True}),
-            ('configure_signet',{'run_id':'x','ncores':True}),
-            ('configure_signet',{'run_id':'x','ncores':2.5}),
-            ('configure_signet',{'run_id':'x','cohort':'other'}),
+            ('get_network_genes',{'run_id':'x','limit':True}),
+            ('get_network_genes',{'run_id':'x','gene':'../escape'}),
             ('list_files',{'folder':'/tmp'}),
         ]:
             self.assertEqual(st.dispatch_tool(name,args)['status'],'invalid',(name,args))

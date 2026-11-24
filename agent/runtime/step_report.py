@@ -179,6 +179,9 @@ def label_summary(name, record, summary):
     outputs = []
     for entry in summary.get('outputs', []):
         entry = dict(entry)
+        if 'rows_are' in entry:
+            outputs.append(entry)
+            continue
         if entry.get('columns') == 1:
             del entry['columns']
         meaning = next((value for key, value in _MEANING.items()
@@ -206,13 +209,25 @@ def public_progress(record):
     if not isinstance(progress, dict):
         return result
     for key, value in progress.items():
-        if (key in {'imputation', 'expression_outputs', 'variant_filter', 'low_frequency',
+        if (key in {'preparation', 'imputation', 'expression_outputs', 'variant_filter', 'low_frequency',
                     'rare_variants', 'stage1', 'stage2', 'subnetworks'}
                 and isinstance(value, str) and re.fullmatch(r'[0-9]+ [0-9]+', value)):
             done, total = map(int, value.split())
             if 0 <= done <= total and total > 0:
                 result[key] = value
     return result
+
+
+def _visualize_output(entry):
+    """Stage 6 line counts mean something only for its tables; figures are just present."""
+    file, rows = entry['file'], entry.get('rows')
+    if type(rows) is not int or rows < 0:
+        return {}
+    if file == 'signet-edges.csv' or file.startswith('signet_edgelist_'):
+        return {'rows': max(rows - 1, 0), 'rows_are': 'regulatory edges'}   # minus the header row
+    if file.endswith('_name.txt'):
+        return {'rows': rows, 'rows_are': 'genes in the subnetwork'}
+    return {'available': True}
 
 
 def safe_summary(name, record, summary):
@@ -227,6 +242,10 @@ def safe_summary(name, record, summary):
         row = {'file': entry['file']}
         if entry.get('available') is False:
             row['available'] = False
+        if name == 'visualize':
+            row.update(_visualize_output(entry))
+            clean['outputs'].append(row)
+            continue
         for key in ('rows', 'columns'):
             if type(entry.get(key)) is int and entry[key] >= 0:
                 row[key] = entry[key]
@@ -241,6 +260,44 @@ def safe_summary(name, record, summary):
     if name == 'genotype' and summary.get('reference_preparation'):
         from agent.runtime.jobs.reference_summary import safe_preparation
         result['reference_preparation'] = safe_preparation(summary['reference_preparation'])
+    return result
+
+
+_SAMPLE_ID = re.compile(r'\b(?:TCGA-[A-Za-z0-9]{2}-[A-Za-z0-9]{4}|GTEX-[A-Za-z0-9]{4,6})[A-Za-z0-9-]*', re.IGNORECASE)
+_PATH = re.compile(r'(?:/[^\s/:\'"()]+){2,}/?')
+
+
+def mask_log_line(line):
+    """A log line for the model: sample IDs and folder paths removed, length bounded."""
+    line = _SAMPLE_ID.sub('[sample ID]', line)
+    line = _PATH.sub(lambda match: '.../' + match.group(0).rstrip('/').rsplit('/', 1)[-1], line)
+    return ''.join(char if char.isprintable() else ' ' for char in line).strip()[:240]
+
+
+def _megabytes(value):
+    match = re.fullmatch(r'([0-9.]+)([KMGT]?)[nc]?', value or '')
+    if not match:
+        return None
+    scale = {'': 1 / 1024 / 1024, 'K': 1 / 1024, 'M': 1, 'G': 1024, 'T': 1024 * 1024}[match[2]]
+    return round(float(match[1]) * scale, 1)
+
+
+def parse_accounting(text):
+    """sacct JobID|State|ExitCode|Elapsed|MaxRSS|ReqMem|NodeList rows: the job line and its batch step."""
+    rows = [line.split('|') for line in (text or '').split(';') if line.count('|') == 6]
+    job = next((row for row in rows if '.' not in row[0]), None)
+    if not job:
+        return None
+    result = {'state': job[1].split(' ')[0], 'exit_code': job[2], 'elapsed': job[3]}
+    requested = _megabytes(job[5])
+    if requested is not None:
+        result['requested_mem_gb'] = round(requested / 1024, 1)
+    used = [_megabytes(row[4]) for row in rows if row[4]]
+    used = [value for value in used if value is not None]
+    if used:
+        result['max_memory_mb'] = max(used)
+    if re.fullmatch(r'[A-Za-z0-9-]{1,40}', job[6] or ''):
+        result['node'] = job[6]
     return result
 
 
@@ -303,8 +360,13 @@ def failure_summary(record):
     result['classifications'] = [code for code, _ in diagnoses]
     result['evidence'] = 'unclassified' if result['classifications'] == ['unclassified_failure'] else 'recognized_execution_evidence'
     result['next_action'] = 'inspect_private_diagnostics'
+    if isinstance(record.get('accounting'), dict):
+        result['accounting'] = record['accounting']
+    if isinstance(record.get('log_tail'), list):
+        result['log_tail'] = [mask_log_line(line) for line in record['log_tail'] if isinstance(line, str)][-40:]
     result['reason'] = diagnoses[0][1]
-    result['scope'] = 'Execution diagnostics only. Raw logs, patient identifiers and input paths are not shared with the model.'
+    result['scope'] = ('Execution diagnostics: Slurm accounting and the last log lines with sample IDs and folder paths '
+                       'removed. Patient identifiers and input paths are not shared with the model.')
     return result
 
 

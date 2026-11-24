@@ -205,14 +205,15 @@ class SignetApiTest(unittest.TestCase):
         return path, {'session': session, 'proposal_id': draft['id'], **draft['parameters'],
                       'settings': settings}
 
-    def test_chat_proposes_genotype_without_running_and_waits_for_the_card(self):
+    def test_retired_chat_card_points_to_the_form_without_running(self):
         session = '12345678-1234-1234-1234-123456789abc'
         self.genotype_inputs()
 
         def conversation(client, text, history, **kwargs):
             proposed = dispatch_tool('propose_hpc3_genotype', {'run_id': 'step_test', 'use_example': True})
             bypass = dispatch_tool('genotype_tcga', {})
-            self.assertEqual((proposed['status'], proposed['executed']), ('awaiting_confirmation', False))
+            # The retired chat card now points to the Analysis form and prepares nothing.
+            self.assertEqual((proposed['status'], proposed['executed']), ('needs_review', False))
             # The local genotype tool is gone, so nothing can bypass the card.
             self.assertEqual((bypass['status'], bypass['executed']), ('needs_review', False))
             return 'Review the genotype settings.'
@@ -221,9 +222,7 @@ class SignetApiTest(unittest.TestCase):
             status, stream = self.call('POST', '/chat', {'text': 'Use the official example', 'session': session})
         self.assertEqual(status, 200)
         self.assertIn('Review the genotype settings.', stream)
-        progress = self.call('GET', '/signet/progress?session=' + session)[1]['analyses'][0]
-        self.assertEqual(progress['genotype_proposal']['state'], 'pending')
-        self.assertEqual(progress['steps'][0]['phase'], 'not_started')
+        self.assertEqual(self.call('GET', '/signet/progress?session=' + session)[1]['analyses'], [])
         self.assertEqual(self.calls, [])
 
     def test_genotype_decline_cross_session_and_stale_review_do_not_submit(self):
