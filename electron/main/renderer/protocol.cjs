@@ -10,6 +10,7 @@ const assets=new Map([
  ['/workspace/job-logs.js',['workspace/job-logs.js','text/javascript']],
  ['/workspace/genotype-run.js',['workspace/genotype-run.js','text/javascript']],
  ['/workspace/input-validation.js',['workspace/input-validation.js','text/javascript']],
+ ['/workspace/stage6-dashboard.js',['workspace/stage6-dashboard.js','text/javascript']],
  ['/workspace/result-assets.js',['workspace/result-assets.js','text/javascript']],
  ['/workspace/result-assets.css',['workspace/result-assets.css','text/css']],
  ['/workspace/icons.js',['workspace/icons.js','text/javascript']],

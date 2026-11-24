@@ -34,6 +34,22 @@ fetch('/signet/datasets').then(()=>document.body.dataset.fetch='allowed').catch(
             relative = 'res/resv/' + name
             if relative not in fixture.job['required_outputs']:
                 fixture.job['required_outputs'].append(relative)
+    # The Shiny dashboard export: data plus one widget page per clustering criterion.
+    dashboard = fixture.directory / 'signet_dashboard_freq0.45_files'
+    dashboard.mkdir()
+    (dashboard / 'widget.js').write_text((fixture.directory / 'signet_top1_freq0.45_files/widget.js').read_text())
+    for number in (1, 2):
+        for criterion in ('enrichment', 'modularity'):
+            (fixture.directory / f'signet_dashboard_freq0.45_top{number}_{criterion}.html').write_text(f'''<!doctype html><html><head><meta charset="utf-8"><script src="signet_dashboard_freq0.45_files/widget.js"></script></head>
+<body><h2>Dashboard network {number} by {criterion}</h2><button type="button">Inspect subnetwork {number}</button></body></html>''')
+    table = [{'source gene': 'MEGF6', 'source chr': '1', 'source start': 100, 'source end': 200,
+              'target gene': 'B', 'target chr': '1', 'target start': 300, 'target end': 400}]
+    (fixture.directory / 'signet_dashboard_freq0.45.json').write_text(json.dumps({
+        'version': 1, 'frequency': 0.45, 'ntop': 2, 'summary': {'subnetworks': 2, 'genes': 5, 'edges': 4},
+        'top_nodes': [{'gene': 'MEGF6', 'degree': 2, 'subnetwork': 1}, {'gene': 'D', 'degree': 1, 'subnetwork': 2}],
+        'ppi': [{'Protein 1': 'MEGF6', 'Protein 2': 'B', 'Combined Score': 912}],
+        'subnetworks': [{'number': number, 'genes': 3, 'edges': 2, 'enrichment_terms': False, 'modularity_groups': 1,
+                         'pathway': [], 'table': table} for number in (1, 2)]}))
     fixture.snapshot_path.write_text(json.dumps(fixture.snapshot))
     fixture.job_path.write_text(json.dumps(fixture.job))
     matrix = fixture.root / 'work/res/resn/signet_Afreq'

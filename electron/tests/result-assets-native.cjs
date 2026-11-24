@@ -16,7 +16,7 @@ const timeout = setTimeout(() => {console.error('Original result native QA timed
 app.on('will-quit', () => {clearTimeout(timeout); backend?.kill(); rmSync(profile, {recursive: true, force: true});});
 const until = async (check, message) => { for (let i = 0; i < 180; i++) {if (await check()) return; await new Promise(resolve => setTimeout(resolve, 25));} throw Error(message); };
 function startBackend() {
-  backend = spawn(path.join(root, '.venv/bin/python'), ['-u', path.join(__dirname, 'fixtures/result_assets_backend.py')], {cwd: root, stdio: ['ignore', 'pipe', 'pipe']});
+  backend = spawn(process.env.SIGNET_PYTHON || path.join(root, '.venv/bin/python'), ['-u', path.join(__dirname, 'fixtures/result_assets_backend.py')], {cwd: root, stdio: ['ignore', 'pipe', 'pipe']});
   backend.stderr.on('data', data => process.stderr.write(data));
   return new Promise((resolve, reject) => {
     let output = ''; backend.stdout.on('data', data => {output += data; if (output.includes('\n')) {try {resolve(JSON.parse(output.split('\n')[0]));} catch (error) {reject(error);}}});
@@ -26,7 +26,7 @@ function startBackend() {
 (async () => {
   const {origin, run_id: runId} = await startBackend();
   const build = path.join(temporary, 'renderer'); mkdirSync(path.join(build, 'workspace'), {recursive: true});
-  for (const name of ['index.html', 'workspace.css', 'workspace.js', 'job-logs.js', 'genotype-run.js', 'input-validation.js', 'result-assets.js', 'result-assets.css', 'icons.js', 'interaction.js']) copyFileSync(path.join(renderer, 'features/workspace', name), path.join(build, 'workspace', name));
+  for (const name of ['index.html', 'workspace.css', 'workspace.js', 'job-logs.js', 'genotype-run.js', 'input-validation.js', 'stage6-dashboard.js', 'result-assets.js', 'result-assets.css', 'icons.js', 'interaction.js']) copyFileSync(path.join(renderer, 'features/workspace', name), path.join(build, 'workspace', name));
   for (const [source, output] of [['features/chat/markdown.js', 'chat-markdown.js'], ['styles/ssh.css', 'ssh.css']]) copyFileSync(path.join(renderer, source), path.join(build, output));
   const components = buildSync({entryPoints: [path.join(renderer, 'app/main.tsx')], bundle: true, write: false, platform: 'browser', format: 'iife', loader: {'.css': 'text'}, jsx: 'automatic', target: 'chrome140', define: {'process.env.NODE_ENV': '"production"'}, logLevel: 'silent'}).outputFiles[0].text;
   writeFileSync(path.join(build, 'renderer.js'), components);
@@ -67,11 +67,16 @@ function startBackend() {
   await nativeClick('#lens-stage6 [data-gene="MEGF6"] .s6-dot');
   assert.equal(await js(`document.getElementById('lens-stage6').dataset.selectedGene`), 'MEGF6');
   await nativeClick('.s6-original-results > summary');
-  await until(() => js(`!!document.querySelector('.s6-original-select select')`), 'Original result metadata did not load');
+  await until(() => js(`[...document.querySelectorAll('.s6-original-content button')].some(e=>e.textContent==='Open SIGNET dashboard')`), 'Original result metadata did not load');
   assert.deepEqual(await geometry(), before);
-  await js(`document.querySelector('.s6-original-select select').value='2';document.querySelector('.s6-original-select select').dispatchEvent(new Event('change'));[...document.querySelectorAll('.s6-original-content button')].find(e=>e.textContent==='View original network').click();void 0`);
-  await until(() => window.webContents.mainFrame.frames.some(frame => frame.url.includes('signet_top2_')), 'Original frame was blocked');
-  const frame = window.webContents.mainFrame.frames.find(frame => frame.url.includes('signet_top2_'));
+  await js(`[...document.querySelectorAll('.s6-original-content button')].find(e=>e.textContent==='Open SIGNET dashboard').click();void 0`);
+  await until(() => js(`!!document.querySelector('.s6-dash-headline')`), 'Dashboard did not open');
+  const summaryScreenshot = path.join(temporary, 'dashboard-summary.png'); writeFileSync(summaryScreenshot, (await window.webContents.capturePage()).toPNG());
+  assert.equal(await js(`document.querySelectorAll('.s6-cutoff-chart circle').length`), 10);
+  assert.equal(await js(`document.querySelector('.s6-cutoff-chart svg').getAttribute('role')`), 'img');
+  await js(`[...document.querySelectorAll('.s6-dash-tabs button')].find(e=>e.textContent==='Enrichment Analysis').click();const s=document.querySelector('.s6-dash-controls select');s.value='2';s.dispatchEvent(new Event('change'));void 0`);
+  await until(() => window.webContents.mainFrame.frames.some(frame => frame.url.includes('dashboard_freq0.45_top2_modularity')), 'Dashboard network frame was blocked');
+  const frame = window.webContents.mainFrame.frames.find(frame => frame.url.includes('dashboard_freq0.45_top2_modularity'));
   await until(() => frame.executeJavaScript(`document.body?.dataset.ready==='yes'`), 'Original HTML dependency script did not execute under CSP');
   const sandbox = await frame.executeJavaScript(`({...document.body.dataset})`);
   assert.equal(sandbox.parent, 'blocked'); assert.equal(sandbox.bridge, 'undefined'); assert.equal(sandbox.require, 'undefined');
@@ -85,17 +90,14 @@ function startBackend() {
   window.webContents.debugger.detach();
   await until(() => frame.executeJavaScript(`document.body.dataset.clicked==='true'`), 'Original widget did not receive a trusted mouse interaction');
   const screenshot = path.join(temporary, 'original-network.png'); writeFileSync(screenshot, (await window.webContents.capturePage()).toPNG());
+  await js(`[...document.querySelectorAll('.s6-dash-tabs button')].find(e=>e.textContent==='Circular Plot').click();void 0`);
+  await js(`[...document.querySelectorAll('.s6-dash-box button')].find(e=>e.textContent==='Download original PDF').click();void 0`);
+  await until(() => downloads.length === 1, 'Individual original PDF download was blocked');
   await js(`document.querySelector('.s6-original-dialog').close();void 0`);
   await until(() => js(`!document.querySelector('.s6-original-dialog iframe')`), 'Original frame kept running after close');
   await js(`const search=document.querySelector('.s6-table-tools input');search.value='megf6';search.dispatchEvent(new Event('input'));void 0`);
   assert.equal(await js(`document.getElementById('lens-stage6').dataset.selectedGene`), 'MEGF6');
   assert.equal(await js(`document.querySelector('.s6-table-tools input').placeholder`), 'Search connections');
-  assert.equal(await js(`document.querySelectorAll('.s6-cutoff-chart circle').length`), 10);
-  assert.equal(await js(`document.querySelector('.s6-cutoff-chart svg').getAttribute('role')`), 'img');
-  await js(`document.querySelector('.s6-cutoff-chart').scrollIntoView({block:'nearest'});void 0`);
-  const chartScreenshot = path.join(temporary, 'threshold-chart.png'); writeFileSync(chartScreenshot, (await window.webContents.capturePage()).toPNG());
-  await js(`[...document.querySelectorAll('.s6-original-plot button')].find(e=>e.textContent==='Download original PDF').click();void 0`);
-  await until(() => downloads.length === 1, 'Individual original PDF download was blocked');
   assert.equal(downloads[0].state, 'completed'); assert.match(readFileSync(downloads[0].file, 'utf8'), /^%PDF/);
   assert.equal((await net.fetch(downloads[0].url, {bypassCustomProtocolHandlers: true})).status, 404);
   await js(`document.querySelector('.s6-original-actions button').click();void 0`);
@@ -105,6 +107,6 @@ function startBackend() {
   assert.equal(await js(`document.body.dataset.escaped`), undefined);
   const unexpectedErrors = errors.filter(message => !message.includes("connect-src 'none'") && !message.includes('Fetch API cannot load'));
   assert.deepEqual(unexpectedErrors, [], 'Actual renderer startup or original result script failed');
-  console.log(JSON.stringify({passed: true, geometry: before, sandbox, trustedOriginalInteraction: true, preservedGene: 'MEGF6', cutoffPoints: 10, downloads, screenshot, chartScreenshot, blockedExternalRequests: denied.length, expectedCSPRejections: errors.length, unexpectedErrors}, null, 2));
+  console.log(JSON.stringify({passed: true, geometry: before, sandbox, trustedOriginalInteraction: true, preservedGene: 'MEGF6', cutoffPoints: 10, downloads, screenshot, summaryScreenshot, blockedExternalRequests: denied.length, expectedCSPRejections: errors.length, unexpectedErrors}, null, 2));
   window.destroy(); app.quit();
 })().catch(async error => {console.error(error); if (window) {const file=path.join(temporary,'failure.png');writeFileSync(file,(await window.webContents.capturePage()).toPNG());console.error('Native failure screenshot:',file);window.destroy();} app.exit(1);});

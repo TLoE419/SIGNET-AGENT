@@ -10,7 +10,7 @@ for(const [source,output] of [['features/chat/markdown.js','chat-markdown.js'],[
  await copyFile(new URL('renderer/'+source,root),new URL('build/renderer/'+output,root));
 }
 await mkdir(new URL('build/renderer/workspace/',root), {recursive:true});
-for (const file of ['index.html', 'workspace.css', 'workspace.js', 'job-logs.js', 'genotype-run.js', 'input-validation.js', 'result-assets.js', 'result-assets.css', 'icons.js', 'interaction.js', 'LUCIDE-LICENSE.txt']) {
+for (const file of ['index.html', 'workspace.css', 'workspace.js', 'job-logs.js', 'genotype-run.js', 'input-validation.js', 'stage6-dashboard.js', 'result-assets.js', 'result-assets.css', 'icons.js', 'interaction.js', 'LUCIDE-LICENSE.txt']) {
   await copyFile(new URL('renderer/features/workspace/'+file,root),new URL('build/renderer/workspace/'+file,root));
 }
 // Existing chat controllers share a lexical scope until their React migration.

@@ -44,3 +44,53 @@
 .s6-table-tools select { width: 145px; }
 .s6-table-tools span { color: #647186; white-space: nowrap; }
 #lens-stage6 .s6-table-tools + .ml-result-table { height: 155px; }
+
+/* SIGNET dashboard: the three Shiny tabs inside one large dialog. */
+.s6-dashboard-dialog { width: min(1240px, 94vw); max-width: 94vw; height: 90vh; }
+.s6-dashboard { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 10px; font-size: 12px; }
+.s6-dash-tabs { display: flex; gap: 4px; border-bottom: 1px solid #dce2ea; }
+.s6-dash-tabs button { font: inherit; border: 1px solid transparent; border-bottom: 0; border-radius: 6px 6px 0 0; background: none; color: #526178; padding: 7px 13px; cursor: pointer; }
+.s6-dash-tabs button[aria-selected="true"] { border-color: #dce2ea; background: #fff; color: #172033; font-weight: 600; margin-bottom: -1px; }
+.s6-dash-body { flex: 1; min-height: 0; overflow: auto; padding-right: 4px; }
+.s6-dash-panel { display: grid; gap: 14px; align-content: start; }
+.s6-dash-headline { margin: 4px 0 0; font-size: 15px; font-weight: 400; color: #273449; }
+.s6-dash-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; align-items: start; }
+.s6-dash-box { min-width: 0; display: grid; gap: 8px; align-content: start; border: 1px solid #e3e8ef; border-radius: 8px; padding: 10px 12px; background: #fff; }
+.s6-dash-box h4, .s6-dash-figures h4 { margin: 0; font-size: 13px; }
+.s6-dash-box img, .s6-dash-figures img { display: block; max-width: 100%; max-height: 520px; margin: auto; }
+.s6-dashboard button, .s6-dashboard select { font: inherit; color: #2458b8; border: 1px solid #dce2ea; border-radius: 5px; background: #fff; padding: 5px 8px; cursor: pointer; }
+.s6-dashboard button:disabled { opacity: .55; cursor: default; }
+.s6-dash-chart { display: block; width: 100%; height: auto; }
+.s6-dash-chart text { font: 10px Arial, "PingFang TC", sans-serif; fill: #3d4a5f; }
+.s6-dash-chart .s6-dash-title { font-size: 13px; fill: #172033; }
+.s6-dash-chart .s6-dash-axis-title { font-size: 11px; }
+.s6-dash-bar:hover rect { stroke: #172033; stroke-width: 1; }
+.s6-dash-sidebar-layout { grid-template-columns: 230px minmax(0, 1fr); align-items: start; }
+.s6-dash-controls { display: grid; gap: 8px; border: 1px solid #e3e8ef; border-radius: 8px; padding: 10px 12px; background: #f6f8fb; position: sticky; top: 0; }
+.s6-dash-controls hr { width: 100%; border: 0; border-top: 1px solid #dce2ea; margin: 2px 0; }
+.s6-dash-field { display: grid; gap: 5px; font-weight: 600; color: #273449; }
+.s6-dash-field input[type=file] { font: inherit; font-weight: 400; max-width: 100%; }
+.s6-dash-radio { border: 0; margin: 0; padding: 0; display: grid; gap: 5px; }
+.s6-dash-radio legend { font-weight: 600; color: #273449; padding: 0 0 4px; }
+.s6-dash-radio label { display: flex; gap: 6px; align-items: center; }
+.s6-dash-main { min-width: 0; display: grid; gap: 12px; }
+.s6-dash-network { display: block; width: 100%; height: 560px; border: 1px solid #e3e8ef; border-radius: 8px; background: #fff; }
+.s6-dash-pathway { margin: 0; display: grid; gap: 4px; }
+.s6-dash-figures { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.s6-dash-figures h4 { grid-column: 1 / -1; }
+.s6-dt { display: grid; gap: 6px; min-width: 0; }
+.s6-dt-search { justify-self: end; display: flex; gap: 6px; align-items: center; }
+.s6-dt-search input { height: 25px; padding: 3px 6px; border: 1px solid #dce2ea; border-radius: 4px; font: inherit; }
+.s6-dt-scroll { overflow-x: auto; }
+.s6-dt table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.s6-dt th, .s6-dt td { text-align: left; padding: 4px 6px; border-bottom: 1px solid #edf0f4; white-space: nowrap; }
+.s6-dt th { font-weight: 600; color: #273449; border-bottom-color: #c9d1dc; }
+.s6-dt th[tabindex] { cursor: pointer; }
+.s6-dt th[aria-sort="ascending"]::after { content: " ▲"; font-size: 9px; }
+.s6-dt th[aria-sort="descending"]::after { content: " ▼"; font-size: 9px; }
+.s6-dt td:first-child, .s6-dt th:first-child { color: #8794a5; }
+.s6-dt-footer { display: flex; justify-content: space-between; align-items: center; gap: 8px; color: #647186; font-size: 11px; }
+.s6-dt-footer span:last-child { display: flex; gap: 5px; }
+.s6-cutoff-section { display: grid; gap: 8px; }
+@media (max-width: 900px) { .s6-dash-row, .s6-dash-sidebar-layout, .s6-dash-figures { grid-template-columns: minmax(0, 1fr); } .s6-dash-controls { position: static; } }
+.s6-dash-controls > *, .s6-dash-controls select, .s6-dash-controls button { box-sizing: border-box; min-width: 0; max-width: 100%; }

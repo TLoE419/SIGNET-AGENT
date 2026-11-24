@@ -8,6 +8,7 @@ from base64 import b64encode
 from dataclasses import dataclass
 import hashlib
 import io
+import json
 import math
 import os
 from pathlib import Path, PurePosixPath
@@ -31,6 +32,15 @@ PREVIEW_TTL = 300
 DOWNLOAD_TTL = 60
 TYPES = {'.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
          '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.pdf': 'application/pdf'}
+# sub_summary.R draws the KEGG radar only with more than 3 terms (enrichment_radar.R)
+# and the Process histogram only with at least 5 (enrichment_hist.R).
+ENRICHMENT_PLOTS = {'enrichment_radar': 'KEGG', 'enrichment_hist': 'Process'}
+PLOT_MINIMUM = {'enrichment_radar': 4, 'enrichment_hist': 5}
+CRITERIA = ('enrichment', 'modularity')
+# circular.R's info[[i]][, 1:8], shown by server.R output$table.
+TABLE_COLUMNS = ('source gene', 'source chr', 'source start', 'source end',
+                 'target gene', 'target chr', 'target start', 'target end')
+MAX_ROWS = 20000
 _STYLE = b'<style>html,body,#htmlwidget_container{height:100%;margin:0!important;padding:0!important}html,body{overflow:hidden}.visNetwork.html-widget{height:100%!important}</style>'
 _SCRIPT = b'''window.addEventListener('load',()=>{
 const widget=document.querySelector('.visNetwork.html-widget');
@@ -41,6 +51,17 @@ const freeze=()=>{clearTimeout(timer);network.off('stabilizationIterationsDone',
 timer=setTimeout(freeze,4000);network.once('stabilizationIterationsDone',freeze);
 network.on('dragStart',({nodes})=>{if(nodes.length){dragging=true;clearTimeout(timer);network.off('stabilizationIterationsDone',freeze);network.setOptions({physics:{enabled:true}})}});
 network.on('dragEnd',()=>{if(dragging){dragging=false;timer=setTimeout(freeze,350)}});
+});
+window.addEventListener('message',event=>{
+if(event.source!==window.parent||!event.data||!Array.isArray(event.data.signetGenes))return;
+const widget=document.querySelector('.visNetwork.html-widget'),el=widget&&document.getElementById('graph'+widget.id);
+if(!el||!el.nodes||typeof resetAllNodes!=='function')return;
+if(widget.selectActive===true||widget.highlightActive===true){
+resetAllEdges(el.edges,el.highlightColor,el.byselectionColor,el.chart);resetAllNodes(el.nodes,true,el.options,el.chart);
+if(widget.selectActive===true){widget.selectActive=false;resetList('selectedBy',widget.id,'selectedBy')}
+if(widget.highlightActive===true){widget.highlightActive=false;resetList('nodeSelect',widget.id,'selected')}}
+const ids=new Set(el.nodes.getIds());
+el.nodes.update(event.data.signetGenes.filter(id=>typeof id==='string'&&ids.has(id)).map(id=>({id,color:'#FB7E81'})));
 });'''
 _SCRIPT_HASH = b64encode(hashlib.sha256(_SCRIPT).digest()).decode('ascii')
 _MANAGER_LOCK = threading.Lock()
@@ -85,6 +106,41 @@ def _read(path):
     if len(data) != before.st_size or stamp(before) != stamp(after) or stamp(after) != stamp(path.stat()):
         raise ValueError('The saved export changed while it was being read.')
     return data, (*stamp(after), hashlib.sha256(data).digest())
+
+
+def _rows(value):
+    if value is None or value == {}:
+        return []
+    if not isinstance(value, list) or len(value) > MAX_ROWS or not all(isinstance(row, dict) for row in value):
+        raise ValueError('Unexpected dashboard table.')
+    return value
+
+
+def _value(value):
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        raise ValueError('Unexpected dashboard number.')
+    return value
+
+
+def _count(value):
+    value = _value(value)
+    if value is None or value < 0 or value != int(value):
+        raise ValueError('Unexpected dashboard count.')
+    return int(value)
+
+
+def _label(value):
+    if value is None:
+        return ''
+    if not isinstance(value, str):
+        raise ValueError('Unexpected dashboard text.')
+    return value[:2000]
+
+
+def _cell(value):
+    return _label(value) if not isinstance(value, (int, float)) or isinstance(value, bool) else _value(value)
 
 
 @dataclass(frozen=True)
@@ -171,6 +227,10 @@ class ResultAssets:
         for number in range(1, top + 1):
             for kind in ('circular', 'enrichment_radar', 'enrichment_hist'):
                 allowed.update(f'signet_{kind}_top{number}_freq{label}{suffix}' for suffix in ('.pdf', '.png'))
+            allowed.update(f'signet_enrich_{category}_info_top{number}_freq{label}.txt' for category in ENRICHMENT_PLOTS.values())
+        dashboard = f'signet_dashboard_freq{label}'
+        allowed.update((dashboard + '.json', dashboard + '.error.txt', f'signet_freq{label}_top_degree.txt'))
+        allowed.update(f'{dashboard}_top{number}_{criterion}.html' for number in range(1, top + 1) for criterion in CRITERIA)
         files, total = {}, 0
 
         def add(relative):
@@ -189,8 +249,9 @@ class ResultAssets:
                 add(name)
         # A widget can load only its own known static dependency tree, never an
         # arbitrary run output, clinical file, sibling directory, or HTML page.
-        for stem in sorted(widgets):
-            if stem + '.html' not in files:
+        pages = any(name.startswith(dashboard + '_top') and name.endswith('.html') for name in files)
+        for stem in sorted(widgets) + [dashboard]:
+            if stem + '.html' not in files and not (stem == dashboard and pages):
                 continue
             folder = directory / (stem + '_files')
             if not folder.exists() and not folder.is_symlink():
@@ -240,6 +301,7 @@ class ResultAssets:
             plots.append({'kind': 'count_vs_freq', 'subnetwork': None,
                           'url': base + 'signet_count_vs_freq.png' if 'signet_count_vs_freq.png' in files else None,
                           'pdf': 'signet_count_vs_freq.pdf' if 'signet_count_vs_freq.pdf' in files else None})
+        dashboard = self._dashboard(files, label, int(result['top_networks']), base)
         matrix = root / 'work/res/resn/signet_Afreq' if row['source'] != 'archive' else root / 'signet_Afreq'
         try:
             thresholds = threshold_counts(matrix)
@@ -247,7 +309,76 @@ class ResultAssets:
             thresholds = None
         return {'history_id': history_id, 'identity': identity, 'revision': row['revision'], 'source': row['source'], 'run_id': row['run_id'],
                 'frequency': result['frequency'], 'top_networks': result['top_networks'], 'previews': previews,
-                'plots': plots, 'thresholds': thresholds, 'download_available': bool(files), 'expires_in': PREVIEW_TTL}
+                'plots': plots, 'thresholds': thresholds, 'dashboard': dashboard,
+                'download_available': bool(files), 'expires_in': PREVIEW_TTL}
+
+    def _text(self, files, name):
+        return self._asset(files[name]).decode('utf-8', 'replace') if name in files else None
+
+    def _terms(self, files, name):
+        """Rows of an enrich_*_info file; sub_summary.R writes one NA row when STRING found none."""
+        text = self._text(files, name)
+        if text is None:
+            return None
+        return sum(1 for line in text.splitlines()[1:] if line.strip() and line.split('@', 1)[0] != 'NA')
+
+    def _dashboard(self, files, label, top, base):
+        """The Shiny dashboard's data as exported on HPC3, plus why each optional figure is absent."""
+        stem = f'signet_dashboard_freq{label}'
+        subnetworks = []
+        for number in range(1, top + 1):
+            names = {criterion: f'{stem}_top{number}_{criterion}.html' for criterion in CRITERIA}
+            pages = {criterion: base + name if name in files else None for criterion, name in names.items()}
+            missing = {}
+            for kind, category in ENRICHMENT_PLOTS.items():
+                plot = f'signet_{kind}_top{number}_freq{label}'
+                if plot + '.pdf' in files or plot + '.png' in files:
+                    continue
+                count = self._terms(files, f'signet_enrich_{category}_info_top{number}_freq{label}.txt')
+                missing[kind] = ({'code': 'not_recorded', 'category': category} if count is None
+                                 else {'code': 'too_few', 'category': category, 'count': count, 'minimum': PLOT_MINIMUM[kind]}
+                                 if count < PLOT_MINIMUM[kind] else {'code': 'missing', 'category': category, 'count': count})
+            circular = f'signet_circular_top{number}_freq{label}'
+            if circular + '.pdf' not in files and circular + '.png' not in files:
+                missing['circular'] = {'code': 'missing'}
+            subnetworks.append({'number': number, 'networks': pages, 'missing': missing})
+        report = {'available': False, 'reason': None, 'summary': None, 'top_nodes': [], 'ppi': [], 'subnetworks': subnetworks}
+        try:
+            text = self._text(files, stem + '.json')
+            if text is None:
+                failure = self._text(files, stem + '.error.txt')
+                report['reason'] = ({'code': 'export_failed', 'detail': ' '.join(failure.split())[:500]} if failure is not None
+                                    else {'code': 'not_exported'})
+                return report
+            data = json.loads(text)
+            summary = data['summary']
+            report['summary'] = {key: _count(summary[key]) for key in ('subnetworks', 'genes', 'edges')}
+            report['top_nodes'] = [{'gene': _label(row['gene']), 'degree': _count(row['degree']),
+                                    'subnetwork': _count(row['subnetwork']) if row.get('subnetwork') is not None else None}
+                                   for row in _rows(data['top_nodes'])[:50]]
+            report['ppi'] = [{'protein1': _label(row.get('Protein 1')), 'protein2': _label(row.get('Protein 2')),
+                              'score': _value(row.get('Combined Score'))} for row in _rows(data['ppi'])]
+            exported = {_count(item['number']): item for item in _rows(data['subnetworks'])}
+            for entry in subnetworks:
+                item = exported.get(entry['number'])
+                if item is None:
+                    raise ValueError('A subnetwork is missing from the dashboard export.')
+                entry.update({
+                    'genes': _count(item['genes']), 'edges': _count(item['edges']),
+                    'enrichment_terms': item.get('enrichment_terms') is True,
+                    'modularity_groups': _count(item['modularity_groups']),
+                    'pathway': [{'description': _label(row['description']), 'p_value': _value(row['p_value']),
+                                 'text': _label(row.get('text'))} for row in _rows(item.get('pathway'))],
+                    'table': {'columns': list(TABLE_COLUMNS),
+                              'rows': [[_cell(row.get(column)) for column in TABLE_COLUMNS] for row in _rows(item.get('table'))]},
+                })
+            report['available'] = True
+        except (KeyError, TypeError, ValueError, AttributeError):
+            report.update(available=False, reason={'code': 'invalid'}, summary=None, top_nodes=[], ppi=[])
+            for entry in subnetworks:
+                for key in ('genes', 'edges', 'enrichment_terms', 'modularity_groups', 'pathway', 'table'):
+                    entry.pop(key, None)
+        return report
 
     def issue_download(self, history_id, identity, asset=None, revision=None):
         row, result, _, directory = self._resolve(history_id, identity, revision)

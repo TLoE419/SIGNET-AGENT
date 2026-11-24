@@ -940,6 +940,66 @@ def _remote_dir(config, root, run_id):
     return config['workRoot'] + '/' + run_id
 
 
+# SIGNET's Shiny dashboard (script/netvis/server.R) is skipped with cloud=T, but
+# netshiny.R still computes everything it shows before that check. This block runs
+# at the end of the run's copy of netshiny.R and saves those same objects: the
+# Top Nodes and Top Edges data, each subnetwork's pathway chart and Circular Plot
+# table, and the visNetwork widget exactly as renderVisNetwork builds it (one file
+# per "Choose a criterion for clustering" option). A failure only writes a reason
+# file; it never fails -v. It runs before the check below reuses the name `edges`.
+DASHBOARD_EXPORT = r"""local({
+  base <- paste0(Sys.getenv("resv"), "_dashboard_", name)
+  unlink(paste0(base, c(".json", ".error.txt")))
+  tryCatch({
+    ## server.R output$top_nodes
+    top_nodes <- sort(igraph::degree(net_bs), decreasing = T)
+    tn_frame <- data.frame(gene_name=names(top_nodes), degree=top_nodes, stringsAsFactors=F)
+    write.table(tn_frame, paste0(Sys.getenv("resv"), "_", name, "_top_degree.txt"), row.names=F, col.names=F, quote=F)
+    nrow_max_nodes <- min(50, nrow(tn_frame))
+    tn_frame_reduce <- tn_frame[1:nrow_max_nodes, ]
+    sub_idx <- comp[match(tn_frame_reduce$gene_name, as.matrix(V(g_bs)$name))]
+    sub_net_num <- match(sub_idx, idx_tot)
+    ## server.R output$network, with its edge legend
+    edge_legend <- data.frame(label=c("non-TF up regulation", "TF up regulation", "non-TF down regulation", "TF down regulation"),
+                              arrows=list(to=list(enabled=T, type=c("arrow", "arrow", "circle", "circle"))),
+                              color=c("#2B7CE9", "#FFA500", "#2B7CE9", "#FFA500"))
+    for(i in 1:ntop){
+      for(criterion in c("enrichment", "modularity")){
+        widget <- visNetwork(nodes[[i]], edges[[i]], width="100%", height="100%") %>%
+          visOptions(selectedBy = list(variable = criterion, style = 'width: 200px; height: 26px;', sort=T, multiple=T),
+                     highlightNearest = list(enabled = T, degree = 2, hover = T)) %>%
+          visEdges(arrows = 'to') %>%
+          visLegend(addEdges=edge_legend, addNodes=NULL, main="Edge Legend", useGroups=F, width=0.3) %>%
+          visLayout(randomSeed=1)
+        htmlwidgets::saveWidget(widget, paste0(base, "_top", i, "_", criterion, ".html"),
+                                selfcontained=F, libdir=paste0(basename(base), "_files"))
+      }
+    }
+    ## server.R output$pathway and output$table, per subnetwork
+    subnetworks <- lapply(1:ntop, function(i){
+      pathway <- enrichment[[i]]
+      found <- !is.null(pathway) && nrow(pathway) > 0 && !is.na(pathway[1, 1])
+      list(number=i, genes=nrow(nodes[[i]]), edges=nrow(edges[[i]]),
+           enrichment_terms="enrichment" %in% colnames(nodes[[i]]) && any(nzchar(nodes[[i]]$enrichment)),
+           modularity_groups=length(unique(nodes[[i]]$modularity)),
+           pathway=if(found) data.frame(description=as.character(pathway$description), p_value=pathway$p_value,
+                                       text=paste0("Related genes: ", pathway$preferredNames), stringsAsFactors=F) else list(),
+           table=info[[i]][, 1:8])
+    })
+    jsonlite::write_json(list(version=1, frequency=freq, ntop=ntop,
+                              summary=list(subnetworks=net_number, genes=vertex_number, edges=edge_number),
+                              top_nodes=data.frame(gene=as.character(tn_frame_reduce$gene_name), degree=tn_frame_reduce$degree,
+                                                   subnetwork=sub_net_num, stringsAsFactors=F),
+                              ppi=as.data.frame(ppi_sort, stringsAsFactors=F), subnetworks=subnetworks),
+                         paste0(base, ".json"), auto_unbox=T, digits=NA, na="null", null="null")
+  }, error=function(e){
+    unlink(paste0(base, ".json"))
+    writeLines(conditionMessage(e), paste0(base, ".error.txt"))
+  })
+})
+"""
+
+
 def _job_script(config, run_id, name, step, directory, binds, options=None, settings=None, dataset_plan=None):
     """The Slurm batch script. Every value in it was validated; nothing comes from the caller as text.
 
@@ -1003,7 +1063,7 @@ printf '\nfile.create(file.path(Sys.getenv("SIGNET_TMP_ROOT"), "tmpt", ".signet-
         run = r"""sed -i '1i Sys.setenv(freq=trimws(Sys.getenv("freq")))' script/netvis/netshiny.R
 sed -i '/^[[:space:]]*dev.off()$/a\   file.create(file.path(Sys.getenv("SIGNET_TMP_ROOT"), "tmpv", paste0(".signet-network-", i)))' script/netvis/circular.R
 cat >> script/netvis/netshiny.R <<'SIGNET_EXPORT_CHECK'
-frequency <- as.numeric(Sys.getenv("freq"))
+""" + DASHBOARD_EXPORT + r"""frequency <- as.numeric(Sys.getenv("freq"))
 prefix <- Sys.getenv("resv")
 indices <- seq_len(as.integer(Sys.getenv("ntop")))
 expected <- c(paste0(prefix, "_top", indices, "_freq", frequency, ".html"),
